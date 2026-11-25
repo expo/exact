@@ -27,6 +27,11 @@ public struct ExactPackageRefusal: Error, CustomStringConvertible {
     public init(_ description: String) { self.description = description }
 }
 
+public struct ExactViewBinding: Equatable, Codable {
+    public let value: String, origin: String
+    public init(value: String, origin: String) { self.value = value; self.origin = origin }
+}
+
 /// The events a package's view sends its element, which Contract's handlers
 /// take (`message=`, `load=`, …), and its natural size. Any thread.
 public final class ExactPackageEvents {
@@ -62,6 +67,14 @@ public final class ExactPackageEvents {
 public protocol ExactPackageView: AnyObject {
     /// The view the host puts in the node's box; it fills the box.
     var view: ExactPackagePlatformView { get }
+    #if os(iOS) || os(tvOS)
+    /// The controller whose view is `view`, or nil for a plain view. The
+    /// host makes it a child of the controller its node shows in (a
+    /// route's) once that controller exists, and moves it when the node
+    /// shows in another (a dialog's sheet), as for an app's
+    /// `ExactNativeScreen`. The package never adds it to a parent itself.
+    var controller: UIViewController? { get }
+    #endif
     /// Every prop, as strings, replaced on each change; throw to refuse them.
     func setProps(_ props: [String: String]) throws
     /// Last call: the node is gone.
@@ -69,6 +82,9 @@ public protocol ExactPackageView: AnyObject {
 }
 
 public extension ExactPackageView {
+    #if os(iOS) || os(tvOS)
+    var controller: UIViewController? { nil }
+    #endif
     func destroy() {}
 }
 
@@ -236,6 +252,12 @@ public final class ExactPackageContext {
     /// production (`--bind`): an implementation that is its own substitute
     /// then opens no device and asks the OS for nothing (LLP 1133.006 D8).
     public let agent: Bool
+    /// The trust with which the host was built.
+    #if EXACT_DEVELOPMENT
+    public let development = true
+    #else
+    public let development = false
+    #endif
     /// The session's id, unique in the process: what a process object
     /// shared by sessions (a capture, a photo output) keys its consumers by.
     public let session: String
@@ -253,9 +275,11 @@ public final class ExactPackageContext {
     /// `app:/tmp`: the app's own, or under the agent its drive's store (a
     /// named one, `EXACT_AGENT_STORAGE`, kept across the drive's launches).
     public let data: URL, cache: URL, temporary: URL
-    /// Who made the call being answered now (`app`, `tool`, `wake`): set by
-    /// the host before each `later`, read by an implementation at its entry,
-    /// as a capture's first lease is refused to a tool's read (LLP 1133.009 D6).
+    /// Who made the call being answered now (`app`, `tool`, `wake`,
+    /// `action`, `device`, or `press`: a live press of a recording control,
+    /// which may start the microphone, LLP 1126.004 D4): set by the host before each `later`,
+    /// read by an implementation at its entry, as a capture's first lease is
+    /// refused to a tool's read (LLP 1133.009 D6).
     public var origin = "app"
     /// The runner's number for the send being answered now, set beside
     /// `origin`: the one `cancel(_:)` names when the call is let go (LLP
@@ -298,6 +322,14 @@ public final class ExactPackageContext {
     public let push: ExactPushRegistration
     /// The host events held for this session (LLP 1133.001.000 D2).
     public let hostEvents: ExactHostEvents
+    /// The package's configuration (LLP 1133.021 §9 item 7): each key its
+    /// interface's `exact.json` declares under `config.ios`, `config.macos`
+    /// or `config.tvos`, for this build's platform, that the app's
+    /// `app.json` gives under `packages.<interface>.<platform>`, a key typed
+    /// `env` as the variable's value when the app was built: a `String`, a
+    /// number or a `Bool` as declared. A key given no value is absent. Read at
+    /// build: changing one is a new binary.
+    public let config: [String: Any]
 
     public init(agent: Bool, session: String, hostSession: String = "", label: String? = nil,
                 data: URL? = nil, cache: URL? = nil, temporary: URL? = nil, changed: @escaping (String) -> Void,
@@ -325,7 +357,7 @@ public final class ExactPackageContext {
                 push: ExactPushRegistration = ExactPushRegistration { nil },
                 hostEvents: ExactHostEvents = ExactHostEvents { _ in [] },
                 expireWake: @escaping (String) -> Void = { _ in },
-                state: @escaping ([String: Any]) -> Void = { _ in }) {
+                state: @escaping ([String: Any]) -> Void = { _ in }, config: [String: Any] = [:]) {
         self.agent = agent; self.session = session; self.hostSession = hostSession; self.label = label ?? session
         credentials = ExactCredentialMembers.table(session)
         let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -336,6 +368,7 @@ public final class ExactPackageContext {
         self.surfaces = surfaces; orientationFn = orientation; viewFn = view; invokeFn = invoke
         emitFn = emit; activationFn = activation; wakeFn = wake; self.wakes = wakes; self.transfers = transfers
         self.pads = pads; afterFn = after; self.regions = regions; self.push = push; self.hostEvents = hostEvents; expireWakeFn = expireWake; stateFn = state
+        self.config = config
     }
 
     /// `body` once, `ms` later on the session's clock: the agent's under the
@@ -483,7 +516,9 @@ public struct ExactPresentation {
     /// The session's window and its scene.
     public let window: UIWindow
     public let scene: UIWindowScene
-    /// The window's root view controller, which a child view controller is added to.
+    /// The window's root view controller, to present over the app from. A
+    /// view's own controller is `ExactPackageView.controller`, never a child
+    /// of this one.
     public let rootViewController: UIViewController
     init?(_ view: UIView) {
         guard let window = view.window, let scene = window.windowScene, let root = window.rootViewController else { return nil }
@@ -907,8 +942,8 @@ public final class ExactTrackEntry {
 /// joining takes the track's lease (D6), and tells it the track's changes.
 public protocol ExactTrackOwner: AnyObject {
     /// `consumer` joins track `id`; `start` is an explicit start, which
-    /// reopens an idle track; `origin` is `app`, `tool` or `wake`.
-    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, origin: String) throws -> ExactSubscription
+    /// reopens an idle track; `origin` is `app`, `tool`, `wake` or `press`.
+    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, cause: ExactTrackCause) throws -> ExactSubscription
     /// `observer` joins track `id` as an output that is not a consumer (LLP
     /// 1133.027 D17 item 1): told what a consumer is told, attaching its
     /// outputs through the same `configure`, but it never takes, holds or
@@ -952,7 +987,8 @@ public protocol ExactVideoSource: AnyObject {
     /// and `commitConfiguration()`: add or remove inputs and outputs and
     /// configure their connections. With `stopped`, stop capture first and
     /// resume afterwards if it was running (intrinsic-matrix delivery must
-    /// be enabled before startRunning). Never waited for from the main thread.
+    /// be enabled before startRunning). A change needing a stop is skipped while only passive readers
+    /// hold a running session. Their preview continues. Never waited for from the main thread.
     func configure(stopped: Bool, _ change: @escaping (AVCaptureSession) -> Void)
     /// Run `work` on the session's queue, after every configuration asked
     /// before it: a capture from an output it added.
@@ -981,9 +1017,183 @@ public protocol ExactAudioSource: AnyObject {
     func tap(_ block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) -> ExactSubscription
 }
 
+/// The authority a consumer joined with. A view's cause expires when the runner
+/// revokes its binding, including for a device start already waiting on a capture queue.
+public final class ExactTrackCause {
+    public let origin: String
+    private let lock = NSRecursiveLock()
+    private var live = true
+    private let capture: ExactTrackCause?
+    private let revocable: Bool
+    public init(_ origin: String) { self.origin = origin; capture = nil; revocable = false }
+    fileprivate init(_ origin: String, capture: ExactTrackCause?) { self.origin = origin; self.capture = capture; revocable = true }
+    /// A continuously bound track can keep its lease across a handoff. Sample delivery still belongs to each node.
+    public var holdsCapture: Bool { capture?.current ?? current }
+    public var current: Bool { lock.withLock { live } }
+    /// Serialize a nonblocking audio delivery with revocation. Device I/O runs outside this lock.
+    public func whileCurrent(_ deliver: () -> Void) {
+        if revocable { lock.withLock { if live { deliver() } } } else { deliver() }
+    }
+    fileprivate func revoke() { lock.withLock { live = false } }
+}
+
 /// The session's track table: tracks and streams by id.
 public final class ExactTracks {
     private var entries: [String: ExactTrackEntry] = [:]
+    public typealias ViewBindings = [String: [String: [String: ExactViewBinding]]]
+    private struct Key: Hashable { let tag: String, id: String, prop: String }
+    private struct ReaderKey: Hashable { let tag: String, prop: String, track: String }
+    private struct Factory {
+        let kind: String
+        let make: (ExactViewBinding) -> ExactTrackConsumer
+    }
+    private struct Binding {
+        let fact: ExactViewBinding
+        let cause: ExactTrackCause
+    }
+    private final class Slot {
+        var binding: Binding?
+        var factory: Factory?
+        var reader: ExactTrackConsumer?
+        var subscription: ExactSubscription?
+        var presentation: Presentation?
+
+        func retire() -> ExactSubscription? {
+            guard let reader else { return nil }
+            let subscription = self.subscription
+            self.reader = nil; self.subscription = nil; binding = nil; factory = nil
+            presentation?.show(nil)
+            return ExactSubscription { subscription?.cancel(); reader.ended() }
+        }
+    }
+    private final class Presentation {
+        let value: String?, kind: String
+        let make: (ExactViewBinding) -> ExactTrackConsumer
+        let show: (ExactTrackConsumer?) -> Void
+        init(_ value: String?, _ kind: String, _ make: @escaping (ExactViewBinding) -> ExactTrackConsumer,
+             _ show: @escaping (ExactTrackConsumer?) -> Void) {
+            self.value = value; self.kind = kind; self.make = make; self.show = show
+        }
+    }
+    private var bindings: [Key: Binding] = [:]
+    private var captures: [ReaderKey: ExactTrackCause] = [:]
+    private var slots: [Key: Slot] = [:]
+    private var needsApply = false, ended = false
+
+    /// Record the commit while the owner waits. Package and device callbacks run after it returns.
+    public func commitViewBindings(_ next: ViewBindings) -> (() -> Void)? {
+        guard !ended else { return nil }
+        let previous = captures
+        var held: [ReaderKey: ExactTrackCause] = [:]
+        var changed = false
+        for (key, old) in bindings where old.fact != next[key.tag]?[key.id]?[key.prop] {
+            old.cause.revoke()
+            bindings[key] = nil
+            changed = true
+        }
+        for (tag, nodes) in next {
+            for (id, props) in nodes {
+                for (prop, fact) in props {
+                    let key = Key(tag: tag, id: id, prop: prop)
+                    let group = ReaderKey(tag: tag, prop: prop, track: fact.value)
+                    if fact.origin == "app", held[group] == nil {
+                        held[group] = previous[group] ?? ExactTrackCause("app")
+                    }
+                    if bindings[key] == nil {
+                        let capture = fact.origin == "app" ? held[group] : nil
+                        bindings[key] = Binding(fact: fact, cause: ExactTrackCause(fact.origin, capture: capture))
+                        changed = true
+                    }
+                }
+            }
+        }
+        guard changed else { return nil }
+        for (key, grant) in previous where held[key] == nil { grant.revoke() }
+        captures = held
+        needsApply = true
+        return { [weak self] in self?.applyBindings() }
+    }
+
+    private func applyBindings() {
+        guard needsApply else { return }
+        needsApply = false
+        var leaving: [ExactSubscription] = []
+        var continuing: [ReaderKey: Factory] = [:]
+        for (key, slot) in slots {
+            guard let old = slot.binding, !old.cause.current else { continue }
+            let continuous = old.fact.origin == "app" && old.cause.holdsCapture
+            if continuous {
+                continuing[ReaderKey(tag: key.tag, prop: key.prop, track: old.fact.value)] = slot.factory
+            }
+            if let release = slot.retire() {
+                if continuous { leaving.append(release) } else { release.cancel() }
+            }
+            if slot.presentation == nil { slots[key] = nil }
+        }
+        for (key, binding) in bindings where binding.fact.origin == "app" && slots[key]?.reader == nil {
+            attach(key, binding, continuing: continuing[ReaderKey(tag: key.tag, prop: key.prop, track: binding.fact.value)])
+        }
+        for release in leaving { release.cancel() }
+        for (key, binding) in bindings where binding.fact.origin != "app" && slots[key]?.reader == nil { attach(key, binding) }
+    }
+
+    public func endViewBindings() {
+        guard !ended else { return }
+        ended = true
+        needsApply = false
+        for grant in captures.values { grant.revoke() }
+        captures.removeAll()
+        for binding in bindings.values { binding.cause.revoke() }
+        bindings.removeAll()
+        for slot in slots.values { slot.retire()?.cancel() }
+        slots.removeAll()
+    }
+
+    /// The first matching presentation subscribes. Replacing it only changes where the node draws its reader.
+    public func present(_ tag: String, id: String, prop: String, value: String?, kind: String,
+                        make: @escaping (ExactViewBinding) -> ExactTrackConsumer,
+                        show: @escaping (ExactTrackConsumer?) -> Void) -> ExactSubscription {
+        guard !ended else { return ExactSubscription {} }
+        applyBindings()
+        let key = Key(tag: tag, id: id, prop: prop)
+        let slot = slots[key] ?? Slot()
+        slots[key] = slot
+        slot.presentation?.show(nil)
+        let presentation = Presentation(value, kind, make, show)
+        slot.presentation = presentation
+        if let binding = bindings[key] { attach(key, binding) }
+        return ExactSubscription { [weak self, weak slot, weak presentation] in
+            guard let self, let slot, let presentation, slot.presentation === presentation else { return }
+            slot.presentation = nil
+            presentation.show(nil)
+            if slot.reader == nil { self.slots[key] = nil }
+        }
+    }
+
+    private func attach(_ key: Key, _ binding: Binding, continuing: Factory? = nil) {
+        guard binding.cause.current else { return }
+        let slot = slots[key] ?? Slot(), p = slot.presentation
+        let fact = binding.fact
+        if slot.reader == nil {
+            // The runner can hand a running track to the next node before its native view exists.
+            let factory = continuing ?? p.flatMap { $0.value == fact.value ? Factory(kind: $0.kind, make: $0.make) : nil }
+            guard let factory, let entry = lookup(fact.value), entry.kind == factory.kind,
+                  let owner = entry.owner else { p?.show(nil); return }
+            let reader = factory.make(fact)
+            slots[key] = slot
+            slot.reader = reader; slot.binding = binding; slot.factory = factory
+            do {
+                let subscription = try owner.subscribe(fact.value, reader, start: false, cause: binding.cause)
+                guard slot.reader === reader else { return subscription.cancel() }
+                slot.subscription = subscription
+            } catch {
+                if slot.reader === reader { slot.retire()?.cancel() }
+                return
+            }
+        }
+        if binding.cause.current, slot.presentation === p { p?.show(slot.reader) }
+    }
+
     public init() {}
     public func add(_ entry: ExactTrackEntry) { entries[entry.id] = entry }
     public func lookup(_ id: String) -> ExactTrackEntry? { entries[id] }
@@ -991,11 +1201,13 @@ public final class ExactTracks {
     public var all: [ExactTrackEntry] { Array(entries.values) }
     /// `consumer` joins track `id`, through its owner.
     public func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, origin: String = "app") throws -> ExactSubscription {
+        applyBindings()
         guard let entry = entries[id], let owner = entry.owner else { throw ExactTrackError("NotFoundError") }
-        return try owner.subscribe(id, consumer, start: start, origin: origin)
+        return try owner.subscribe(id, consumer, start: start, cause: ExactTrackCause(origin))
     }
     /// `observer` watches track `id`, through its owner, taking no lease.
     public func observe(_ id: String, _ observer: ExactTrackConsumer) throws -> ExactSubscription {
+        applyBindings()
         guard let entry = entries[id], let owner = entry.owner else { throw ExactTrackError("NotFoundError") }
         return try owner.observe(id, observer)
     }

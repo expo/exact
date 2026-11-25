@@ -83,8 +83,10 @@ final class NavigationHost {
     /// route paints no background of its own, the page's ground is its
     /// surface. What the author wrote on the route (a colour, a gradient)
     /// is the surface. One in its sheet stands on the sheet's.
-    private func ground(_ routes: [NodeView], grounded: inout Set<UInt32>) {
-        for route in routes where route.props["navigationPresentation"] == "modal" {
+    private func ground(_ routes: [NodeView], inPanel: Bool, grounded: inout Set<UInt32>) {
+        for route in routes {
+            route.panelRouteRoot = inPanel && route === routes.first
+            guard !route.panelRouteRoot, route.props["navigationPresentation"] == "modal" else { continue }
             let painted = (route.cgColor("background_color")?.alpha ?? 0) > 0 || route.style["background_image"] != nil
             // In its sheet the route stands on the sheet's own ground (D7.4).
             guard !painted, !sheets.contains(where: { $0.route === route }), !presenter.dialogs.owns(route) else { continue }
@@ -154,7 +156,7 @@ final class NavigationHost {
                 } else { split.readNone() }
                 sheets = sheeted
             }
-            for routes in stacks { ground(routes, grounded: &grounded) }
+            for routes in stacks { ground(routes, inPanel: nav === roots.first && presenter.root.window is RoutePanel, grounded: &grounded) }
             if nav === roots.first { root = (nav, tabs, tabs == nil ? nil : found); routeless = stacks.allSatisfy(\.isEmpty) }
             guard let at = found else {
                 managed.formUnion((tabs?.panels ?? []).map(\.id))

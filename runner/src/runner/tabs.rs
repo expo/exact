@@ -52,7 +52,8 @@ impl<D: DataSource> Runner<D> {
         // Read from the plan once: a runner's plan is fixed, and a host asks at every batch's end
         let (sites, navigation) = self.panel_navigation.get_or_init(|| {
             let sites = crate::instance::tabs::panel_sites(&self.plan);
-            let navigation = crate::instance::tabs::sites_need_navigation(&self.plan, &sites);
+            let navigation =
+                crate::instance::tabs::sites_need_navigation(&self.plan, &sites, self.platform);
             (sites, navigation)
         });
         panels
@@ -61,6 +62,24 @@ impl<D: DataSource> Runner<D> {
                 self.plan_site_of(*p)
                     .and_then(|s| sites.binary_search(&s).ok())
                     .is_none_or(|i| navigation[i])
+            })
+            .collect()
+    }
+
+    /// Panels whose first route may request an iPad split, including panels
+    /// whose contents wait for selection (LLP 1127 D19).
+    pub fn possible_split_panels(&self, panels: &[ViewId]) -> Vec<ViewId> {
+        let sites = self
+            .split_panel_sites
+            .get_or_init(|| crate::instance::tabs::split_panel_sites(&self.plan));
+        panels
+            .iter()
+            .copied()
+            .filter(|&panel| {
+                !sites.is_empty()
+                    && self
+                        .plan_site_of(panel)
+                        .is_some_and(|s| sites.binary_search(&s).is_ok())
             })
             .collect()
     }

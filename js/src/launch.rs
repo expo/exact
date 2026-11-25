@@ -71,6 +71,7 @@ mod tests {
         };
         assert_eq!(value, expected);
         let mut request = Request::get(&format!("{value}/feed"));
+        request.reach.origin = exact_runner::CallOrigin::App;
         request.method = "POST".into();
         request.headers = vec![("X-Note".into(), value.clone())];
         request.body = value.into_bytes();

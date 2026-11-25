@@ -12,12 +12,13 @@ use tiny_skia::Transform;
 /// `[29, id]`: draw layer `id` here (its reader's node, recorded from the
 /// last `LAYER_SET`).
 pub(super) const LAYER_REF: u32 = 29;
-/// `[30, id, len, m0..m5, px, py, tx, ty, scale, rotate, opacity, r, dash,
+/// `[30, id, len, m0..m5, px, py, tx, ty, scaleX, rotate, opacity, r, dash, scaleY,
 /// at, ops…]`: a layer's matrix (points → the stream's pixels), its pivot and
 /// base values in points before the matrix (`dash`: path units per dash
 /// offset unit), where its drawing's dash phase is (a word index into the
 /// ops, or `u32::MAX`), then its drawing.
 pub(super) const LAYER_SET: u32 = 30;
+pub(super) const HEADER_WORDS: usize = 17;
 /// `[31, id, len, words…]`: a layer's keyframes (`Host::layer_tracks`);
 /// none: it shows its base values.
 pub(crate) const TRACKS: u32 = 31;
@@ -31,7 +32,7 @@ pub(crate) const CLOCK: u32 = 33;
 /// keyframes at the underlying value and percentages of the current transform box.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Basis {
-    pub(super) base: [f32; 7],
+    pub(super) base: [f32; 8],
     pub(super) reference: (f32, f32),
 }
 
@@ -82,7 +83,7 @@ impl Layers {
     pub(super) fn needs_world(&self) -> bool {
         self.sent
             .values()
-            .any(|ops| super::stream::needs_world(&ops[16..]))
+            .any(|ops| super::stream::needs_world(&ops[HEADER_WORDS..]))
     }
 
     pub(super) fn unlayered(&self) -> bool {
@@ -148,7 +149,7 @@ impl Recorder {
         ts: Transform,
         pivot: (f32, f32),
         reference: (f32, f32),
-        base: [f32; 7],
+        base: [f32; 8],
     ) {
         // The clips around the layer stay where they are while the reader
         // moves it: written before it, never in its drawing, where the
@@ -279,7 +280,7 @@ mod tests {
             Transform::identity(),
             (10.0, 10.0),
             (0., 0.),
-            [0., 0., 1., 0., 1., 0., 0.]
+            [0., 0., 1., 0., 1., 0., 0., 1.]
         ));
         r.fill(
             &Shape::rect((0.0, 0.0, 20.0, 20.0)),
@@ -320,6 +321,92 @@ mod tests {
             let (ops, again) = frame(&mut r, keep);
             assert_eq!((ops, again), (vec![], alive), "kept: {keep}");
         }
+    }
+
+    #[test]
+    fn android_draws_the_recorded_layer() {
+        let mut r = Recorder::new();
+        r.begin(64., 64., 1.);
+        let ts = Transform::identity();
+        assert!(r.layer_begin(1, ts, (0., 0.), (0., 0.), [0., 0., 1., 0., 1., 0., 0., 1.]));
+        r.fill(&Shape::rect((8., 8., 16., 16.)), [255, 0, 0, 255], ts);
+        r.layer_end();
+        assert!(!super::super::stream::needs_world(&r.ops));
+        assert!(!r.layers.needs_world());
+        let bytes: Vec<_> = r.ops.iter().flat_map(|word| word.to_le_bytes()).collect();
+        assert_eq!(
+            bytes,
+            include_bytes!("../../../android/canvas/src/test/resources/red-layer.ops")
+        );
+        r.begin(64., 64., 1.);
+        assert!(r.layer_begin(1, ts, (0., 0.), (0., 0.), [0., 0., 1., 0., 1., 0., 0., 1.]));
+        r.ops.extend([super::super::shared::DRAW, 1, 0]);
+        r.layer_end();
+        assert!(super::super::stream::needs_world(&r.ops));
+        assert!(r.layers.needs_world());
+    }
+
+    #[test]
+    fn android_plays_the_recorded_layer_tracks() {
+        use crate::presenter::{PainterChoice, Presenter};
+        use exact_motion::Property;
+        use exact_runner::Event;
+
+        let source = r##"component App
+  state squashed = false
+  action squash
+    squashed = true
+  view
+    column
+      box testId="squash" press=squash width=8 height=8
+      box width=32 height=16 margin=8 background-color="#0000ff" scale=(squashed ? "1 0.5" : "2 2") transition="scale 1s linear"
+"##;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (64., 64.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host_mut().lowering = true;
+        p.host_mut()
+            .engine
+            .set_lowered_properties(&[Property::Scale]);
+        let key = p.host().kernel().find_by_test_id("squash")[0];
+        let id = p.host().kernel().node_by_key(key).unwrap().id;
+        assert!(p.host_mut().dispatch_at(id, Event::Press, 0.).is_none());
+        p.after_commit();
+        p.frame();
+        let mut ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        super::super::tracks::Tracks::default().send(&p, 0, &mut ops);
+        let (mut base, mut tracks) = (None, Vec::new());
+        let mut at = 0;
+        while at < ops.len() {
+            let next = end(&ops, at).unwrap();
+            let word = |k: usize| f32::from_bits(ops[at + 3 + k]);
+            match ops[at] {
+                LAYER_SET => base = Some((word(10), word(15), ops[at + 2 + HEADER_WORDS])),
+                // A track here is 21 words: its property, then its first
+                // and last values at words 16 and 19.
+                TRACKS => tracks.extend(
+                    ops[at + 3..next]
+                        .chunks(21)
+                        .map(|t| (t[0], f32::from_bits(t[16]), f32::from_bits(t[19]))),
+                ),
+                _ => {}
+            }
+            at = next;
+        }
+        assert_eq!(base, Some((1., 0.5, u32::MAX)));
+        assert_eq!(tracks, [(3, 2., 1.), (17, 2., 0.5)]);
+        let bytes: Vec<_> = ops.iter().flat_map(|word| word.to_le_bytes()).collect();
+        assert_eq!(
+            bytes,
+            include_bytes!("../../../android/canvas/src/test/resources/scaled-layer.ops")
+        );
     }
 
     #[test]
@@ -378,7 +465,7 @@ component App
         while at < first.len() {
             let next = end(&first, at).unwrap();
             if first[at] == LAYER_SET {
-                let body = &first[at + 19..next];
+                let body = &first[at + 3 + HEADER_WORDS..next];
                 let mut i = 0;
                 while i < body.len() {
                     if body[i] == super::super::NATIVE {
@@ -428,7 +515,7 @@ component App
                 ROW_BEGIN => walk(&b[i + 6..j - 1], drawn, layers),
                 LAYER_SET => {
                     let mut body = Vec::new();
-                    walk(&b[i + 19..j], &mut body, layers);
+                    walk(&b[i + 3 + HEADER_WORDS..j], &mut body, layers);
                     layers.push(body);
                 }
                 op => drawn.push(op),
@@ -513,7 +600,7 @@ component App
                     Transform::identity(),
                     (10.0, 9.0),
                     (0., 0.),
-                    [0., 0., 1., 0., 1., 0., 0.]
+                    [0., 0., 1., 0., 1., 0., 0., 1.]
                 ));
             }
             if inner_clip {

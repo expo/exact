@@ -1,6 +1,6 @@
 //! The layout rows a node's style keeps though its frame carries them
 //! (`style_json_presented`).
-use exact_kernel::{NodeRef, NodeType, StyleId, StyleMask};
+use exact_kernel::{BoxSizing, NodeRef, NodeType, PropId, StyleId, StyleMask};
 
 /// The layout rows a node's style sends though its frame carries them: a
 /// video's size, which its box waits on; a bar item's drawn face's
@@ -16,10 +16,22 @@ pub(super) fn kept_geometry(node: &NodeRef<'_>) -> StyleMask {
     if node.node_type == NodeType::Video {
         return size;
     }
-    let authored = node
+    let mut authored = node
         .style
         .written
         .intersect(StyleMask::of(StyleId::ColumnGap).union(StyleMask::of(StyleId::MinHeight)));
+    // A named border box can be a height-drag target. UIKit needs its limit
+    // before deciding whether an edge drag belongs to an enclosing scroller.
+    if cfg!(target_os = "ios")
+        && node.style.box_sizing == BoxSizing::BorderBox
+        && node.props.str(PropId::Id).is_some()
+    {
+        authored = authored.union(
+            node.style
+                .written
+                .intersect(StyleMask::of(StyleId::MaxHeight)),
+        );
+    }
     // A drawn box: filled, its size literal points, nothing in it. A size
     // that changes with the layout (a percentage, an env length) is no dot's.
     let points = |d: &exact_kernel::Dimension| matches!(d, exact_kernel::Dimension::Points(_));

@@ -10,6 +10,7 @@
 // - An interruption that begins while the session restarts after a runtime
 //   error stays in force until its own end.
 import AVFoundation
+import ExactPackage
 import Foundation
 
 var failures = 0
@@ -55,6 +56,29 @@ struct InterruptionSuite {
         check("an interruption begun during the restart stays in force", reason() == "interrupted", "\(told)")
         post(AVCaptureSession.interruptionEndedNotification)
         check("until its end", until { reason() == "none" }, reason())
+
+        let admission = CameraStarts()
+        queue.sync { session.stopRunning() }
+        let app = ExactTrackCause("app")
+        queue.suspend()
+        admission.update([app], on: queue) { session.startRunning() }
+        admission.update([], on: queue) { session.startRunning() }
+        queue.resume()
+        queue.sync {}
+        check("revocation before the capture queue runs leaves the session stopped", !session.isRunning)
+        queue.async { session.beginConfiguration(); session.commitConfiguration() }
+        admission.update([app], on: queue) { session.startRunning() }
+        check("a returning grant starts the configured session", until { session.isRunning })
+
+        var changed = false
+        queue.sync {
+            VideoCapture.configure(session, stopped: true, admitted: { false }) { _ in changed = true }
+        }
+        check("a configuration that cannot restart the passive preview leaves it running", !changed && session.isRunning)
+        let keptCapture = queue.sync {
+            VideoCapture.configure(session, stopped: true, admitted: { !changed }) { _ in changed = true }
+        }
+        check("revocation during a stopped configuration reports the lost running session", changed && !keptCapture && !session.isRunning)
 
         for o in observers { NotificationCenter.default.removeObserver(o) }
         queue.sync { session.stopRunning() }

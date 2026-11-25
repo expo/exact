@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { guardFlags } from './help.mjs';
+import * as exactBuild from './exact-build.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const CLI = process.env.EXACT_APPDROP_CLI ?? 'appdrop@0.8';
@@ -143,6 +144,16 @@ async function main(argv) {
     return 1;
   };
   if (newLink && force) return fail('share_flags', 'share: --new-link and --force are opposites; pass one.');
+  // Experimental: the number an Exact Build sign-in page shows, which finishes the login the last share started.
+  const match = argv.includes('--login') ? argv[argv.indexOf('--login') + 1] : null;
+  if (match) {
+    if (process.env.EXACT_EXPERIMENTAL !== '1') return fail('exact_build_login', 'share: --login signs in to Exact Build, which is experimental: set EXACT_EXPERIMENTAL=1');
+    try {
+      const done = await exactBuild.finishLogin(match);
+      if (done.pending) return fail('exact_build_login', `share: the sign-in is not approved yet; approve it, then run share --login ${match} again in ${done.pending} s.`);
+      say(`share: signed in to Exact Build as ${done.username}.`);
+    } catch (error) { return fail('exact_build_login', `share: ${error.message}`); }
+  }
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(name);
   if (app.manifest.variant) return fail('share_variant', `share: variant ${app.manifest.variant.name}: a variant has no AppDrop link of its own (LLP 1030.008 §6); share the app without --variant or EXACT_VARIANT.`);
@@ -184,11 +195,19 @@ async function main(argv) {
   say(`share: building ${app.displayName ?? app.name} ${shown} (${build}) for iPhone; the first build takes minutes.`);
   // An app with an update store starts its own stream: this build is a tester's, not a release in one.
   const streamed = app.manifest.deploy?.store?.ios !== '0';
-  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), '--device', app.crate('apple'), '--archive', ipa, '--unsigned'], {
-    cwd: ROOT, stdio: ['ignore', 2, 2],
-    env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_BUILD_NUMBER: String(build), ...(version ? { EXACT_VERSION: version } : {}), ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
-  });
-  if (built.status !== 0 || !existsSync(ipa)) return fail('build_failed', `share: the iPhone build failed (${built.error?.message ?? `exit ${built.status}`}); its errors are above.`);
+  if (exactBuild.exactBuildReason()) {
+    // Experimental: the same build on Exact Build (the app CLI said why): a release archive with the build number,
+    // version and update genesis build.mjs is given below (its version, when app.json names none, is EXACT_VERSION's).
+    try {
+      await exactBuild.buildIpa(app, ipa, { checkout: ROOT, say, options: { profile: 'release', buildNumber: String(build), ...(version ?? process.env.EXACT_VERSION ? { version: version ?? process.env.EXACT_VERSION } : {}), ...(streamed ? { updateGenesis: '1' } : {}) } });
+    } catch (error) { return fail(error.code ?? 'build_failed', error.message, error.url ? { url: error.url } : {}); }
+  } else {
+    const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), '--device', app.crate('apple'), '--archive', ipa, '--unsigned'], {
+      cwd: ROOT, stdio: ['ignore', 2, 2],
+      env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_BUILD_NUMBER: String(build), ...(version ? { EXACT_VERSION: version } : {}), ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
+    });
+    if (built.status !== 0 || !existsSync(ipa)) return fail('build_failed', `share: the iPhone build failed (${built.error?.message ?? `exit ${built.status}`}); its errors are above.`);
+  }
 
   say(step.action === 'create' ? 'share: uploading to a new AppDrop link' : `share: uploading to ${step.url}`);
   // Run outside the app's checkout, whose branch the CLI would take as the link's label

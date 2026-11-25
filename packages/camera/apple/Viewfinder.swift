@@ -74,12 +74,12 @@ final class Viewfinder: NSObject, ExactPackageView {
         pinchToZoom = props["pinchToZoom"] != "false"
         preview?.videoGravity = gravity
         picture?.contentsGravity = contentsGravity
-        module?.props(id, props)
+        module?.props(self, props)
     }
 
     func destroy() {
         blank()
-        module?.gone(id)
+        module?.gone(self)
     }
 
     private var gravity: AVLayerVideoGravity {

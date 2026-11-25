@@ -28,8 +28,26 @@ private val PROCESS = java.util.UUID.randomUUID().toString()
 /** Held while a writer claims a path and while recovery reads and converts one, so neither sees the other half done. */
 private val LEDGER = Any()
 
+/** A press can expire while the codec or muxer starts. Publish its open file only while it is still admitted. */
+internal fun <T> openRecordingFile(file: File, admit: (() -> Unit)?, open: (File) -> T, close: (T) -> Unit): T {
+    if (admit == null) { file.delete(); return open(file) }
+    val pending = File.createTempFile(".recording-", ".tmp", file.parentFile)
+    try {
+        val output = open(pending)
+        try {
+            admit()
+            java.nio.file.Files.move(pending.toPath(), file.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            return output
+        } catch (e: Exception) {
+            close(output)
+            throw e
+        }
+    } finally { pending.delete() }
+}
+
 /** The ADTS stream of one take ([Encoder]'s writer under the line). On the recorder's thread. */
-internal class PartWriter(app: Context, val file: File) {
+internal class PartWriter(app: Context, val file: File, admit: (() -> Unit)? = null) {
     val part = File(file.path + ".part")
     private val ledger = ledger(app)
     private val out: FileOutputStream
@@ -39,9 +57,8 @@ internal class PartWriter(app: Context, val file: File) {
     init {
         file.parentFile?.mkdirs()
         synchronized(LEDGER) {
-            part.delete()
+            out = openRecordingFile(part, admit, ::FileOutputStream, FileOutputStream::close)
             ledger.edit().putString(file.path, PROCESS).commit()
-            out = FileOutputStream(part)
         }
     }
 
@@ -112,10 +129,13 @@ internal fun mux(part: File, file: File): Boolean {
         val track = muxer.addTrack(format)
         muxer.start()
         val info = MediaCodec.BufferInfo()
+        // The whole array, each frame at its offset: the muxer reads a heap buffer from its array's start plus the
+        // info's offset, and not from a slice's own offset.
+        val all = ByteBuffer.wrap(bytes)
         frames.forEachIndexed { i, (start, size) ->
             // 1,024 samples a frame (AAC-LC): the times are rebuilt from the count.
-            info.set(0, size, i * 1024L * 1_000_000L / rate, MediaCodec.BUFFER_FLAG_KEY_FRAME)
-            muxer.writeSampleData(track, ByteBuffer.wrap(bytes, start, size).slice(), info)
+            info.set(start, size, i * 1024L * 1_000_000L / rate, MediaCodec.BUFFER_FLAG_KEY_FRAME)
+            muxer.writeSampleData(track, all, info)
         }
         muxer.stop()
     } finally {

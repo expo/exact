@@ -37,7 +37,7 @@ function heldCommit(host, holding = true, apply = () => {}) {
     return true;
   } };
   const bindings = { host, presence: { hold: () => false }, navigation: { holdLink: () => null, project: noop },
-    letGo: noop, agentMode: false, apply, refitTexts: noop, flowBatch: noop,
+    letGo: noop, agentMode: false, apply, refitTexts: noop, playSymbolEffects: noop, flowBatch: noop,
     motion: { commit: noop }, arrange: { commit: noop }, clocks: { sync: noop }, globalThis: { exact: {} } };
   const source = readFileSync(new URL('../wasm/commit.js', import.meta.url), 'utf8');
   const applyBatch = new Function(...Object.keys(bindings), `${glueDeclarations(source, ['heldLinks', 'heldOutputs', 'applyBatch'])}; return applyBatch;`)(...Object.values(bindings));
@@ -76,7 +76,7 @@ function replayedCommit(host, holder, apply) {
     host.presence = presence;
   }
   const bindings = { host, presence: host.presence ?? { hold: () => false }, navigation: { holdLink: () => null, project: noop },
-    letGo: noop, agentMode: false, apply: batch => apply(batch, host), refitTexts: noop, flowBatch: noop,
+    letGo: noop, agentMode: false, apply: batch => apply(batch, host), refitTexts: noop, playSymbolEffects: noop, flowBatch: noop,
     motion: { commit: noop }, arrange: { commit: noop }, clocks: { sync: noop }, globalThis: { exact: {} } };
   const source = readFileSync(new URL('../wasm/commit.js', import.meta.url), 'utf8');
   applyBatch = new Function(...Object.keys(bindings), `${glueDeclarations(source, ['heldLinks', 'heldOutputs', 'applyBatch'])}; return applyBatch;`)(...Object.values(bindings));
@@ -311,7 +311,7 @@ test('the wasm grouped-sound batch keeps a timed end after its play, including a
     const received = [], noop = () => {};
     const host = { soundOut: { ops: ops => received.push(...ops) }, page: { hold: () => holding } };
     const bindings = { host, presence: { hold: () => false }, navigation: { holdLink: () => null, project: noop },
-      letGo: noop, agentMode: false, apply: noop, refitTexts: noop, flowBatch: noop,
+      letGo: noop, agentMode: false, apply: noop, refitTexts: noop, playSymbolEffects: noop, flowBatch: noop,
       motion: { commit: noop }, arrange: { commit: noop }, clocks: { sync: noop }, globalThis: { exact: {} } };
     const applyBatch = new Function(...Object.keys(bindings), `${glueDeclarations(source, ['heldLinks', 'heldOutputs', 'applyBatch'])}; return applyBatch;`)(...Object.values(bindings));
     // playSounds with two overlapping hits in one choke group, as take_sounds emits it.
@@ -359,7 +359,7 @@ test('the wasm freeze cancels streams and output before presence or page holds, 
       const presence = presenceLoader(() => new Promise(resolve => { ready = resolve; }), {}, batch => applyBatch(batch));
       const noop = () => {};
       const bindings = { presence, host, navigation: { holdLink: () => null, project: noop }, letGo, agentMode: false,
-        apply: batch => { presented.push(batch); return batch.timers; }, refitTexts: noop, flowBatch: noop,
+        apply: batch => { presented.push(batch); return batch.timers; }, refitTexts: noop, playSymbolEffects: noop, flowBatch: noop,
         motion: { commit: noop }, arrange: { commit: noop }, clocks: { sync: noop }, globalThis: { exact: {} } };
       const applyBatch = new Function(...Object.keys(bindings), `${glueDeclarations(source, ['heldLinks', 'heldOutputs', 'applyBatch'])}; return applyBatch;`)(...Object.values(bindings));
       const scheduled = { ops: [{ op: 'exit', id: 1 },

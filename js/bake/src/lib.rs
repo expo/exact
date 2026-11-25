@@ -106,11 +106,6 @@ struct Composer<'a> {
     compose: Box<dyn Fn(Module) -> Box<dyn DataSource> + 'a>,
 }
 
-/// A composed source, as `contract::bake` takes it.
-struct Composed(Box<dyn DataSource>);
-
-mod composed;
-
 fn mixed_grants<'a>(
     javascript: &serde_json::Value,
     rust: Option<&'a dyn DataSource>,
@@ -380,6 +375,12 @@ fn build_sources(
     replace_changed(&out.join("module.rs"), metadata.as_bytes())?;
     contract::native::write_desktop_packages(platform, app, &baked.plan, &target, &out)?;
     contract::native::write_desktop_hatches(platform, app, &target, &out)?;
+    if platform == "linux" {
+        let main = compat.linux_main(
+            "exact_painted::Composed { packages: exact_packages(), hatches: exact_hatches() }",
+        );
+        replace_changed(&out.join("linux.rs"), main.as_bytes())?;
+    }
     {
         let mode = compat.inputs["rustMode"]
             .as_str()
@@ -454,16 +455,24 @@ fn build_sources(
     if selection.exists() || std::env::var_os("EXACT_BACKEND_SELECTION").is_none() {
         println!("cargo:rerun-if-changed={}", selection.display());
     }
-    // The settings app.ts read: each name in the environment, and the files
-    // beside app.json, watched as the selection is (EXACT_ENV_FILES names the
-    // ones that exist).
-    // And the names Bun loaded (`noteBunLoaded`): a variable whose value stays
-    // may come from the environment once and from Bun's files the next time.
+    // Watch the setting's files and the lists that decide whether its shell
+    // value is a build input. EXACT_ENV_FILES names the files that exist.
     if let Some(settings) = meta["env"].as_object() {
         println!("cargo:rerun-if-env-changed=EXACT_ENV_FILES");
         println!("cargo:rerun-if-env-changed=EXACT_BUN_LOADED");
+        println!("cargo:rerun-if-env-changed=EXACT_LAUNCH_OMIT");
+        let launched = std::env::var("EXACT_LAUNCH_OMIT").unwrap_or_default();
+        let loaded = std::env::var("EXACT_BUN_LOADED").unwrap_or_default();
         for name in settings.keys() {
-            println!("cargo:rerun-if-env-changed={name}");
+            if !launched.split(',').chain(loaded.split(',')).any(|ignored| {
+                if cfg!(windows) {
+                    name.eq_ignore_ascii_case(ignored)
+                } else {
+                    name == ignored
+                }
+            }) {
+                println!("cargo:rerun-if-env-changed={name}");
+            }
         }
         for file in [".env.local", ".env"] {
             let path = root.join(file);
@@ -1244,8 +1253,8 @@ fn bake_in(
         (Some(composer), _) => contract::snapshot::bake_app_with_warnings(
             &entries,
             plan,
-            Composed((composer.compose)(module)),
-            Composed((composer.compose)(refresh_module)),
+            (composer.compose)(module),
+            (composer.compose)(refresh_module),
         ),
         (None, Some(seed)) => {
             // A data source owns what it reads: the bake's two share one seed.
@@ -1332,8 +1341,9 @@ const OPTIONAL_ENTRY: &str = "import type { Overlay } from './app.contract.d.ts'
 /// The TypeScript recorder (LLP 1056 D3), bundled into a module that draws.
 const RECORDER: &str = include_str!("../../../canvas/recorder.js");
 
-/// Its seam's type, for the generated entry's strict check.
-const RECORDER_TYPES: &str = "export declare function canvasSeam(draw: (surface: string, args: any, ctx: any, frame: any) => unknown): { draw(request: unknown, host?: unknown): string; retire(retired: unknown): void };\n";
+/// Its seam's type, for the generated entry's strict check. Any `draw` is
+/// taken: the app's own is checked against the declaration's `Draw`.
+const RECORDER_TYPES: &str = "export declare function canvasSeam(draw: (...call: never) => unknown): { draw(request: unknown, host?: unknown): string; retire(retired: unknown): void };\n";
 
 /// With async break checks in every loop and function, so a host can
 /// interrupt a running call from another thread (LLP 1048.000 D10), and with

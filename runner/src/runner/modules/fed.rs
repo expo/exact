@@ -19,6 +19,7 @@
 //! surface that is hidden is told hidden at once, before the start reaches
 //! the implementation.
 
+use super::super::provenance::Cause;
 use super::super::{DataSource, Runner};
 use super::{CallOrigin, Json, ModulesRow, Route};
 use exact_kernel::ViewId;
@@ -38,8 +39,8 @@ struct Surface {
     /// The sensors whose inputs run on it.
     sensors: BTreeSet<String>,
     shown: bool,
-    /// The origin of the commit that last changed `shown`.
-    by: CallOrigin,
+    /// The cause of the commit that last changed `shown`.
+    by: Cause,
     /// The lease: whether its inputs wait for an app's commit to show it.
     paused: bool,
 }
@@ -63,12 +64,7 @@ impl<D: DataSource> Runner<D> {
     /// A send that `feeds` a canvas, admitted: its input starts or stops on
     /// the surface it names. Before the substitute keeps it, or the host
     /// hands it to the implementation.
-    pub(in crate::runner) fn fed_send(
-        &mut self,
-        row: &ModulesRow,
-        args: &Json,
-        origin: CallOrigin,
-    ) {
+    pub(in crate::runner) fn fed_send(&mut self, row: &ModulesRow, args: &Json, cause: Cause) {
         let feeds = self.substitute(row)["feeds"].clone();
         let field = |k: &str| {
             (feeds[k].as_str())
@@ -95,14 +91,14 @@ impl<D: DataSource> Runner<D> {
             extension,
             sensors: BTreeSet::new(),
             shown,
-            by: origin,
+            by: cause,
             paused: !shown,
         });
         s.sensors.insert(sensor);
         // A new start takes the canvas as it is now (D6).
         (s.shown, s.paused) = (shown, !shown);
         if started && !shown && self.route(row) != Route::Substitute {
-            self.tell_fed(&surface, false, origin);
+            self.tell_fed(&surface, false, cause);
         }
     }
 
@@ -115,7 +111,7 @@ impl<D: DataSource> Runner<D> {
         }
         let kernel = &self.kernel;
         (self.extensions.fed.canvases).retain(|v, _| kernel.node(*v).is_some());
-        let origin = self.extensions.views.last;
+        let cause = (self.extensions.views.last).unwrap_or(Cause::device());
         let names: Vec<String> = self.extensions.fed.surfaces.keys().cloned().collect();
         for name in names {
             let shown = self.surface_shown(&name);
@@ -125,15 +121,15 @@ impl<D: DataSource> Runner<D> {
             if s.shown == shown {
                 continue;
             }
-            (s.shown, s.by) = (shown, origin);
-            s.paused = !shown || (s.paused && origin != CallOrigin::App);
+            (s.shown, s.by) = (shown, cause);
+            s.paused = !shown || (s.paused && cause.origin() != CallOrigin::App);
             let paused = s.paused;
             self.log(format!(
                 "surface {name}: displayed {shown} ({} origin), its input {}",
-                origin.word(),
+                cause.origin().word(),
                 if paused { "paused" } else { "resumed" }
             ));
-            self.tell_fed(&name, shown, origin);
+            self.tell_fed(&name, shown, cause);
         }
     }
 
@@ -157,7 +153,7 @@ impl<D: DataSource> Runner<D> {
         let surfaces: serde_json::Map<String, Json> = (self.extensions.fed.surfaces.iter())
             .filter(|(_, s)| s.extension == extension)
             .map(|(n, s)| {
-                let v = json!({ "displayed": s.shown, "origin": s.by.word(), "paused": s.paused });
+                let v = json!({ "displayed": s.shown, "origin": s.by.origin().word(), "paused": s.paused });
                 (n.clone(), v)
             })
             .collect();
@@ -165,7 +161,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Tell the implementation that feeds surface `name`, when the host binds one.
-    fn tell_fed(&mut self, name: &str, shown: bool, origin: CallOrigin) {
+    fn tell_fed(&mut self, name: &str, shown: bool, cause: Cause) {
         let Some(s) = self.extensions.fed.surfaces.get(name) else {
             return;
         };
@@ -175,7 +171,7 @@ impl<D: DataSource> Runner<D> {
         {
             return;
         }
-        let body = json!({ "extension": extension, "surface": name, "displayed": shown, "origin": origin.word() });
+        let body = json!({ "extension": extension, "surface": name, "displayed": shown, "origin": cause.origin().word() });
         if let Some(handler) = self.native_slot().extension_handler() {
             handler(
                 body.to_string().into_bytes(),

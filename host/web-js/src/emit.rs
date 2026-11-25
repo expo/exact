@@ -72,6 +72,8 @@ mod timers;
 mod trapped;
 #[path = "type_descriptors.rs"]
 mod type_descriptors;
+#[path = "viewport.rs"]
+mod viewport;
 use regions::root_slot;
 pub use sites::{Site, Sites};
 use type_descriptors::type_code;
@@ -469,7 +471,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     }
     em.out.clear();
     em.template_scope(true, |em| em.mount_node(sites.root, "$R", &top))?;
-    let view = std::mem::take(&mut em.out);
+    let view = crate::hoist::lift(&std::mem::take(&mut em.out), crate::hoist::MIN)?;
     if let Some(m) = &modes {
         body.push_str(&m.js(plan, &em.classes));
     }
@@ -506,6 +508,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let owned = em.uses.rt("ownedTasks");
         let _ = write!(body, "{owned}();");
     }
+    viewport::fit(&mut em, sites.root as usize, &mut body);
     let mount = em.uses.rt("mount");
     let _ = write!(body, "{mount}($R=>{{{view}}});");
     // A plan whose actions read geometry fetches the page's reader after
@@ -585,20 +588,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     }
     timers::timers(&mut em, &mut body)?;
     timers::sequences(&mut em, &mut body)?;
-    let viewport = em.parts[sites.root as usize].as_ref().and_then(|p| {
-        let fit = p.props.get("viewportFit");
-        let widget = p.props.get("interactiveWidget");
-        (fit.is_some() || widget.is_some()).then(|| {
-            let mut m = String::from("width=device-width, initial-scale=1");
-            if let Some(f) = fit {
-                let _ = write!(m, ", viewport-fit={f}");
-            }
-            if let Some(w) = widget {
-                let _ = write!(m, ", interactive-widget={w}");
-            }
-            m
-        })
-    });
+    let root = em.parts[sites.root as usize].as_ref();
+    let viewport = root.and_then(viewport::meta);
     // The sources' parameter types, then `|` and the answer's type, for a
     // data module that needs values encoded by type (records and lists are
     // both arrays here).
@@ -741,7 +732,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         [
             (!commands.is_empty(), commands_import.as_str()),
             (paint, "import{paintUse as $paint}from\"./paint.js\";"),
-            (em.list, "import{vl as $vl}from\"./list.js\";"),
+            (em.list, "import{vl as $vl,load as $loadLists}from\"./list.js\";"),
             (each::readers(plan), "import{reader as $reader}from\"./store-reader.js\";"),
             (em.follow, "import\"./follow.js\";"),
             (em.zoom, "import{zoom as $zoom}from\"./zoom.js\";"),
@@ -968,11 +959,7 @@ impl Em<'_> {
             let _ = write!(self.out, "{press}();");
         }
         self.clocks_in(&presence);
-        // A fitted text (LLP 1116.001 D1.4): the runtime scales it after each tree update.
-        if presence.contains("--exact-fit:") {
-            let fit = self.uses.rt("fitTexts");
-            let _ = write!(self.out, "{fit}();");
-        }
+        self.after_updates_in(&presence);
         if element == "a" {
             attrs.push(("data-view".into(), String::new()));
         }
@@ -1223,6 +1210,9 @@ impl Em<'_> {
                         )
                     );
                 if !svg_animation
+                    && !(b.kind == BindingKind::Prop
+                        && b.id == PropId::AccessibilityKeyShortcuts as u16
+                        && v.as_str().is_some_and(exact_plan::shortcut::portable))
                     && (b.kind != BindingKind::Prop
                         || !exact_runner::bridge::prop_value(b.id, &v)
                             .is_err_and(|e| crate::svg_lengths::refused(&e)))
@@ -1246,12 +1236,15 @@ impl Em<'_> {
                     self.markdown(i, &e, &f, plan.code(b.expr))
                 }
                 BindingKind::Prop if b.id == PropId::Dataset as u16 => self.dataset(&e, &f),
+                BindingKind::Prop if self.canvas_setting(&b, &e, &f) => {}
                 BindingKind::Prop => {
                     let prop = PropId::from_wire(b.id).ok_or("unknown prop")?;
                     let name = style::prop_name(node_type, prop)?;
                     // The plan stores editable; HTML exposes the inverse, readonly.
                     // `glassGroup`'s reserved `-1` is `auto` (LLP 1053.000.000.000 D3).
-                    let f = if prop == PropId::Editable {
+                    let f = if prop == PropId::AccessibilityKeyShortcuts {
+                        format!("()=>{}(({f})())", self.uses.rt("resolveShortcuts"))
+                    } else if prop == PropId::Editable {
                         format!("()=>{{const v=({f})();return v==null?v:!v}}")
                     } else if prop == PropId::GlassGroup {
                         format!("()=>{{const v=({f})();return v===-1?\"auto\":v}}")
@@ -1292,7 +1285,6 @@ impl Em<'_> {
             self.lower(&e, &class, &parts, scope, seen)?;
         }
         self.motion_node(i, &e, scope)?;
-        self.height_owner(i, &e, scope)?;
         if self.reorder_handle(i) {
             self.motion = true;
             let on = self.uses.rt("onReorder");
@@ -1348,7 +1340,7 @@ impl Em<'_> {
                 | EventKind::Contextmenu
                 | EventKind::Dblclick
                 | EventKind::Pointerdown
-                | EventKind::Pointerup
+                | EventKind::Pointercancel | EventKind::Pointerup
                 | EventKind::Pointermove
                 | EventKind::Copy
                 | EventKind::Cut
@@ -1408,6 +1400,7 @@ impl Em<'_> {
                 | EventKind::Capture // and the runtime refusing a capture (`onFrameCapture`)
                 | EventKind::Userpromptopened // @ref LLP 1020.002 D9: the browser's own dialogs
                 | EventKind::Historyswipe // @ref LLP 1115.000 D5.5: the browser shows its own arrow
+                | EventKind::Swipe // @ref LLP 1057.001 §8.1: the web has no swipe of the platform's
                 | EventKind::Select => {}
                 // The motion piece's: the swipe's holds, a pan's velocity.
                 EventKind::Swiperight
@@ -1419,6 +1412,11 @@ impl Em<'_> {
                 EventKind::Reachstart | EventKind::Reachend if virtualized => {}
                 EventKind::Reachstart | EventKind::Reachend => {
                     return Err(contract::collection_edge_refusal(h.event.name()))
+                }
+                EventKind::Reorderdrop if !virtualized => {
+                    self.list = true;
+                    self.motion = true;
+                    self.out.push_str("$loadLists();");
                 }
                 EventKind::Reorderdrop | EventKind::Reordertargetchange if virtualized => {
                     self.motion = true

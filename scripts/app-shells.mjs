@@ -12,8 +12,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cargoEnvironment, lockedMetadata, pathFrom, patchLines, readManifest as readAppManifest } from './app.mjs';
-import { pathWithin } from './paths.mjs';
+import { cargoCheckout, cargoEnvironment, checkoutPathRefusal, lockedMetadata, pathFrom, patchLines, readManifest as readAppManifest } from './app.mjs';
+import { dependencyTables, pathWithin } from './paths.mjs';
+import { baseManifest } from './variants.mjs';
 import { directDependencies, nativePackages } from './package-libraries.mjs';
 import { MEMBER_OF, appCrates, authoredWorkspace, gpuShellsDir, notAMember, shellsDir } from './cargo-check.mjs';
 import { OFFLINE_MISSING } from './filesystem.mjs';
@@ -25,7 +26,7 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
  * takes `host.ios` (scripts/app.schema.json). */
 export const PLATFORMS = { ios: 'apple', macos: 'apple', linux: 'linux', android: 'android', windows: 'windows' };
 /** SDK dependencies whose names app and game crates may not take. */
-export const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-painted', 'exact-painted-update', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
+export const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-linux-update', 'exact-painted', 'exact-painted-update', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
 
 /** Authored host crates own their identity. Otherwise package.json keeps the scaffold's prefix across directory
  * and display-name changes; a caller's name or the folder supplies it for an app without a package manifest. */
@@ -75,17 +76,21 @@ const hostDefaults = (platform) => ({
   windows: { window: { width: 1024, height: 720, minWidth: 360, minHeight: 500 } },
 }[platform] ?? {});
 
-const readManifest = (dir) => readAppManifest(dir, basename(dir));
+// All installs share the workspace and the platform declarations that determine its members (LLP 1153 D1).
+function readBaseManifest(dir) {
+  const selected = readAppManifest(dir, basename(dir));
+  return selected[baseManifest] ?? selected;
+}
 const writeManifest = (dir, manifest) => writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest, null, 2) + '\n');
 
-/** Whether the manifest names the platform. */
-export const namesPlatform = (manifest, platform) => platform in (manifest.host ?? {});
+/** An icon override in a variant does not declare a platform the app ships. */
+export const namesPlatform = (manifest, platform) => platform in ((manifest[baseManifest] ?? manifest).host ?? {});
 
 /** Name `platform` in the app's manifest: `host.<platform>`, and its store for one that has a stream. Returns the
  * keys written, none when it was named already. */
 export function namePlatform(dir, platform) {
   if (!(platform in PLATFORMS)) throw new Error(`${platform} is not a platform; the platforms are ${Object.keys(PLATFORMS).join(', ')}`);
-  const manifest = readManifest(dir), wrote = [];
+  const manifest = readBaseManifest(dir), wrote = [];
   manifest.host ??= {};
   if (!(platform in manifest.host)) { manifest.host[platform] = hostDefaults(platform); wrote.push(`host.${platform}`); }
   if (STORED.includes(platform)) {
@@ -101,7 +106,7 @@ export function namePlatform(dir, platform) {
 export function withoutPlatformKeys(dir, platform) {
   if (platform === 'web') throw new Error('update --without web: the web host is the dev loop\'s and the agent\'s (`web`, `test web`, `agent web`), so it stays');
   if (!(platform in PLATFORMS)) throw new Error(`update --without ${platform}: the platforms are ${Object.keys(PLATFORMS).join(', ')}`);
-  const manifest = readManifest(dir), removed = [];
+  const manifest = readBaseManifest(dir), removed = [];
   for (const [key, table] of [['host', manifest.host], ['deploy.store', manifest.deploy?.store], ['deploy.binaries', manifest.deploy?.binaries]]) {
     if (table && platform in table) { delete table[platform]; removed.push(`${key}.${platform}`); }
   }
@@ -193,7 +198,10 @@ ${target}
 ${dev ? `\n[[bin]]\nname = "${name}-dev"\npath = "src/bin/${name}-dev.rs"\ntest = false\nbench = false\n` : ''}
 ${kind === 'android' ? `[target.'cfg(target_os = "android")'.dependencies]` : '[dependencies]'}
 ${dependencies}
-
+${kind === 'linux' ? `
+[target.'cfg(unix)'.dependencies]
+exact-linux-update = ${dep('host/linux-update')}
+` : ''}
 [build-dependencies]
 exact-bake = ${dep('bake')}
 ${data.krate} = ${data.dependency}
@@ -394,6 +402,9 @@ exact-linux = ${dep('host/linux')}
 exact-painted = ${dep('host/painted')}
 exact-js = ${dep('js')}
 ${linked}
+[target.'cfg(unix)'.dependencies]
+exact-linux-update = ${dep('host/linux-update')}
+
 ${build}`,
     'build.rs': bake('linux'),
     'src/main.rs': `//! ${title} on Linux (and Android): the Contract UI and the TypeScript data module.
@@ -404,10 +415,7 @@ ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
 // (exact_hatches(), from modules/linux).
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
-fn main() {
-    let composed = exact_painted::Composed { hatches: exact_hatches(), packages: exact_packages() };
-    std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, composed));
-}
+include!(concat!(env!("OUT_DIR"), "/linux.rs"));
 `,
   };
   // The library the Canvas reader loads (LLP 1107, host/android/README.md), in Shelf's shape: empty off Android.
@@ -556,18 +564,56 @@ function besideApp(dir, wanted) {
   if (missing.length) writeFileSync(ignore, `${had}${had && !had.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
 }
 
+let exact2CrateDirs;
+/** The checkout's crates by name, `name` -> directory: its workspace's packages and the SQLite provider it vendors. */
+export function exact2Crates() {
+  if (exact2CrateDirs) return exact2CrateDirs;
+  const listed = spawnSync('cargo', ['metadata', '--no-deps', '--offline', '--format-version', '1'], { cwd: ROOT, env: cargoEnvironment(), encoding: 'utf8', maxBuffer: 1 << 26 });
+  if (listed.status !== 0) throw new Error(`cargo metadata in ${ROOT}:\n${listed.stderr || listed.error?.message}`);
+  exact2CrateDirs = new Map(JSON.parse(listed.stdout).packages.map(p => [p.name, dirname(p.manifest_path)]));
+  return exact2CrateDirs.set('ibex2-sqlite', resolve(ROOT, 'vendor/ibex/crates/ibex2-sqlite'));
+}
+
+/** What the members `manifests` of a generated workspace take from exact2 by `<name>.workspace = true` beyond
+ * `offered`: `{ stamp, entries() }`, each entry `{ name, dir, defaults }` for its `[workspace.dependencies]`
+ * (`defaults` false when a member turns them off, which Cargo reads only from the workspace's entry). A member that
+ * names a crate of exact2 through the app's link is refused: the workspace names the checkout by its real path, and a
+ * second spelling of it is a second package (`cargoCheckout`, scripts/paths.mjs). */
+export function takenFromExact2(manifests, offered) {
+  const refused = checkoutPathRefusal(manifests);
+  if (refused) throw new Error(refused);
+  const names = new Set(), off = new Set();
+  for (const manifest of manifests) {
+    for (const [, table] of dependencyTables(Bun.TOML.parse(readFileSync(manifest, 'utf8')))) {
+      for (const [name, dep] of Object.entries(table)) {
+        if (dep?.workspace !== true || offered.includes(name)) continue;
+        names.add(name);
+        if (dep['default-features'] === false || dep.default_features === false) off.add(name);
+      }
+    }
+  }
+  const sorted = [...names].sort();
+  // A name exact2 has no crate of is the member's own mistake, which Cargo names.
+  const entries = () => sorted.filter(name => exact2Crates().has(name)).map(name => ({ name, dir: exact2Crates().get(name), defaults: !off.has(name) }));
+  return { stamp: sorted.map(name => off.has(name) ? `${name} without defaults` : name), entries };
+}
+/** A `[workspace.dependencies]` line for `takenFromExact2`'s entry, its path relative to the workspace at `from`. */
+const takenLine = (from, { name, dir, defaults }) => `${name} = { path = ${JSON.stringify(pathWithin(from, dir))}${defaults ? '' : ', default-features = false'} }`;
+
 /** The generated workspace for the app at `dir`, current with its inputs: the manifest's platforms and name, the app's
  * own crates, the checkout's path and the files the workspace copies from it, and this module. Returns the workspace
  * directory and whether anything was written. The crates are `<name>-<kind>`, with the prefix `appCrateName` reads.
  * Its lock is the app's captured `Cargo.lock` when it has one (LLP 1153.003 D1.4), copied in; otherwise exact2's,
  * re-resolved offline for these members, and one this machine's cache cannot resolve is left as the copy for the
  * build, which `settleLock` resolves. */
-export function ensureShells(dir, manifest = readManifest(dir), name = null) {
+export function ensureShells(dir, manifest = readBaseManifest(dir), name = null) {
   dir = realpathSync(dir);
+  if (manifest.variant) manifest = manifest[baseManifest] ?? readBaseManifest(dir);
   name = appCrateName(dir, name ?? basename(dir));
   const shells = shellsDir(dir), crates = shellCrates(manifest), members = appMembers(dir, name);
   const config = hostConfiguration(dir, manifest, name, members.host, true);
   const { title, native, data, dataCrate, typescript, preload, updates } = config;
+  const taken = takenFromExact2(members.host.map(member => member.manifest), ['exact-runner', 'contract']), checkout = cargoCheckout(dir, true);
   // The paths written are relative (`pathWithin`), which reads real directories.
   for (const kind of crates) mkdirSync(resolve(shells, kind), { recursive: true });
   const copied = ['rust-toolchain.toml', '.cargo/config.toml'].map(file => [file, readFileSync(resolve(ROOT, file), 'utf8')]);
@@ -585,7 +631,7 @@ export function ensureShells(dir, manifest = readManifest(dir), name = null) {
   // manifest's platforms, the app's name, its own crates and the package that fills the native slot.
   const commit = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout?.trim() ?? '';
   const stamp = {
-    exact2: ROOT, app: dir, commit, name, title, crates, native, members: own, data, typescript,
+    exact2: ROOT, app: dir, commit, name, title, crates, native, members: own, taken: taken.stamp, data, typescript,
     ...(preload ? { preload } : {}),
     ...(updates ? { updates } : {}),
     inputs: createHash('sha256').update([readFileSync(fileURLToPath(import.meta.url), 'utf8'), APPLE_BUILD_SCRIPT, ...copied.map(([, text]) => text), ...patches, readFileSync(resolve(ROOT, 'Cargo.lock'), 'utf8')].join('\0')).digest('hex'),
@@ -599,7 +645,7 @@ export function ensureShells(dir, manifest = readManifest(dir), name = null) {
     if (existsSync(captured)) writeChanged(resolve(shells, 'Cargo.lock'), readFileSync(captured, 'utf8'));
     return { workspace: shells, wrote: false, crates };
   }
-  const dependency = path => `{ path = ${JSON.stringify(pathWithin(shells, resolve(ROOT, path)))} }`;
+  const dependency = path => `{ path = ${JSON.stringify(pathWithin(shells, resolve(checkout, path)))} }`;
   let wrote = writeChanged(resolve(shells, 'Cargo.toml'), `# ${title}'s native workspace, generated by exact2 from app.json and the app's own crates (LLP 1153 D1,
 # LLP 1153.003 D1): never edited, rewritten when the manifest's platforms, the app's crates or the checkout change. A
 # crate beside app.json joins it with package.workspace = "${MEMBER_OF.host}".
@@ -616,13 +662,13 @@ license = "MIT"
 [workspace.dependencies]
 exact-runner = ${dependency('runner')}
 contract = ${dependency('contract/cli')}
-
+${taken.entries().map(entry => takenLine(shells, entry) + '\n').join('')}
 [patch.crates-io]
 ${patches.join('\n')}
 `);
   for (const [file, text] of copied) wrote = writeChanged(resolve(shells, file), text) || wrote;
   for (const kind of crates) {
-    const files = hostCrateFiles(kind, config, '../../..', path => `{ path = ${JSON.stringify(pathWithin(resolve(shells, kind), resolve(ROOT, path)))} }`);
+    const files = hostCrateFiles(kind, config, '../../..', path => `{ path = ${JSON.stringify(pathWithin(resolve(shells, kind), resolve(checkout, path)))} }`);
     for (const [file, text] of Object.entries(files)) wrote = writeChanged(resolve(shells, kind, file), text) || wrote;
     // A file an earlier shape wrote (app.ts added or removed, the dev driver) goes.
     const keep = new Set(Object.keys(files));
@@ -647,7 +693,7 @@ bench = false
 
 [dependencies]
 ${data.krate} = { path = ${JSON.stringify(pathWithin(module, dataCrate.dir))} }
-exact-logic-abi = { path = ${JSON.stringify(pathWithin(module, resolve(ROOT, 'logic/abi')))} }
+exact-logic-abi = { path = ${JSON.stringify(pathWithin(module, resolve(checkout, 'logic/abi')))} }
 `) || wrote;
     if (!existsSync(resolve(module, 'src/lib.rs'))) wrote = writeChanged(resolve(module, 'src/lib.rs'), `exact_logic_abi::export!(${data.ty}, ${data.source});\n`) || wrote;
   } else if (existsSync(module)) { rmSync(module, { recursive: true, force: true }); wrote = true; }
@@ -686,6 +732,7 @@ export function ensureGpuShells(dir, name = null) {
     if (existsSync(gpu)) rmSync(gpu, { recursive: true, force: true });
     return null;
   }
+  const taken = takenFromExact2(members.map(member => member.manifest), ['exact-gpu', 'wasm-bindgen', 'wasm-bindgen-futures', 'web-sys']);
   mkdirSync(resolve(gpu, '.cargo'), { recursive: true });
   const pinned = Bun.TOML.parse(readFileSync(resolve(ROOT, 'game/Cargo.toml'), 'utf8')).workspace.dependencies;
   const toml = value => typeof value === 'string' ? JSON.stringify(value)
@@ -703,9 +750,9 @@ license = "MIT"
 
 # What a GPU crate takes from exact2 (\`exact-gpu.workspace = true\`), and the web dependencies at exact2's pins.
 [workspace.dependencies]
-exact-gpu = { path = ${JSON.stringify(pathWithin(gpu, resolve(ROOT, 'gpu')))} }
+exact-gpu = { path = ${JSON.stringify(pathWithin(gpu, resolve(cargoCheckout(dir, true), 'gpu')))} }
 ${['wasm-bindgen', 'wasm-bindgen-futures', 'web-sys'].map(dep => `${dep} = ${toml(pinned[dep])}`).join('\n')}
-
+${taken.entries().map(entry => takenLine(gpu, entry) + '\n').join('')}
 [patch.crates-io]
 ${patchLines(gpu, pathWithin).join('\n')}
 `);
@@ -1091,7 +1138,7 @@ export function lockShells(dir, workspace, captured = resolve(dir, 'Cargo.lock')
 export async function bringPlatform(dir, platform, { report = null, os = process.platform, name = null, verb = platform === 'macos' ? 'mac' : platform } = {}) {
   const lines = [];
   verb = `bun exact.mjs ${verb}`;
-  const manifest = existsSync(resolve(dir, 'app.json')) ? readManifest(dir) : null;
+  const manifest = existsSync(resolve(dir, 'app.json')) ? readBaseManifest(dir) : null;
   if (!namesPlatform(manifest ?? {}, platform)) {
     if (platform === 'ios' && !['darwin', 'linux'].includes(os)) return { refused: `${verb}: iOS builds need macOS or Linux (use WSL on Windows); nothing was written` };
     if (platform === 'macos' && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };

@@ -865,6 +865,7 @@ pub(super) fn plain_faces_fade_without_a_wash() {
             .unwrap();
             let _roles = p.host().runner().bind_roles();
             assert!(error.is_none(), "{error:?}");
+            drive_button_clock(&mut p);
             let ground = if scheme == "dark" { [18; 3] } else { [255; 3] };
             for name in ["default", "authored", "tinted", "disabled"] {
                 p.blur();
@@ -915,11 +916,17 @@ pub(super) fn plain_faces_fade_without_a_wash() {
             let rest = text_pixels(&mut p, "menu");
             p.hover(target).unwrap();
             p.set_pointer(None);
-            assert_ne!(pixel(&mut p, "menu", 4.0, 26.0), ground);
+            let hover = pixel(&mut p, "menu", 4.0, 26.0);
+            assert_ne!(hover, ground);
             let (x, y, _, _) = p.rect_of(target).unwrap();
             p.pointer_down(x + 4.0, y + 4.0, 0.0).unwrap();
             p.set_pointer(None);
-            assert_ne!(pixel(&mut p, "menu", 4.0, 26.0), ground);
+            let pressed = pixel(&mut p, "menu", 4.0, 26.0);
+            assert_eq!(pressed, [pressed[0]; 3], "neutral wash in {scheme}");
+            assert!(
+                pressed[0].abs_diff(ground[0]) > hover[0].abs_diff(ground[0]),
+                "{scheme} {style}: held {pressed:?}, hover {hover:?}, ground {ground:?}"
+            );
             let held = text_pixels(&mut p, "menu");
             let accent = if scheme == "dark" {
                 [0x68, 0xa5, 0xfe]

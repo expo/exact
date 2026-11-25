@@ -1,17 +1,32 @@
-//! Static failures of `Kernel::transform_drag_binding` (`kernel/src/transform.rs`).
+//! Static failures of the transform and height drag bindings in the kernel.
 //! Layout, presentation holds and values the compiler cannot resolve stay undecided.
 
-use crate::LowerError;
+use crate::{swipe_rows::DragRow, LowerError};
 use contract_checking::View;
 use contract_syntax::{Attr, Expr, Span, StyleDecl};
 use exact_kernel::{
     BoxSizing as Sizing, Dimension, Display, NodeType, Overflow, RowValue, StyleId, StyleMask,
     StyleProps, StyleValue,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) fn check(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerError>) {
+pub(super) fn check(
+    view: &View<'_>,
+    styles: &[StyleDecl],
+    list_rows: &BTreeMap<(Span, u32), DragRow>,
+    out: &mut Vec<LowerError>,
+) {
+    if !view.walk().any(|node| {
+        node.element().is_some_and(|(_, _, attrs)| {
+            attrs
+                .iter()
+                .any(|a| matches!(a.name.as_str(), "heightDragFor" | "transformDragFor"))
+        })
+    }) {
+        return;
+    }
     let mut seen = BTreeSet::new();
+    let mut height_seen = BTreeSet::new();
     let mut path = Vec::new();
     let mut rooted = true;
     let mut uses = Vec::new();
@@ -21,9 +36,11 @@ pub(super) fn check(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerEr
                 path.push(Element {
                     tag,
                     rows: rows(tag, attrs, styles),
+                    lowered: list_rows.get(&(node.span(), node.instance().unwrap())),
                     span: node.span(),
                 });
-                binding(&path, rooted, &mut seen, out);
+                binding(&path, rooted, "transformDragFor", &mut seen, out);
+                binding(&path, rooted, "heightDragFor", &mut height_seen, out);
             } else {
                 path.pop();
             }
@@ -42,12 +59,20 @@ pub(super) fn check(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerEr
 struct Element<'a> {
     tag: &'a str,
     rows: Option<Vec<Attr>>,
+    lowered: Option<&'a DragRow>,
     span: Span,
 }
 
 impl Element<'_> {
     fn attr(&self, name: &str) -> Option<&Attr> {
         self.rows.as_ref()?.iter().rfind(|a| a.name == name)
+    }
+
+    fn grouped(&self) -> bool {
+        !matches!(
+            crate::grouped::style(self.tag, self.rows.as_deref().unwrap_or_default()),
+            Ok(None)
+        )
     }
 }
 
@@ -88,11 +113,12 @@ fn literal<'a>(element: &'a Element<'_>, name: &str) -> Option<&'a str> {
 fn binding(
     path: &[Element<'_>],
     rooted: bool,
+    attribute: &str,
     seen: &mut BTreeSet<(Span, String, String)>,
     out: &mut Vec<LowerError>,
 ) {
     let (handle, ancestors) = path.split_last().unwrap();
-    let Some(name) = literal(handle, "transformDragFor").filter(|n| !n.is_empty()) else {
+    let Some(name) = literal(handle, attribute).filter(|n| !n.is_empty()) else {
         return;
     };
     let mut targets = Vec::new();
@@ -109,21 +135,20 @@ fn binding(
     }
     let [target] = targets.as_slice() else { return };
     let clip = target.checked_sub(1);
+    let height = attribute == "heightDragFor";
     let mut defaults_known = rooted;
     for (i, element) in path.iter().enumerate() {
         let node_type = crate::tags::tag(element.tag).map(|t| t.node_type);
         let plain = node_type == Some(NodeType::View);
-        // A grouped list's sheet puts rows under the author's on the elements
-        // below it (`grouped.rs`); a list row that says `delete=` takes its
-        // swipe's (`swipe_rows.rs`).
-        let rows = element.rows.as_deref().unwrap_or_default();
-        if !matches!(crate::grouped::style(element.tag, rows), Ok(None)) {
+        // Transform checks stay conservative below grouped sheets, which
+        // also style row parts. Height checks below track only box sizing.
+        if element.grouped() {
             defaults_known = false;
         }
         let sheeted = !defaults_known || element.attr("delete").is_some();
         let label = if i == *target {
             format!("target `{name}`")
-        } else if Some(i) == clip {
+        } else if !height && Some(i) == clip {
             literal(element, "id").map_or_else(
                 || format!("clip (the target's direct `{}` parent)", element.tag),
                 |id| format!("clip `{id}`"),
@@ -134,9 +159,32 @@ fn binding(
                 |id| format!("path element `{id}`"),
             )
         };
-        let style = StaticStyle::new(element.tag, element.rows.as_deref(), !sheeted);
-        let mut repairs = style.path(i == *target);
-        if i == *target || Some(i) == clip {
+        let unknown = if height {
+            // The sheets write box sizing on rows, not height or their
+            // descendants' non-inherited box sizing.
+            if !rooted {
+                StyleMask::ALL
+            } else if element.lowered.is_some_and(|row| row.box_sizing) {
+                StyleMask::of(StyleId::BoxSizing)
+            } else {
+                StyleMask::EMPTY
+            }
+        } else if sheeted {
+            StyleMask::ALL
+        } else {
+            StyleMask::EMPTY
+        };
+        let style = StaticStyle::new(element.tag, element.rows.as_deref(), unknown);
+        let mut repairs = if height {
+            let mut repairs = style.visibility();
+            if i == *target {
+                repairs.extend(style.height_rules());
+            }
+            repairs
+        } else {
+            style.path(i == *target)
+        };
+        if !height && (i == *target || Some(i) == clip) {
             if plain {
                 repairs.extend(style.box_rules(i == *target));
             } else if node_type.is_some() {
@@ -147,14 +195,18 @@ fn binding(
                 });
             }
         }
-        if i == *target && clip.is_none() && rooted {
+        if !height && i == *target && clip.is_none() && rooted {
             repairs.push("has no clipping parent; wrap it in a `column` or `box` with `overflow=\"hidden\" padding=0 border-width=0`".into());
         }
         for prop in ["inert", "disabled"] {
-            if matches!(
-                element.attr(prop).map(|a| &a.value),
-                Some(Expr::Bool(true, _))
-            ) {
+            let attr = if prop == "disabled" && element.attr("delete").is_some() {
+                element
+                    .lowered
+                    .map_or_else(|| element.attr(prop), |row| row.disabled.as_ref())
+            } else {
+                element.attr(prop)
+            };
+            if matches!(attr.map(|a| &a.value), Some(Expr::Bool(true, _))) {
                 repairs.push(format!(
                     "is `{prop}=true`; write `{prop}=false` before enabling the handle"
                 ));
@@ -163,8 +215,12 @@ fn binding(
         for repair in repairs {
             if seen.insert((element.span, name.to_string(), repair.clone())) {
                 out.push(LowerError {
-                    id: "lower-transform-drag-ineligible",
-                    message: format!("`transformDragFor=\"{name}\"` cannot bind: {label} {repair}"),
+                    id: if height {
+                        "lower-height-drag-ineligible"
+                    } else {
+                        "lower-transform-drag-ineligible"
+                    },
+                    message: format!("`{attribute}=\"{name}\"` cannot bind: {label} {repair}"),
                     span: element.span,
                 });
             }
@@ -178,7 +234,7 @@ struct StaticStyle {
 }
 
 impl StaticStyle {
-    fn new(tag: &str, rows: Option<&[Attr]>, defaults_known: bool) -> Self {
+    fn new(tag: &str, rows: Option<&[Attr]>, unknown: StyleMask) -> Self {
         let mut this = Self {
             props: StyleProps::default(),
             unknown: StyleMask::EMPTY,
@@ -193,9 +249,7 @@ impl StaticStyle {
             }
         }
         // A sheet the lowering adds (a grouped list's, a swipe's) sits under authored rows.
-        if !defaults_known {
-            this.unknown = StyleMask::ALL;
-        }
+        this.unknown = unknown;
         let boxed = crate::box_transform::lower(tag, false, rows).ok().flatten();
         let attrs = boxed.as_deref().unwrap_or(rows);
         for attr in attrs {
@@ -273,18 +327,26 @@ impl StaticStyle {
         }
     }
 
-    fn path(&self, target: bool) -> Vec<String> {
-        let s = &self.props;
+    fn visibility(&self) -> Vec<String> {
         let mut out = Vec::new();
-        if self.known(StyleId::Display) && s.display == Display::None {
+        if self.known(StyleId::Display) && self.props.display == Display::None {
             out.push("is `display=\"none\"`; show it before enabling the handle".into());
         }
+        out
+    }
+
+    fn path(&self, target: bool) -> Vec<String> {
+        let s = &self.props;
+        let mut out = self.visibility();
         if self.known(StyleId::Rotate) && s.rotate != 0.0 {
             out.push("has rotation; write `rotate=0` and put the rotation on a child outside the handle's path".into());
         }
-        if self.known(StyleId::Scale) && (s.scale <= 0.0 || !target && s.scale != 1.0) {
+        if self.known(StyleId::Scale)
+            && ((s.scale.x <= 0.0 || s.scale.x != s.scale.y)
+                || !target && (s.scale.x != 1.0 || s.scale.y != 1.0))
+        {
             out.push(if target {
-                "needs a positive scale; write `scale=1`".into()
+                "needs a positive uniform scale; write `scale=1`".into()
             } else {
                 "must have an identity transform; write `scale=1`".into()
             });
@@ -304,6 +366,22 @@ impl StaticStyle {
         out
     }
 
+    fn border_box(&self) -> Option<String> {
+        (self.known(StyleId::BoxSizing) && self.props.box_sizing != Sizing::BorderBox)
+            .then(|| "needs a border box; write `box-sizing=\"border-box\"`".into())
+    }
+
+    fn height_rules(&self) -> Vec<String> {
+        let mut out: Vec<_> = self.border_box().into_iter().collect();
+        if self
+            .dimension(StyleId::Height)
+            .is_some_and(|d| !matches!(d, Dimension::Points(px) if px.is_finite() && px >= 0.0))
+        {
+            out.push("needs a finite nonnegative point height; write a numeric `height`, such as `height=200`".into());
+        }
+        out
+    }
+
     fn box_rules(&self, target: bool) -> Vec<String> {
         use StyleId::*;
         let s = &self.props;
@@ -319,9 +397,7 @@ impl StaticStyle {
                     ));
                 }
             }
-            if self.known(BoxSizing) && s.box_sizing != Sizing::BorderBox {
-                out.push("needs a border box; write `box-sizing=\"border-box\"`".into());
-            }
+            out.extend(self.border_box());
             if self.known(TransformOrigin) && !s.transform_origin.centred() {
                 out.push(
                     "needs a centred transform origin; write `transform-origin=\"50% 50%\"`".into(),

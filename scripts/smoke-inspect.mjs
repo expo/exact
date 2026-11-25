@@ -89,13 +89,13 @@ export async function formControlsSmoke({ host, open, check }) {
 }
 
 // An HTTP guest must not become mixed content merely because the native
-// host supplies a wrapper (#106). Loopback IP needs no ATS exception, so
+// host supplies a wrapper. Loopback IP needs no ATS exception, so
 // the existing smoke app can exercise the WebKit path without changing
 // its manifest. The named-host ATS opt-in is verified on a built bundle.
 // A bundled page (`local.html`) loads a loopback `http:` stylesheet, as
-// Chrome does from a secure page, and the host logs one that fails (#135).
+// Chrome does from a secure page, and the host logs one that fails.
 // A bundled PDF (`local.pdf`) is shown by its type, not as its bytes in an
-// HTML document (#115): on Apple in PDFKit's view (LLP 1020.002 D10).
+// HTML document: on Apple in PDFKit's view (LLP 1020.002 D10).
 export async function httpFrameSmoke({ host, open, check }) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-http-frames-'));
   const source = resolve(dir, 'app.contract'), plan = resolve(dir, 'app.plan');

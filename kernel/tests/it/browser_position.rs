@@ -342,7 +342,7 @@ fn block_justify_self_overrides_the_container_default() {
                     width: length(100.0),
                     height: auto(),
                 },
-                justify_items: Some(JustifyItems::CENTER),
+                justify_items: JustifyItems::CENTER,
                 ..Style::default()
             },
             &children,
@@ -396,12 +396,13 @@ fn absolute_block_justify_self_overrides_the_container_default() {
                     .new_with_children(
                         Style {
                             display: Display::Block,
+                            position: Position::Relative,
                             direction,
                             size: Size {
                                 width: length(100.0),
                                 height: length(20.0),
                             },
-                            justify_items: Some(JustifyItems::SAFE_CENTER),
+                            justify_items: JustifyItems::SAFE_CENTER,
                             ..Style::default()
                         },
                         &[child],

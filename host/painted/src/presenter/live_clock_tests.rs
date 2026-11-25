@@ -452,7 +452,7 @@ fn a_live_contact_animates_press_feedback_like_a_pointer() {
   action pressed
     active = true
   view
-    box testId="pad" press=pressed width=80 height=40 -exact-press-scale=0.6
+    box testId="pad" press=pressed width=80 height=40 -exact-press-scale=0.6 transition="scale 100ms linear"
 "#,
     );
     let sample = |agent| {

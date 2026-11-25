@@ -67,9 +67,10 @@ impl Surfaces {
                     children.len() as u32,
                 );
             }
-            // The no-device executor computes the same placements at the committed
-            // viewport/clock, without trying to render a GPU frame.
-            if ask {
+            // Until this canvas has rendered at this size, ask its no-device executor
+            // for placements at the committed viewport and clock.
+            let size = (node.frame.width, node.frame.height);
+            if ask && (!abi.device_loaded || self.drawn_sizes.get(&view) != Some(&size)) {
                 abi.agent(canvas.id,&json!({"op":"state","now":host.now(),"width":node.frame.width,"height":node.frame.height}));
             }
             for (i, id) in children.iter().enumerate() {

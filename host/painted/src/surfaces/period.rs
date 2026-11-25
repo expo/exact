@@ -1,7 +1,8 @@
 //! The display's frame period, which every loaded GPU module is given
 //! (`gpu_period`: `Frame::period_ms`, and the slack of a canvas's frame-rate
 //! cap; LLP 1009, gpu/README.md "Frame pacing and timing"), and on Android
-//! each canvas's cap (`gpu_max_fps`), which the reader asks the platform for.
+//! the display callback and thermal state (`gpu_host_frame`) and each
+//! canvas's cap (`gpu_max_fps`), which the reader asks the platform for.
 use super::*;
 use std::cell::Cell;
 
@@ -38,6 +39,16 @@ impl Surfaces {
         PERIOD.set(ms);
         for abi in self.abis.values() {
             give(abi);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn host_frame(&self, raw_ms: f64, callback_ms: f64, fastest_ms: f64, thermal: u32) {
+        for abi in self.abis.values() {
+            if let Some(host_frame) = abi.host_frame {
+                // SAFETY: gpu/src/native.rs exports this signature. The module stays loaded for this call.
+                unsafe { host_frame(raw_ms, callback_ms, fastest_ms, thermal) };
+            }
         }
     }
 

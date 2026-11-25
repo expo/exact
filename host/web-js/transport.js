@@ -19,7 +19,7 @@
 //   (clockin.js's follower); midi.js hands its clock messages to
 //   `Sounds.clockIn` before it dispatches a delivery.
 import { journal, clock, Sounds, Mutations, Resources, R, data, drive, untracked, Refusal } from './rt.js';
-import { watchPage } from './facts.js';
+import { watchOutput } from './output.js';
 import { plain } from './format.js';
 import { Midi } from './midi.js';
 import { follower, feed, tempo, position, LOOKAHEAD as CLOCK_AHEAD, DRIFT, TICKS_PER_SECOND } from './clockin.js';
@@ -416,7 +416,7 @@ Sounds.clockIn = msgs => { const before = answerKey(); follow(msgs, clock.now); 
 /** Every `sequence name when gate key=key` (LLP 1125 D2), `[gate, key, args, ended, name]` each, `args` making `play`'s six
  * arguments: all read first, then armed at mount where a gate holds, as the runner's boot does, so a refusal arms none. */
 export function sequence(list) {
-  watchPage(true);
+  watchOutput();
   for (const [gate, key, args, ended, name] of list) Seqs.push({ gate, key: key || null, args, ended, name, on: false, kt: undefined });
   stood(untracked(() => Seqs.map(look)));
 }

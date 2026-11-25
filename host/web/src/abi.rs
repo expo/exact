@@ -118,17 +118,13 @@ impl<D: DataSource> Bridge<D> {
             .map(|(digest, page)| (digest.to_string(), page.to_string()));
     }
 
-    /// The page's facts as bits, for the next boot: the display preferences
-    /// in bits 0–7 and 26–31, and the fold
-    /// (LLP 1078 D4, D6) above them — bit 8 `folded`, bits 9–16 the columns,
-    /// bits 17–24 the rows (0 reads as 1). The browser resolves the
-    /// `env(viewport-segment-*)` lengths itself; the runner answers the
-    /// three `exactViewport` fields. Bit 25 is reserved. Bits 26–27 carry
-    /// gamut, 28 HDR, and 29–31 display mode; unpack these above the low
-    /// byte for the runner. `update` has no room here and keeps what
-    /// [`Bridge::set_update`] last said.
+    /// Display preferences occupy bits 0–7, gamut 26–27, HDR 28 and display mode 29–31.
+    /// Bit 8 is folded, 9–16 are the segment columns and 17–24 the rows (zero means one).
+    /// The browser resolves segment lengths (LLP 1078 D6). Bit 25 is reserved.
+    /// Screen orientation, screen reader and `update` arrive separately.
     pub fn set_preferences(&mut self, bits: u32) {
         self.preferences = exact_runner::Preferences {
+            orientation: self.preferences.orientation,
             update: self.preferences.update,
             screen_reader: self.preferences.screen_reader,
             ..exact_runner::Preferences::from_bits((bits & 0xff) | ((bits >> 26) << 8))
@@ -136,9 +132,12 @@ impl<D: DataSource> Bridge<D> {
         self.fold = fold_bits(bits);
     }
 
-    /// The page's `update` media feature (LLP 1101.003 D6): 0 `fast`, 1
-    /// `slow`, 2 `none`, as the native wire's bits 15–16 hold it. Taken by
-    /// the next boot or resize, which the page sends after this.
+    /// Screen orientation for the next boot or resize.
+    pub fn set_orientation(&mut self, code: u32) {
+        self.preferences.orientation = exact_runner::ScreenOrientation::from_code(code);
+    }
+
+    /// The page's `update` media feature for the next boot or resize (0 = fast, 1 = slow, 2 = none).
     pub fn set_update(&mut self, code: u32) {
         self.preferences.update = exact_runner::Preferences::from_bits((code & 3) << 15).update;
     }
@@ -534,9 +533,9 @@ impl<D: DataSource> Bridge<D> {
     /// 7 = submit, 8 = load, 9 = message (the payload — a change's text, a
     /// key's chord with its code, repeat and isComposing (`KeyboardEvent::parse`), or a
     /// guest message — is the input buffer's first `len` bytes, UTF-8).
-    /// Kind 43 is `keyup`; 44 is `keycapture`, with the keydown payload (#140).
+    /// Kind 43 is `keyup`; 44 is `keycapture`, with the keydown payload.
     /// Kind 45 is `intersect`, `0|1,ratio` (LLP 1005).
-    /// Kinds 46/47 are `focusin`/`focusout`, with target and relatedTarget (#283).
+    /// Kinds 46/47 are `focusin`/`focusout`, with target and relatedTarget.
     /// Kind 14 is navigate: one UTF-8 location at the navigation root (LLP 1038 D8).
     /// Kind 20 is pan (`dx,dy`); 28 panrelease (`vx,vy`, px/s; LLP 1057 §10.6).
     /// Kind 23 is a text field's `input`; 24 and 25 a checkbox's `change`
@@ -573,7 +572,7 @@ impl<D: DataSource> Bridge<D> {
             // their targets, toggle (50), scrollend (51), a file drag's enter
             // and leave (55, 56), a paste with files (57), an iframe's record (58), an atom's press (59),
             // a left swipe (61), and a scroll drag's start (62) and release (63) (`Event::of_host_kind`).
-            6 | 10 | 13 | 19 | 20 | 21 | 28..=48 | 50..=59 | 61..=63 => {
+            6 | 10 | 13 | 19 | 20 | 21 | 28..=48 | 50..=59 | 61..=63 | 65 => {
                 match Event::of_host_kind(kind, &payload) {
                     Ok(event) => event,
                     Err(error) => return self.refuse(error),
@@ -867,7 +866,7 @@ impl<D: DataSource> Bridge<D> {
                 decoded.map_err(|_| "malformed motion input".to_string())?;
             if op == 11 {
                 // The thresholds exact2 defines itself (LLP 1057.001 §3).
-                let [knee, resistance, edge, slop] = exact_motion::gesture::CONSTANTS;
+                let [knee, resistance, edge, slop, ..] = exact_motion::gesture::CONSTANTS;
                 return Ok(format!(
                     "{{\"knee\":{knee},\"resistance\":{resistance},\"edge\":{edge},\"slop\":{slop}}}"
                 ));
@@ -1262,8 +1261,13 @@ macro_rules! host {
             EXACT_BRIDGE.with(|b| b.borrow().request_active(ticket))
         }
 
-        /// The page's `update` media feature, for the next boot or resize
-        /// (`Bridge::set_update`).
+        /// The screen orientation for the next boot or resize.
+        #[no_mangle]
+        pub extern "C" fn exact_set_orientation(code: u32) {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().set_orientation(code))
+        }
+
+        /// The page's `update` media feature for the next boot or resize.
         #[no_mangle]
         pub extern "C" fn exact_set_update(code: u32) {
             EXACT_BRIDGE.with(|b| b.borrow_mut().set_update(code))
@@ -1276,12 +1280,8 @@ macro_rules! host {
             EXACT_BRIDGE.with(|b| b.borrow_mut().set_screen_reader(code));
         }
 
-        /// The viewport or the page's facts (bit 0 reduced motion, bit 1
-        /// reduced transparency, bit 2 contrast more, bit 3 contrast less,
-        /// bit 4 a dark system; bit 8 folded, bits 9–16 and 17–24 the
-        /// viewport segment columns and rows, LLP 1078 D6) changed, with the
-        /// page's geometry in `geometry` bytes of the input buffer (none for
-        /// 0, LLP 1039 D9); returns the batch length.
+        /// Apply the size, the bits documented on `Bridge::set_preferences` and the geometry
+        /// in the first `geometry` input bytes (zero for none). Returns the batch length (LLP 1039 D9).
         #[no_mangle]
         pub extern "C" fn exact_resize(width: f64, height: f64, now_ms: f64, preferences: u32, geometry: u32) -> u32 {
             EXACT_BRIDGE.with(|b| b.borrow_mut().resize_with(width, height, preferences, now_ms, geometry as usize))
@@ -1355,9 +1355,10 @@ macro_rules! host {
         /// The date and the place (`locale NUL timeZone NUL seed` in the
         /// input buffer, `place_len` 0 for none) the next boot reads first.
         #[no_mangle]
-        pub extern "C" fn exact_set_launch(epoch_at_zero: f64, utc_offset: f64, place_len: u32) {
+        pub extern "C" fn exact_set_launch(epoch_at_zero: f64, utc_offset: f64, place_len: u32, keyboard: u32) {
             EXACT_BRIDGE.with(|b| {
                 let mut b = b.borrow_mut();
+                b.set_launch_keyboard(keyboard);
                 b.set_launch_time(epoch_at_zero, utc_offset);
                 if place_len > 0 {
                     b.set_launch_place(place_len as usize);

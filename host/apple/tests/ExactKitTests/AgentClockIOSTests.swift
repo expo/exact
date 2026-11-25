@@ -36,12 +36,12 @@ final class AgentClockIOSTests: XCTestCase {
         p.views[node.id] = node
         node.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
         p.documentHost.addSubview(node)
-        node.handlers = ["pan", "panrelease", "pointerdown", "pointermove", "pointerup"]
+        node.handlers = ["pan", "panrelease", "pointerdown", "pointermove", "pointerup", "pointercancel"]
         let agent = Agent(session: session)
         var events: [String] = []
         p.onPointer = { _, kind, sample in
-            events.append(kind == .down ? "down" : kind == .up ? "up" : "move")
-            XCTAssertEqual(sample.buttons, kind == .up ? 0 : 1)
+            events.append(kind == .down ? "down" : kind == .up ? "up" : kind == .cancel ? "cancel" : "move")
+            XCTAssertEqual(sample.buttons, kind == .up || kind == .cancel ? 0 : 1)
         }
         p.onPan = { _, _, _ in events.append("pan") }
         p.onPanRelease = { _, _, _ in events.append("release") }
@@ -51,8 +51,13 @@ final class AgentClockIOSTests: XCTestCase {
         XCTAssertEqual(events, ["down", "move", "pan", "up", "release"])
         events = []
         _ = agent.recognizedPan("down", ["id": Int(node.id)])
+        _ = agent.recognizedPan("move", ["dx": 12.0])
         _ = agent.recognizedPan("cancel", [:])
-        XCTAssertEqual(events, ["down", "up"])
+        XCTAssertEqual(events, ["down", "move", "pan", "cancel", "release"])
+        events = []
+        _ = agent.recognizedPan("down", ["id": Int(node.id)])
+        _ = agent.recognizedPan("cancel", [:])
+        XCTAssertEqual(events, ["down", "cancel"])
     }
 
     /// A swipe row inside a panning surface (the smoke's precedence fixture),

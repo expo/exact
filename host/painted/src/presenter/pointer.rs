@@ -1,8 +1,7 @@
 //! `pointerdown`, `pointerup` and `pointermove` (LLP 1005 §3; LLP 1056 §3
 //! stage 3): DOM's events beside the contact, which they never take from.
 //! The down and the up bubble (Charlie, 2026-10-15): every enabled node
-//! from the press up that hears either holds the pointer until it lifts (a
-//! cancel is an up), innermost first, and the innermost hearing any of the
+//! from the press up that hears either holds the pointer until it lifts or is cancelled, innermost first, and the innermost hearing any of the
 //! three also hears its moves; a free pointer's moves go to the innermost
 //! node under it that hears them. Each carries the
 //! `PointerEvent` record from the node's content box. The pointer is a mouse
@@ -37,9 +36,10 @@ impl PointerKind {
     }
 }
 
-const KINDS: [EventKind; 3] = [
+const KINDS: [EventKind; 4] = [
     EventKind::Pointerdown,
     EventKind::Pointerup,
+    EventKind::Pointercancel,
     EventKind::Pointermove,
 ];
 
@@ -78,7 +78,7 @@ impl<D: DataSource> Presenter<D> {
             if !out && kinds.iter().any(|k| hears.contains(k)) {
                 return Some(n);
             }
-            at = self.display.parent(kernel, n);
+            at = self.listener_parent(kernel, n);
         }
         None
     }
@@ -146,11 +146,9 @@ impl<D: DataSource> Presenter<D> {
         let held = hit.and_then(|hit| self.pointer_node(hit, &KINDS))?;
         let mut path = Vec::new();
         let mut at = Some(held);
-        while let Some(view) =
-            at.and_then(|n| self.pointer_node(n, &[EventKind::Pointerdown, EventKind::Pointerup]))
-        {
+        while let Some(view) = at.and_then(|n| self.pointer_node(n, &KINDS[..3])) {
             path.push(view);
-            at = self.display.parent(self.host.kernel(), view);
+            at = self.listener_parent(self.host.kernel(), view);
         }
         let kernel = self.host.kernel();
         self.pointer_held = kernel.node(held).map(|n| n.key);
@@ -263,8 +261,11 @@ impl<D: DataSource> Presenter<D> {
             self.pointer_pressed_with(x, y, after as u8, now_ms)
         } else if self.pointer_held.is_some() && buttons == 0 {
             let error;
-            (error, prevented) =
-                self.pointer_lifted_by(Some((x, y)), dom_button((before & !after) as u8), now_ms);
+            (error, prevented) = self.pointer_lifted_by(
+                Some((x, y)),
+                Some(dom_button((before & !after) as u8)),
+                now_ms,
+            );
             error
         } else {
             if self.pointer_held.is_some() {
@@ -278,18 +279,17 @@ impl<D: DataSource> Presenter<D> {
         prevented
     }
 
-    /// The held pointer lifted, or its contact was cancelled: `pointerup`
+    /// The held pointer lifted: `pointerup`
     /// for every node that held it still in the tree, innermost first.
     pub(super) fn pointer_lifted(&mut self, at: Option<(f32, f32)>, now_ms: f64) -> Option<String> {
-        self.pointer_lifted_by(at, 0, now_ms).0
+        self.pointer_lifted_by(at, Some(0), now_ms).0
     }
 
-    /// [`Self::pointer_lifted`] by `button` (DOM's number): its error, and
-    /// whether a handler prevented the up's default.
-    fn pointer_lifted_by(
+    /// A released button or a cancelled contact (no button changed).
+    pub(super) fn pointer_lifted_by(
         &mut self,
         at: Option<(f32, f32)>,
-        button: i8,
+        button: Option<i8>,
         now_ms: f64,
     ) -> (Option<String>, bool) {
         if self.pointer_held.take().is_none() {
@@ -309,11 +309,15 @@ impl<D: DataSource> Presenter<D> {
             let Some(view) = self.host.kernel().node_by_key(key).map(|n| n.id) else {
                 continue;
             };
-            let Some(record) = self.pointer_record(view, x, y, button, 0) else {
+            let Some(record) = self.pointer_record(view, x, y, button.unwrap_or(-1), 0) else {
                 continue;
             };
-            let failed =
-                self.pointer_dispatch(view, EventKind::Pointerup, Event::Pointerup(record), now_ms);
+            let (kind, event) = if button.is_some() {
+                (EventKind::Pointerup, Event::Pointerup(record))
+            } else {
+                (EventKind::Pointercancel, Event::Pointercancel(record))
+            };
+            let failed = self.pointer_dispatch(view, kind, event, now_ms);
             error = error.or(failed);
             if self.stopped() {
                 break;
@@ -333,7 +337,7 @@ impl<D: DataSource> Presenter<D> {
         let mut at = self.hit(x, y);
         while let Some(hit) = at.and_then(|hit| self.pointer_node(hit, &[EventKind::Wheel])) {
             path.push(hit);
-            at = self.display.parent(self.host.kernel(), hit);
+            at = self.listener_parent(self.host.kernel(), hit);
         }
         let mut prevented = false;
         let outer = std::mem::replace(&mut self.pointer_walking, true);

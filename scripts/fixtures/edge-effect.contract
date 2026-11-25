@@ -41,7 +41,7 @@ component EdgeEffect
                         scroll id=`pane-${pane}` testId=`pane-${pane}` flex=1 min-width=0 min-height=0 box-sizing="border-box" height="100%" overflow-x="hidden"
                           for r in rows key = r
                             row padding=16
-                              text `${pane} row ${r}` testId=`${pane}-row-${r}`
+                              text `${pane} row ${r}` margin-left="var(--exact-safe-area-inset-right)" testId=`${pane}-row-${r}`
                 else
                   scroll id=`content-${e.name}` testId=`content-${e.name}` -exact-scroll-edge-effect=(e.name == "large" ? "soft" : none) flex=1 min-height=0 refresh=reload refreshing=false
                     if e.name == "large"

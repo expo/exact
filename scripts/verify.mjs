@@ -472,7 +472,10 @@ export async function largestText(s, screen) {
       for (const a of obs.advice ?? []) if (a.kind === 'menu') omit(a.id);
       const before = found.size;
       const compared = { ...obs, items: (obs.items ?? []).filter(it => !projected.has(it.id) && !projected.has(it.of)) };
-      for (const f of judge(compared, null, { host: web ? 'web' : 'ios' })) if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(`${f.kind} ${f.id}`)) found.set(`${f.kind} ${f.id}`, f);
+      for (const f of judge(compared, null, { host: web ? 'web' : 'ios' })) {
+        const key = `${f.kind} ${f.id} ${f.detail?.axis ?? ''}`;
+        if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(key)) found.set(key, f);
+      }
       // Each page as its findings were read, before it scrolls on, so each finding is seen, not reproduced by hand.
       if (found.size > before && largeShots) { const shot = resolve(largeShots.dir, `${largeShots.host}-largest-${++largeShots.n}.png`); if (await s.screenshot(shot).then(() => true, () => false)) shots.push(shot); }
       let moved = false;
@@ -655,7 +658,7 @@ export async function scrollKey(app, { udid, server = null } = {}) {
   const [{ nativeBuild, planOverride, planSource }, { appleArtifacts }] = await Promise.all([import('./agent-build.mjs'), import('../host/apple/build.mjs')]);
   const receipt = resolve(appleArtifacts(app, { destination: 'ios-simulator' }).bundle, 'receipt.json'), built = fileDigest(receipt);
   if (!built || !udid) return null;
-  const state = nativeBuild('ios', app, { checked: built });
+  const state = nativeBuild('ios', app, { hashed: built });
   if (state.missing || state.changed.some((path) => !planSource(path, app))) return null;
   const override = state.changed.length ? planOverride('ios', app, state) : null;
   if (state.changed.length && !override) return null;
@@ -777,13 +780,13 @@ export const movedClock = (test) => test.end?.reached != null && test.end.launch
  * with must be made under them too (LLP 1116.007 D3.4). */
 export function pinnedLaunch(test, defaults) {
   const launch = test.end?.launch;
-  return !!launch && (LAUNCH_FACTS.some((k) => launch[k] != null && launch[k] !== defaults[k]) || Object.entries(launch.media ?? {}).some(([k, v]) => v !== (defaults.media?.[k] ?? LAUNCH_MEDIA[k])) || Object.keys(launch.permissions ?? {}).length > 0);
+  return !!launch && (LAUNCH_FACTS.some((k) => launch[k] != null && launch[k] !== defaults[k]) || Object.entries(launch.media ?? {}).some(([k, v]) => v !== (defaults.media?.[k] ?? LAUNCH_MEDIA[k])) || Object.keys(launch.permissions ?? {}).length > 0 || Object.keys(launch.substitutes ?? {}).length > 0);
 }
 
 /** What a fresh launch shows under `launch`'s facts on an empty scratch store, for `seen`'s comparison. */
 async function freshUnder(host, app, launch, store) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
-  const s = await open({ host, app: app.selector, storage: store, env: { EXACT_AGENT_STORAGE_FRESH: '1' }, ax: readsAx(host), ...launchOf(launch), ...(host === 'web' ? { size: WEB_SIZES[0] } : hostOpen(host, app)) });
+  const s = await open({ host, app: app.selector, storage: store, env: { EXACT_AGENT_STORAGE_FRESH: '1' }, ax: readsAx(host), ...launchOf(launch), substitutes: launch?.substitutes, restoreSubstitutes: true, ...(host === 'web' ? { size: WEB_SIZES[0] } : hostOpen(host, app)) });
   try {
     for (const [name, value] of Object.entries(preferencesOf(launch))) await s.prefer({ [name]: value });
     await s.clock('data');
@@ -801,7 +804,7 @@ async function freshUnder(host, app, launch, store) {
  * end; then `check both` (the web: at both widths, one capture kept). */
 async function relaunch(host, app, test, fresh, shots) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
-  const s = await open({ host, app: app.selector, storage: test.store, ax: readsAx(host), ...launchOf(relaunchFacts(test)), ...(host === 'web' ? { size: WEB_SIZES[0], ...(test.end.port ? { port: test.end.port } : {}) } : hostOpen(host, app)) });
+  const s = await open({ host, app: app.selector, storage: test.store, ax: readsAx(host), ...launchOf(relaunchFacts(test)), substitutes: test.end.launch?.substitutes, restoreSubstitutes: true, ...(host === 'web' ? { size: WEB_SIZES[0], ...(test.end.port ? { port: test.end.port } : {}) } : hostOpen(host, app)) });
   try {
     for (const [name, value] of Object.entries(preferencesOf(test.end?.launch))) await s.prefer({ [name]: value });
     const started = performance.now(), b = (st) => (st.background?.queued ?? 0) + (st.background?.inFlight ?? 0);

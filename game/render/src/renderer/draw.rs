@@ -634,7 +634,14 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
                 deadline.remaining_at(start),
             );
         }
-        let result = hooks.prepare(&gpu, view, &crate::RenderWorld(world));
+        if let Some(reads) = &mut self.idle_hook_reads {
+            reads.get_mut().clear();
+        }
+        let result = hooks.prepare(
+            &gpu,
+            view,
+            &crate::RenderWorld(world, self.idle_hook_reads.as_ref()),
+        );
         if let Some((deadline, start)) = deadline.zip(start) {
             let end = crate::perf::Stamp::now();
             let duration_ms = start.elapsed_at(end);

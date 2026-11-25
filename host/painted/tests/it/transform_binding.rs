@@ -75,11 +75,14 @@ fn live_tuple_range_validation_is_atomic_and_stale_is_before_validation() {
                 y: 0.,
                 ..Value::ZERO
             },
-            Value::scalar(2.),
+            Value::new(2., 2.),
         ],
-        [Value::ZERO, Value::scalar(0.)],
-        [Value::ZERO, Value::scalar(-1.)],
-        [Value::ZERO, Value::scalar(f64::MIN_POSITIVE)],
+        [Value::ZERO, Value::new(0., 0.)],
+        [Value::ZERO, Value::new(-1., -1.)],
+        [
+            Value::ZERO,
+            Value::new(f64::MIN_POSITIVE, f64::MIN_POSITIVE),
+        ],
         [
             Value::ZERO,
             Value {
@@ -107,7 +110,7 @@ fn live_tuple_range_validation_is_atomic_and_stale_is_before_validation() {
             y: -10.,
             ..Value::ZERO
         },
-        Value::scalar(2.),
+        Value::new(2., 2.),
     ];
     assert!(h
         .dispatch_transform_held(pair, b, values, [Value::ZERO, Value::scalar(f64::NAN)], 20.)
@@ -125,7 +128,7 @@ fn live_tuple_range_validation_is_atomic_and_stale_is_before_validation() {
                     y: 50.,
                     ..Value::ZERO
                 },
-                Value::scalar(-0.5)
+                Value::new(-0.5, -0.5)
             ],
             20.
         )
@@ -170,7 +173,7 @@ fn invalid_caught_scale_refuses_before_clock_or_replacing_existing_hold() {
     let b = binding(&h, "first");
     let id = h.kernel().node_by_key(b.target).unwrap().id;
     let old = h.hold_begin(id, Property::Scale, 0.).unwrap().unwrap();
-    h.hold_update(old.token, Value::scalar(0.), 0.).unwrap();
+    h.hold_update(old.token, Value::new(0., 0.), 0.).unwrap();
     assert!(h.transform_drag_begin(b, 50.).is_err());
     assert_eq!(h.now(), 0.);
     assert!(h.has_hold(old.token));
@@ -192,7 +195,7 @@ fn receipt_latest_none_transition_and_target_precede_invalid_binding_cancellatio
                 y: 0.,
                 ..Value::ZERO
             },
-            Value::scalar(2.),
+            Value::new(2., 2.),
         ],
         110.,
     )
@@ -213,7 +216,7 @@ fn receipt_latest_none_transition_and_target_precede_invalid_binding_cancellatio
     );
     assert_eq!(
         h.engine().value(motion_node(b.target), Property::Scale),
-        Some(Value::scalar(1.))
+        Some(Value::new(1., 1.))
     );
     assert!(h.engine().quiescent());
     assert_eq!(count(&h), "0");
@@ -230,7 +233,7 @@ fn pair_moves_also_publish_an_unrelated_running_height_projection() {
     assert!(h.dispatch_at(grow, Event::Press, 0.).is_none());
     let b = binding(&h, "first");
     let pair = h.transform_drag_begin(b, 0.).unwrap().unwrap();
-    h.transform_drag_update(pair, b, [Value::ZERO, Value::scalar(2.)], 100.)
+    h.transform_drag_update(pair, b, [Value::ZERO, Value::new(2., 2.)], 100.)
         .unwrap();
     assert!(
         h.kernel().node(panel).unwrap().frame.height > 180.,

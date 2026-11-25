@@ -518,7 +518,7 @@ extension Agent {
     /// other operation answers while the button is down. Mouse cancellation
     /// releases the platform contact and clears the driver ownership. The
     /// `down`'s `modifiers` are held in every event of the contact, and a
-    /// `move` or `up` that names others holds those from it on (#107).
+    /// `move` or `up` that names others holds those from it on.
     func contact(_ phase: String, _ req: [String: Any]) -> [String: Any] {
         guard let win = phase == "down" ? view(req)?.window : contactWindow else {
             return ["error": phase == "down" ? "no view \(req["id"] ?? "?") on screen" : "no contact is down"]
@@ -621,6 +621,7 @@ extension Agent {
         case "cancel":
             guard let p = contact else { return ["error": "no contact is down"] }
             contactClock += 1.0 / 60
+            presenter.mouseLayoutPan.systemCancel()
             contactButton?.cancelHeldContact()
             // End AppKit's tracking loop outside the button's bounds.
             let release = contactTracksNative ? CGPoint(x: -10000, y: -10000) : p
@@ -647,6 +648,10 @@ extension Agent {
         // AppKit's layout pass, and a tap right after a commit can come before it,
         // so the point and the hit test would read its children a box-height off.
         view(req)?.window?.layoutIfNeeded()
+        // An attached session's tap (LLP 1012.000 D3) is the click alone: never a host activation of a control, an
+        // alert's button, a toolbar or sidebar item, a status item or a web view's content.
+        let attached = req["attached"] as? Bool == true
+        if attached, presenter.alerts.presented != nil { return ["error": "background: an alert is up in the window", "refused": "background"] }
         if req["holdState"] != nil { return holdTap(req) } // a held state (LLP 1122 D8, HeldState.swift)
         // An alert's buttons are AppKit's (LLP 1115.000 D7.6): a tap on an
         // authored button of it presses the alert's, and nothing behind its
@@ -655,9 +660,9 @@ extension Agent {
             guard req["phase"] == nil, let activated = presenter.alerts.click(node) else { return ["error": "view \(id) is behind an alert"] }
             return activated ? ["tapped": id, "delivery": "host-activation", "native": "NSAlert"] : ["error": "alert button #\(id) is unavailable"]
         }
-        if let node = view(req), presenter.dialogs.blocks(node) { return ["error": "view \(node.id) is blocked by a modal dialog"] }
+        if let node = view(req), presenter.dialogs.blocks(node) { return ["error": "view \(node.id) is inert under the open modal dialog"] }
         // A status item and the menu its tap opened are AppKit's (LLP 1133.025 §11).
-        if req["phase"] == nil, req["wheel"] == nil, let node = view(req),
+        if !attached, req["phase"] == nil, req["wheel"] == nil, let node = view(req),
            let clicked = presenter.statusItems.agentClick(node) ?? presenter.statusItems.agentChoose(node) { return clicked }
         if view(req)?.placedAncestor?.placementHidden == true { return ["error": "placed child is hidden"] }
         if req["phase"] == nil, req["wheel"] == nil,
@@ -675,14 +680,14 @@ extension Agent {
         if req["phase"] == nil, req["wheel"] == nil, req["x"] == nil, req["y"] == nil, req["at"] == nil, req["mouse"] == nil, req["auxclick"] == nil, req["clicks"] == nil,
            let id = req["id"] as? UInt32, let run = presenter.inlineText(id), let node = presenter.textHost(id) {
             guard node.window != nil, !node.inert, !(secondary ? node.formDisabled : node.disabled), !run.hidden else { return ["error": "inline node #\(id) is unavailable"] }
-            if req["hover"] as? Bool != true, !secondary, node.activateInline(id) { return ["tapped": Int(id), "delivery": "host-activation", "native": "inline-text"] }
+            if !attached, req["hover"] as? Bool != true, !secondary, node.activateInline(id) { return ["tapped": Int(id), "delivery": "host-activation", "native": "inline-text"] }
         }
 
         if let phase = req["phase"] as? String { return contact(phase, req) }
         // `--chrome platform`: a root tab the window's sidebar stands for is
         // pressed as its row presses it (LLP 1115.002 D3), as iOS's tab bar
         // item is. The tablist's own boxes are nowhere to click.
-        if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
+        if !attached, let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil, req["mouse"] == nil, req["auxclick"] == nil, req["clicks"] == nil,
            let activated = presenter.sidebar.activate(node) {
             return activated ? ["tapped": id, "pressed": id, "delivery": "host-activation", "native": "sidebar-row"]
@@ -691,7 +696,7 @@ extension Agent {
         if let node = view(req), presenter.sidebar.suppresses(node) {
             return ["error": "view \(node.id) is in the authored tablist AppKit's sidebar stands for; only a tab's host activation is supported"]
         }
-        if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
+        if !attached, let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil, req["mouse"] == nil, req["auxclick"] == nil, req["clicks"] == nil,
            let activated = presenter.toolbar.activate(node) {
             return activated ? ["tapped": id, "delivery": "host-activation", "native": "NSToolbarItem"]
@@ -701,19 +706,19 @@ extension Agent {
             return ["error": "native toolbar geometry is system-owned; only button host activation is supported"]
         }
         // A modal route's Cancel or confirming action in its sheet's own row (LLP 1115.002 D7.4): the row's click.
-        if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
+        if !attached, let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil, req["mouse"] == nil, req["auxclick"] == nil, req["clicks"] == nil,
            let activated = presenter.dialogs.activate(node) {
             return activated ? ["tapped": id, "delivery": "host-activation", "native": "NSButton"]
                 : ["error": "sheet button #\(id) is unavailable (it is disabled, or something stands over its sheet)"]
         }
-        if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
+        if !attached, let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil, req["mouse"] == nil, req["auxclick"] == nil, req["clicks"] == nil,
            let activated = presenter.controls.activate(node) {
             return activated ? ["tapped": id, "delivery": "host-activation", "native": "control"]
                 : ["error": "control #\(id) is disabled, inert or not shown"]
         }
-        if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
+        if !attached, let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil, req["mouse"] == nil, req["auxclick"] == nil, req["clicks"] == nil,
            let activated = presenter.segments.activate(node) {
             return activated ? ["tapped": id, "delivery": "host-activation", "native": "segmented-control"]
@@ -800,7 +805,9 @@ extension Agent {
                 var r: [String: Any] = ["tapped": Int(v.id), "at": at, "pid": Int(getpid()), "window": win.windowNumber,
                                         "point": [p.x, win.frame.height - p.y], "screen": [screen.x, (NSScreen.screens.first?.frame.height ?? 0) - screen.y],
                                         "mark": ChainingScrollView.driverMark, "delivered": ChainingScrollView.driverWheels]
-                if let owner, let id = owner.pointerOwner?.id { r["scroller"] = Int(id); r["offset"] = [owner.contentView.bounds.origin.x, owner.contentView.bounds.origin.y] }
+                // The page is no node: it is named `page`.
+                let scroller: Any? = owner is PageScrollView ? "page" : (owner as? ChainingScrollView)?.pointerOwner.map { Int($0.id) }
+                if let owner, owner.window === win, let scroller { r["scroller"] = scroller; r["offset"] = [owner.contentView.bounds.origin.x, owner.contentView.bounds.origin.y] }
                 return r
             }
             guard Agent.privateEvents else { return Agent.developmentOnly("tap wheel") }
@@ -840,7 +847,7 @@ extension Agent {
             session.presenter.settlePump()
             return ["tapped": Int(v.id), "pinch": scale, "at": at, "delivery": "platform"]
         }
-        if v.kind == "iframe" { return session.webviews.tap(v, request: req, at: at) }
+        if v.kind == "iframe" { return attached ? ["error": "unsupported: a web view's content is not tapped by an attached session", "refused": "unsupported"] : session.webviews.tap(v, request: req, at: at) }
         // Files dragged in from Finder (studio diary R19; FileDragMac.swift).
         if let reply = fileDragTap(req, v, at: p, in: win, reply: at) { return reply }
         // Named, a plain click presses what it names (`AgentAddressedTap.swift`):
@@ -879,6 +886,16 @@ extension Agent {
         guard (1...3).contains(count) else { return ["malformed": true, "error": "tap: clicks is 1, 2 or 3"] }
         // What the click will reach, by the window's own hit test: a part's landing reads it (AgentParts.swift).
         PartLanding.view = win.contentView?.superview?.hitTest(p) ?? win.contentView?.hitTest(p)
+        // An attached tap clicks only the view it names, at the moment the connection still may.
+        if attached {
+            // The node the window hit-tests there, as `landing` names it (a table's row through its cell).
+            let landed = landing(at: p, in: win)
+            let node = landed.hasPrefix("#") ? UInt32(landed.dropFirst()).flatMap { presenter.views[$0] } : nil
+            guard let node, node === v || node.isDescendant(of: v) else {
+                return ["error": "target: view #\(v.id) is covered where it would be clicked, by \(landed)", "refused": "target"]
+            }
+            guard Agent.inputGate?() == true else { return ["error": "input-not-granted: the grant, the connection or the window changed before the click", "refused": "input-not-granted"] }
+        }
         PartLanding.delivered = true
         PartLanding.point = p
         for clicks in 1...count {
@@ -893,7 +910,7 @@ extension Agent {
             NSApp.postEvent(up, atStart: true)
             presenter.menus.pointer(down)
             // Through the application, as a hand's click comes: its local
-            // monitors see it, then the window (#107).
+            // monitors see it, then the window.
             ExactAgentWindow.sendPointerEvent(down)
             // The queue's wrapper identifies the release, but its window location
             // is re-derived from the window server's and lands elsewhere by the
@@ -1062,11 +1079,11 @@ extension Agent {
             guard let down = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: t, windowNumber: win.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: repeats, keyCode: code),
                   let up = NSEvent.keyEvent(with: .keyUp, location: .zero, modifierFlags: upModifiers, timestamp: t, windowNumber: win.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
             else { return ["error": "no key event"] }
-            // The release's `keyup` handlers at the focus then (#140), as the
+            // The release's `keyup` handlers at the focus then, as the
             // monitor's route hears a keyboard's (`Presenter.keyUp`).
             // A chord's modifiers are their own keys around it (Charlie, 2026-10-07;
             // KeyCodes.modifierPresses): down in order, up in reverse after the
-            // key's, each up without its own flag (#140), as a keyboard's.
+            // key's, each up without its own flag, as a keyboard's.
             let flagsOf = { (held: String) in NSEvent.ModifierFlags([.shift, .control, .option, .command].enumerated().compactMap { i, f in held.contains(["Shift+", "Control+", "Alt+", "Meta+"][i]) ? f : nil }) }
             let presses = KeyCodes.modifierPresses(chord)
             let modifierKeys: [(down: NSEvent, up: NSEvent)] = presses.enumerated().compactMap { i, m in
@@ -1088,7 +1105,7 @@ extension Agent {
             }
             // This driver sends directly to NSWindow, bypassing NSApplication's
             // local monitor. Use the same session command router first.
-            presenter.flushKeyViewLoop()
+            let deferredEditor = phase == "up" ? nil : presenter.prepareKeyViewLoop(for: down, in: win)
             // The monitor's route (`Presenter.routeKey`): shortcuts, the focus's
             // `key` handlers (a prevented key goes no further), then the menus'
             // and dialogs' defaults.
@@ -1106,6 +1123,7 @@ extension Agent {
                 }
                 return ["typed": Int(v.id), "key": chord, "value": Agent.shownValue(v.textArea?.string ?? v.field?.stringValue ?? "", of: v)]
             }
+            if let deferredEditor, win.firstResponder !== deferredEditor { presenter.flushKeyViewLoop() }
             // A native view takes the key itself; the chord's modifiers still come up here.
             if v.kind == "native" {
                 let reply = nativeType(v, req, token: nativeToken)
@@ -1129,7 +1147,8 @@ extension Agent {
                 releaseHeard()
                 return ["typed": Int(v.id), "key": chord, "delivery": "platform"]
             }
-            if phase != "up", modifiers.contains(.command), v.performKeyEquivalent(with: down) || NSApp.mainMenu?.performKeyEquivalent(with: down) == true {
+            // A chord holding ⌘ or ⌃ asks the window and then the menu bar, as AppKit does.
+            if phase != "up", !modifiers.isDisjoint(with: [.command, .control]), v.performKeyEquivalent(with: down) || NSApp.mainMenu?.performKeyEquivalent(with: down) == true {
                 releaseHeard()
                 return ["typed": Int(v.id), "key": chord]
             }
@@ -1346,7 +1365,7 @@ extension Agent {
     }
 }
 
-open class ExactAgentWindow: NSWindow {
+open class ExactAgentWindow: ExactSessionWindow, DrivenOcclusion {
     private(set) static var pointerEvent: NSEvent?
 
     /// An inactive process cannot make its window key. AppKit checks the target
@@ -1364,14 +1383,24 @@ open class ExactAgentWindow: NSWindow {
     /// page's frames and timers. At the driver's reserved level, a covered window
     /// and its sheets still have live pages; their window-server order never changes.
     public override var occlusionState: NSWindow.OcclusionState {
-        let actual = super.occlusionState
+        drivenOcclusion(super.occlusionState)
+    }
+
+    package var physicalOcclusionState: NSWindow.OcclusionState { super.occlusionState }
+}
+
+/// A window whose covered WebKit guests can keep drawing at the driven level.
+package protocol DrivenOcclusion: AnyObject {
+    var physicalOcclusionState: NSWindow.OcclusionState { get }
+}
+
+extension NSWindow {
+    func drivenOcclusion(_ actual: NSWindow.OcclusionState) -> NSWindow.OcclusionState {
         var parent: NSWindow = self
         while let over = parent.sheetParent { parent = over }
         guard parent.level == .agentBehind, isVisible, !isMiniaturized, !NSApp.isHidden else { return actual }
         return actual.union(.visible)
     }
-
-    var physicalOcclusionState: NSWindow.OcclusionState { super.occlusionState }
 }
 extension Agent {
     /// Whether this process's windows sit at `NSWindow.Level.agentBehind`: a drive

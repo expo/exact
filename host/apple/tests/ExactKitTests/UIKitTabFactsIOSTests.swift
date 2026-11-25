@@ -56,7 +56,7 @@ final class UIKitTabFactsIOSTests: XCTestCase {
     /// someone sets one, also while More shows its list.
     func testMoreHasNoDelegateOfUIKits() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "More shows its list as in an app only in a scene's window") }
-        build(scene, watching: false)
+        try buildWithMore(scene, watching: false)
         XCTAssertNil(tabs.moreNavigationController.delegate, "More starts with no delegate")
         tabs.selectedViewController = tabs.moreNavigationController
         waitFor("More shows its list") { tabs.moreNavigationController.viewIfLoaded?.window != nil && tabs.moreNavigationController.transitionCoordinator == nil }
@@ -140,7 +140,7 @@ final class UIKitTabFactsIOSTests: XCTestCase {
     func testMoresPopToItsListPutsTheRootBackInItsTabsOwnController() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit animates More's pop as in an app only in a scene's window") }
         for tapsHome in [false, true] {
-            build(scene)
+            try buildWithMore(scene)
             let more = tabs.moreNavigationController, five = navs[4], root = five.viewControllers[0]
             let deeper = deeperUnderMore()
             tapMoreAgain()
@@ -162,7 +162,7 @@ final class UIKitTabFactsIOSTests: XCTestCase {
     /// before at the `willShow` within the setter.
     func testTheSelectionMoresWillShowSees() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit shows More's tabs as in an app only in a scene's window") }
-        build(scene)
+        try buildWithMore(scene)
         let more = tabs.moreNavigationController
         _ = deeperUnderMore()
         XCTAssertTrue(watcher.selectedAtWillShow.contains { $0 === navs[4] }, "a row picked: the row's tab")
@@ -191,7 +191,7 @@ final class UIKitTabFactsIOSTests: XCTestCase {
     func testSelectingATabWhoseRoutesMoreHolds() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit shows More's tabs as in an app only in a scene's window") }
         for (hides, viaMore) in [(false, false), (true, false), (false, true), (true, true)] {
-            build(scene)
+            try buildWithMore(scene)
             let more = tabs.moreNavigationController, five = navs[4], root = five.viewControllers[0], list = more.viewControllers[0]
             let deeper = UIViewController()
             deeper.hidesBottomBarWhenPushed = hides
@@ -280,8 +280,14 @@ final class UIKitTabFactsIOSTests: XCTestCase {
         XCTAssertEqual(answered.calls, 1)
     }
 
-    /// Enough tabs that UIKit shows More, in a window; with `watching`, every
-    /// delegate slot, More's included, is the watcher's.
+    /// `build`, skipped where UIKit's bar shows every tab.
+    private func buildWithMore(_ scene: UIWindowScene, watching: Bool = true) throws {
+        build(scene, watching: watching)
+        guard tabs.tabBar.items?.count == 5 else { throw XCTSkip("UIKit's bar shows every tab at this width: there is no More") }
+    }
+
+    /// Enough tabs that an iPhone's bar shows More, in a window; with `watching`,
+    /// every delegate slot, More's included, is the watcher's.
     private func build(_ scene: UIWindowScene, watching: Bool = true) {
         window?.isHidden = true
         let window = UIWindow(windowScene: scene)

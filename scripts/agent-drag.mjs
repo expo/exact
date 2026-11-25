@@ -6,6 +6,7 @@ import { DRAG_BOUNDS, REACH_MS, reaches } from '../host/apple/touches.mjs';
 import { layoutArgs, perfOp, layoutBox } from './agent-inspect.mjs';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
+import { FIELDS } from '../host/web/drag-in.js';
 
 /** Observed only while CDP holds a finger. Cancellation ends the DOM pointer
  * stream even though the driver still has to lift its injected touch. */
@@ -143,10 +144,18 @@ export function dragArguments(opts) {
   if (total > DRAG_BOUNDS.total) throw new MalformedOperation(`drag: the gesture lasts past ${DRAG_BOUNDS.total} ms`);
 }
 
+/** The words of a drag's text: a quoted target or read, escapes included, is one word. */
+export const dragWords = text => text.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]+/g) ?? [];
+
+/** The words of a drag in after its kind (`tap <target> drop …`), a quoted one whole and unquoted, in either quote:
+ * `--text "Mount Fuji"`, `'/tmp/a b.txt'`. */
+export const dragInWords = text => dragWords(text).map((w) => w.length < 2 || w[0] !== w.at(-1) || !`"'`.includes(w[0]) ? w
+  : w[0] === '"' ? inputJSON(w) : w.slice(1, -1).replace(/\\'/g, "'"));
+
 /** Parse the drag portion of one CLI operation; quoted reads belong to the preceding leg. */
 export function parseDrag(s, text) {
   // A read is quoted either way: `during 'state liked'` as `during "state liked"`.
-  const words = (text.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]+/g) ?? []).map(w => w.length > 1 && w.startsWith("'") && w.endsWith("'") ? JSON.stringify(w.slice(1, -1).replace(/\\'/g, "'")) : w);
+  const words = dragWords(text).map(w => w.length > 1 && w.startsWith("'") && w.endsWith("'") ? JSON.stringify(w.slice(1, -1).replace(/\\'/g, "'")) : w);
   const drag = words[0] === 'to' ? { to: words[1] } : { dx: Number(words[0]), dy: Number(words[1]) };
   let leg = drag;
   for (let i = 2; i < words.length;) {
@@ -189,12 +198,11 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     try { dragArguments({ ...opts, to: undefined }); }
     catch (error) { throw new Error(error.message); }
   }
-  const { dx, dy, from, into, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during, ...(into ? { into } : {}) }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}) };
+  const legs = dragLegs(opts);
+  const { dx, dy, from, into, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during, ...(into ? { into } : {}) }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}), ...(opts.path ? { path: legs.slice(1).map(({ during: _, press: __, ...leg }) => leg) } : {}) };
   // `mouse` (files diary F10): the left button, where the carrier's contact
   // is otherwise a finger (the web's); a desktop host's contact is the mouse.
   if (mouse && (carrier.touches || ['ios', 'host-ios'].includes(host))) throw new Error('drag: mouse is a desktop pointer\'s; an iOS contact is a finger');
-  const legs = dragLegs(opts);
-  if (opts.path && !carrier.touches) throw new Error('drag: a scripted path needs the iOS touch runner (--touch platform)');
   const moves = legs.some(l => l.dx !== 0 || l.dy !== 0);
   // The touch runner lifts at the end of its scripted hold, and its ops start after the press and the move: without a hold they would find the finger lifted.
   if (carrier.touches && legs.some(l => l.during.length && !(l.hold > 0))) throw new Error('drag: under --touch platform, during runs after the press and the move, inside the scripted hold: give hold <ms>, the time the ops run in');
@@ -204,17 +212,22 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const start = from ? [b.x + from[0], b.y + from[1]] : [b.x + b.w / 2, b.y + b.h / 2], end = [start[0] + dx, start[1] + dy];
   const inside = ([x, y]) => x >= 0 && y >= 0 && x <= vp.w && y <= vp.h;
+  // A swipe's flick (`swipeDrag`, LLP 1057.001 §8.3) is one real stroke from inside its target, never the scroll view's own
+  const after = scrolled ? ' after the view scrolled in' : '';
+  if (opts.flick && !(start[0] >= b.x && start[1] >= b.y && start[0] < b.x + b.w && start[1] < b.y + b.h)) throw new Error(`swipe: its start (${start}) is outside the target's ${b.w} × ${b.h} box at (${b.x}, ${b.y})${after}`);
   // Android's reader owns scrolling; Presenter.pointer_* cannot hold its scroll contact.
   // Use the reader's deterministic scroll samples, and report that delivery explicitly.
-  if (host === 'android' && carrier.reader && ['ScrollView', 'List'].includes(b.type) && !mouse) {
+  let liftAt;
+  if (host === 'android' && carrier.reader && (press || dx || dy || ['ScrollView', 'List'].includes(b.type)) && !mouse) {
     if (!inside(start)) throw new Error(`drag: start (${start}) leaves the viewport (${vp.w} × ${vp.h})`);
-    const req = { op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, from: start };
-    const owner = await carrier.ask({ ...req, probe: true });
+    const req = { op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: dx || dy ? over : 0, from: start, ...(hold ? { hold } : {}) };
+    const owner = await carrier.ask({ ...req, probe: true, ...(press ? { press } : {}) });
     if (owner.error) throw new Error(`drag: ${owner.error}`);
+    liftAt = owner.liftAt;
     if (owner.scrollDrag !== 'presenter') {
       if (owner.scrollDrag !== 'reader') throw new Error('drag: Android reader did not identify the scroll owner');
-      if (during.length || press || hold || opts.path || modifiers) throw new Error('drag: Android reader scroll samples do not hold a native touch; press, hold, during, path and modifiers need native input');
-      const r = await carrier.ask(req);
+      if (during.length || (press && !owner.reorderGrip) || opts.path || modifiers) throw new Error('drag: Android reader scroll samples do not hold a native touch; press, during, path and modifiers need native input');
+      const r = await carrier.ask(press ? { ...req, press } : req);
       if (r.error || r.delivery === 'unsupported') throw new Error(`drag: ${r.error ?? r.reason ?? 'unsupported'}`);
       return noted(await s.landed({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...still(r, target), ...await reorderNotes(s, mark)]);
     }
@@ -233,6 +246,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
 
   if (into && !endpoint(end)) throw new Error(`drag: end (${end}) leaves the screen above its bottom safe area`);
   if (vp && !(inside(start) && endpoint(end))) {
+    if (opts.flick) throw new Error(`swipe: the flick from (${start}) to (${end}) leaves the viewport (${vp.w} × ${vp.h})${after}; start it farther in with at, where the target leaves room for the stroke`);
     // A scroller dragged further than the viewport reaches scrolls the whole way (euxy FRICTION 14). On iOS it is the
     // scroll view's own drag, which a viewport does not bound, under real touches too: a held real stroke scrolls less
     // than its length (a 300-point one scrolled Reflow 214) and an unheld one flings, so real strokes would not scroll
@@ -251,17 +265,23 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   if (carrier.touches) {
     let r;
     // A still drag's ops first wait up to `REACH_MS` for the touch to reach its view, inside the finger's time: the
-    // runner holds that much longer, and the reply says the hold asked. The hold also moves the agent's clock by its
-    // length, so the app's `every` and `after` run while the finger is held (euxy FRICTION 10), as `tap down`,
-    // `clock +<ms> real`, `tap up` does; the finger is held only as long as asked (`heldTick`). Under platform timing
-    // the clock is the wall's already.
+    // runner holds that much longer, and the reply says the hold asked. The gesture also moves the agent's clock by its
+    // press, travel and holds as the finger makes them, so the app's `every` and `after` run while it is down (euxy
+    // FRICTION 10) and its own `performanceNow()` reads a hold's length (#1333), as `tap down`, `clock +<ms> real`,
+    // `tap up` does; the finger is held only as long as asked (`heldTick`). Under platform timing the clock is the
+    // wall's already.
     const reach = !moves && during.length ? REACH_MS : 0;
-    const tick = hold > 0 && timing !== 'platform' ? heldTick(s, s.now + hold, target) : undefined;
-    let heldTime = hold;
-    const path = opts.path?.map(l => {
-      heldTime += l.hold ?? 0;
-      return { ...l, during: (l.during ?? []).map(held), ...(timing !== 'platform' && l.hold > 0 ? { tick: heldTick(s, s.now + heldTime, target) } : {}) };
-    });
+    // The runner's offsets count the reach inside the first leg's hold; the clock counts only the time asked.
+    const base = s.now, first = press + (dx || dy ? over : 0) + hold;
+    const asked = (ms) => ms <= first + reach ? Math.min(ms, first) : ms - reach;
+    // A `during` clock counts toward its leg's hold, and what it moves past that moves the rest of the gesture later,
+    // as on the carriers' phases below: the steps never pass their target, so a clock already past one was moved so.
+    let carry = 0;
+    const tick = timing !== 'platform' ? (ms) => {
+      carry = Math.max(carry, s.now - base - asked(ms));
+      return heldTick(s, base + asked(ms) + carry, target);
+    } : undefined;
+    const path = opts.path?.map(l => ({ ...l, during: (l.during ?? []).map(held) }));
     try { r = await carrier.input(node.id, 'drag', { at: from ? start : undefined, drag: { ...drag, hold: hold + reach, during: during.map(held), ...(tick ? { tick } : {}), ...(path ? { path } : {}) } }); }
     catch (error) { throw await tapRefusal(s, target, error); }
     return noted(await s.landed({ ...r, ...(r.drag ? { drag: { ...r.drag, hold } } : {}), target, ...(scrolled ? { scrolled } : {}), carrier: host, mode: timing }), await reorderNotes(s, mark));
@@ -293,7 +313,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     if (down.delivery === 'unsupported' && ['ios', 'host-ios'].includes(host)) {
       // iOS holds no contact across requests: one request moves the scroller with the finger (LLP 1116.003).
       // Any other drag is refused, never answered `unsupported` as a success.
-      if (during.length) throw new Error('drag: during needs the finger held down, which only --touch platform does on iOS (LLP 1080.000 §11)');
+      if (during.length || opts.path) throw new Error(`drag: ${opts.path ? 'then' : 'during'} needs the finger held down, which only --touch platform does on iOS (LLP 1080.000 §11)`);
       const r = await carrier.ask({ op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, ...(from ? { from: start } : {}) });
       if (r.error) throw new Error(r.error);
       return noted(await s.tagged({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...(moves ? still(r, target) : []), ...await reorderNotes(s, mark)]);
@@ -305,17 +325,34 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     // press and hold seek the virtual clock (platformer R7). `virtual` tells
     // web and macOS to skip the wall sleep; Linux already seeks and reports `clock`.
     const seek = timing !== 'platform' ? { virtual: true } : {};
-    if (press) await phase('hold', { ms: press, ...seek });
-    if (moves) await phase('move', { dx, dy, ms: over });
-    // The ops run where the finger has moved to, each bounded by the gesture's own bound.
-    for (const op of during) {
-      let timer;
-      const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error(`drag: an op during it outlasted ${DRAG_BOUNDS.total} ms`)), DRAG_BOUNDS.total); });
-      const running = held(op)();
-      running.catch(() => {});
-      try { done.push(await Promise.race([running, late])); } finally { clearTimeout(timer); }
+    if (liftAt !== undefined) {
+      const still = Math.min(press, liftAt), travel = liftAt - still;
+      if (still) await phase('hold', { ms: still, ...seek });
+      if (travel) {
+        const leg = legs[0], part = travel / over;
+        await phase('move', { dx: dx * part, dy: dy * part, ms: travel });
+        leg.dx -= dx * part; leg.dy -= dy * part; leg.over -= travel;
+      }
+      const lifted = await carrier.ask({ op: 'tap', phase: 'reorderHold' });
+      if (lifted.error) throw new Error(`drag: ${lifted.error}`);
+      if (press > still) await phase('hold', { ms: press - still, ...seek });
+    } else if (press) await phase('hold', { ms: press, ...seek });
+    // Each leg (`then`) moves on from where the one before ended, runs its ops there, and holds.
+    for (const leg of legs) {
+      if (leg.dx || leg.dy) await phase('move', { dx: leg.dx, dy: leg.dy, ms: leg.over });
+      // The ops run where the finger has moved to, each bounded by the gesture's own bound. A clock they move counts
+      // toward the leg's hold under the agent's clock.
+      const before = s.now;
+      for (const op of leg.during) {
+        let timer;
+        const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error(`drag: an op during it outlasted ${DRAG_BOUNDS.total} ms`)), DRAG_BOUNDS.total); });
+        const running = held(op)();
+        running.catch(() => {});
+        try { done.push(await Promise.race([running, late])); } finally { clearTimeout(timer); }
+      }
+      const moved = timing !== 'platform' && s.now > before ? s.now - before : 0, hold = Math.max(0, leg.hold - moved);
+      if (hold) await phase('hold', { ms: hold, ...seek });
     }
-    if (hold) await phase('hold', { ms: hold, ...seek });
     up = await phase('up');
   } catch (error) {
     // Never leave the finger down: cancel, else lift (AppKit has no cancel). If neither is confirmed the contact stays recorded, and says so.
@@ -516,24 +553,34 @@ export const folderTree = (dir, prefix = '') => readdirSync(dir, { withFileTypes
 /** The driver's pasted paths: a file's bytes, a folder's tree. */
 export const driverFiles = (paths) => paths.map((p) => statSync(p).isDirectory() ? { name: basename(p), files: folderTree(p) } : { name: basename(p), bytes: readFileSync(p).toString('base64') });
 
-/** `tap <target> drop|dragenter <path…>` and `tap <target> dragleave` on Chrome; returns the drag it leaves held. */
+/** `tap <target> drop|dragenter [<path…>] [--text "…"] [--url "…"]` and `tap <target> dragleave` on Chrome; returns
+ * the drag it leaves held. */
 export async function fileDrag({ kind, opts, id, x, y, dragged, call, evaluate }) {
-  // A drag of files from the desktop as Chrome takes one (`Input.dispatchDragEvent`, the paths themselves, so
-  // its DataTransfer is the browser's own, folders included): it comes over the point, then drops there, or
-  // is cancelled. A drop no element accepts is refused before Chrome would open the files itself.
+  // A drag from outside the page as Chrome takes one (`Input.dispatchDragEvent`, the paths themselves, so its
+  // DataTransfer is the browser's own, folders included, with the text as `text/plain` and the link as
+  // `text/uri-list`): it comes over the point, then drops there, or is cancelled. A drop no element takes is
+  // refused before Chrome would open the files or follow the link itself.
+  // Out of the page first, then cancelled: Chrome sends the page no dragleave for a bare cancel
+  const away = async (held) => {
+    await call('Input.dispatchDragEvent', { type: 'dragOver', x: -1, y: -1, data: held.data });
+    await call('Input.dispatchDragEvent', { type: 'dragCancel', x: -1, y: -1, data: held.data });
+  };
   if (kind === 'dragleave') {
     if (!dragged) throw new Error('no drag is held over the page');
-    // Out of the page first: Chrome sends the page no dragleave for a bare cancel.
-    await call('Input.dispatchDragEvent', { type: 'dragOver', x: -1, y: -1, data: dragged.data });
-    await call('Input.dispatchDragEvent', { type: 'dragCancel', x: -1, y: -1, data: dragged.data });
+    await away(dragged);
     dragged = null;
   } else {
-    const data = { items: [], files: opts[kind], dragOperationsMask: 1 };
-    if (kind === 'drop' && !await evaluate(`(() => { const dt = new DataTransfer(); dt.items.add(new File([], 'probe')); const over = new DragEvent('dragover', { clientX: ${x}, clientY: ${y}, bubbles: true, cancelable: true, dataTransfer: dt }); (document.elementFromPoint(${x}, ${y}) ?? exact.views.get(${id})).dispatchEvent(over); return over.defaultPrevented; })()`)) {
-      if (dragged) { await call('Input.dispatchDragEvent', { type: 'dragCancel', x: dragged.x, y: dragged.y, data: dragged.data }); dragged = null; }
-      throw new Error(`view ${id} took no drop (nothing at its middle accepts a file drag)`);
+    const { text, url } = opts, files = opts[kind];
+    const items = [...(text !== undefined ? [{ mimeType: 'text/plain', data: text }] : []), ...(url !== undefined ? [{ mimeType: 'text/uri-list', data: url }] : [])];
+    const data = { items, files, dragOperationsMask: 1 };
+    // The probe's drag carries the same types; an editable field under the point inserts plain text itself
+    const probe = `const dt = new DataTransfer(); ${files.length ? "dt.items.add(new File([], 'probe'));" : ''} ${items.map((i) => `dt.setData(${JSON.stringify(i.mimeType)}, ${JSON.stringify(i.data)});`).join(' ')}`;
+    if (kind === 'drop' && !await evaluate(`(() => { ${probe} const over = new DragEvent('dragover', { clientX: ${x}, clientY: ${y}, bubbles: true, cancelable: true, dataTransfer: dt }); const at = document.elementFromPoint(${x}, ${y}) ?? exact.views.get(${id}); at.dispatchEvent(over); const field = at.closest(${JSON.stringify(FIELDS)}); return over.defaultPrevented || (!!field && dt.types.includes('text/plain') && !dt.types.includes('Files')); })()`)) {
+      // A drag held over the page leaves it as `dragleave` takes it away, and the caller holds none (`error.dragged`)
+      if (dragged) await away(dragged);
+      throw Object.assign(new Error(`view ${id} took no drop: nothing at its middle takes this drag`), { dragged: null });
     }
-    if (!dragged || dragged.data.files.join('\n') !== data.files.join('\n')) await call('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data });
+    if (!dragged || JSON.stringify([dragged.data.items, dragged.data.files]) !== JSON.stringify([items, files])) await call('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data });
     await call('Input.dispatchDragEvent', { type: 'dragOver', x, y, data });
     if (kind === 'drop') { await call('Input.dispatchDragEvent', { type: 'drop', x, y, data }); dragged = null; } else dragged = { x, y, data };
   }

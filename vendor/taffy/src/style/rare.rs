@@ -56,6 +56,18 @@ pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
     /// EXACT PATCH 81: how far in from this box's border its bars' slots begin on each edge: its
     /// unsafe area there, what it observes with what its own reservations add to its padding.
     pub bar_inset: Rect<f32>,
+    /// EXACT PATCH 81: whether this box's bars lie on its scrollport, the host presenting it as a
+    /// scroll view: they are its inset, not its content's, so they take none of its padding and
+    /// their overflow none of its scrollable extent.
+    pub bar_scrollport: bool,
+    /// EXACT PATCH 81: where this box's region bars' slots lie on each edge, top right bottom left
+    /// (LLP 1123 D12, "Region"): how far in from its border box's edge the slot begins, less than
+    /// 0 where it lies past that edge, and how far in from the two edges beside it the slot runs,
+    /// left and right for the top or bottom, top and bottom for a side. `None` lays a region bar
+    /// out as any other.
+    pub bar_regions: [Option<[f32; 3]>; 4],
+    /// EXACT PATCH 81: whether this bar lies on its parent's region on its edge (`bar_regions`).
+    pub bar_region: bool,
     /// Keeps the custom identifier type when grid layout is disabled.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub dummy: core::marker::PhantomData<S>,
@@ -125,6 +137,9 @@ impl<S: CheapCloneStr> RareStyle<S> {
         bar: None,
         bars: false,
         bar_inset: Rect::ZERO,
+        bar_scrollport: false,
+        bar_regions: [None; 4],
+        bar_region: false,
         dummy: core::marker::PhantomData,
         #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
         calc_owners: crate::sys::Vec::new(),

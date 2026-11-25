@@ -3,17 +3,15 @@
 // mutation's too, as the runner's `fragment_command` waits on `has_pending`. rt.js and router.js run beside stand-ins for the
 // modules they import, and a fragment.js that records what it is asked.
 import { afterAll, test, expect } from 'bun:test';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { standIns } from './stand-ins.mjs';
-import { fileURLToPath } from 'node:url';
+import { stageRuntime } from './stand-ins.mjs';
 
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-fragment-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'shape.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js'];
-for (const f of REAL) copyFileSync(resolve(fileURLToPath(new URL(`../../web-js/${f}`, import.meta.url))), resolve(dir, f));
-for (const [file, source] of standIns(REAL)) writeFileSync(resolve(dir, file), source);
+stageRuntime(dir, REAL);
 writeFileSync(resolve(dir, 'fragment.js'), `const asked = globalThis.fragmentAsked;
 export const arm = (root, op) => asked.push(['arm', op.fragment, op.activation]);
 export const scroll = (root, visit, fragment, log, activation) => asked.push(['scroll', fragment, activation]);

@@ -29,6 +29,7 @@ macro_rules! pattern {
 pub const RECIPES: &[(&str, &str)] = &[
     recipe!("after-a-write"),
     recipe!("alternate-app-icons"),
+    recipe!("announce"),
     recipe!("app-json"),
     recipe!("background-transfers"),
     recipe!("background-work"),
@@ -51,6 +52,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("fetch-loading-error"),
     recipe!("files-and-grants"),
     recipe!("first-launch"),
+    recipe!("floating-window"),
     recipe!("foldables"),
     recipe!("functions"),
     recipe!("gpu-module"),
@@ -59,12 +61,15 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("grouped-form"),
     recipe!("in-app-browser"),
     recipe!("ios-driving"),
+    recipe!("keep-a-playing-video"),
     recipe!("keyboard-and-focus"),
     recipe!("large-live-list"),
     recipe!("list-rows"),
     recipe!("local-network"),
     recipe!("long-lists"),
     recipe!("long-text"),
+    recipe!("mac-binary-updates"),
+    recipe!("mini-player"),
     recipe!("mobile-build"),
     recipe!("model-viewer"),
     recipe!("money"),
@@ -83,6 +88,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("phone-manifest"),
     recipe!("porting-and-release"),
     recipe!("ports-and-browsers"),
+    recipe!("progressive-tabs"),
     recipe!("purchases"),
     recipe!("push"),
     recipe!("random-and-shuffle"),
@@ -106,6 +112,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("supabase"),
     recipe!("suspending-feed"),
     recipe!("symbols"),
+    recipe!("system-controls"),
     recipe!("tabs"),
     recipe!("forma"),
     recipe!("tests"),
@@ -116,12 +123,14 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("tips"),
     recipe!("tools"),
     recipe!("usb-hid-serial"),
+    recipe!("wait-for-a-frame-click"),
     recipe!("waveform-and-tail"),
     recipe!("web-look"),
     recipe!("web-sessions"),
     recipe!("website"),
     recipe!("website-hosting"),
     recipe!("white-label"),
+    recipe!("window-bounds"),
 ];
 
 pub const PATTERNS: &[(&str, &str)] = &[
@@ -137,6 +146,7 @@ pub const PATTERNS: &[(&str, &str)] = &[
 /// Grammar words a recipe is the answer to, which builders looked up by the
 /// word (`sequence` for the sequencer, `keyframes` for motion; euxy port 19).
 const ALIASES: &[(&str, &str)] = &[
+    ("windowKind", "second-window"),
     ("every", "timers"),
     ("after", "timers"),
     ("tolerance", "timers"),
@@ -144,6 +154,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("keyframes", "motion"),
     ("@keyframes", "motion"),
     ("tool", "tools"),
+    ("rotate", "ios-driving"),
     ("exactDelivery", "over-the-air-updates"),
 ];
 

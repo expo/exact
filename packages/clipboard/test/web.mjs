@@ -43,8 +43,10 @@ try {
     }
     return out;
   });
+  const mounted = await text('mount');
+  check('chrome', 'mount cannot read', mounted === 'NotAllowedError: clipboard.readText: NotAllowedError: person-required', mounted);
   const supports = await text('supports');
-  check('chrome', 'ClipboardItem.supports answers from the declaration', supports === 'image/png=true text/plain=true text/html=false image/svg+xml=false', supports);
+  check('chrome', 'ClipboardItem.supports answers from the declaration', supports === 'image/png=true text/plain=true text/html=true image/svg+xml=false', supports);
   const pixel = { png: '255,0,0', 'png-bytes': '255,0,0', both: '255,0,0', apng: '0,255,0' };
   for (const [kind, answer, landed] of KINDS) {
     const before = await text('wrote');
@@ -54,12 +56,51 @@ try {
     let got = before;
     while (Date.now() < end && (got = await text('wrote')) === before) await page.waitForTimeout(50);
     check('chrome', `${kind}: answers ${answer}`, got === answer, got);
+    if (kind === 'html' || kind === 'html-only') {
+      const stored = await page.evaluate(async () => {
+        const [item] = await navigator.clipboard.read({ unsanitized: ['text/html'] });
+        return (await item.getType('text/html')).text();
+      });
+      if (kind === 'html-only') {
+        check('chrome', 'a hidden document body is absent from the clipboard', !stored.includes('private draft'), stored);
+      } else {
+        check('chrome', 'the unsanitized read already contains clean HTML', stored.includes('<b>Résumé</b>') &&
+          !/script|onclick|discard/i.test(stored), stored);
+        await page.evaluate(() => {
+          const editor = document.body.appendChild(document.createElement('div'));
+          editor.contentEditable = 'true';
+          editor.id = 'clipboard-paste-target';
+          editor.focus();
+        });
+        const editor = page.locator('#clipboard-paste-target');
+        await editor.press(process.platform === 'darwin' ? 'Meta+v' : 'Control+v');
+        const pasted = await editor.evaluate(el => ({
+          text: el.textContent.trim(),
+          bold: [...el.querySelectorAll('*')].some(e => e.textContent === 'Résumé' && Number(getComputedStyle(e).fontWeight) >= 600),
+        }));
+        check('chrome', 'a rich editor pastes the formatted note', pasted.text === 'Résumé note' && pasted.bold, JSON.stringify(pasted));
+        await editor.evaluate(el => el.remove());
+      }
+    }
+    if (kind === 'both') {
+      for (const [id, expected] of [['paste', 'https://example.com/red.png | png 137 80'], ['open-url', 'https://example.com/red.png'], ['read-pair', 'https://example.com/red.png | https://example.com/red.png']]) {
+        await page.getByTestId(id).click();
+        await page.waitForFunction(s => document.querySelector('[data-testid=wrote]')?.textContent === s, expected, { timeout: 5000 }).catch(() => {});
+        const seen = await text('wrote');
+        check('chrome', id, seen === expected, seen);
+      }
+    }
     const h = await held();
     if (!landed) { check('chrome', `${kind}: leaves the clipboard as it was`, h.text === 'before', JSON.stringify(h)); continue; }
     const ok = landed.types.every(t => h.types.includes(t)) && (landed.text === undefined || h.text === landed.text)
       && (!landed.image || (h.image?.width === 8 && h.image?.height === 8 && h.image.pixel === pixel[kind]));
     check('chrome', `${kind}: the clipboard holds ${JSON.stringify(landed)}${pixel[kind] ? ` in ${pixel[kind]}` : ''}`, ok, JSON.stringify(h));
   }
+  await page.evaluate(() => navigator.clipboard.writeText('Read from Return'));
+  await page.getByTestId('paste-key').press('Enter');
+  await page.waitForFunction(() => document.querySelector('[data-testid=wrote]')?.textContent === 'Read from Return', null, { timeout: 5000 }).catch(() => {});
+  const submitted = await text('wrote');
+  check('chrome', 'Return submits a person-started read', submitted === 'Read from Return', submitted);
 } finally {
   await browser.close();
   server.stop();

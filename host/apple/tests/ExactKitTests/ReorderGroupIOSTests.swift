@@ -162,6 +162,20 @@ final class ReorderGroupIOSTests: XCTestCase {
         XCTAssertTrue(p.views[7]?.isFirstResponder == true, "the landed grip keeps the keyboard")
     }
 
+    func testTheListIdCancelsItsKeyboardReorder() throws {
+        let calls = ReorderGroupRecorder(), (p, grip) = fixture(calls)
+        p.views[1]?.applyProps(set: ["id": "backlog"], clear: [])
+        grip.applyProps(set: ["tabIndex": "0"], clear: [])
+        XCTAssertTrue(grip.becomeFirstResponder())
+        key(" ", .keyboardSpacebar, at: grip)
+        p.reorders.cancel("done")
+        XCTAssertTrue(p.reorders.groupActive)
+        p.reorders.cancel("backlog")
+        XCTAssertNil(p.reorderHost!.group)
+        p.reorders.cancel("backlog")
+        XCTAssertEqual(calls.log, ["begin 3", "cancel", "finish"])
+    }
+
     func testEscapeCancelsAndAnAuthoredKeyHandlerKeepsItsKeys() throws {
         let calls = ReorderGroupRecorder(), (p, grip) = fixture(calls)
         grip.applyProps(set: ["tabIndex": "0"], clear: [])

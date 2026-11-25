@@ -7,6 +7,97 @@ use contract_types::{Scope, Ty};
 use exact_kernel::StyleId;
 use exact_motion::animation::LONGHANDS;
 
+/// Check literal references in the expanded view, where component arguments
+/// have their values. Computed names resolve against the mounted elements.
+pub(crate) fn action_targets(checked: &contract_types::Checked<'_>, out: &mut Vec<LowerError>) {
+    let checking = contract_checking::Checking::new(checked);
+    let view = checking.expanded();
+    if !view.walk().any(|node| {
+        node.element()
+            .is_some_and(|(_, _, attrs)| attrs.iter().any(|a| a.name == "aria-actions"))
+    }) {
+        return;
+    }
+    let mut refs = Vec::new();
+    let mut targets = std::collections::BTreeMap::new();
+    let branches =
+        view.structure()
+            .walk_regions_with((Vec::new(), false), |node, (arms, inline)| {
+                [false, true].map(|other| {
+                    let mut path = arms.clone();
+                    if node.is_choice() {
+                        path.push((node.site(), other));
+                    }
+                    Some((
+                        path,
+                        node.element()
+                            .map_or(*inline, |(tag, _, _)| crate::prose::text_container(tag)),
+                    ))
+                })
+            });
+    for (node, (arms, inline)) in branches {
+        let Some((tag, _, attrs)) = node.element() else {
+            continue;
+        };
+        let attr = |name: &str| attrs.iter().find(|a| a.name == name);
+        let id = attr("id").map(|a| &a.value);
+        if let Some(actions) = attr("aria-actions") {
+            if let Expr::Str(names, _) = &actions.value {
+                refs.push((names, id, actions.span, arms.clone()));
+            }
+        }
+        if let Some(Expr::Str(id, _)) = id {
+            let presses = attr("press").is_some()
+                || (matches!(tag, "link" | "button") || inline && crate::prose::phrasing(tag))
+                    && attr("href")
+                        .is_some_and(|a| !matches!(&a.value, Expr::Str(s, _) if s.is_empty()));
+            targets
+                .entry(id.as_str())
+                .or_insert_with(Vec::new)
+                .push((arms, presses));
+        }
+    }
+    for (names, own, span, arms) in refs {
+        for name in names.split_ascii_whitespace() {
+            let reason = if matches!(own, Some(Expr::Str(id, _)) if id == name) {
+                "names the element itself"
+            } else {
+                // Only opposite arms of the same choice exclude a target.
+                let mut mounted = targets
+                    .get(name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|(path, _)| {
+                        arms.iter()
+                            .zip(path)
+                            .take_while(|(a, b)| a.0 == b.0)
+                            .all(|(a, b)| a.1 == b.1)
+                    })
+                    .peekable();
+                if mounted.peek().is_none() {
+                    "names no element in this view with that literal id"
+                // A conditional target may disappear. An unconditional earlier id wins.
+                } else if mounted
+                    .take_while(|(path, presses)| *presses || !arms.starts_with(path))
+                    .any(|(_, presses)| *presses)
+                {
+                    continue;
+                } else {
+                    "names an element with no press"
+                }
+            };
+            out.push(LowerError {
+                id: "lower-aria-action-target",
+                message: format!("`aria-actions` id `{name}` {reason}"),
+                span,
+            });
+            if out.len() >= MAX_REFUSALS {
+                return;
+            }
+        }
+    }
+}
+
 pub(crate) fn unknown_tag(tag: &str, span: Span) -> LowerError {
     let hint = tags::html_tag(tag)
         .or_else(|| svg::refused_tag(tag))
@@ -32,9 +123,10 @@ pub(crate) fn fragmentation(name: &str) -> Option<&'static str> {
     })
 }
 
-/// WAI-ARIA 1.2's states and properties: an unknown `aria-*` name is told
+/// WAI-ARIA 1.2 and the proposed aria-actions (w3c/aria#1805): an unknown `aria-*` name is told
 /// whether ARIA has it, and which of these Contract carries (`tags::attr`).
 const ARIA: &[&str] = &[
+    "aria-actions",
     "aria-activedescendant",
     "aria-atomic",
     "aria-autocomplete",
@@ -394,10 +486,8 @@ pub(crate) fn unknown_attr(tag: &str, a: &Attr) -> LowerError {
              `-exact-press-haptic` names the platform feedback"
                 .into()
         }
-        // Every host ends a hold the system took (a scroll, an alert, the
-        // window losing focus) with the hold's `pointerup`.
-        None if matches!(a.name.as_str(), "pointercancel" | "touchcancel" | "lostpointercapture") => {
-            "; a cancelled pointer ends with `pointerup` (its `buttons` 0), so the `pointerup` handler that ends a hold covers it".into()
+        None if matches!(a.name.as_str(), "touchcancel" | "lostpointercapture") => {
+            "; handle a cancelled contact with `pointercancel`".into()
         }
         // LLP 1055.000 §8 ruling 7: the end of a motion is not an event.
         None if matches!(
@@ -586,14 +676,14 @@ fn known_arms(v: &Expr, names: &Substituted, budget: &mut usize) -> Option<Expr>
 /// rows. The driver runs this when an earlier pass refused, so a misspelled
 /// tag or a bad colour is reported in the same run as a type error.
 pub fn lint(file: &File) -> Vec<LowerError> {
-    lint_components(file, |_| true)
+    lint_components(file, |_| true, &Default::default())
 }
 
 /// A bad literal value (`color="notacolor"`) in a component of the root's
 /// file that nothing the root renders uses (LLP 1156.005 D3). Lowering walks
 /// from the root, so without this it built clean and was refused only at the
 /// component's first use, far from the edit.
-pub fn lint_unused(file: &File) -> Vec<LowerError> {
+pub fn lint_unused(file: &File, shapes: &contract_types::Shapes) -> Vec<LowerError> {
     let Some(root) = file.components.first() else {
         return Vec::new();
     };
@@ -643,7 +733,11 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
                     ..
                 } if tag != "svg" => {
                     out.extend(attrs.iter().filter_map(|a| {
-                        matches!(a.value, Expr::Str(..) | Expr::Number(..)).then_some(a.span)
+                        matches!(
+                            a.value,
+                            Expr::Str(..) | Expr::Number(..) | Expr::Template(..)
+                        )
+                        .then_some(a.span)
                     }));
                     literal(children, out);
                 }
@@ -665,17 +759,26 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
     if spans.is_empty() {
         return Vec::new();
     }
-    let mut errors = lint_components(file, unused);
+    let mut errors = lint_components(file, unused, shapes);
     errors.retain(|e| e.id == "lower-attr-value" && spans.contains(&e.span));
     errors
 }
 
-fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerError> {
+fn lint_components(
+    file: &File,
+    checked: impl Fn(usize) -> bool,
+    shapes: &contract_types::Shapes,
+) -> Vec<LowerError> {
     // A theme's names are colours (LLP 1095 D4); the lint asks only whether a
     // row's value is one, so each stands for any.
     crate::theme::bind_axes(file);
     let _theme = crate::theme::lint_scope(file);
-    fn walk(nodes: &[Node], names: &Substituted, errors: &mut Vec<LowerError>) {
+    fn walk(
+        nodes: &[Node],
+        names: &Substituted,
+        errors: &mut Vec<LowerError>,
+        constants: &crate::keyframes::Context,
+    ) {
         for n in nodes {
             match n {
                 Node::Element {
@@ -685,10 +788,15 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                     span,
                     ..
                 } => {
+                    let mut attrs = std::borrow::Cow::Borrowed(attrs.as_slice());
+                    values::fold_attr_templates(&mut attrs, &|e, string_only| {
+                        constants.template_constant(e, string_only)
+                    });
+                    let attrs = attrs.as_ref();
                     if tags::tag(tag).is_none() && !native::is_module_tag(tag) {
                         errors.push(unknown_tag(tag, *span));
                     } else {
-                        let coerced = svg::coerce_lengths(tag, false, attrs);
+                        let coerced = svg::coerce_lengths(tag, false, attrs, None);
                         let attrs = coerced.as_deref().unwrap_or(attrs);
                         // Activity compilation consumes `slot` before lowering (LLP 1126.001 WP8).
                         // `delete=` is lowering's, a list row's swipe (`swipe_rows.rs`).
@@ -792,14 +900,14 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                             }
                         }
                     }
-                    walk(children, names, errors);
+                    walk(children, names, errors, constants);
                 }
                 node => {
                     for (list, binds) in node.scoped_child_lists() {
                         if binds.is_empty() {
-                            walk(list, names, errors);
+                            walk(list, names, errors, constants);
                         } else {
-                            walk(list, &names.hiding(binds.iter()), errors);
+                            walk(list, &names.hiding(binds.iter()), errors, constants);
                         }
                     }
                 }
@@ -838,7 +946,9 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                 imported: imported.clone(),
             },
         };
-        walk(&c.view, &names, &mut errors);
+        let scope = Scope::default();
+        let constants = crate::keyframes::Context::new(&file.fns, &scope, shapes);
+        walk(&c.view, &names, &mut errors, &constants);
     }
     // A component's anatomy, which no type is needed to check (LLP 1139 D2).
     for (_, c) in

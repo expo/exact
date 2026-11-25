@@ -1,9 +1,11 @@
 #if os(iOS)
+import ExactCore
 import XCTest
 import QuartzCore
 @testable import ExactKit
 @testable import ExactEffects
 @testable import ExactSvg
+@testable import ExactNavigation
 
 final class NavigationMarksTests: XCTestCase {
     func testTheRenderLinkStopsWhileTTIWaitsForWork() throws {
@@ -71,6 +73,30 @@ final class NavigationMarksTests: XCTestCase {
         XCTAssertNotNil(picture.layer.contents, "the picture landed")
     }
 
+    /// LLP 1072 T3: TTI's read of outstanding work waits on the owner, not
+    /// main. While the owner is busy (a first build; here a held job), main
+    /// keeps turning, and TTI is recorded once the owner answers.
+    func testTTIReadsTheLedgerWithoutHoldingMain() throws {
+        let session = try heldNavigation("/busy") { $0.holdFillForTests() }
+        defer { session.destroy() }
+        // The first frame's read, answered while the fill still holds TTI.
+        Owner.shared.sync {}
+        waitForMainQueue("the first frame's read")
+        let held = DispatchSemaphore(value: 0)
+        var released = false
+        defer { if !released { held.signal() } }
+        Owner.shared.post { _ = held.wait(timeout: .now() + 30) }
+        session.publishFillForTests(1, wireBatch([]), lease: session.runtime.completionLease)
+        let started = Date()
+        for _ in 0..<3 { waitForMainQueue("a turn while the owner is busy") }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10, "no main turn waited for the owner")
+        XCTAssertFalse(session.fillInFlight, "the fill landed while the owner was busy")
+        XCTAssertFalse(NavigationMarks.shared.recent.contains { $0.hasPrefix("tti /busy ") }, "the owner has not answered")
+        held.signal()
+        released = true
+        waitForTTI("/busy")
+    }
+
     func testADestroyedSessionHasNoTTI() throws {
         let session = try heldNavigation("/destroyed") { $0.holdFillForTests() }
         session.destroy()
@@ -98,6 +124,67 @@ final class NavigationMarksTests: XCTestCase {
 
     private func waitForTTI(_ route: String) {
         waitFor("TTI once the work ends") { NavigationMarks.shared.recent.contains { $0.hasPrefix("tti \(route) ") } }
+    }
+}
+
+/// What caused a navigation is what made its commit (#1385): a person's input
+/// whatever control took it, the program's commit even just after a tap.
+extension NavigationTabsIOSTests {
+    func testANavigationIsThePersonsWhicheverControlTookItAndTheProgramsOtherwise() throws {
+        let session = try fixture("navigation-cause")
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        let home = try XCTUnwrap(tabs.tabControllers?[0] as? UINavigationController)
+        var since = CACurrentMediaTime()
+        /// The next navigation's cause and its time to render, in ms, from the journal.
+        func next(_ what: String) -> (cause: String, ms: Double)? {
+            let ttr = { ExactJournal.shared.events.first { $0.at >= since && $0.kind == "navigation" && ($0.fields["name"] as? String)?.hasSuffix("_ttr") == true } }
+            waitFor(what) { ttr() != nil }
+            defer { since = CACurrentMediaTime() }
+            guard let event = ttr(), let cause = event.fields["exact.nav.cause"] as? String, let value = event.fields["value"] as? Double else { return nil }
+            return (cause, value * 1000)
+        }
+        // The tab bar's item presses its tab inside UIKit's dispatch of the
+        // lift, as the window dispatches it (`ExactWindow`)
+        let marks = NavigationMarks.shared
+        marks.dispatching = CACurrentMediaTime() - 0.25
+        tapTab(tabs, 1)
+        marks.dispatching = nil
+        let tab = try XCTUnwrap(next("a tab bar tap's navigation"))
+        XCTAssertEqual(tab.cause, "input")
+        XCTAssertGreaterThanOrEqual(tab.ms, 250, "timed from the lift")
+        // With no event in dispatch it is the person's all the same, timed from when the host took it
+        tapTab(tabs, 0)
+        let away = try XCTUnwrap(next("a tab bar tap with no recent event"))
+        XCTAssertEqual(away.cause, "input")
+        XCTAssertLessThan(away.ms, 250)
+        try tapNode(session, "detail")
+        XCTAssertEqual(next("a press's push")?.cause, "input")
+        until("detail pushed in Home") { home.viewControllers.count == 2 && home.transitionCoordinator == nil }
+        // Reselecting the tab is UIKit's pop, which the router follows as the platform's Back
+        tapTab(tabs, 0)
+        XCTAssertEqual(next("UIKit's pop to the root")?.cause, "input")
+        until("Home popped to its root") { home.viewControllers.count == 1 && home.transitionCoordinator == nil && !session.presenter.navigationHost.changing }
+        // A commit the program makes, as a timer's or a reply's is
+        session.apply(session.runtime.press(try node(session, "detail").id, now: session.now()))
+        XCTAssertEqual(next("the program's push")?.cause, "program")
+        // A queued act (`hatchAct`): a script's `click()` is the program's, a native control's carries the person's input
+        let detail = try node(session, "detail").id
+        func back() {
+            session.presenter.navigationHost.goBack()
+            XCTAssertEqual(next("the platform's Back")?.cause, "input")
+            until("Home back at its root") { home.viewControllers.count == 1 && home.transitionCoordinator == nil && !session.presenter.navigationHost.changing }
+        }
+        back()
+        marks.acting(.program) { session.applyInput(session.runtime.press(detail, now: session.now())) }
+        XCTAssertEqual(next("a script's click")?.cause, "program")
+        back()
+        marks.acting(.person(at: CACurrentMediaTime() - 0.25)) { session.applyInput(session.runtime.press(detail, now: session.now())) }
+        let bar = try XCTUnwrap(next("a bar button's press"))
+        XCTAssertEqual(bar.cause, "input")
+        XCTAssertGreaterThanOrEqual(bar.ms, 250, "timed from the lift")
+        // A change that work fell due made, in an input's batch (the runner's `RouterChange::due`)
+        marks.routerChanged(session, payload: ["top": 999, "pattern": "/due", "due": true], input: CACurrentMediaTime())
+        XCTAssertEqual(next("the due work's push")?.cause, "program")
     }
 }
 #endif

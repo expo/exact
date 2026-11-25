@@ -15,13 +15,13 @@ extension NodeView {
     /// screen's plane or a z translation — about `origin` (from the layer's
     /// anchor), else nil and the 2D path applies. `shift` is what a lifted
     /// Arrange row already moved by its frame (macOS).
-    func spaceTransform(origin d: CGPoint, scale s: CGFloat, shift: CGPoint = .zero) -> CATransform3D? {
+    func spaceTransform(origin d: CGPoint, scale s: CGPoint, shift: CGPoint = .zero) -> CATransform3D? {
         let axis = rotationAxis == [0, 0, 0] ? (style["rotate_axis"]?.numbers ?? [0, 0, 1]) : rotationAxis
         let z = number("translate_z")
         guard axis.count == 3, (axis[0] != 0 || axis[1] != 0 || z != 0) else { return nil }
         var t = CATransform3DMakeTranslation(translate.x - shift.x + d.x, translate.y - shift.y + d.y, z)
         t = CATransform3DRotate(t, rotate * .pi / 180, axis[0], axis[1], axis[2])
-        t = CATransform3DScale(t, s, s, 1)
+        t = CATransform3DScale(t, s.x, s.y, 1)
         return CATransform3DTranslate(t, -d.x, -d.y, 0)
     }
 
@@ -280,7 +280,19 @@ extension NodeView {
             return CGSize(width: PixelGrid.length(content.width, from: place.origin, vertical: false, scale: scale),
                           height: PixelGrid.length(content.height, from: place.origin, vertical: true, scale: scale))
         } ?? content
-        var reach = drawnRect(CGRect(origin: .zero, size: extent), in: document)
+        var reach = scale.x == 0 || scale.y == 0 ? CGRect.null : drawnRect(CGRect(origin: .zero, size: extent), in: document)
+        // A transform may extend the scroll area, but its original border
+        // box still counts, even when one axis collapses.
+        if let parent = superview {
+            #if os(iOS) || os(tvOS)
+            let original = CGRect(x: layer.position.x - bounds.width * layer.anchorPoint.x,
+                                  y: layer.position.y - bounds.height * layer.anchorPoint.y,
+                                  width: bounds.width, height: bounds.height)
+            #else
+            let original = frame
+            #endif
+            reach = reach.union(parent.convert(original, to: document))
+        }
         // A canvas placement or an AppKit layer transform needs the drawn corners.
         // Else the platform can convert the whole rectangle in one call.
         #if os(iOS) || os(tvOS)
@@ -291,6 +303,7 @@ extension NodeView {
         while let (child, carried, clip) = below.popLast() {
             guard child.style["display"]?.string != "none", child.props["semanticTag"] != "dialog",
                   child.props["popover"] == nil else { continue }
+            guard child.scale.x != 0, child.scale.y != 0 else { continue }
             if child.bounds.width > 0, child.bounds.height > 0 {
                 let raw = carried ? child.drawnRect(child.bounds, in: document) : child.convert(child.bounds, to: document)
                 if raw.origin.x.isFinite, raw.origin.y.isFinite, raw.width.isFinite, raw.height.isFinite,

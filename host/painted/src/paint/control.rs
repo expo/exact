@@ -23,7 +23,7 @@ const ACCENT: [u8; 4] = [0x00, 0x75, 0xff, 0xff];
 /// The accent a control, a focus ring or a filled button paints in, and
 /// what is drawn on it (a check, a switch's thumb, a filled button's
 /// title). One accent (LLP 1115.001 D4): the node's `accent-color` where it
-/// sets one (`authored`), with white on it as before; else the platform's
+/// sets one (`authored`), with the ink that reads on it; else the platform's
 /// `AccentColor` with its `AccentColorText`, where the host reported the
 /// device's colours; else this painter's own blue, with white.
 pub(crate) fn accents(authored: Option<[u8; 4]>, dark: bool) -> ([u8; 4], [u8; 4]) {
@@ -31,7 +31,7 @@ pub(crate) fn accents(authored: Option<[u8; 4]>, dark: bool) -> ([u8; 4], [u8; 4
         return look::accents(authored, dark);
     }
     match authored {
-        Some(accent) => (accent, [0xff; 4]),
+        Some(accent) => (accent, look::ink_on(accent)),
         None => crate::presenter::reported_accent(dark).unwrap_or((ACCENT, [0xff; 4])),
     }
 }
@@ -695,7 +695,7 @@ fn material_spinner(
         phase: c * crate::host::lower::SPINNER_REST as f32,
     };
     let layer = crate::host::lower::spinner_layer(key);
-    let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, c];
+    let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, c, 1.0];
     let layered = backend.layer_begin(layer, ts, (cx, cy), (0., 0.), base);
     backend.svg_path(&paint, ts);
     if layered {

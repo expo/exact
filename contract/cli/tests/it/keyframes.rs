@@ -5,6 +5,7 @@
 //! runner resolves after boot, and on what the compiler refuses.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, StyleId};
 use exact_motion::{Animations, Direction, Easing, FillMode, Property, Value};
 use exact_plan::{Plan, Value as PlanValue};
@@ -59,7 +60,7 @@ fn svg_angle_keyframes_refuse_an_inherited_spatial_axis() {
     }
 }
 
-fn animation(r: &Runner<NoData>, test_id: &str) -> (bool, Animations) {
+fn animation(r: &Runner<Source>, test_id: &str) -> (bool, Animations) {
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap();
     (
@@ -73,7 +74,7 @@ fn a_named_animation_reaches_the_row_with_its_keyframes_and_a_condition_can_stop
     let plan = contract::compile(&fixture()).unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -94,7 +95,7 @@ fn a_named_animation_reaches_the_row_with_its_keyframes_and_a_condition_can_stop
         a.keyframes.0[0].values,
         [
             (Property::Opacity, Value::scalar(0.4)),
-            (Property::Scale, Value::scalar(0.9)),
+            (Property::Scale, Value::new(0.9, 0.9)),
         ]
     );
     // From a `style`, through `class`: the keyframe's own easing and a
@@ -245,13 +246,13 @@ fn each_names_the_position_and_a_moved_row_reads_its_new_one() {
     let plan = contract::compile(source).unwrap();
     let mut r = Runner::boot(
         plan,
-        Keys,
+        boxed(Keys),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let text = |r: &Runner<Keys>, id: &str| {
+    let text = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         let node = k.node_by_key(k.find_by_test_id(id)[0]).unwrap();
         (
@@ -282,7 +283,7 @@ fn each_names_the_position_and_a_moved_row_reads_its_new_one() {
         let source = list;
         let mut r = Runner::boot(
             contract::compile(source).unwrap(),
-            Keys,
+            boxed(Keys),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -312,7 +313,7 @@ fn a_computed_delay_staggers_and_colours_keyframe() {
     let plan = contract::compile(source).unwrap();
     let mut r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -356,7 +357,7 @@ fn a_keyframe_takes_light_dark_through_a_palette_function() {
     let plan = contract::compile(source).unwrap();
     let r = Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        Words,
+        boxed(Words),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -399,11 +400,11 @@ fn a_keyframe_takes_light_dark_through_a_palette_function() {
     );
 }
 
-fn booted(source: &str) -> Runner<NoData> {
+fn booted(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap();
     Runner::boot(
         Plan::decode(&plan.encode()).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -907,7 +908,7 @@ fn a_bare_hex_color_is_its_quoted_string_and_another_hash_says_why() {
 fn translate_takes_percentages_of_the_box_everywhere_it_takes_lengths() {
     let source = "keyframes slide\n  from translate=\"calc(-50% + 4px) 0\"\n  to translate=\"10px 25%\"\ncomponent App\n  state wide = false\n  action widen\n    wide = true\n  view\n    column\n      box testId=\"centred\" position=\"absolute\" left=\"50%\" top=\"50%\" width=120 height=40 translate=\"-50% -50%\"\n      box testId=\"one\" position=\"absolute\" left=\"50%\" width=20 height=10 translate=\"-50%\"\n      box testId=\"bound\" width=80 height=10 translate=wide ? \"12px calc(-100% + 3px)\" : \"0\"\n      box testId=\"slides\" width=10 height=10 animation=\"slide 1s\"\n      button testId=\"widen\" press=widen\n        text \"w\"\n";
     let mut r = booted(source);
-    let rows = |r: &Runner<NoData>, id: &str| {
+    let rows = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         let s = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().style;
         (
@@ -967,8 +968,7 @@ fn translate_takes_percentages_of_the_box_everywhere_it_takes_lengths() {
 
 /// A design token in a colour keyframe is the colour it stands for, a
 /// `light-dark()` pair whole (euxy's chip relight, `c.chipDim`), as a row's
-/// colour is; one that varies by an app axis, and a two-value `scale`, are
-/// refused by name.
+/// colour is; one that varies by an app axis is refused by name.
 #[test]
 fn a_colour_keyframe_takes_the_designs_tokens() {
     let source = "theme\n  chipDim=\"light-dark(#cfced4, #45454b)\"\n  glow=\"#ff000080\"\nkeyframes relight\n  from background-color=\"chipDim\" box-shadow=\"0 0 6px glow\"\n  to background-color=\"transparent\" box-shadow=\"none\"\ncomponent App\n  view\n    text \"a\" testId=\"a\" animation=\"relight 1s\"\n";
@@ -1030,15 +1030,6 @@ fn a_colour_keyframe_takes_the_designs_tokens() {
         error.message.contains("`c.chip` varies by an app axis"),
         "{error}"
     );
-    let scale = contract::compile(
-        "keyframes fill\n  from scale=\"0 1\"\ncomponent App\n  view\n    text \"a\" animation=\"fill 1s\"\n",
-    )
-    .unwrap_err();
-    assert_eq!(scale.id, "lower-keyframes");
-    assert!(
-        scale.message.contains("one factor for both axes") && scale.message.contains("-90deg x"),
-        "{scale}"
-    );
 }
 
 /// A class choice whose one side sets animation longhands and whose other
@@ -1051,7 +1042,7 @@ fn a_class_choice_without_animation_on_one_side_bakes_from_either() {
             "keyframes spin\n  from rotate=0\n  to rotate=360\nstyle Idle\n  opacity=1\nstyle Active\n  animation-name=\"spin\"\n  animation-duration=\"200ms\"\ncomponent App\n  state active = {active}\n  view\n    view class=(active ? Active : Idle)\n"
         );
         let plan = contract::compile(&src).unwrap();
-        if let Err(e) = contract::bake(plan, ()) {
+        if let Err(e) = contract::bake(plan, boxed(())) {
             panic!("active={active}: {e}");
         }
     }
@@ -1077,7 +1068,7 @@ fn a_keyframes_declaration_reads_in_any_ascii_case() {
         let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
         let r = Runner::boot(
             Plan::decode(&plan.encode()).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -1097,4 +1088,47 @@ fn a_keyframes_declaration_reads_in_any_ascii_case() {
     assert!(a.keyframes.0[0]
         .values
         .contains(&(Property::Rotate, Value::scalar(45.0))));
+}
+
+#[test]
+fn scale_rows_keyframes_and_transitions_keep_both_axes() {
+    use exact_motion::Value;
+    let r = booted(
+        r#"keyframes flip
+  from scale="1 1"
+  to scale="1 0"
+component App
+  state flat = true
+  view
+    column
+      view testId="row" scale="1 0.5" transition="scale 1s linear" animation="flip 1s linear both"
+      view testId="choice" scale=(flat ? "0 1" : "1 0")
+      view testId="transform" transform="scale(2, 0.5)"
+      view testId="x" transform="scaleX(25%)"
+      view testId="y" transform="scaleY(-2)"
+      view testId="uniform" scale=2
+"#,
+    );
+    let k = r.kernel();
+    for (id, pair) in [
+        ("row", (1., 0.5)),
+        ("choice", (0., 1.)),
+        ("transform", (2., 0.5)),
+        ("x", (0.25, 1.)),
+        ("y", (1., -2.)),
+        ("uniform", (2., 2.)),
+    ] {
+        let s = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().style;
+        assert_eq!((s.scale.x, s.scale.y), pair, "{id}");
+    }
+    let (_, row) = animation(&r, "row");
+    assert_eq!(
+        row.0[0].sample(0.5, Property::Scale, Value::new(1., 1.)),
+        Some(Value::new(1., 0.5))
+    );
+    let s = k.node_by_key(k.find_by_test_id("row")[0]).unwrap().style;
+    assert_eq!(
+        s.transition,
+        exact_motion::Transitions::parse("scale 1s linear").unwrap()
+    );
 }

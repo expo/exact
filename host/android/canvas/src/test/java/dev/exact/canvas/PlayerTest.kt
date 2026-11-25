@@ -13,6 +13,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE)
@@ -152,6 +154,50 @@ class PlayerTest {
         assertEquals(Color.BLUE, tip(10f))
     }
 
+    @Test fun collectingAHostedViewsClipPreservesThePaint() {
+        val node = RenderNode("module").apply { setPosition(0, 0, 60, 60) }
+        val clip = intArrayOf(4, f(10), f(20), f(40), f(30)) + IntArray(8)
+        val draw = intArrayOf(28, 1, 2, 0, 0, f(60), f(60)) + IntArray(9)
+        val stream = identity + clip + draw + intArrayOf(6)
+        fun paint(collect: Boolean): Bitmap {
+            val graph = PaintedOrigins().apply { hasHostedViews = collect }
+            val bitmap = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
+            val canvas = object : Canvas(bitmap) {
+                override fun drawRenderNode(node: RenderNode) { drawColor(Color.BLUE) }
+            }
+            Player(emptyMap()).apply { origins = graph; native = { node } }
+                .replay(canvas, IntBuffer.wrap(stream), 0, stream.size)
+            if (collect) {
+                val visible = RectF(0f, 0f, 60f, 60f)
+                assertTrue(graph.transform(node, android.graphics.Matrix(), visible))
+                assertEquals(RectF(10f, 20f, 50f, 50f), visible)
+            }
+            return bitmap
+        }
+        val without = paint(false)
+        assertEquals(Color.BLUE, without.getPixel(10, 20))
+        assertEquals(Color.TRANSPARENT, without.getPixel(9, 20))
+        assertTrue(without.sameAs(paint(true)))
+    }
+
+    @Test fun anIframeKeepsItsFilterOriginAndItsOwnPaintClip() {
+        val graph = PaintedOrigins().apply { tracksFrames = true }
+        val frame = RenderNode("frame").apply { setPosition(0, 0, 200, 100) }
+        val root = RenderNode("root")
+        val player = Player(emptyMap()).apply { origins = graph; native = { frame } }
+        val blur = intArrayOf(53, 8, 0, f(200), f(300), f(180), 1, 0, f(4), f(4))
+        val half = 0.5f.toRawBits()
+        val transform = intArrayOf(1, half, 0, 0, half, 0, f(225))
+        val draw = intArrayOf(28, 1, 1, 0, 0, f(200), f(100)) + IntArray(9)
+        val ops = identity + blur + transform + draw + intArrayOf(54)
+        player.replay(root.beginRecording(400, 600), IntBuffer.wrap(ops), 0, ops.size)
+        root.endRecording()
+        val matrix = android.graphics.Matrix()
+        val clip = RectF(0f, 0f, 200f, 100f)
+        assertTrue(graph.transform(frame, matrix, clip))
+        assertEquals(RectF(0f, 225f, 100f, 275f), clip)
+    }
+
     /** A box's CSS filter (ops 53 and 54): its drawing goes into a node at the region's device bounds, which carries
      * the chain as a RenderEffect, and the walkers step over both ops. */
     @Test fun aFilterDrawsItsBoxIntoAnEffectNode() {
@@ -227,5 +273,37 @@ class PlayerTest {
         assertTrue(Bounds().apply { row = { node } }.measure(buffer, 0, ops.size, bounds))
         // The node's 100×50 at half size from (10, 20), not its unscaled box.
         assertTrue("$bounds", bounds.contains(RectF(10f, 20f, 60f, 45f)) && bounds.right < 70f && bounds.bottom < 50f)
+    }
+
+    /** A paragraph's lines in one style are one text blob; a run in another colour is its own. */
+    @Test fun runsInOneStyleAreDrawnTogether() {
+        val font = android.graphics.fonts.Font.Builder(java.io.File("../../../apps/canvas-gallery/assets/ExposureSansOriginal03-Regular.ttf")).build()
+        val calls = ArrayList<Int>()
+        val canvas = object : Canvas(Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)) {
+            override fun drawGlyphs(ids: IntArray, idOffset: Int, positions: FloatArray, posOffset: Int, count: Int,
+                font: android.graphics.fonts.Font, paint: android.graphics.Paint) { calls.add(count) }
+        }
+        fun run(color: Int, y: Int) = intArrayOf(9, 1, f(12), color, 0, 2, 36, f(0), f(y), 37, f(8), f(y))
+        val ops = identity + run(Color.BLACK, 12) + run(Color.BLACK, 28) + run(Color.BLUE, 44)
+        Player(mapOf(1 to font)).apply { width = 80; height = 80 }.replay(canvas, IntBuffer.wrap(ops), 0, ops.size)
+        assertEquals(listOf(4, 2), calls)
+    }
+
+    @Implements(LegacyGlyphs::class, isInAndroidSdk = false)
+    class GlyphOutlines {
+        companion object {
+            @JvmStatic @Implementation fun glyph(font: java.nio.ByteBuffer, index: Int, axes: IntArray, id: Int) =
+                intArrayOf(1, 4, 0, 0, 0, 1, 1f.toBits(), 0, 1, 0, 1f.toBits(), 4)
+        }
+    }
+
+    @Test @Config(sdk = [30], shadows = [GlyphOutlines::class])
+    fun overlappingLegacyRunsCompositeSeparately() {
+        val font = android.graphics.fonts.Font.Builder(java.io.File("../../../apps/canvas-gallery/assets/ExposureSansOriginal03-Regular.ttf")).build()
+        val run = intArrayOf(9, 1, f(12), 0x80000000.toInt(), 0, 1, 36, f(5), f(5))
+        val ops = identity + run + run
+        val bitmap = Bitmap.createBitmap(24, 24, Bitmap.Config.ARGB_8888)
+        Player(mapOf(1 to font)).apply { width = 24; height = 24 }.replay(Canvas(bitmap), IntBuffer.wrap(ops), 0, ops.size)
+        assertEquals(192, Color.alpha(bitmap.getPixel(7, 7)))
     }
 }

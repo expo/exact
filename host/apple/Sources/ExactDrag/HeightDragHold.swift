@@ -12,12 +12,13 @@ final class HeightDragHold {
     let generation: Int
     let primary: NativeHold
     let mapping: HeightDragPosition
+    let timeline: InputTimeline
     private(set) var ended = false
     private var finishing = false
     private var pin: UInt64?
     private var lastDisplacement = 0.0
-    /// The newest shown height and its time; the release velocity is the
-    /// engine's, over the heights shown (LLP 1057.001 §3).
+    /// The newest shown height and its input time; the release velocity is
+    /// the engine's, over the heights shown at their input times (LLP 1057.001 §3).
     private var shown: Double
     private var time: Double
     private var queued = false
@@ -32,7 +33,9 @@ final class HeightDragHold {
               SwipeInput.allows(header), SwipeInput.allows(target) else { return nil }
         self.session = session; self.header = header; self.target = target
         self.binding = binding; generation = session.generation
-        let (hold, batch) = session.runtime.heightDragBegin(binding.handleKey, targetKey: targetKey, now: session.now())
+        let now = session.now()
+        timeline = InputTimeline(input: time, clock: now)
+        let (hold, batch) = session.runtime.heightDragBegin(binding.handleKey, targetKey: targetKey, now: now)
         guard let hold, let mapping = HeightDragPosition(base: hold.x) else {
             session.apply(batch); return nil
         }
@@ -67,8 +70,8 @@ final class HeightDragHold {
             if session?.isApplyingPresentation == true { schedule(); return }
             let end = pendingEnd, move = pendingMove
             pendingEnd = nil; pendingMove = nil
+            if let move, end?.2 != true { _ = self.move(downward: move.0, time: move.1) }
             if let end { finish(downward: end.0, time: end.1, cancel: end.2) }
-            else if let move { _ = self.move(downward: move.0, time: move.1) }
         }
     }
     @discardableResult func move(downward: Double, time: Double) -> Bool {
@@ -78,7 +81,7 @@ final class HeightDragHold {
             pendingMove = (downward, time); schedule(); return true
         }
         guard live && eligible else { if !finishing { cancel() }; return false }
-        let batch = session.runtime.heightDragUpdate(primary.token, height: height, now: session.now())
+        let batch = session.runtime.heightDragUpdate(primary.token, height: height, now: session.now(), at: timeline.at(time))
         session.apply(batch)
         guard batch.error == nil, live, eligible, let target else { return false }
         shown = Double(target.bounds.height); self.time = time
@@ -91,17 +94,23 @@ final class HeightDragHold {
             pendingEnd = (downward, time, cancel); schedule(); return
         }
         finishing = true
-        let updated = !cancel && move(downward: downward, time: time)
+        // A lift where the finger already was, soon after, is no sample; the
+        // height shown may still have changed since (a constraint authored).
+        let lifted = Gesture.liftSamples(moved: downward != lastDisplacement, dt: time - self.time)
+        let updated = !cancel && (lifted ? move(downward: downward, time: time) : live && eligible)
+        if updated, !lifted, let target { shown = Double(target.bounds.height) }
         guard let session else { ended = true; return }
         if updated, live, eligible {
-            session.apply(session.runtime.heightDragRelease(primary.token, height: shown, now: session.now()))
+            session.apply(session.runtime.heightDragRelease(primary.token, height: shown, now: session.now(), at: timeline.at(self.time)))
         }
         ended = true
         if session.heightInputHold === self { session.heightInputHold = nil }
         if incarnationLive {
-            session.apply(session.runtime.holdEnd(primary.token, cancel: cancel || !updated, measured: true, now: session.now()))
+            session.apply(session.runtime.holdEnd(primary.token, cancel: cancel || !updated, measured: true,
+                                                  now: session.now(), at: timeline.at(self.time)))
             session.presenter.collections.releaseInteractionLater(ifCurrent: pin)
         }
     }
-    func cancel() { finish(downward: lastDisplacement, time: time, cancel: true) }
+    func finish(time: Double, cancel: Bool) { finish(downward: lastDisplacement, time: time, cancel: cancel) }
+    func cancel() { finish(time: time, cancel: true) }
 }

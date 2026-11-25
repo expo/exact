@@ -1147,10 +1147,10 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
         14
     );
     // A transaction's options are data: what decides 10 is the grant.
-    assert_eq!(needs(b"await db.transaction(m.commands, m.options)"), 0);
-    let with = |grants: &str| {
-        super::typescript_runtime_of(b"await db.transaction(m.commands, m.options)", grants)
-    };
+    let transaction = b"await db.transaction(m.commands, m.options)";
+    assert_eq!(needs(transaction), 0);
+    let with = |grants: &str| super::typescript_runtime_of(transaction, grants);
+    assert_eq!(with("browser.automation"), 18);
     assert_eq!(with("sqlite.open app:/data/a.db"), 10);
     assert_eq!(with("fs.read app:/data\n  sqlite.open app:/data"), 10);
     assert_eq!(with("# sqlite.open app:/data/a.db\nfs.read app:/data"), 0);

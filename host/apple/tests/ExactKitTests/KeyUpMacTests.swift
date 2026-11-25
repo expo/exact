@@ -131,7 +131,7 @@ final class KeyUpMacTests: XCTestCase {
     }
     private let leftCommand = NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.command.rawValue | 0x8)
 
-    /// A ⌘ chord during a composition (#140). Chrome hands the page the
+    /// A ⌘ chord during a composition. Chrome hands the page the
     /// chord's keydown before the input method's result, with the composed
     /// text already in the field and reported to `input` (CDP's
     /// `Input.imeSetComposition`, then ⌘B: `input 한`, then the keys). So

@@ -50,6 +50,8 @@ pub mod link;
 pub mod motion;
 mod pan_velocity;
 pub mod parity;
+#[cfg(test)]
+mod portal_tests;
 mod text_box_css;
 #[cfg(test)]
 mod textflow_tests;

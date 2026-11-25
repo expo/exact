@@ -332,6 +332,8 @@ fn compiler_intrinsics_are_never_another_files_names() {
 
 // Round 3 (Astra, Grok, 2026-10-05).
 
+use contract::{compile_for_comparison, ComparisonInput::Path as ComparisonPath};
+
 #[test]
 fn a_whole_attribute_call_resolves_as_the_type_checker_reads_it() {
     let dir = Dir::new("attr-call");
@@ -343,14 +345,26 @@ fn a_whole_attribute_call_resolves_as_the_type_checker_reads_it() {
         "app.contract",
         "use length, Card from \"./ui.contract\"\ncomponent App\n  state length = 0\n  view\n    column\n      Card()\n      view width=\"hi\".length height=10\n",
     );
+    let ordinary = contract::compile_path(&root).unwrap();
+    assert!(ordinary.nodes.iter().filter_map(|n| n.place).any(|id| {
+        let step = &ordinary.place_steps[id.0 as usize];
+        ordinary.str(step.name) == "text"
+            && step.outer.is_some_and(|outer| {
+                ordinary.str(ordinary.place_steps[outer.0 as usize].name) == "Card"
+            })
+    }));
     // The same program with the library's `fn` spelled apart: one plan.
     let flat = dir.write(
         "flat.contract",
         "fn seven(s: string): number = 7\ncomponent App\n  state length = 0\n  view\n    column\n      text \"c\"\n      view width=seven(\"hi\") height=10\n",
     );
     assert_eq!(
-        contract::compile_path(&root).unwrap().encode(),
-        contract::compile_path(&flat).unwrap().encode()
+        compile_for_comparison(ComparisonPath(&root))
+            .unwrap()
+            .encode(),
+        compile_for_comparison(ComparisonPath(&flat))
+            .unwrap()
+            .encode()
     );
 }
 

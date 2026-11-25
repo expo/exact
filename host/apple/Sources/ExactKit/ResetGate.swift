@@ -67,8 +67,8 @@ enum ResetGate {
         "hostRoot(_:now:)": "a link in another window retargeting this rooted one over the teardown (LLP 1030.004 D2): it keeps its screen, as a press on the old tree would",
         "heightDragBegin(_:targetKey:now:)": "a height drag beginning on the old tree",
         "transformMotion(_:)": "a transform drag's packet for the old tree",
-        "holdUpdate(_:x:y:now:)": "a gesture moving on the old tree",
-        "holdEnd(_:cancel:measured:vx:vy:now:)": "a gesture ending as its view goes",
+        "holdUpdate(_:x:y:now:at:)": "a gesture moving on the old tree",
+        "holdEnd(_:cancel:measured:vx:vy:now:at:)": "a gesture ending as its view goes",
         "pointer(_:_:_:now:)": "a pointer event on the old tree",
         "pan(_:dx:dy:now:)": "a pan on the old tree",
         "panRelease(_:vx:vy:now:)": "a pan released as its view goes",
@@ -77,6 +77,7 @@ enum ResetGate {
         "timelineScrolled(_:left:top:)": "an old scroller's timelines as its view goes; the new tree's layout places its own",
         "canvasDrawAsync(done:)": "a draw of the old tree's canvases; the new tree's draw on mount",
         "intrinsics(_:)": "the old views' sizes; the new tree's views measure and report their own",
+        "tableColumnWidths(_:)": "an old table's dragged column widths; the new tree's table restores the window's stored widths and reports them",
         "focus(_:now:)": "focus a teardown gives back (a dismissed sheet's) lands on the old tree",
         "blur(_:now:)": "the old tree's field losing focus as it goes",
         "focusEvent(_:entering:target:related:now:)": "focusin and focusout across the old tree",
@@ -103,8 +104,7 @@ enum ResetGate {
         // Events on the old tree's views: as the gestures and inputs above.
         "contextmenu(_:now:)": "a context menu asked of the old tree",
         "dblclick(_:now:)": "a double click on the old tree",
-        "swiperight(_:now:)": "a swipe on the old tree",
-        "swipeleft(_:now:)": "a swipe on the old tree",
+        "swipe(_:_:now:)": "a swipe on the old tree",
         "historySwipe(_:phase:direction:amount:client:now:)": "a history swipe's progress told to the old tree's root",
         "scrollend(_:now:)": "an old scroller's end",
         "scrolldragstart(_:now:)": "a drag of an old scroller",
@@ -112,8 +112,8 @@ enum ResetGate {
         "refresh(_:now:)": "a pull to refresh on the old tree's list",
         "intoView(_:key:block:inline:)": "the agent's scroll into an old list",
         "dropStream(_:)": "the test reports that the runtime is held",
-        "heightDragUpdate(_:height:now:)": "a height drag moving on the old tree",
-        "heightDragRelease(_:height:now:)": "a height drag released as its view goes",
+        "heightDragUpdate(_:height:now:at:)": "a height drag moving on the old tree",
+        "heightDragRelease(_:height:now:at:)": "a height drag released as its view goes",
         "reorderBegin(_:scrollTop:now:)": "a reorder beginning on the old tree",
         "reorderMove(_:dy:scrollTop:inside:now:)": "a reorder moving on the old tree",
         "reorderEnd(_:drop:dy:scrollTop:inside:velocity:now:)": "a reorder ending as its list goes",
@@ -121,6 +121,7 @@ enum ResetGate {
         "moveInto(_:target:contentY:scrollTop:inside:now:)": "a grouped reorder moving on the old tree",
         "groupStep(_:step:now:)": "a grouped reorder's keyboard step on the old tree",
         "groupEnd(_:drop:now:)": "a grouped reorder ending as its list goes",
+        "drop(before:)": "a queued grouped reorder's token and view ids belong to the old tree; the replacement list shows the new runtime's order",
         "groupFinish(_:now:)": "a grouped reorder finishing as its list goes",
         "media(_:event:payload:now:)": "an old media view's event as it goes",
         "load(_:now:)": "an old image's or frame's load",
@@ -204,6 +205,13 @@ enum ResetGate {
 }
 
 extension ExactSession {
+    /// UIKit has finished its move, but its drop still belongs to the retiring list (LLP 1121 X1).
+    package func discardQueuedReorder() {
+        let call = "drop(before:)"
+        guard runtime.holds(call) else { return }
+        ExactJournal.shared.record("reset.drop", ["call": call, "reason": ResetGate.dropped[call]!])
+    }
+
     /// The presenter's reset with this runtime held (the one it replaces the old tree's with): nothing the
     /// teardown sets off reaches it. Its calls wait in `heldCalls` for `replayHeld`, after the committed batch.
     func resetHeld() {

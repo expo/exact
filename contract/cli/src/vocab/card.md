@@ -24,6 +24,7 @@ concat: xs.concat(ys) -> T[]
 filter: xs.filter(x => bool) -> T[]
 flat: xs.flat() -> T[]
 first: first(xs) -> option<T>
+formatShortcut: formatShortcut(chord) -> string  (⇧⌘O or Ctrl+Shift+O; empty on server)
 formatDate: formatDate(msOrDayKey, offset, "medium"|"month-year"|"month-day"|"iso") -> string
 formatDay: formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
 formatDecimal: (cents to "12.34"; literal digits)
@@ -48,13 +49,14 @@ toFixed: (literal digits)
 toString: x.toString() -> string
 
 ## tags
-view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd | id testId role title tabindex | press hover key keyup focus blur contextmenu dblclick
+view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd | id testId role title tabindex aria-live | press hover key keyup focus blur contextmenu dblclick
 text | markup | selectionchange
 image | alt | load
 button | disabled buttonStyle destructive | press
 link | href | press
-input | value type inputmode min max step maxlength placeholder enterkeyhint autocomplete autocapitalize autofocus disabled readonly checked name accept multiple | input change submit select selectionchange beforeinput
-textarea | value placeholder maxlength enterkeyhint | input change select selectionchange beforeinput
+input textarea | value placeholder maxlength inputmode enterkeyhint autocomplete autocapitalize autocorrect spellcheck autofocus disabled readonly emojiPicker | input change select selectionchange beforeinput
+input | type min max step checked name accept multiple | submit
+textarea | rows markup
 select | value disabled | change
 option | value
 time | datetime format
@@ -64,7 +66,7 @@ scroll | scrollTop scrollZoom navigationScroll keyboardDismissMode | scroll scro
 dialog | closedby | cancel close
 
 ## rules
-- An event's payload follows captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; none for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
+- After captured arguments, fields, selects and dates pass text. Checkboxes and switches pass bools. Ranges pass numbers. `press` and `submit` pass none. `change=set(i.id)` calls `set(id, payload)`.
 
 ```contract
 component App
@@ -81,6 +83,7 @@ component App
 ```
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
+- No announce call: a screen reader reads a mounted `text role="status"` (or `"alert"`) as its text changes (`vocab live`).
 - Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
 
 ## how
@@ -114,7 +117,7 @@ main navigationKey=`${top(nav).id}` navigationBack="back"
             image "symbol:checkmark"
 ```
 ### a confirmation
-Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. Open: `command="show-modal"` or `showModal(id)`.
+Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. `showModal(id)` opens it too.
 ```contract
 state n = 1
 action remove
@@ -128,7 +131,7 @@ dialog id="remove" role="alertdialog" aria-label="Delete it?"
     text "Cancel"
 ```
 ### a timer
-`every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`. More: `vocab timers`.
+`every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`.
 ```contract
 state now = 0
 task tick mount
@@ -174,7 +177,7 @@ action log
   days = days.concat([formatDate(at, time.utcOffset, "iso")])
 ```
 ### a test, and verify
-Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
+Fresh store per test. `reload` keeps it. `clock data` lands replies, `clock settle` ends transitions. `bun exact.mjs verify` checks ends and relaunches. Run `verify ios` last. Keep its `contract verify` receipt and `--shots <dir>`.
 ```contract-test
 test "a pick survives a relaunch"
   tap "pick"
@@ -183,7 +186,7 @@ test "a pick survives a relaunch"
   expect text "n" == "1"
 ```
 ### composing a screen
-One focal point. Emphasis is a part, not paint on a `button`; the main action is `buttonStyle="filled"`. Search: `input type="search"` in the `header`, live. A form is a grouped list (`grouped-form`); no rows, an `EmptyState`, its `button` indented under it.
+One focal point. Use parts, a filled button and live header search. See `grouped-form`. Nest buttons under `EmptyState`.
 ```contract
 use SummaryCard from "exact:content"
 column gap=16 padding=16

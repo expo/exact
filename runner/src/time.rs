@@ -104,8 +104,10 @@ std::thread_local! {
 /// viewer is (locale, zone, seed). A runner booted under it ([`launching_with`])
 /// reads both from its first settle, as `set_time` and `set_place` would
 /// set them after.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct Launch {
+    /// A web client's keyboard notation. Server renders leave it unknown.
+    pub keyboard: crate::page::Keyboard,
     /// The host's viewport preferences, read before the first settlement (LLP 1039 D10).
     pub preferences: Option<crate::Preferences>,
     /// The date (`set_time`'s fact).
@@ -140,11 +142,41 @@ pub struct Launch {
     /// (LLP 1060.000 D3; the Mac). Told on its own, not implied by
     /// `direction`.
     pub natural_text: bool,
+    /// What `exactPage()` says at the first settlement, given the plan the
+    /// boot runs, where the host knows it at launch: a resource whose
+    /// arguments read a fact is asked with the device's answer, not the
+    /// default's. Only facts whose change has no effect beyond their readers;
+    /// `hidden`, `frozen` and `background` are the default's here and told
+    /// with `set_page`, which applies them. `None`: the default.
+    pub page: Option<PageFacts>,
+}
+
+/// [`Launch::page`]: the page facts for the plan a boot runs.
+#[derive(Clone)]
+pub struct PageFacts(std::sync::Arc<dyn Fn(&exact_plan::Plan) -> crate::Page + Send + Sync>);
+
+impl PageFacts {
+    /// The facts `facts` gives for each plan.
+    pub fn new(facts: impl Fn(&exact_plan::Plan) -> crate::Page + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(facts))
+    }
+
+    /// The facts for `plan`.
+    pub fn facts(&self, plan: &exact_plan::Plan) -> crate::Page {
+        (self.0)(plan)
+    }
+}
+
+impl std::fmt::Debug for PageFacts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PageFacts")
+    }
 }
 
 impl Launch {
     /// Nothing known: the boot reads the defaults.
     pub const NONE: Launch = Launch {
+        keyboard: crate::page::Keyboard::Unknown,
         preferences: None,
         time: None,
         place: None,
@@ -155,6 +187,7 @@ impl Launch {
         rooted: false,
         direction: None,
         natural_text: false,
+        page: None,
     };
 }
 
@@ -186,6 +219,7 @@ pub fn launching_with<T>(launch: Launch, boot: impl FnOnce() -> T) -> T {
         }
     }
     let launch = Launch {
+        keyboard: launch.keyboard,
         preferences: launch.preferences,
         time: launch.time.filter(|t| t.validate().is_ok()),
         place: launch.place.filter(|p| p.validate().is_ok()),
@@ -198,6 +232,7 @@ pub fn launching_with<T>(launch: Launch, boot: impl FnOnce() -> T) -> T {
         rooted: launch.rooted,
         direction: launch.direction,
         natural_text: launch.natural_text,
+        page: launch.page,
     };
     let _restore = Restore(Some(LAUNCH.with(|l| l.replace(launch))));
     boot()
@@ -225,6 +260,19 @@ pub(crate) fn launch_time() -> WallTime {
 /// [`launching_with`] was told, else zero.
 pub(crate) fn launch_clock() -> f64 {
     LAUNCH.with(|l| l.borrow().clock).unwrap_or(0.0)
+}
+
+/// The page facts a boot of `plan` under [`launching_with`] was told.
+pub(crate) fn launch_page(plan: &exact_plan::Plan) -> crate::Page {
+    let told = LAUNCH
+        .with(|l| l.borrow().page.clone())
+        .map(|page| page.facts(plan));
+    told.map_or_else(Default::default, |told| crate::Page {
+        hidden: false,
+        frozen: false,
+        background: None,
+        ..told
+    })
 }
 
 pub(crate) fn launch_preferences() -> Option<crate::Preferences> {
@@ -261,6 +309,10 @@ pub(crate) fn launch_direction() -> Option<exact_kernel::Direction> {
 /// Whether a boot under [`launching_with`] was told its unsaid text is natural.
 pub(crate) fn launch_natural_text() -> bool {
     LAUNCH.with(|l| l.borrow().natural_text)
+}
+
+pub(crate) fn launch_keyboard() -> crate::page::Keyboard {
+    LAUNCH.with(|l| l.borrow().keyboard)
 }
 
 /// Where the viewer is, when a boot under [`launching_with`] was told.

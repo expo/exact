@@ -63,6 +63,7 @@ package protocol NativeModuleHosting: AnyObject {
     func prepareAppModule()
     func activateAfterCommit(_ live: @escaping () -> Bool)
     func loadIfNeeded()
+    func endViewBindings()
     func destroyModule()
     func sessionViewChanged()
     func willQuit()
@@ -112,7 +113,12 @@ package protocol NativeModuleHosting: AnyObject {
     func speaksForItself(_ owner: NodeView) -> Bool
     func declined(_ owner: NodeView, at point: CGPoint, with event: UIEvent?) -> Bool
     func refreshWorldGeometry()
-    func routeLoaded(_ route: NodeView)
+    var hasScreens: Bool { get }
+    func setScreensMounted(_ mounted: Bool, in subtree: UIView)
+    func prepareScreenMove(_ subtree: UIView, into container: UIView) -> (() -> Void)?
+    func retryWaitingScreens(in subtree: NodeView)
+    func moved(_ subtree: NodeView)
+    func leaving(_ subtree: NodeView)
     #else
     func ownsFocus(_ owner: NodeView) -> Bool
     @discardableResult func focus(_ owner: NodeView) -> Bool
@@ -146,6 +152,7 @@ final class NoNativeModule: NativeModuleHosting {
     func prepareAppModule() {}
     func activateAfterCommit(_ live: @escaping () -> Bool) {}
     func loadIfNeeded() {}
+    func endViewBindings() {}
     func destroyModule() {}
     func sessionViewChanged() {}
     func willQuit() {}
@@ -187,7 +194,12 @@ final class NoNativeModule: NativeModuleHosting {
     func speaksForItself(_ owner: NodeView) -> Bool { false }
     func declined(_ owner: NodeView, at point: CGPoint, with event: UIEvent?) -> Bool { false }
     func refreshWorldGeometry() {}
-    func routeLoaded(_ route: NodeView) {}
+    var hasScreens: Bool { false }
+    func setScreensMounted(_ mounted: Bool, in subtree: UIView) {}
+    func prepareScreenMove(_ subtree: UIView, into container: UIView) -> (() -> Void)? { nil }
+    func retryWaitingScreens(in subtree: NodeView) {}
+    func moved(_ subtree: NodeView) {}
+    func leaving(_ subtree: NodeView) {}
     #else
     func ownsFocus(_ owner: NodeView) -> Bool { false }
     func focus(_ owner: NodeView) -> Bool { false }
@@ -315,7 +327,7 @@ extension Presenter {
     /// What of `node`'s scroll view changed outside Exact, which owns it.
     package func scrollOwnedChanges(_ node: NodeView) -> [String] {
         guard let scroll = node.scrollView else { return [] }
-        return RouteGeometry.ownedChanges(scroll, of: node, insetByUIKit: node.scrollOrigin > 0 || navigation.insetByUIKit(node))
+        return RouteGeometry.ownedChanges(scroll, of: node, insetByUIKit: navigation.insetByUIKit(node))
     }
     /// Whether a native list is making `id`'s row now.
     package func listCreating(_ id: UInt32) -> Bool { pool.list(creating: id) != nil }
@@ -339,9 +351,31 @@ extension Presenter {
 }
 
 extension NodeView {
-    /// `found` when it is this route's own controller, else nil.
-    package func routeController(in found: UIViewController?) -> UIViewController? {
-        (found as? any RouteSurface).flatMap { $0.node === self ? $0 : nil }
+    /// UIKit checks a screen's parent during the move that puts its route in a window.
+    package func movingRoute(into container: UIView, _ move: () -> Void) {
+        let finish = presenter?.session?.natives.prepareScreenMove(self, into: container)
+        move()
+        finish?()
+    }
+
+    /// The controller above this node after an optional subtree move. A projected
+    /// route has to reach its own controller before its native screen may enter.
+    package func screenParent(moving subtree: UIView? = nil, into container: UIView? = nil) -> UIViewController? {
+        var next: UIResponder? = self, route: NodeView?
+        while let current = next {
+            if let sheet = (current as? PopoverLayer)?.sheet { return sheet }
+            if let controller = current as? UIViewController {
+                if let route, (controller as? any RouteSurface)?.node !== route {
+                    guard let root = presenter?.keyRoot, root.props["navigationBack"] == nil else { return nil }
+                }
+                return controller
+            }
+            if route == nil, let node = current as? NodeView, node.props["navigationKey"] != nil, node.props["navigationBack"] == nil { route = node }
+            // A root view keeps its controller as its next responder across the move.
+            let responder = current.next
+            next = current === subtree && (responder == nil || responder is UIView) ? container : responder
+        }
+        return nil
     }
 }
 #endif

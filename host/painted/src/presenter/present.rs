@@ -1,15 +1,18 @@
 //! A display host's presents (LLP 1003.001 D9): each picture carries the
-//! engine time it was produced at, and its present, heard from the display,
-//! starts what it carried and sets the page's `presented` (LLP 1069.000 D2).
+//! engine time it was produced at and the press generation it shows, and its
+//! present, heard from the display, starts what it carried, releases the quick
+//! taps it showed (LLP 1061 D7 "Timing" item 3) and sets the page's
+//! `presented` (LLP 1069.000 D2).
 use super::*;
 
-/// What a picture carries to its present: the host that painted it and the
-/// engine time it was produced at. A present for another host (a reload,
-/// an activated update) starts nothing.
+/// What a picture carries to its present: the host that painted it, the
+/// engine time it was produced at and the press generation it shows. A
+/// present for another host (a reload, an activated update) starts nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Carried {
     host: u64,
     at: f64,
+    press_generation: u64,
 }
 
 impl<D: DataSource> Presenter<D> {
@@ -30,15 +33,18 @@ impl<D: DataSource> Presenter<D> {
         Carried {
             host: self.hosts,
             at: self.host.picture_carried(),
+            press_generation: self.host.painted_press_generation(),
         }
     }
 
     /// Whether a picture painted now is to have its present reported:
-    /// something is held, or the page has not been presented.
+    /// something is held, a press waits for a picture to show it, or the page
+    /// has not been presented.
     pub fn present_wanted(&self) -> bool {
         let engine = self.host.engine();
         !self.host.runner().presented().seen
             || engine.starts_on_frame() && engine.held_since().is_some()
+            || self.host.press_wants_picture()
     }
 
     /// The present, at `at_ms` on the loop's clock, of the picture that
@@ -48,7 +54,7 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let (paint, error) = self.host.picture_presented(carried.at, at_ms);
-        self.dirty |= paint;
+        self.dirty |= paint | self.host.presses_presented(carried.press_generation);
         error.or_else(|| self.after_commit())
     }
 
@@ -66,6 +72,9 @@ impl<D: DataSource> Presenter<D> {
         let page = self.host.runner().page();
         let presentable = !page.hidden && !page.frozen && !self.timers_hidden;
         self.dirty |= self.host.set_presentable(presentable);
+        if !presentable {
+            self.dirty |= self.host.cancel_presses();
+        }
     }
 
     /// Holds whose present has not come by the deadline start at their
@@ -79,6 +88,7 @@ impl<D: DataSource> Presenter<D> {
     /// booted from here on is too.
     pub(super) fn driven_presented(&mut self) {
         exact_runner::page::set_awaits_present(false);
+        self.land_presses();
         self.dirty |= self.host.frame_clock(false);
         if let Some(error) = self.host.page_presented() {
             self.host.log(error);

@@ -69,19 +69,45 @@ final class PanReleaseMacTests: XCTestCase {
     }
 
     func testACancelledContactReleasesAtRestOnce() {
-        let (p, node) = host(["pan", "panrelease"])
+        let (p, node) = host(["pan", "panrelease", "pointercancel", "pointerup", "press"])
+        var ends: [PointerKind] = []
+        p.onPointer = { _, kind, _ in ends.append(kind) }
+        p.onPress = { _ in XCTFail("press after cancel") }
         var releases: [[Double]] = []
-        p.onPanRelease = { _, vx, vy in releases.append([vx, vy]) }
+        p.onPanRelease = { _, vx, vy in XCTAssertEqual(ends, [.cancel]); releases.append([vx, vy]) }
         node.mouseDown(with: event(.leftMouseDown, node, right: 0, at: 3.0))
         node.mouseDragged(with: event(.leftMouseDragged, node, right: 40, at: 3.016))
-        p.mouseLayoutPan.cancel() // Escape, or the window resigning key
+        window!.makeKey()
+        window!.resignKey()
         node.mouseUp(with: event(.leftMouseUp, node, right: 60, at: 3.032))
         XCTAssertEqual(releases, [[0, 0]])
+        XCTAssertEqual(ends, [.cancel])
         // A restart forgets a live contact without releasing it.
         node.mouseDown(with: event(.leftMouseDown, node, right: 0, at: 4.0))
         node.mouseDragged(with: event(.leftMouseDragged, node, right: 40, at: 4.016))
         p.mouseLayoutPan.abandon()
         XCTAssertEqual(releases, [[0, 0]])
+    }
+
+    func testEscapeQueuedDuringTrackingCancelsAtTheLastMousePosition() {
+        let (p, node) = host(["pointerup", "pointercancel"])
+        let down = event(.leftMouseDown, node, right: 0, at: 1)
+        let drag = event(.leftMouseDragged, node, right: 23, at: 2)
+        var ends: [PointerKind] = []
+        let point = node.pointerSample(drag)
+        p.onPointer = { _, kind, sample in
+            ends.append(kind)
+            XCTAssertEqual(sample.clientX, point.clientX)
+            XCTAssertEqual(sample.clientY, point.clientY)
+            XCTAssertEqual(sample.button, -1)
+        }
+        node.tracksPointer(down) {
+            node.pointerDragged(drag)
+            let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 3,
+                windowNumber: window!.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+            NSApp.postEvent(key, atStart: true)
+        }
+        XCTAssertEqual(ends, [.cancel])
     }
 
     func testANodeWithoutPanreleaseHearsNone() {

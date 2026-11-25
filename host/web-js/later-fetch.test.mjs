@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // LLP 1016.000 D7, the amendment of 2026-11-12: a mutation whose source sent on a socket may fetch in a later
 // turn, and that fetch waits for the commit that asked the answer. A view transition holds such a commit; here the
@@ -11,8 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 async function load() {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-later-fetch-'));
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
-  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
+  writeFileSync(resolve(dir, 'admission.js'), `export { fetchTarget, ownWithout, redirectOf, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
 export class FetchError extends Error { constructor(kind, message) { super(message); this.kind = kind; } }
 export const overlaying = { on: false }; export const inOverlay = what => new Error(what); export const signalDeadline = { arm: () => undefined };
 export const fetchWith = (grants, input, init) => {

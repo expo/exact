@@ -153,6 +153,7 @@ package final class TextArea: NSTextView {
     }
 
     package override func doCommand(by selector: Selector) {
+        owner?.presenter?.flushKeyViewLoop()
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
         let name = NSStringFromSelector(selector)
         crossHidden(backward: Self.backwardSteps.contains(name), forward: Self.forwardSteps.contains(name))
@@ -242,8 +243,14 @@ package final class TextArea: NSTextView {
     /// Tab and Shift-Tab move the focus, the Markdown editor's too, as the
     /// web's textarea does; an app that wants a tab or an indent prevents
     /// the `key` and calls `setRangeText` (LLP 1045 D6).
-    package override func insertTab(_ sender: Any?) { window?.selectNextKeyView(self) }
-    package override func insertBacktab(_ sender: Any?) { window?.selectPreviousKeyView(self) }
+    package override func insertTab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        window?.selectNextKeyView(self)
+    }
+    package override func insertBacktab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        window?.selectPreviousKeyView(self)
+    }
 
     /// Return: the app's `beforeinput` first, then the Markdown editor's
     /// list continuation, else a line break (LLP 1045 D6).
@@ -306,7 +313,7 @@ package final class TextArea: NSTextView {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(plain, forType: .string)
     }
-    // DOM's clipboard events, before the editor's own (#125, Clipboard.swift).
+    // DOM's clipboard events, before the editor's own (Clipboard.swift).
     package override func copy(_ sender: Any?) {
         NodeView.fieldEdit(owner, #selector(NodeView.copy(_:))) {
             guard let markup, let storage = textStorage else { super.copy(sender); return }
@@ -630,7 +637,7 @@ extension NSTextView {
     }
 
     /// No correction keeps the text as typed, as HTML's `autocorrect="off"`
-    /// asks (#111): no smart quotes or dashes and no text replacement, which
+    /// asks: no smart quotes or dashes and no text replacement, which
     /// AppKit would otherwise apply after a pause in typing. What the view
     /// had (AppKit's, or the person's from the Substitutions menu) is held,
     /// and given back once correction is allowed again: for the window's one
@@ -691,11 +698,20 @@ final class Field: NSTextField {
 /// tells the field's node what that one tells nobody: each change of the
 /// text an input method is composing (`markedTextChanged`), and a `copy`,
 /// `cut` or `paste` before it happens, for the node or an ancestor that
-/// hears one (#125).
+/// hears one.
 final class FieldEditor: NSTextView {
     override func mouseDown(with event: NSEvent) { pressingField(owner, event, self) { super.mouseDown(with: event) } }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.countsFirstMouse(event) || super.acceptsFirstMouse(for: event) }
+    override func insertTab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        super.insertTab(sender)
+    }
+    override func insertBacktab(_ sender: Any?) {
+        owner?.presenter?.flushKeyViewLoop()
+        super.insertBacktab(sender)
+    }
     override func doCommand(by selector: Selector) {
+        owner?.presenter?.flushKeyViewLoop()
         let types = ["deleteBackward:": "deleteContentBackward", "deleteForward:": "deleteContentForward", "deleteWordBackward:": "deleteWordBackward", "deleteWordForward:": "deleteWordForward", "deleteToBeginningOfLine:": "deleteSoftLineBackward", "deleteToEndOfLine:": "deleteSoftLineForward", "deleteToBeginningOfParagraph:": "deleteHardLineBackward", "deleteToEndOfParagraph:": "deleteHardLineForward"]
         if let type = types[NSStringFromSelector(selector)], let fields = owner?.presenter?.fieldSelections {
             fields.withIntent(owner, type) { super.doCommand(by: selector) }

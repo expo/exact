@@ -97,6 +97,32 @@ final class KeyboardProbeIOSTests: XCTestCase {
         XCTAssertTrue(try settles(view), "the view settles")
     }
 
+    /// A queued layout cannot take the place of the resize at batch completion.
+    func testABatchFitsBeforeTheQueuedLayoutTurn() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the keyboard guide is a scene window's") }
+        let (session, view, _, prompt) = try fixture("keyboard-probe-batch-fit")
+        let presenter = session.presenter
+        XCTAssertTrue(prompt.becomeFirstResponder())
+        view.fit()
+        XCTAssertTrue(view.fitPending, "adding the guide reenters the fit and queues a layout")
+        let oldWidth = presenter.viewport.frame.width
+        view.autoresizingMask = []
+        let command = presenter.onCommand
+        defer { presenter.onCommand = command }
+        presenter.onCommand = { name, _, _ in
+            guard name == "test-fit" else { return }
+            XCTAssertTrue(presenter.applying)
+            view.bounds.size.width -= 40
+            view.fit()
+            XCTAssertEqual(presenter.viewport.frame.width, oldWidth)
+        }
+
+        presenter.apply(wireBatch([["op": "command", "name": "test-fit", "args": []]]))
+
+        XCTAssertEqual(presenter.viewport.frame.width, oldWidth - 40, accuracy: 0.5)
+        XCTAssertTrue(view.fitPending, "the separate layout still waits for the main queue")
+    }
+
     /// The view moved into a window while its session's editor has the keys:
     /// `didMoveToWindow` fits, and that fit adds the guide.
     func testAViewMovedIntoAWindowWhileEditingSettles() throws {

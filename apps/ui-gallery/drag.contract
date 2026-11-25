@@ -1,0 +1,185 @@
+// Drag and drop: each card carries one kind of data out of the app, so a drop into another app shows what that
+// app takes, and the drop zone shows the files, text and link another app drops in (LLP 1094.000, LLP 1094.001;
+// reference.md, "Files dropped or pasted")
+style DragHeading
+  font-size=16
+  font-weight=700
+  padding-top=16
+style DragCaption
+  font-size=12
+  color="-exact-secondary-label"
+style DragTitle
+  font-size=15
+  font-weight=600
+style DragPanel
+  padding=12
+  border-radius=14
+  background-color="-exact-secondary-background"
+
+component CardFace
+  props
+    title: string
+    carries: string
+    picture: string
+    symbol: string
+  view
+    row column-gap=12 align-items="center" flex=1 min-width=0
+      if picture != ""
+        image picture width=56 height=56 object-fit="cover" border-radius=8 flex-shrink=0 aria-hidden=true
+      if picture == ""
+        column width=56 height=56 align-items="center" justify-content="center" flex-shrink=0
+          image `symbol:${symbol}` font-size=28 color="-exact-secondary-label" aria-hidden=true
+      column flex=1 min-width=0 row-gap=2
+        text title class=DragTitle
+        text carries class=DragCaption
+
+// A card that carries `text` and `files`; the runner clears an empty one
+component DragCard
+  props
+    name: string
+    title: string
+    carries: string
+    picture: string
+    symbol: string
+    text: string
+    files: string[]
+  view
+    row draggable=true dataTransfer=DataTransfer(text=text, files=files) aria-label=`${title}: ${carries}` testId=`drag-${name}` class=DragPanel
+      CardFace(title=title, carries=carries, picture=picture, symbol=symbol)
+
+// A card that carries a link as well: a literal `url=""` is refused, so a card without one is a `DragCard`
+component LinkCard
+  props
+    name: string
+    title: string
+    carries: string
+    picture: string
+    symbol: string
+    text: string
+    url: string
+    files: string[]
+  view
+    row draggable=true dataTransfer=DataTransfer(text=text, url=url, files=files) aria-label=`${title}: ${carries}` testId=`drag-${name}` class=DragPanel
+      CardFace(title=title, carries=carries, picture=picture, symbol=symbol)
+
+shape DragNote
+  path: string
+  why: string
+
+// A dropped file as the zone shows it: `id` is its drop and place in it, as two files may share a name, and
+// `picture` is its copy in the app's own files, "" when it could not be copied
+shape DropPreview
+  id: string
+  name: string
+  picture: string
+  size: string
+
+component DragDrop
+  props
+    host: string
+    // On iOS, `pad`, `duo-open`, `duo-closed` or `phone`, else ""
+    device: string
+    note: DragNote
+    previews: DropPreview[]
+    dropFiles: action
+  derive touch = host == "ios" or host == "android"
+  // An iPad, or an iPhone Duo while open, shows two apps side by side, and an iPhone, or a closed Duo, one at a time
+  derive acrossSteps = "Open the other app beside UI Gallery. Then hold a card until it lifts and drag it across."
+  derive homeSteps = "Hold a card until it lifts. Keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there."
+  derive iosSteps = device == "pad" ? acrossSteps : device == "duo-open" ? acrossSteps : device == "duo-closed" ? "Open iPhone Duo to show the other app beside UI Gallery, then drag a card across. Or, with it closed, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there." : device == "phone" ? homeSteps : "On iPad or an open iPhone Duo, open the other app beside UI Gallery and drag a card across. On iPhone, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there."
+  derive drops = host == "macos" or host == "web" or host == "windows" or host == "ios" or host == "android"
+  state over = false
+  state dropped: string[] = []
+  state droppedText = ""
+  state droppedLink = ""
+  state dropCount = 0
+  state taps = 0
+  state picked = ""
+  state dragOn = true
+  action entered(e: DragEvent)
+    over = true
+  action left()
+    over = false
+  action took(e: DragEvent)
+    over = false
+    dropCount = dropCount + 1
+    dropped = e.files
+    droppedText = e.text
+    droppedLink = e.url
+    dropFiles(e.files)
+  action tapped()
+    taps = taps + 1
+  action pick(choice: string)
+    picked = choice
+  action toggleDrag()
+    dragOn = not dragOn
+  view
+    column row-gap=8 testId="drag-drop"
+      text (host == "ios" ? iosSteps : host == "android" ? "Open another app beside this one. Then hold a card until it lifts and drag it there." : host == "macos" ? "Drop it in Finder, Notes, Mail, Safari or another app." : "Drop it on the desktop, in another app or in another tab.") class=DragCaption testId="drag-steps"
+      text (host == "web" ? "File cards share links, and some pages can show the photo. To save a copy, drag a file card from Chrome to Finder or File Explorer. Chrome saves only the first file." : "UI Gallery offers the original files, with their names and details.") class=DragCaption
+
+      text "Text and links" class=DragHeading
+      DragCard(name="text", title="Plain text", carries="Text with accents and emoji", picture="", symbol="article", text="Hello from UI Gallery: café, naïve, 日本語, العربية and 🧭.", files=[])
+      LinkCard(name="link", title="A link", carries=(host == "android" ? "example.com, sent as text" : "example.com"), picture="", symbol="link", text="", url="https://example.com/", files=[])
+      LinkCard(name="link-title", title="A link and its title", carries="example.com and its title", picture="", symbol="link", text="Example Domain", url="https://example.com/", files=[])
+
+      text "Photos, video, sound and PDFs" class=DragHeading
+      DragCard(name="jpeg", title="A JPEG photo", carries="With sample camera details, a date, a place and a caption", picture="assets/drag-photo.jpg", symbol="", text="", files=["assets/drag-photo.jpg"])
+      DragCard(name="heic", title="A HEIC photo", carries="The same photo, as HEIC", picture="assets/drag-photo.jpg", symbol="", text="", files=["assets/drag-photo.heic"])
+      DragCard(name="png", title="A PNG image", carries="A row of color samples", picture="assets/p3-primaries.png", symbol="", text="", files=["assets/p3-primaries.png"])
+      DragCard(name="video", title="A video", carries="Three seconds long", picture="", symbol="play", text="", files=["assets/sdr.mp4"])
+      DragCard(name="sound", title="A sound", carries="A three-second chord", picture="", symbol="play", text="", files=["assets/drag-chord.m4a"])
+      DragCard(name="pdf", title="A PDF", carries="One page, with a title and author", picture="", symbol="document", text="", files=["assets/drag-notes.pdf"])
+
+      text "Several at once" class=DragHeading
+      DragCard(name="files", title="Three files", carries=(host == "web" ? "Links to a photo, a PDF and a sound" : "A photo, a PDF and a sound"), picture="", symbol="copy", text="", files=["assets/drag-photo.jpg", "assets/drag-notes.pdf", "assets/drag-chord.m4a"])
+      LinkCard(name="photo-caption", title="A photo with a caption and a link", carries="The photo, its caption and a link", picture="assets/drag-photo.jpg", symbol="", text="Glasshouse, a generated test photograph", url="https://example.com/", files=["assets/drag-photo.jpg"])
+
+      text "From the app" class=DragHeading
+      DragCard(name="written", title="A file the app made", carries=(host == "web" ? "This note isn't available in the browser" : note.path != "" ? "A short text note" : note.why != "" ? "Couldn't make the note" : "Making the note…"), picture="", symbol="compose", text="", files=[note.path])
+      row draggable=true dataTransfer=DataTransfer(files=["assets/drag-photo.jpg"]) contextPopover="drag-menu" aria-label="A card with a menu" testId="drag-menu-card" class=DragPanel column-gap=12 align-items="center"
+        image "assets/drag-photo.jpg" width=56 height=56 object-fit="cover" border-radius=8 flex-shrink=0 aria-hidden=true
+        column flex=1 min-width=0 row-gap=2
+          text "A card with a menu" class=DragTitle
+          text (picked != "" ? `Picked: ${picked}.` : touch ? "Hold still for the menu. To drag the photo, hold and then move." : "Right-click it for the menu, or drag it.") class=DragCaption testId="drag-picked"
+      column id="drag-menu" popover="auto" role="menu"
+        button press=pick("Favorite") popovertarget="drag-menu" popovertargetaction="hide"
+          text "Favorite"
+        button press=pick("Rename") popovertarget="drag-menu" popovertargetaction="hide"
+          text "Rename"
+      row draggable=true dataTransfer=DataTransfer(text="A card you can tap") press=tapped aria-label="A card you can tap" testId="drag-tap-card" class=DragPanel column-gap=12 align-items="center"
+        column width=56 height=56 align-items="center" justify-content="center" flex-shrink=0
+          image "symbol:checkmark" font-size=28 color="-exact-secondary-label" aria-hidden=true
+        column flex=1 min-width=0 row-gap=2
+          text "A card you can tap" class=DragTitle
+          text (taps == 0 ? "Tap it or drag its text." : `Tapped ${taps} ${taps == 1 ? "time" : "times"}.`) class=DragCaption testId="drag-taps"
+      row draggable=dragOn dataTransfer=DataTransfer(text="Turn dragging on or off") aria-label="Turn dragging on or off" testId="drag-switch-card" class=DragPanel column-gap=12 align-items="center"
+        column width=56 height=56 align-items="center" justify-content="center" flex-shrink=0
+          image "symbol:adjust" font-size=28 color="-exact-secondary-label" aria-hidden=true
+        column flex=1 min-width=0 row-gap=2
+          text "Turn dragging on or off" class=DragTitle
+          text (dragOn ? "Dragging is on." : "Dragging is off.") class=DragCaption testId="drag-switch-state"
+        button (dragOn ? "Turn off" : "Turn on") buttonStyle="bordered" press=toggleDrag testId="drag-switch"
+
+      text "Drops" class=DragHeading
+      column dragenter=entered dragleave=left drop=took testId="drop-zone" min-height=120 padding=16 row-gap=6 border-radius=14 border-width=2 border-style="dashed" border-color=(over ? "AccentColor" : "-exact-separator") background-color=(over ? "-exact-secondary-background" : "transparent") align-items="center" justify-content="center"
+        image "symbol:download" font-size=28 color="-exact-secondary-label" aria-hidden=true
+        text (not drops ? "You can't drop into UI Gallery on this device yet." : over ? "Let go to drop" : "Drop a file, text or a link from another app here") class=DragTitle text-align="center" testId="drop-prompt"
+        if dropCount > 0
+          column align-self="stretch" align-items="flex-start" row-gap=6
+            text `Got ${dropped.length} ${dropped.length == 1 ? "file" : "files"}` class=DragCaption testId="drop-count"
+            // Each file's picture where the platform can draw it, over a document icon that shows where it can't
+            for p in previews key=p.id
+              row column-gap=10 align-items="center" width="100%" max-width=420 testId="drop-file"
+                column position="relative" width=48 height=48 flex-shrink=0 align-items="center" justify-content="center" border-radius=8 overflow="hidden" background-color="-exact-secondary-background"
+                  image "symbol:document" font-size=22 color="-exact-secondary-label" aria-hidden=true
+                  if p.picture != ""
+                    image p.picture position="absolute" left=0 top=0 width="100%" height="100%" object-fit="cover" aria-hidden=true
+                column flex=1 min-width=0 row-gap=2
+                  text p.name class=DragCaption font-weight=600 color="-exact-label" overflow-wrap="anywhere" testId="drop-file-name"
+                  if p.size != ""
+                    text p.size class=DragCaption
+            if droppedText != ""
+              text `Text: ${droppedText}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-text"
+            if droppedLink != ""
+              text `Link: ${droppedLink}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-link"

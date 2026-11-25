@@ -169,6 +169,21 @@ impl<D: DataSource> super::Session<D> {
             rtl,
             p3,
         });
+        // A Rust `draw` takes `args`. No types cross this seam, so the JSON
+        // form, which no TypeScript draw reached through it reads, has
+        // records by position.
+        let mut args_json = String::from(if names.is_empty() { "[" } else { "{" });
+        for (i, v) in args.iter().enumerate() {
+            if i > 0 {
+                args_json.push(',');
+            }
+            if let Some(name) = names.get(i) {
+                exact_runner::json::quote(name, &mut args_json);
+                args_json.push(':');
+            }
+            exact_runner::json::untyped_json(v, &mut args_json);
+        }
+        args_json.push(if names.is_empty() { ']' } else { '}' });
         let request = DrawRequest {
             canvas,
             generation,
@@ -176,6 +191,7 @@ impl<D: DataSource> super::Session<D> {
             surface: &surface,
             args: &args,
             names: &names,
+            args_json: &args_json,
             frame,
             current_color,
             rtl,

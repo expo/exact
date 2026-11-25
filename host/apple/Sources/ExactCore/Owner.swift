@@ -15,9 +15,12 @@ package final class Owner: @unchecked Sendable {
         var done = false
         /// Signalled when the job is done, or when a call waits for main.
         let wake: DispatchSemaphore
-        init(_ body: @escaping () -> Void, wake: DispatchSemaphore = DispatchSemaphore(value: 0)) {
+        /// Whether `jobsAsked` counts it.
+        let counted: Bool
+        init(_ body: @escaping () -> Void, wake: DispatchSemaphore = DispatchSemaphore(value: 0), counted: Bool = true) {
             self.body = body
             self.wake = wake
+            self.counted = counted
         }
     }
     private final class MainCall {
@@ -47,6 +50,14 @@ package final class Owner: @unchecked Sendable {
     /// lock, and drained under it before it goes back, so none comes back
     /// holding a count.
     private var spareWakes: [DispatchSemaphore] = []
+    /// Counted jobs the owner has begun, and uncounted ones waiting.
+    private var started: UInt64 = 0, uncounted = 0
+    /// How many counted jobs the owner has begun: in one, its number.
+    package var jobsBegun: UInt64 { lock.withLock { started } }
+    /// The counted jobs the owner has begun and those waiting: a reply read
+    /// when `jobsBegun` was `n` had no counted job begin after the read, or
+    /// wait, while this is still `n`.
+    package var jobsAsked: UInt64 { lock.withLock { started + UInt64(jobs.count - uncounted + later.count) } }
     /// The job main is waiting on: a call for main wakes it.
     private var mainWaits: Job?
     private var thread: pthread_t?
@@ -87,6 +98,7 @@ package final class Owner: @unchecked Sendable {
             lock.lock()
             // A notification was posted during an earlier job: it goes first.
             let job = later.isEmpty ? jobs.removeFirst() : later.removeFirst()
+            if job.counted { started &+= 1 } else { uncounted -= 1 }
             lock.unlock()
             autoreleasepool { drainOffsets(); job.body?() }
             lock.lock()
@@ -148,10 +160,12 @@ package final class Owner: @unchecked Sendable {
 
     /// Run `body` on the owner after the jobs before it, without waiting
     /// (LLP 1072 T3: the collection fill). What it produces goes back to
-    /// main by its own publication.
-    package func post(_ body: @escaping () -> Void) {
+    /// main by its own publication. `counted: false` for a read that begins
+    /// no work (a metric's): `jobsAsked` leaves it out.
+    package func post(counted: Bool = true, _ body: @escaping () -> Void) {
         lock.lock()
-        jobs.append(Job(body))
+        jobs.append(Job(body, counted: counted))
+        if !counted { uncounted += 1 }
         #if DEBUG
         posts += 1
         #endif

@@ -2,6 +2,8 @@
 
 #![allow(clippy::unusual_byte_groupings)]
 
+use core::sync::atomic::{AtomicU16, Ordering};
+
 use crate::geometry::{Line, Size};
 use crate::style::AvailableSpace;
 use crate::tree::{CollapsibleMarginSet, LayoutInput, LayoutOutput, RunMode, SizingMode};
@@ -90,8 +92,7 @@ fn size_mixed_cache_key(kd: Size<Option<f32>>, avs: Size<AvailableSpace>) -> u64
 }
 
 /// Space-optimised cache key that packs bits into as small a size as possible
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(Serialize))]
+#[derive(Debug)]
 struct CacheKey {
     /// The initial cached size of the node itself
     kd_available_space: u64,
@@ -108,7 +109,20 @@ struct CacheKey {
     /// (`ContentSize`). The same known dimensions give different sizes in the two modes.
     sizing_mode: SizingMode,
     /// EXACT PATCH 72: fits in the key's padding. The tree resets stamps before reusing a pass.
-    last_used_pass: u16,
+    last_used_pass: AtomicU16,
+}
+
+impl Clone for CacheKey {
+    fn clone(&self) -> Self {
+        Self {
+            kd_available_space: self.kd_available_space,
+            parent_size: self.parent_size,
+            known_dimensions_are_definite: self.known_dimensions_are_definite,
+            vertical_margins_are_collapsible: self.vertical_margins_are_collapsible,
+            sizing_mode: self.sizing_mode,
+            last_used_pass: AtomicU16::new(self.last_used_pass.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl PartialEq for CacheKey {
@@ -165,7 +179,7 @@ impl From<&LayoutInput> for CacheKey {
                 .zip_map(input.known_dimensions, |is_definite, kd| is_definite || kd.is_none()),
             vertical_margins_are_collapsible: input.vertical_margins_are_collapsible,
             sizing_mode: input.sizing_mode,
-            last_used_pass: 0,
+            last_used_pass: AtomicU16::new(0),
         }
     }
 }
@@ -190,8 +204,7 @@ fn offer_at(offers: Option<&Vec<u64>>, slot: usize) -> u64 {
 }
 
 /// Cached intermediate layout results
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize))]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CacheEntry<T> {
     /// The key for the cache entry
     key: CacheKey,
@@ -200,8 +213,7 @@ pub(crate) struct CacheEntry<T> {
 }
 
 /// A cache for caching the results of a sizing a Grid Item or Flexbox Item
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize))]
+#[derive(Debug)]
 pub struct Cache {
     /// The cache entry for the node's final layout
     final_layout_entry: Option<CacheEntry<LayoutOutput>>,
@@ -212,11 +224,35 @@ pub struct Cache {
     /// Slot zero is the final layout; size slots start at one.
     indefinite_offers: Option<Box<Vec<u64>>>,
     /// Tracks which measure entries have been used since the eviction cursor last passed them
-    recently_used_entries: u16,
+    recently_used_entries: AtomicU16,
     /// The next measure entry to consider replacing
     next_measure_entry: usize,
     /// Tracks if all cache entries are empty
     is_empty: bool,
+}
+
+impl Clone for Cache {
+    fn clone(&self) -> Self {
+        Self {
+            final_layout_entry: self.final_layout_entry.clone(),
+            measure_entries: self.measure_entries.clone(),
+            indefinite_offers: self.indefinite_offers.clone(),
+            recently_used_entries: AtomicU16::new(self.recently_used_entries.load(Ordering::Relaxed)),
+            next_measure_entry: self.next_measure_entry,
+            is_empty: self.is_empty,
+        }
+    }
+}
+
+impl PartialEq for Cache {
+    fn eq(&self, other: &Self) -> bool {
+        self.final_layout_entry == other.final_layout_entry
+            && self.measure_entries == other.measure_entries
+            && self.indefinite_offers == other.indefinite_offers
+            && self.recently_used_entries.load(Ordering::Relaxed) == other.recently_used_entries.load(Ordering::Relaxed)
+            && self.next_measure_entry == other.next_measure_entry
+            && self.is_empty == other.is_empty
+    }
 }
 
 impl Default for Cache {
@@ -232,7 +268,7 @@ impl Cache {
             final_layout_entry: None,
             measure_entries: Vec::new(),
             indefinite_offers: None,
-            recently_used_entries: 0,
+            recently_used_entries: AtomicU16::new(0),
             next_measure_entry: 0,
             is_empty: true,
         }
@@ -240,14 +276,18 @@ impl Cache {
 
     /// Try to retrieve a cached result from the cache
     #[inline]
-    pub fn get(&mut self, input: &LayoutInput, pass: u16, exact_axis: bool) -> Option<LayoutOutput> {
+    pub fn get(&self, input: &LayoutInput, pass: u16, exact_axis: bool) -> Option<LayoutOutput> {
         let key = CacheKey::from(input);
         let offer = indefinite_offer(input);
         match input.run_mode {
-            RunMode::PerformLayout => self.final_layout_entry.filter(|entry| entry.key == key && (!key.has_indefinite_size() || self.offer(0) == offer)).map(|e| e.content),
+            RunMode::PerformLayout => self
+                .final_layout_entry
+                .as_ref()
+                .filter(|entry| entry.key == key && (!key.has_indefinite_size() || self.offer(0) == offer))
+                .map(|e| e.content),
             RunMode::ComputeSize => {
                 let offers = self.indefinite_offers.as_deref();
-                for (index, entry) in self.measure_entries.iter_mut().enumerate() {
+                for (index, entry) in self.measure_entries.iter().enumerate() {
                     // EXACT PATCH 11: every input matches except the requested axis. Upstream
                     // compared only the parent's width, but a node's own percentage height
                     // resolves against the parent's height (CSS 2.1 §10.5).
@@ -261,8 +301,10 @@ impl Cache {
                         && entry.key.parent_size() == key.parent_size()
                         && entry.key.size_is_valid_for(&key)
                     {
-                        entry.key.last_used_pass = pass;
-                        if index < CACHE_SIZE { self.recently_used_entries |= 1 << index; }
+                        entry.key.last_used_pass.store(pass, Ordering::Relaxed);
+                        if index < CACHE_SIZE {
+                            self.recently_used_entries.fetch_or(1 << index, Ordering::Relaxed);
+                        }
                         return Some(LayoutOutput::from_outer_size(entry.content));
                     }
                 }
@@ -298,15 +340,16 @@ impl Cache {
                 let offer = indefinite_offer(input);
                 if let Some(index) = self.measure_entries.iter().enumerate().position(|(index, entry)| entry.key == key && (!key.has_indefinite_size() || self.offer(index + 1) == offer)) {
                     self.measure_entries[index].content = layout_output.size;
-                    self.measure_entries[index].key.last_used_pass = pass;
-                    if index < CACHE_SIZE { self.recently_used_entries |= 1 << index; }
+                    *self.measure_entries[index].key.last_used_pass.get_mut() = pass;
+                    if index < CACHE_SIZE { *self.recently_used_entries.get_mut() |= 1 << index; }
                     return;
                 }
                 let entry_index = match policy {
                     SizeCachePolicy::Nine => {
                         self.next_measure_entry %= CACHE_SIZE;
-                        while self.recently_used_entries & (1 << self.next_measure_entry) != 0 {
-                            self.recently_used_entries &= !(1 << self.next_measure_entry);
+                        let recently_used = self.recently_used_entries.get_mut();
+                        while *recently_used & (1 << self.next_measure_entry) != 0 {
+                            *recently_used &= !(1 << self.next_measure_entry);
                             self.next_measure_entry = (self.next_measure_entry + 1) % CACHE_SIZE;
                         }
                         self.next_measure_entry
@@ -314,11 +357,11 @@ impl Cache {
                     _ => {
                         let len = self.measure_entries.len();
                         (0..if len < CACHE_SIZE { 0 } else { len }).map(|offset| (self.next_measure_entry + offset) % len)
-                            .find(|&index| self.measure_entries[index].key.last_used_pass != pass)
+                            .find(|&index| self.measure_entries[index].key.last_used_pass.load(Ordering::Relaxed) != pass)
                             .unwrap_or(len)
                     }
                 };
-                let entry = CacheEntry { key: CacheKey { last_used_pass: pass, ..key }, content: layout_output.size };
+                let entry = CacheEntry { key: CacheKey { last_used_pass: AtomicU16::new(pass), ..key }, content: layout_output.size };
                 if entry_index < self.measure_entries.len() {
                     self.measure_entries[entry_index] = entry;
                 } else {
@@ -329,7 +372,7 @@ impl Cache {
                     self.measure_entries.push(entry);
                 }
                 self.set_offer(entry_index + 1, offer);
-                if entry_index < CACHE_SIZE { self.recently_used_entries |= 1 << entry_index; }
+                if entry_index < CACHE_SIZE { *self.recently_used_entries.get_mut() |= 1 << entry_index; }
                 self.next_measure_entry = if entry_index + 1 == (if policy == SizeCachePolicy::Nine { CACHE_SIZE } else { self.measure_entries.len() }) { 0 } else { entry_index + 1 };
             }
             RunMode::PerformHiddenLayout => {}
@@ -359,7 +402,7 @@ impl Cache {
 
     /// EXACT PATCH 72: zero is reserved for answers from before a stamp wrap.
     fn reset_pass_stamps(&mut self) {
-        for entry in &mut self.measure_entries { entry.key.last_used_pass = 0; }
+        for entry in &mut self.measure_entries { *entry.key.last_used_pass.get_mut() = 0; }
     }
 
     /// EXACT PATCH 72: a size probe laid children out behind the final entry.
@@ -378,7 +421,7 @@ impl Cache {
         self.final_layout_entry = None;
         self.measure_entries.clear();
         if let Some(offers) = &mut self.indefinite_offers { offers.clear(); }
-        self.recently_used_entries = 0;
+        *self.recently_used_entries.get_mut() = 0;
         self.next_measure_entry = 0;
         ClearState::Cleared
     }
@@ -404,8 +447,8 @@ impl LazyCache {
     }
 
     #[inline]
-    pub fn get(&mut self, input: &LayoutInput, pass: u16, exact_axis: bool) -> Option<LayoutOutput> {
-        self.0.as_deref_mut().and_then(|cache| cache.get(input, pass, exact_axis))
+    pub fn get(&self, input: &LayoutInput, pass: u16, exact_axis: bool) -> Option<LayoutOutput> {
+        self.0.as_deref().and_then(|cache| cache.get(input, pass, exact_axis))
     }
 
     pub fn store(&mut self, input: &LayoutInput, output: LayoutOutput, pass: u16, policy: SizeCachePolicy) {
@@ -573,12 +616,12 @@ mod tests {
         let mut cache = Cache::new();
         cache.store(&input(1.0), output(1.0), 0, SizeCachePolicy::Nine);
         cache.store(&input(2.0), output(2.0), 0, SizeCachePolicy::Nine);
-        cache.recently_used_entries = 0;
+        *cache.recently_used_entries.get_mut() = 0;
         let entries = cache.measure_entries.clone();
 
         assert_eq!(cache.get(&input(1.0), 0, false), Some(output(1.0)));
         assert_eq!(cache.measure_entries, entries);
-        assert_ne!(cache.recently_used_entries, 0);
+        assert_ne!(cache.recently_used_entries.load(Ordering::Relaxed), 0);
     }
 
     // EXACT PATCH 11 — the upstream fixture: an entry answers only the inputs it was computed

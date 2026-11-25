@@ -173,7 +173,7 @@ object Presence {
         val call = request.getLong("call")
         val answer = { fields: JSONObject -> Exact.presence(fields.put("call", call).toString()) }
         val failed = { code: String, message: String -> answer(JSONObject().put("status", "failed").put("code", code).put("message", message)) }
-        val origin = request.optString("origin", "app")
+        val origin = request.optString("origin").ifEmpty { "none" }
         if (origin != "app") return failed("PERMISSION_DENIED", "person-required")
         val authenticator = Extensions.authenticator() ?: return failed("NotSupportedError", "this APK binds no authenticator (LLP 1133.010 D13)")
         val policy = request.optString("policy")

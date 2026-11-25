@@ -158,7 +158,7 @@ function reply(t, name, source, held, f, next, gone) {
     recommit(() => {
       if (t.r) again(t);
     }, 'a failed request');
-  }));
+  }), t.input);
   return o => {
     if (!deferForReplacement(() => land(o))) return land(o);
   };
@@ -270,7 +270,7 @@ export function res(
         r.stand = null;
       }
       r.asleep = r.slept = true;
-      r.forced = r.rev = r.reconciling = false;
+      r.forced = r.rev = r.reconciling = r.launch = false;
       if (!r.ticket?.upload) release();
       if (r.failed) {
         r.failed = null;
@@ -305,7 +305,10 @@ export function res(
     r.slept = false;
     // In a render, keep the call that gave the answer taken: the checkpoint lists the answer in `open` when that call
     // watched a document or was refused storage or visitor credentials (checkpoint.js `answers`)
-    if (globalThis.__exactRender) r.renderCall = call;
+    if (globalThis.__exactRender) {
+      r.renderCall = call;
+      if (!globalThis.__exactProduction) for (const url of call?.urls ?? []) (r.renderUrls ??= new Set()).add(url);
+    }
     r.stand = null;
     r.stale = false;
     r.passed = undefined;
@@ -349,7 +352,6 @@ export function res(
             }
             return;
           }
-          if (globalThis.__exactRender && !globalThis.__exactProduction) for (const url of t.call?.urls ?? []) (r.renderUrls ??= new Set()).add(url);
           // what the first frame showed, said once the answer is taken
           const stood = r.stale && r.stand && [eq(p.v, r.value), r.stand];
           take(p.v, t.args, t.origin, t.generation, t.madeBy);
@@ -401,7 +403,8 @@ export function res(
           rev = r.rev,
           reconciling = r.reconciling,
           mk = finiteArguments(a) ? data.uploads.at(r, a) : null;
-        // `launch`: true while the launch's own ask waits for the source, false once a refresh was asked meanwhile
+        // `launch`: true while the launch's own ask waits for the source, false once a refresh was asked meanwhile or
+        // the gate closed, as a wake is asked as a refresh is (LLP 1161.002 D3)
         r.forced = r.rev = r.reconciling = false;
         if (forced) r.launch = undefined;
         // A failure keeps the value for its arguments, including NaN; `refresh` or new ones ask again (settlement.rs),
@@ -426,11 +429,13 @@ export function res(
           root = r.path === undefined;
         r.baked = false;
         if (baked) r.stale = true;
-        // the first frame's build-time answer, said once when it starts to stand in for an answer (the runner's
-        // `journal_build_time`)
+        // the first frame's build-time answer, or a store reader's placeholder in place of one (store-reader.js), said
+        // once when it starts to stand in for an answer (the runner's `journal_build_time`)
         let quiet = false;
         const stands = () => {
-          if (!was && !quiet && r.stale && r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
+          if (was || quiet || !r.stale) return;
+          if (r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
+          else r.unseen?.();
         };
         if (!forced && !rev) {
           // Reuse follows the request in flight; the displayed value may answer older arguments (LLP 1016 D5).
@@ -468,7 +473,8 @@ export function res(
         if (ans && ans.store) r.store = true;
         r.watches = ans?.watches;
         if (ans && 'v' in ans) {
-          stands();
+          // a placeholder answered as it is asked shows in no frame
+          if (r.stand) stands();
           const stood = r.stale && r.stand && [eq(ans.v, r.value), r.stand];
           try {
             take(ans.v, a, Ov.tick(), undefined, ans.madeBy);
@@ -616,6 +622,7 @@ export function res(
       r.renderCall,
       r.stand,
       r.stale,
+      r.asked,
     ],
     restore: x => {
       [r.value, r.settled, r.ticket] = x;
@@ -645,6 +652,7 @@ export function res(
       r.renderCall = x[25];
       r.stand = x[26];
       r.stale = x[27];
+      r.asked = x[28];
       write(pend.n, x[19]);
       // and what it shows is read again, from what was put back
       write(ver.n, ver.n.v + 1);
@@ -760,7 +768,7 @@ export function mut(name, slot, refreshes, type, mode) {
         if (p.req) {
           const req = { ...p.req, origin: t.req?.origin };
           if (o.more) {
-            const n = { id: ++Ticket, name, owner: m, invocation: t.invocation, askOrigin: t.askOrigin, source: t.source, args: t.args, req, write: t.write, send: t.send };
+            const n = { id: ++Ticket, name, owner: m, invocation: t.invocation, askOrigin: t.askOrigin, input: t.input, source: t.source, args: t.args, req, write: t.write, send: t.send };
             if (m.parallel) m.tickets = [...m.tickets.filter(x => x !== t), n];
             else m.ticket = n;
             send(n, land(n));
@@ -876,6 +884,7 @@ export function mut(name, slot, refreshes, type, mode) {
           owner: m,
           invocation: Invocation.id,
           askOrigin: Origin.now(),
+          input: Origin.input,
           source,
           args,
           req: a.req && { ...a.req, origin: Origin.now() },

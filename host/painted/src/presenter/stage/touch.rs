@@ -26,6 +26,7 @@
 //! from a source runs its container's return (`zoom.rs`). One whose pop
 //! flies names stays in place while the gesture seeks them (LLP 1013.004 D4).
 use super::*;
+use exact_motion::{gesture, Value, VelocityTracker};
 
 /// A slop of Android's (`ViewConfiguration`'s touch slop, 8 dp).
 const SLOP: f32 = 8.0;
@@ -43,7 +44,7 @@ fn spring_at(ms: f64) -> f32 {
     (1.0 - (1.0 + w) * (-w).exp()) as f32
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(in crate::presenter) enum Gesture {
     /// A contact on a sheet's scrim.
     Scrim { modal: NodeKey, contact: Contact },
@@ -53,8 +54,8 @@ pub(in crate::presenter) enum Gesture {
         finger: (f32, f32),
         start: f32,
         top: f32,
-        last: (f32, f64),
-        velocity: f32,
+        sampled_ms: f64,
+        velocity: VelocityTracker,
         moving: bool,
         directions: (bool, bool),
         contact: Contact,
@@ -211,6 +212,7 @@ impl Preview {
             dx: way * p * (width / 20.0 - 8.0).max(0.0),
             dy: 0.0,
             scale: 1.0 - 0.1 * p,
+            scale_axes: (1.0, 1.0),
             rotate: 0.0,
             origin: (width / 2.0, height / 2.0),
             opacity: 1.0,
@@ -248,12 +250,12 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The top sheet, with its frame now.
-    fn grab_sheet(&self) -> Option<(NodeKey, f32)> {
+    fn grab_sheet(&self) -> Option<(&Sheet, f32)> {
         let sheet = self
             .front_sheets()
             .last()
             .filter(|_| self.stage_presents())?;
-        Some((sheet.modal, self.sheet_top_now(sheet)))
+        Some((sheet, self.sheet_top_now(sheet)))
     }
 
     /// Which finger directions move the sheet rather than its nested list:
@@ -321,37 +323,48 @@ impl<D: DataSource> Presenter<D> {
 
     /// A contact down: one on a scrim is the stage's; one on a sheet may
     /// become its drag.
-    pub(in crate::presenter) fn stage_down(&mut self, x: f32, y: f32, now: f64) -> bool {
-        let Some((modal, top)) = self.grab_sheet() else {
+    pub(in crate::presenter) fn stage_down(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: f64,
+        event: f64,
+    ) -> bool {
+        let Some((sheet, top)) = self.grab_sheet() else {
             return false;
         };
+        let modal = sheet.modal;
+        let handle = y < top + sheet.handle;
         let (left, width) = self.sheet_span();
         let contact = Contact {
             at: (x, y),
-            event_ms: now,
+            event_ms: event,
             delivered_ms: now,
         };
         if y < top || x < left || x >= left + width {
             self.stage.gesture = Some(Gesture::Scrim { modal, contact });
             return true;
         }
-        let handle = y < top + SHEET_HANDLE;
         let under = self.scrollers_at(x, y);
         let directions = if handle || (under.chain.is_empty() && !under.claims.1) {
             (true, true)
         } else {
             under.sheet_directions
         };
-        self.stage.gesture = (directions.0 || directions.1).then_some(Gesture::Drag {
-            modal,
-            finger: (x, y),
-            start: top,
-            top,
-            last: (y, now),
-            velocity: 0.0,
-            moving: false,
-            directions,
-            contact,
+        self.stage.gesture = (directions.0 || directions.1).then(|| {
+            let mut velocity = VelocityTracker::new();
+            velocity.push(event / 1000., Value::scalar(y.into()));
+            Gesture::Drag {
+                modal,
+                finger: (x, y),
+                start: top,
+                top,
+                sampled_ms: event,
+                velocity,
+                moving: false,
+                directions,
+                contact,
+            }
         });
         false
     }
@@ -360,9 +373,15 @@ impl<D: DataSource> Presenter<D> {
     /// scrim, a sheet's drag past the slop): where it is and when it was
     /// last heard.
     pub(in crate::presenter) fn stage_contact(&self) -> Option<Contact> {
-        match self.stage.gesture? {
-            Gesture::Scrim { contact, .. } | Gesture::Drag { contact, .. } => Some(contact),
+        match self.stage.gesture.as_ref()? {
+            Gesture::Scrim { contact, .. } | Gesture::Drag { contact, .. } => Some(*contact),
         }
+    }
+
+    pub(in crate::presenter) fn clear_pending_sheet_drag(&mut self) {
+        self.stage
+            .gesture
+            .take_if(|g| matches!(g, Gesture::Drag { moving: false, .. }));
     }
 
     /// Whether a contact down may yet drag a sheet.
@@ -385,6 +404,15 @@ impl<D: DataSource> Presenter<D> {
         event: f64,
     ) -> bool {
         if let Some(gesture) = &mut self.stage.gesture {
+            if let Gesture::Drag {
+                sampled_ms,
+                velocity,
+                ..
+            } = gesture
+            {
+                velocity.push(event / 1000., Value::scalar(y.into()));
+                *sampled_ms = event;
+            }
             *gesture.contact() = Contact {
                 at: (x, y),
                 event_ms: event,
@@ -433,25 +461,10 @@ impl<D: DataSource> Presenter<D> {
             None => return false,
         }
         if let Some(Gesture::Drag {
-            finger,
-            start,
-            top,
-            last,
-            velocity,
-            ..
+            finger, start, top, ..
         }) = &mut self.stage.gesture
         {
             *top = (*start + y - finger.1).clamp(highest, h);
-            let dt = (event - last.1) as f32 / 1000.0;
-            if dt > 0.0 {
-                let v = (y - last.0) / dt;
-                *velocity = if dt > 0.1 {
-                    v
-                } else {
-                    0.6 * v + 0.4 * *velocity
-                };
-                *last = (y, event);
-            }
             self.dirty = true;
         }
         true
@@ -460,25 +473,26 @@ impl<D: DataSource> Presenter<D> {
     /// A contact up: a press on the scrim dismisses; a drag settles on the
     /// detent its speed carries it to, or out of the window.
     pub(in crate::presenter) fn stage_up(&mut self, x: f32, y: f32, now: f64, event: f64) -> bool {
-        let Some(mut gesture) = self.stage.gesture.take() else {
-            return false;
-        };
-        if let Gesture::Drag {
+        if let Some(Gesture::Drag {
             moving: true,
-            last,
+            sampled_ms,
             velocity,
+            contact,
             ..
-        } = &mut gesture
+        }) = &mut self.stage.gesture
         {
-            // The release's own sample counts toward the speed; a finger
-            // still for 40 ms has stopped (Android's `VelocityTracker`).
-            let dt = (event - last.1) as f32 / 1000.0;
-            if dt > 0.04 {
-                *velocity = 0.0;
-            } else if dt > 0.0 {
-                *velocity = 0.6 * ((y - last.0) / dt) + 0.4 * *velocity;
+            let moved = (x, y) != contact.at;
+            let elapsed = (event - *sampled_ms) / 1000.;
+            if gesture::lift_samples(moved, elapsed) {
+                if elapsed > gesture::LIFT_STILL {
+                    velocity.reset();
+                }
+                self.stage_move(x, y, now, event);
             }
         }
+        let Some(gesture) = self.stage.gesture.take() else {
+            return false;
+        };
         match gesture {
             Gesture::Scrim { modal, .. } => {
                 let closes = (self.host.kernel().node_by_key(modal))
@@ -497,9 +511,15 @@ impl<D: DataSource> Presenter<D> {
                 modal,
                 top,
                 velocity,
+                sampled_ms,
                 ..
             } => {
-                self.settle_sheet(modal, top, velocity, now);
+                self.settle_sheet(
+                    modal,
+                    top,
+                    velocity.estimate(sampled_ms / 1000.).x as f32,
+                    now,
+                );
                 true
             }
         }

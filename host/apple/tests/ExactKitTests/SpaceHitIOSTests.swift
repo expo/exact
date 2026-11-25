@@ -36,6 +36,25 @@ final class SpaceHitIOSTests: XCTestCase {
         return (p, try XCTUnwrap(p.views[1]), try XCTUnwrap(p.views[2]))
     }
 
+    func testPerAxisScaleHitsAndMapsThroughNegativeAndCollapsedAxes() throws {
+        let (p, parent, child) = try fixture(degrees: 0, axis: [0, 0, 1])
+        for (x, y) in [(1.0, 0.5), (-1.0, -0.5), (0.0, 0.5), (1.0, 0.0)] {
+            p.apply(wireBatch([["op": "present", "id": 2, "property": "scale", "x": x, "y": y]]))
+            let rect = child.drawnRect(child.bounds, in: parent)
+            XCTAssertEqual(rect.width, 100 * abs(x), accuracy: 1e-6)
+            XCTAssertEqual(rect.height, 100 * abs(y), accuracy: 1e-6)
+            for y: CGFloat in [60, 80, 100, 120, 140] {
+                XCTAssertEqual(parent.hitTest(CGPoint(x: 100, y: y), with: nil) === child, x != 0 && y > 75 && y < 125 && child.scale.y != 0)
+            }
+            if x != 0 && y != 0 {
+                let point = CGPoint(x: 25, y: 80)
+                let local = child.local(child.drawnPoint(point))
+                XCTAssertEqual(local.x, point.x, accuracy: 1e-6)
+                XCTAssertEqual(local.y, point.y, accuracy: 1e-6)
+            }
+        }
+    }
+
     // Turned 60° about y under a 200 px perspective, the near (left) edge
     // stands at x ≈ 68 and runs y ≈ 36…164; the far (right) edge at x ≈ 121.
     func testATurnedBoxIsHitWhereItIsDrawn() throws {

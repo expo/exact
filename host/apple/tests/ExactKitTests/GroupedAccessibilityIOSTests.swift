@@ -4,8 +4,53 @@ import XCTest
 @testable import ExactKit
 @testable import ExactGroupedLists
 import ExactMarkdown
+@testable import ExactCollections
 
 final class GroupedAccessibilityIOSTests: GroupedListFixture {
+    func testTheExposedReorderButtonOffersBothMoves() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "read UIKit's reorder accessory") }
+        ExactCollections.install()
+        ExactGroupedLists.install()
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_GROUPED_SETTINGS_PLAN"])
+        let session = ExactApp.shared.makeSession(label: "grouped-reorder-actions")
+        defer { session.destroy(); window?.isHidden = true }
+        let view = ExactView(session: session), root = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        window = UIWindow(windowScene: scene)
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        view.frame = root.view.bounds
+        root.view.addSubview(view)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: view.bounds.size).error)
+        view.layoutIfNeeded()
+        let p = session.presenter
+        let list = try XCTUnwrap(host(p).lists.values.first)
+        list.collection.layoutIfNeeded()
+        let row = try XCTUnwrap(list.model.sections.first?.rows.first { $0.reorderKey == "Privacy" })
+        let grip = try XCTUnwrap(row.reorderGrip)
+        let native = try XCTUnwrap(list.cell(row.view) as? GroupedCell)
+        let control = try XCTUnwrap(native.reorderControl)
+        let elements = try XCTUnwrap(p.axElements(roots: [p.viewport])["elements"] as? [[String: Any]])
+        let button = try XCTUnwrap(elements.first { $0["role"] as? String == "button" && $0["name"] as? String == control.accessibilityLabel })
+        XCTAssertEqual(button["actions"] as? [String], ["Move earlier", "Move later"])
+
+        let reset = NodeView(id: 99999, kind: "button", presenter: p)
+        p.root.addSubview(reset)
+        p.views[reset.id] = reset
+        reset.handlers = ["press"]
+        p.apply(wireBatch([["op": "props", "id": Int(reset.id), "set": ["id": "reset", "accessibilityLabel": "Reset"]],
+                           ["op": "props", "id": Int(grip), "set": ["accessibilityActions": "reset"]]]))
+        XCTAssertEqual(control.accessibilityCustomActions?.map(\.name), ["Move earlier", "Move later", "Reset"])
+
+        let calls = ReorderGroupRecorder()
+        calls.hold = false
+        p.reorderHost?.groupCalls = calls
+        for action in (control.accessibilityCustomActions ?? []).prefix(2) {
+            XCTAssertEqual(action.actionHandler?(action), true)
+        }
+        XCTAssertEqual(calls.log, ["begin \(grip)", "step 1", "drop", "finish", "begin \(grip)", "step 2", "drop", "finish"])
+    }
+
     func testAccessibilityOnlyUpdatesRefreshTheVisibleCell() throws {
         let p = presenter { self.model() }
         let milk = try cell(p, 10)

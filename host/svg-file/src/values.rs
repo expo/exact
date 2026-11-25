@@ -23,18 +23,17 @@ pub(super) fn presentation<'a>(name: &str, value: &'a str, weight: u16) -> Cow<'
 }
 
 pub(super) fn families(value: &str) -> Option<Vec<(bool, String)>> {
-    use cssparser::{Parser, ParserInput, Token};
-    let mut input = ParserInput::new(value);
+    use cssparser::{ParseError, Parser, Token};
     let mut count = 0;
-    Parser::new(&mut input)
+    Parser::new(value)
         .parse_comma_separated(|p| {
             count += 1;
             if count > 64 {
-                return Err(p.new_custom_error::<_, ()>(()));
+                return Err(ParseError::<()>::custom(()));
             }
             if let Ok(name) = p.try_parse(|p| p.expect_string_cloned()) {
                 if name.is_empty() {
-                    return Err(p.new_custom_error::<_, ()>(()));
+                    return Err(ParseError::<()>::custom(()));
                 }
                 return Ok((true, name.to_string()));
             }
@@ -45,10 +44,10 @@ pub(super) fn families(value: &str) -> Option<Vec<(bool, String)>> {
             let generic = !installed;
             while !p.is_exhausted() {
                 if generic {
-                    return Err(p.new_custom_error(()));
+                    return Err(ParseError::custom(()));
                 }
                 let Token::Ident(next) = p.next()? else {
-                    return Err(p.new_custom_error(()));
+                    return Err(ParseError::custom(()));
                 };
                 name.push(' ');
                 name.push_str(next);
@@ -57,7 +56,7 @@ pub(super) fn families(value: &str) -> Option<Vec<(bool, String)>> {
                 name.to_ascii_lowercase().as_str(),
                 "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "default"
             ) {
-                return Err(p.new_custom_error(()));
+                return Err(ParseError::custom(()));
             }
             if generic {
                 name = canonical;

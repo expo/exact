@@ -182,7 +182,9 @@ impl Input {
         if [15, 16, 20, 22].contains(&self.op) && !self.rows.is_empty() {
             return Err("unexpected reorder samples");
         }
-        if self.op == 21 && self.rows.len() != 1 {
+        if self.op == 21
+            && !(1..=if self.binding.unwrapped() { 2 } else { 1 }).contains(&self.rows.len())
+        {
             return Err("reorder-preview-into names its target list once");
         }
         let mut keys = std::collections::BTreeSet::new();

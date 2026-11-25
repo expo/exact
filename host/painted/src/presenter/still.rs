@@ -17,6 +17,7 @@ pub(crate) struct Still {
     menu: Option<(ViewId, Option<usize>, u32)>,
     page: (u32, u32),
     viewport: (u32, u32),
+    safe: [f32; 4],
     dark: bool,
     controls: BTreeMap<ViewId, bool>,
     feedback: (Option<ViewId>, Option<ViewId>),
@@ -35,6 +36,11 @@ impl Still {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// The reader draws selection geometry from the last paint's paragraphs.
+    pub(crate) fn reader_selection_active(&self) -> bool {
+        self.reader_selection.is_some()
+    }
+
     /// The paint's inputs other than scroll offsets; `None` while anything
     /// moves on its own (motion, a press, a collection's pending correction)
     /// or under a finger on the stage.
@@ -51,6 +57,7 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let bits = |(a, b): (f32, f32)| (a.to_bits(), b.to_bits());
+        let env = self.host.kernel().arena().env();
         Some(Still {
             epoch: self.host.kernel().epoch(),
             images: self
@@ -64,6 +71,7 @@ impl<D: DataSource> Presenter<D> {
             menu: (self.menu).map(|id| (id, self.menu_row, self.menu_scroll.to_bits())),
             page: bits(self.page),
             viewport: bits(self.viewport),
+            safe: [env.top, env.right, env.bottom, env.left],
             dark: self.brush.dark,
             controls: self.controls.clone(),
             feedback: self.brush.feedback,

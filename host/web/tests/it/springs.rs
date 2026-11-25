@@ -34,24 +34,27 @@ fn view(host: &Host<NoData>, test_id: &str) -> u32 {
 /// The one `animate` op in a batch: (id, property, delay, duration, values).
 fn animate(batch: &str) -> (u32, String, f64, f64, Vec<f64>) {
     assert_eq!(batch.matches("\"op\":\"animate\"").count(), 1, "{batch}");
-    let at = batch.find("\"op\":\"animate\"").unwrap();
-    let op = &batch[at..];
-    let op = &op[..op.find("]}").unwrap() + 2];
-    let field = |name: &str| {
-        let s = &op[op.find(&format!("\"{name}\":")).unwrap() + name.len() + 3..];
-        s[..s.find([',', '}']).unwrap()].to_string()
-    };
-    let values = &op[op.find("\"values\":[").unwrap() + 10..op.len() - 2];
-    let values: Vec<f64> = if values.is_empty() {
-        Vec::new()
-    } else {
-        values.split(',').map(|v| v.parse().unwrap()).collect()
-    };
+    let batch: serde_json::Value = serde_json::from_str(batch).unwrap();
+    let op = batch["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "animate")
+        .unwrap();
+    let values = op["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            assert_eq!(v[0], v[1], "uniform scale keeps both axes equal");
+            v[0].as_f64().unwrap()
+        })
+        .collect();
     (
-        field("id").parse().unwrap(),
-        field("property").trim_matches('"').to_string(),
-        field("delay").parse().unwrap(),
-        field("duration").parse().unwrap(),
+        op["id"].as_u64().unwrap() as u32,
+        op["property"].as_str().unwrap().to_owned(),
+        op["delay"].as_f64().unwrap(),
+        op["duration"].as_f64().unwrap(),
         values,
     )
 }

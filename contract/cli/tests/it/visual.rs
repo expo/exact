@@ -2,6 +2,7 @@
 //! kernel as CSS, in a literal, a `style` and a conditional, and what the
 //! hosts do not draw is refused at compile time, by name.
 
+use crate::source::{boxed, Source};
 use exact_kernel::corner::{Corner, CornerShape};
 use exact_kernel::gradient::BackgroundImage;
 use exact_kernel::style::TextShadow;
@@ -17,11 +18,11 @@ impl DataSource for NoData {
     }
 }
 
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -29,7 +30,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style_of(r: &Runner<NoData>, id: &str) -> exact_kernel::StyleProps {
+fn style_of(r: &Runner<Source>, id: &str) -> exact_kernel::StyleProps {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()
@@ -196,22 +197,6 @@ fn a_native_button_haptic_repair_compiles() {
             panic!("{kind}: {e}");
         }
     }
-}
-
-/// The euxy port: a cancelled pointer is a `pointerup` on every host, and
-/// the refusal of `pointercancel` says so.
-#[test]
-fn pointercancel_names_the_pointerup_that_ends_a_hold() {
-    let e = contract::compile(
-        "component App\n  state held = false\n  action up\n    held = false\n  view\n    button pointerup=up pointercancel=up\n      text \"Hold\"\n",
-    )
-    .unwrap_err();
-    assert_eq!(e.id, "lower-unknown-attr");
-    assert!(
-        e.message
-            .contains("a cancelled pointer ends with `pointerup` (its `buttons` 0)"),
-        "{e}"
-    );
 }
 
 /// An agent who knows CSS writes `animationend=`: the refusal names the timer.

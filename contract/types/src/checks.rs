@@ -788,20 +788,65 @@ pub(super) fn check_command(
             span,
         );
     }
-    // @ref LLP 1069.010 — one opacity, 0 (unseen) to 1 (opaque).
+    if matches!(name, "setWindowAlwaysOnTop" | "setWindowIgnoreMouseEvents") {
+        if matches!(args, [flag] if infer(flag, scope, shapes)? == Ty::Bool) {
+            return Ok(());
+        }
+        return err(
+            "type-window-flag",
+            format!("`{name}(flag)` takes one boolean"),
+            span,
+        );
+    }
     if name == "setWindowOpacity" {
-        let fits = match args {
-            [Expr::Number(n, _)] => (0.0..=1.0).contains(n),
-            [Expr::Unary(UnOp::Neg, inner, _)] => matches!(**inner, Expr::Number(n, _) if n == 0.0),
-            [arg] => matches!(infer(arg, scope, shapes)?, Ty::Number),
-            _ => false,
+        let opacity = match args.first() {
+            Some(Expr::Number(n, _)) => (0.0..=1.0).contains(n),
+            Some(Expr::Unary(UnOp::Neg, inner, _)) if matches!(**inner, Expr::Number(..)) => {
+                matches!(**inner, Expr::Number(n, _) if n == 0.0)
+            }
+            Some(arg) => infer(arg, scope, shapes)? == Ty::Number,
+            None => false,
         };
-        if fits {
+        let duration = match args.get(1) {
+            None => true,
+            Some(Expr::Unary(UnOp::Neg, inner, _)) if matches!(**inner, Expr::Number(..)) => {
+                matches!(**inner, Expr::Number(n, _) if n == 0.0)
+            }
+            Some(arg) => infer(arg, scope, shapes)? == Ty::Number,
+        };
+        if args.len() <= 2 && opacity && duration {
             return Ok(());
         }
         return err(
             "type-window-opacity",
-            "`setWindowOpacity(opacity)` takes the window's opacity as a number from 0 (unseen) to 1 (opaque)",
+            "`setWindowOpacity(opacity, duration)` takes an opacity from 0 to 1 and an optional nonnegative duration in milliseconds",
+            span,
+        );
+    }
+    if name == "setBounds" {
+        if let [bounds, rest @ ..] = args {
+            if matches!(infer(bounds, scope, shapes)?, Ty::Record(s) if s == "DOMRect")
+                && (rest.is_empty()
+                    || matches!(rest, [flag] if infer(flag, scope, shapes)? == Ty::Bool))
+            {
+                return Ok(());
+            }
+        }
+        return err(
+            "type-window-bounds",
+            "`setBounds(bounds, animate)` takes a DOMRect and an optional boolean",
+            span,
+        );
+    }
+    if name == "setAspectRatio" {
+        if matches!(args, [ratio] if infer(ratio, scope, shapes)? == Ty::Number
+            && !matches!(ratio, Expr::Unary(UnOp::Neg, inner, _) if matches!(**inner, Expr::Number(n, _) if n > 0.0)))
+        {
+            return Ok(());
+        }
+        return err(
+            "type-window-aspect",
+            "`setAspectRatio(ratio)` takes a positive width-to-height ratio, or zero to unlock",
             span,
         );
     }
@@ -848,6 +893,16 @@ pub(super) fn check_command(
     }
     if name.starts_with("show") && name.ends_with("Picker") && name != "showPicker" {
         return pickers::picker_args(name, args, scope, shapes, span);
+    }
+    if name == "cancelReorder" {
+        if matches!(args, [id] if infer(id, scope, shapes)?.is_string()) {
+            return Ok(());
+        }
+        return err(
+            "type-cancel-reorder",
+            "`cancelReorder` takes the source list's string id",
+            span,
+        );
     }
     if name == "scrollIntoView" {
         return into_view_args(args, scope, shapes, span);

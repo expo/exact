@@ -26,14 +26,21 @@ const PREFERENCES: [ORIENTATION_PREFERENCE; 4] = [
     ORIENTATION_PREFERENCE_LANDSCAPE_FLIPPED,
 ];
 
-/// The primary display's orientation now and its panel's own, as bits:
+/// The display's orientation now and its panel's own, as lock bits, and the viewport reading:
 /// `DMDO_DEFAULT` is the panel's own way up, and each step turns it 90°.
-fn display() -> Option<(u8, u8)> {
+fn display(name: Option<&[u16; 32]>) -> Option<(u8, u8, exact_runner::ScreenOrientation)> {
     // SAFETY: a zeroed DEVMODEW with its size set is what the call fills.
     let mut mode: DEVMODEW = unsafe { std::mem::zeroed() };
     mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
-    // SAFETY: a null device name is the primary display; `mode` is valid.
-    if unsafe { EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, &mut mode) } == 0 {
+    // The lock uses null for the primary display. The viewport passes its monitor’s terminated GDI name.
+    if unsafe {
+        EnumDisplaySettingsW(
+            name.map_or(std::ptr::null(), |n| n.as_ptr()),
+            ENUM_CURRENT_SETTINGS,
+            &mut mode,
+        )
+    } == 0
+    {
         return None;
     }
     // SAFETY: a display's settings fill the display arm of the union.
@@ -41,12 +48,17 @@ fn display() -> Option<(u8, u8)> {
     let wide = mode.dmPelsWidth >= mode.dmPelsHeight;
     // An odd number of turns swaps the panel's axis.
     let landscape_panel = wide == (turns % 2 == 0);
-    let order: [u8; 4] = if landscape_panel {
+    let lock_bits: [u8; 4] = if landscape_panel {
         [0b0100, 0b0001, 0b1000, 0b0010]
     } else {
         [0b0001, 0b0100, 0b0010, 0b1000]
     };
-    Some((order[turns as usize], order[0]))
+    let screen = crate::displays::screen_orientation(mode.dmPelsWidth, mode.dmPelsHeight, turns);
+    Some((lock_bits[turns as usize], lock_bits[0], screen))
+}
+
+pub(super) fn screen(name: &[u16; 32]) -> Option<exact_runner::ScreenOrientation> {
+    display(Some(name)).map(|(_, _, screen)| screen)
 }
 
 /// Apply the session's lock when it changed, and report what was asked.
@@ -57,7 +69,9 @@ pub(crate) fn apply<D: DataSource>(p: &mut Presenter<D>) {
     let (asked, conflict, why) = match &session {
         Session::None | Session::Conflict(_) => (ORIENTATION_PREFERENCE_NONE, false, None),
         Session::Held(lock) => {
-            let (now, natural) = display().unwrap_or((0b1111, 0b1111));
+            let (now, natural) = display(None)
+                .map(|(now, natural, _)| (now, natural))
+                .unwrap_or((0b1111, 0b1111));
             let set = lock.types
                 & if lock.natural { natural } else { 0b1111 }
                 & if lock.current { now } else { 0b1111 };

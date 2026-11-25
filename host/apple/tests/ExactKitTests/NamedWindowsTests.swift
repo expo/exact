@@ -68,6 +68,30 @@ final class NamedWindowsTests: XCTestCase {
         XCTAssertEqual(routes(session), ["route-compose", "route-inbox"])
     }
 
+    func testPanelLinkRequestsItsOwnRouteAndNamesARefusalWithoutAPresenter() throws {
+        let session = try boot(Delegate())
+        defer { session.destroy() }
+        let link = try node(session, "hud")
+        var requests: [[String]] = []
+        session.openPanel = { requests.append([$0, $1]) }
+        #if os(iOS)
+        XCTAssertFalse(link.activateKey(" "))
+        XCTAssertTrue(link.activateKey("Enter"))
+        #else
+        session.presenter.press(link.id)
+        #endif
+        XCTAssertEqual(requests, [["/compose", "shortcuts"]])
+        for name in ["main", "_self", "_blank", "window-32", ""] {
+            session.presentRoutePanel(["/compose", name])
+        }
+        session.presentRoutePanel(["/missing", "shortcuts"])
+        XCTAssertEqual(requests.count, 1)
+        session.openPanel = nil
+        session.presenter.press(link.id)
+        XCTAssertTrue(session.agent(#"{"op":"logs"}"#).contains("panel unsupported"))
+        XCTAssertEqual(routes(session), ["route-inbox"])
+    }
+
     func testAWindowOpenedAtARouteIsRootedThereAndNamed() throws {
         let session = try boot(Delegate(), window: ("compose", "/compose"))
         defer { session.destroy() }
@@ -80,6 +104,99 @@ final class NamedWindowsTests: XCTestCase {
     }
 
     #if os(macOS)
+    @MainActor
+    func testHUDShowsTheRouteAboveItsMaterialAndTakesOnlyItsOwnEscape() throws {
+        let session = try boot(Delegate(), window: ("shortcuts", "/compose"))
+        defer { session.destroy() }
+        let rect = NSRect(x: 0, y: 0, width: 390, height: 270)
+        let panel = RoutePanel(contentRect: rect, behind: true)
+        let view = ExactView(session: session)
+        panel.contentView = view
+        XCTAssertEqual(panel.level, .agentBehind)
+        XCTAssertTrue(panel.requestedFloating)
+        XCTAssertTrue(panel.styleMask.isSuperset(of: [.nonactivatingPanel, .hudWindow]))
+        XCTAssertTrue(panel.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications]))
+        XCTAssertTrue(panel.isExcludedFromWindowsMenu)
+        XCTAssertEqual(panel.tabbingMode, .disallowed)
+        XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertFalse(panel.hidesOnDeactivate)
+        XCTAssertTrue(panel.becomesKeyOnlyIfNeeded)
+        let root = try node(session, "route-compose")
+        XCTAssertTrue(root.standsOnPanelGround)
+        XCTAssertNil(root.layer?.backgroundColor.flatMap { $0.alpha > 0 ? $0 : nil })
+        root.layoutResize = CGSize(width: 18, height: 12)
+        root.applySurface()
+        let surface = try XCTUnwrap(root.surface)
+        XCTAssertNil(surface.backgroundColor.flatMap { $0.alpha > 0 ? $0 : nil })
+        root.layoutResize = .zero
+        root.applySurface()
+        XCTAssertTrue(view.subviews.first is NSVisualEffectView)
+        XCTAssertEqual((view.subviews.first as? NSVisualEffectView)?.material, .hudWindow)
+        XCTAssertFalse(session.presenter.viewport.drawsBackground)
+        panel.orderFront(nil)
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: panel.windowNumber, context: nil, characters: "\u{1b}",
+                                                    charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        final class CloseDelegate: NSObject, NSWindowDelegate {
+            var attempts = 0
+            func windowShouldClose(_ sender: NSWindow) -> Bool { attempts += 1; return attempts > 1 }
+        }
+        let delegate = CloseDelegate()
+        panel.delegate = delegate
+        panel.sendEvent(escape)
+        XCTAssertEqual(delegate.attempts, 1)
+        XCTAssertTrue(panel.isVisible)
+        panel.sendEvent(escape)
+        XCTAssertFalse(panel.isVisible)
+    }
+
+    @MainActor
+    func testDriverEditsAPanelFieldWithoutTakingTheKeyboard() throws {
+        let session = try boot(Delegate(), window: ("shortcuts", "/compose"))
+        let panel = RoutePanel(contentRect: NSRect(x: 10, y: 10, width: 390, height: 270), behind: true)
+        panel.contentView = ExactView(session: session)
+        panel.orderFront(nil)
+        defer { panel.close(); session.destroy() }
+        let field = try node(session, "filter")
+        let result = Agent(session: session).type(["id": Int(field.id), "text": "driver text"])
+        XCTAssertEqual(result["value"] as? String, "driver text")
+        XCTAssertEqual(field.field?.stringValue, "driver text")
+        XCTAssertFalse(panel.canBecomeKey)
+        XCTAssertFalse(panel.isKeyWindow)
+    }
+
+    @MainActor
+    func testLiveFramesLeavesACoveredPanelAtTheDrivenLevel() throws {
+        let session = try boot(Delegate(), window: ("shortcuts", "/compose"))
+        let panel = RoutePanel(contentRect: NSRect(x: 10, y: 10, width: 390, height: 270), behind: true)
+        panel.contentView = ExactView(session: session)
+        panel.orderFront(nil)
+        let cover = NSWindow(contentRect: panel.frame, styleMask: [], backing: .buffered, defer: false)
+        cover.isReleasedWhenClosed = false
+        cover.level = .agentBehind
+        cover.order(.above, relativeTo: panel.windowNumber)
+        defer { cover.close(); panel.close(); session.destroy() }
+        waitFor("the HUD is covered") { !panel.screenOcclusionState.contains(.visible) }
+        var reply: [String: Any]?
+        Agent(session: session).liveFrames(["live": 100]) { reply = $0 }
+        XCTAssertEqual(panel.level, .agentBehind)
+        XCTAssertEqual(reply?["reason"] as? String, "panel is covered")
+    }
+
+    func testReturnOpensAFocusedPanelLink() throws {
+        let session = try boot(Delegate())
+        defer { session.destroy() }
+        var opened: [String] = []
+        session.openPanel = { opened = [$0, $1] }
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                windowNumber: 0, context: nil, characters: "\r",
+                                                charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        let opener = try node(session, "hud")
+        XCTAssertEqual(opener.accessibilityURL()?.relativeString, "/compose")
+        opener.keyDown(with: key)
+        XCTAssertEqual(opened, ["/compose", "shortcuts"])
+    }
+
     /// D5: Settings…, a `Meta+,` link with no `target`, asks for the window
     /// named `settings` as it stands; pressed as a link where the host opens
     /// no windows.

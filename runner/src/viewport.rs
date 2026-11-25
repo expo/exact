@@ -34,6 +34,8 @@ pub const FIELDS: &[&str] = &[
     "accessibilityTextSize",
     "screenReader",
     "update",
+    "orientationType",
+    "orientationAngle",
 ];
 
 /// The host's layout viewport, before the first settlement.
@@ -176,6 +178,46 @@ pub fn even_segments(
     Ok(out)
 }
 
+/// The Screen Orientation API's type and clockwise angle (LLP 1133.029 §12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenOrientation {
+    kind: u8,
+    turns: u8,
+}
+
+impl ScreenOrientation {
+    /// On a naturally landscape panel, 270 degrees is primary portrait, as on Android.
+    pub fn rotated(natural_portrait: bool, quarter_turns: u8) -> Self {
+        let turns = quarter_turns % 4;
+        Self {
+            kind: (turns + u8::from(!natural_portrait)) % 4,
+            turns,
+        }
+    }
+
+    /// Bits 0–1 are the type in clockwise order from primary portrait, 2–3
+    /// the clockwise quarter turns. Bit 4 distinguishes a reading from no screen.
+    pub fn from_code(code: u32) -> Option<Self> {
+        (code & 16 != 0).then_some(Self {
+            kind: (code & 3) as u8,
+            turns: ((code >> 2) & 3) as u8,
+        })
+    }
+
+    fn code(self) -> u32 {
+        16 | (u32::from(self.turns) << 2) | u32::from(self.kind)
+    }
+
+    fn keyword(self) -> &'static str {
+        [
+            "portrait-primary",
+            "landscape-primary",
+            "portrait-secondary",
+            "landscape-secondary",
+        ][usize::from(self.kind)]
+    }
+}
+
 /// The host's display and accessibility readings, including CSS's
 /// user-preference media features (Media Queries 5 §11): `prefers-reduced-motion: reduce`,
 /// `prefers-reduced-transparency: reduce`, `prefers-contrast` and
@@ -184,6 +226,8 @@ pub fn even_segments(
 /// @ref LLP 1061 D5; LLP 1069.000 D1
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Preferences {
+    /// The screen containing the window, when the host has one.
+    pub orientation: Option<ScreenOrientation>,
     /// The platform's screen-reader reading, or unknown where it cannot detect one.
     pub screen_reader: ScreenReader,
     /// Android's system font scale is at least 1.3 (LLP 1039 D10).
@@ -420,6 +464,7 @@ impl Preferences {
     /// No preference stated, a light system: what a host that reads nothing
     /// reports.
     pub const NONE: Preferences = Preferences {
+        orientation: None,
         screen_reader: ScreenReader::Unknown,
         accessibility_text_size: false,
         reduced_motion: false,
@@ -442,10 +487,11 @@ impl Preferences {
     /// (0 sRGB, 1 P3, 2 rec2020), bit 10 a high dynamic range, bits 11–13
     /// the [`DisplayMode`] discriminant, bit 14 Bold Text, bits 15–16
     /// `update` (0 `fast`, 1 `slow`, 2 `none`), bits 17–18 screen reader
-    /// (0 unknown, 1 off, 2 on), bit 19 Android's large-text range.
+    /// (0 unknown, 1 off, 2 on), bit 19 Android's large-text range, bits 20–24 the screen orientation.
     /// Zero is a mouse's `fine` and `hover` on a screen.
     pub fn from_bits(bits: u32) -> Self {
         Self {
+            orientation: ScreenOrientation::from_code(bits >> 20),
             screen_reader: ScreenReader::from_bits((bits >> 17) & 3),
             accessibility_text_size: bits & (1 << 19) != 0,
             reduced_motion: bits & 1 != 0,
@@ -492,6 +538,7 @@ impl Preferences {
             Contrast::Custom => 12,
         };
         u32::from(self.reduced_motion)
+            | (self.orientation.map_or(0, ScreenOrientation::code) << 20)
             | ((self.screen_reader as u32) << 17)
             | (u32::from(self.accessibility_text_size) << 19)
             | (u32::from(self.reduced_transparency) << 1)
@@ -566,6 +613,12 @@ impl Viewport {
         }
     }
 
+    fn orientation(self) -> ScreenOrientation {
+        self.preferences
+            .orientation
+            .unwrap_or_else(|| ScreenOrientation::rotated(self.height >= self.width, 0))
+    }
+
     /// Fill a declared field; unknown names are refused.
     pub fn field(self, name: &str) -> Option<Value> {
         match name {
@@ -575,6 +628,8 @@ impl Viewport {
                 self.device_pixel_ratio
                     .map_or(Value::NONE, |s| Value::some(Value::Number(s))),
             ),
+            "orientationType" => Some(Value::str(self.orientation().keyword())),
+            "orientationAngle" => Some(Value::Number(f64::from(self.orientation().turns) * 90.0)),
             "keyboardHeight" => Some(Value::Number(self.keyboard_height)),
             "screenReader" => Some(Value::str(self.preferences.screen_reader.keyword())),
             "prefersReducedMotion" => Some(Value::Bool(self.preferences.reduced_motion)),
@@ -682,6 +737,46 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn screen_orientation_uses_the_panel_and_falls_back_to_the_viewport() {
+        let types = [
+            "portrait-primary",
+            "landscape-primary",
+            "portrait-secondary",
+            "landscape-secondary",
+        ];
+        for portrait in [false, true] {
+            let mut viewport = if portrait {
+                Viewport::sized(80., 48.)
+            } else {
+                Viewport::sized(48., 80.)
+            };
+            assert_eq!(
+                viewport.field("orientationType"),
+                Some(Value::str(types[usize::from(portrait)]))
+            );
+            assert_eq!(viewport.field("orientationAngle"), Some(Value::Number(0.)));
+            for turns in 0..4 {
+                let screen = super::ScreenOrientation::rotated(portrait, turns);
+                viewport.preferences.orientation = Some(screen);
+                assert_eq!(
+                    Preferences::from_bits(viewport.preferences.bits()).orientation,
+                    Some(screen)
+                );
+                assert_eq!(
+                    viewport.field("orientationType"),
+                    Some(Value::str(
+                        types[(usize::from(turns) + usize::from(!portrait)) % 4]
+                    ))
+                );
+                assert_eq!(
+                    viewport.field("orientationAngle"),
+                    Some(Value::Number(f64::from(turns) * 90.))
+                );
+            }
+        }
     }
 
     #[test]

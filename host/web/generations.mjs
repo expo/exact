@@ -222,6 +222,7 @@ export async function generationFile(dist, id, pathname, accept = '', { miss = f
     if (generationOf(dist) === id) {
       const found = await buildTreeFileAsync(dist, pathname, accept, { miss });
       if (found?.status === 503) return 'busy'; // (its route table unreadable: serve.mjs `buildTreeFile`)
+      if (found?.status === 301) return found;
       let body = null;
       try { body = found && readFileSync(found.path); } catch { /* moved */ }
       const now = generationOf(dist);
@@ -235,6 +236,7 @@ export async function generationFile(dist, id, pathname, accept = '', { miss = f
     if (kept) {
       const found = await buildTreeFileAsync(dir, pathname, accept, { miss });
       if (found?.status === 503) return 'busy';
+      if (found?.status === 301) return found;
       let body = null;
       try { body = found && readFileSync(found.path); } catch { /* reaped meanwhile */ }
       if (body) return { ...found, body, id };
@@ -263,9 +265,10 @@ export function withGenerationBase(html, id, base = '/') {
 
 /** What a server answers for a request path on `dist` (`base`, the path it serves the build under): a generation's
  * file (a path under one, or any path for a drive's `pinned` one), else the current build's, read whole from one
- * build; a document's base set to its generation. `{ status, route?, body?, id?, render? }`: 200, 400 for a malformed
- * generation path, 404 (with the build's page for a miss where it has one), or 410 for a generation kept no more;
- * `render`, for the shell, is the render policy of the route it is served for. */
+ * build; a document's base set to its generation. `{ status, route?, body?, id?, render? }`: 200, 301 with the
+ * `location` of the page a path spells otherwise (`buildTreeFile`), 400 for a malformed generation path, 404 (with the
+ * build's page for a miss where it has one), or 410 for a generation kept no more; `render`, for the shell, is the
+ * render policy of the route it is served for. */
 export async function servedFile(dist, pathname, accept = '', { base = buildBase(dist), pinned = null } = {}) {
   if (withoutBase(pathname, base) === null) return { status: 404 };
   const under = generationPath(pathname, base);
@@ -286,6 +289,7 @@ export async function servedFile(dist, pathname, accept = '', { base = buildBase
       const tree = treeAt(dist), id = generationOf(dist);
       const at = await buildTreeFileAsync(dist, pathname.slice(base.length - 1) || '/', accept, { miss: true });
       if (at?.status === 503) return { status: 503 };
+      if (at?.status === 301) { found = at; break; }
       let body = null;
       try { body = at && readFileSync(at.path); } catch { /* moved */ }
       // (No dist and no swap under way: no build yet, or one a killed swap left as `.previous`, served as before.)
@@ -297,6 +301,8 @@ export async function servedFile(dist, pathname, accept = '', { base = buildBase
     }
   }
   if (!found) return { status: 404 };
+  // (under the mount, or the generation, the request names)
+  if (found.status === 301) return { status: 301, location: pathname.slice(0, pathname.length - location.length) + found.location };
   const body = found.route.endsWith('.html') && found.id ? withGenerationBase(found.body, found.id, base) : found.body;
   return { status: found.status ?? 200, route: found.route, body, id: found.id, render: found.render, location, immutable: found.immutable };
 }

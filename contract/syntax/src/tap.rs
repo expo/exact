@@ -9,6 +9,8 @@ pub enum TapForm {
     Hover,
     /// `dblclick`: two presses, the second a double click (feed F10).
     Dblclick,
+    /// `dblclick touch`: two finger taps.
+    DoubleTap,
     /// `contextmenu`: a secondary press.
     Contextmenu,
     /// `into "key"`: a virtualized list's row brought into view by its key
@@ -25,6 +27,16 @@ pub enum TapForm {
         /// Where the pinch is centred, in the node's box; its middle when `None`.
         at: Option<(f64, f64)>,
     },
+    /// `swipe <left|right|up|down> [at x y]`: the platform's discrete swipe,
+    /// a real flick of 120 points that way from the node's middle, or from
+    /// `at` in its box, which the platform's recognizer reads (LLP 1057.001
+    /// §8.3).
+    Swipe {
+        /// `left`, `right`, `up` or `down`.
+        direction: String,
+        /// Where the swipe starts, in the node's box; its middle when `None`.
+        at: Option<(f64, f64)>,
+    },
     /// `wheel <dx> <dy>`: the agent's wheel at the node's middle, in points,
     /// as `tap <t> wheel dx dy`: a positive `dy` scrolls on toward the
     /// content's end (the offset grows), a negative one back toward its start.
@@ -35,6 +47,18 @@ pub enum TapForm {
         dx: f64,
         /// Down, positive toward the content's end.
         dy: f64,
+    },
+    /// `drop [file "path"]… [text "…"] [url "…"]`: a drag from outside the
+    /// app dropped at the node's middle, as the driver's `tap <t> drop`
+    /// (LLP 1094.001 D6), carrying at least one of these. A file's path is
+    /// from the test file's folder.
+    Drop {
+        /// The dropped files' paths, in their order.
+        files: Vec<String>,
+        /// The drag's plain text.
+        text: Option<String>,
+        /// The drag's link.
+        url: Option<String>,
     },
     /// `mediasession "action" [seconds]`: the media element's session
     /// action, as the platform's handler would call it (LLP 1098 D10);

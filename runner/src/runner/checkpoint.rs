@@ -6,7 +6,7 @@ use super::{DataSource, ResourceState, Runner, RunnerError, Target};
 use crate::delivery::Delivery;
 use exact_kernel::Kernel;
 use exact_plan::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The state a document was projected from. Never a store.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -37,6 +37,10 @@ pub struct Checkpoint {
     /// read the store only through its arguments is not: it is asked when
     /// they change (`Runner::asks_on_store_change`).
     pub readers: Vec<usize>,
+    /// The answers a child's resource gave, by their index in `answers`, each
+    /// with its instance's path: the boot's instance there takes it (LLP
+    /// 1035.005.004 D8).
+    pub instances: Vec<(usize, String)>,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -153,6 +157,7 @@ impl<D: DataSource> Runner<D> {
         }
         let mut urls = Vec::new();
         let (mut answers, mut open, mut readers) = (Vec::new(), Vec::new(), Vec::new());
+        let mut instances = Vec::new();
         // Write each row's answer but a list's own, which no request gave: a
         // list's answers are its elements', whose rows follow the declared
         // ones under the list's name.
@@ -190,6 +195,9 @@ impl<D: DataSource> Runner<D> {
                 if self.asks_on_store_change(i) {
                     readers.push(answers.len() - 1);
                 }
+                if let Some(o) = self.owned_row(i) {
+                    instances.push((answers.len() - 1, o.path.clone()));
+                }
             }
         }
         Checkpoint {
@@ -201,6 +209,7 @@ impl<D: DataSource> Runner<D> {
             pending,
             open,
             readers,
+            instances,
         }
     }
 
@@ -221,6 +230,9 @@ impl<D: DataSource> Runner<D> {
         let (open, readers) = (set(&checkpoint.open), set(&checkpoint.readers));
         let reads = |k: usize| readers.contains(&k);
         let asks = |k: usize| open.contains(&k) || device_state && reads(k);
+        let paths: HashMap<usize, &String> = (checkpoint.instances.iter())
+            .map(|(k, path)| (*k, path))
+            .collect();
         for (i, seed) in seeded.iter_mut().enumerate() {
             let row = self.resource_row(i);
             let (name, source) = (self.plan.str(row.name), self.plan.str(row.source));
@@ -232,16 +244,19 @@ impl<D: DataSource> Runner<D> {
                     n == name && s == source && args.len() == row.args.len as usize
                 });
             // A child's resource: the answers of the instances the render
-            // made, which the boot's instances take by their arguments
+            // made, each of which the boot's instance at its path takes
             // (LLP 1035.005.004 D8).
             if row.owner.is_some() && i < self.plan.resources.len() {
                 let ty = row.ty;
                 let answers = (answers.filter(|(_, (.., value))| self.conforms(value, ty)))
-                    .map(|(k, (_, _, args, value))| PageAnswer {
-                        args: args.clone(),
-                        value: value.clone(),
-                        again: asks(k),
-                        reads: reads(k),
+                    .filter_map(|(k, (_, _, args, value))| {
+                        Some(PageAnswer {
+                            path: Some((*paths.get(&k)?).clone()),
+                            args: args.clone(),
+                            value: value.clone(),
+                            again: asks(k),
+                            reads: reads(k),
+                        })
                     })
                     .collect();
                 self.resources[i].page_answers =
@@ -255,6 +270,7 @@ impl<D: DataSource> Runner<D> {
                 let elements = (answers
                     .filter(|(_, (.., value))| self.conforms(value, element_type)))
                 .map(|(k, (_, _, args, value))| PageAnswer {
+                    path: None,
                     args: args.clone(),
                     value: value.clone(),
                     again: asks(k),

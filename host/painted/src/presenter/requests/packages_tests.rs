@@ -131,6 +131,7 @@ impl Package for Probe {
         let origin = self.context.origin();
         HEARD.with(|h| h.borrow_mut().push(format!("later {name} {args} {origin}")));
         match name {
+            "development" => reply.send(json!(self.context.development())),
             "status" => reply.send(json!({ "state": STATE.with(|s| *s.borrow()) })),
             _ => reply.send(json!({ "name": name })),
         }
@@ -176,9 +177,18 @@ fn boot() -> Presenter<Nothing> {
 /// Hand `body` to the native slot as the runner does, run a turn, and
 /// return what its reply carried.
 fn call(p: &mut Presenter<Nothing>, body: Json) -> std::sync::mpsc::Receiver<Json> {
+    call_status(p, body, 200)
+}
+
+fn call_status(
+    p: &mut Presenter<Nothing>,
+    body: Json,
+    status: u16,
+) -> std::sync::mpsc::Receiver<Json> {
     let (tx, rx) = std::sync::mpsc::channel();
     let reply = exact_runner::Reply::new(move |outcome| {
         if let exact_runner::Outcome::Response(r) = outcome {
+            assert_eq!(r.status, status);
             let _ = tx.send(serde_json::from_slice(&r.body).unwrap_or_default());
         }
     });
@@ -191,6 +201,20 @@ fn call(p: &mut Presenter<Nothing>, body: Json) -> std::sync::mpsc::Receiver<Jso
     handler(body.to_string().into_bytes(), reply);
     p.run_commands(Nothing::default);
     rx
+}
+
+#[test]
+fn package_reads_the_binarys_trust() {
+    for trust in ["production", "development"] {
+        let mut p = boot();
+        p.set_delivery_from_compat(&json!({"embedded": {"trust": trust}}).to_string());
+        p.serve_packages(vec![Entry::of::<Probe>("probe")]);
+        let answer = call(
+            &mut p,
+            json!({"extension": "probe", "source": "development"}),
+        );
+        assert_eq!(answer.recv().unwrap(), json!(trust == "development"));
+    }
 }
 
 #[test]
@@ -227,6 +251,10 @@ fn bodies_reach_the_package_the_shell_or_a_refusal() {
     // A shell beside the packages: its extension's body is queued for it,
     // and the package's still reaches the package.
     p.serve_requests();
+    assert!(
+        !p.host().runner().native_slot().hosted(),
+        "the shell carries package calls without an app module"
+    );
     let shells = call(
         &mut p,
         json!({"extension": "other", "send": "go", "args": {}}),
@@ -236,6 +264,19 @@ fn bodies_reach_the_package_the_shell_or_a_refusal() {
     let id = queued[1] as u32;
     assert!(p.answer_request(id, Some("{\"went\":true}")));
     assert_eq!(shells.recv().unwrap(), json!({ "went": true }));
+    let rejected = call_status(&mut p, json!({"op": "ping"}), 500);
+    p.set_agent_turn(Some(Box::new(|_, words| {
+        let id = words.expect("the shell has a request")[1];
+        serde_json::from_value(json!([{ "id": id, "error": "NotSupportedError" }])).unwrap()
+    })));
+    p.agent_reader_turn();
+    assert_eq!(
+        rejected
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap(),
+        json!({"error":"NotSupportedError"})
+    );
+    p.set_agent_turn(None);
     let still = call(
         &mut p,
         json!({"extension": "probe", "send": "ping", "args": {}}),

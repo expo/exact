@@ -41,6 +41,13 @@ pub struct OwnerReports {
     /// Targets native code registered by name, `None` disposing of one
     /// (D9, "Registration").
     pub registrations: Vec<(String, Option<NativeTarget>)>,
+    /// Given blocks a navigation bar shows as its items, or no longer does
+    /// (LLP 1141.004 D3, `Kernel::set_bar_item`).
+    pub bar_items: Vec<(ViewId, bool)>,
+    /// The left and right widths of navigation chrome beside a route (LLP 1123 D9).
+    pub side_bars: Vec<(ViewId, [f32; 2])>,
+    /// The session's updates (LLP 1123 D2), of which a call carries at most one.
+    pub sessions: Vec<exact_kernel::SessionUpdate>,
 }
 
 impl<D: DataSource> Host<D> {
@@ -250,6 +257,23 @@ impl<D: DataSource> Host<D> {
         }
         self.runner.place_blocks(placements);
         let mut owed = false;
+        for (view, sides) in owners.side_bars {
+            if !refused.contains(&view) {
+                match self.runner.kernel_mut().set_route_bar_insets(view, sides) {
+                    Ok(changed) => owed |= changed,
+                    Err(e) => drop(error.get_or_insert(format!("route bar: {e:?}"))),
+                }
+            }
+        }
+        for (view, item) in owners.bar_items {
+            if refused.contains(&view) {
+                continue;
+            }
+            match self.runner.kernel_mut().set_bar_item(view, item) {
+                Ok(changed) => owed |= changed,
+                Err(e) => drop(error.get_or_insert(format!("bar item: {e:?}"))),
+            }
+        }
         for (name, target) in owners.registrations {
             match self
                 .runner
@@ -265,6 +289,12 @@ impl<D: DataSource> Host<D> {
             match self.runner.kernel_mut().update_owner(view, update) {
                 Ok(o) => owed |= o,
                 Err(e) => drop(error.get_or_insert(format!("owner update: {e:?}"))),
+            }
+        }
+        for update in owners.sessions {
+            match self.runner.kernel_mut().update_session(update) {
+                Ok(o) => owed |= o,
+                Err(e) => drop(error.get_or_insert(format!("session update: {e:?}"))),
             }
         }
         if owed {
@@ -297,7 +327,14 @@ impl<D: DataSource> Host<D> {
                 )),
             }
         });
+        let session = match owners.sessions.as_slice() {
+            [] => None,
+            [update] => (kernel.check_session_update(update).err())
+                .map(|e| format!("session update: {e:?}; nothing in the call was applied")),
+            _ => Some("session update: two in one call; send one".to_string()),
+        };
         let registered = &owners.registrations;
+        let update = update.or(session);
         update.or_else(|| {
             registered
                 .iter()

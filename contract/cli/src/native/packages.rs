@@ -363,3 +363,46 @@ pub(crate) fn implementation_imports(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_binding_stops_at_the_nearest_provider() {
+        let tree =
+            std::env::temp_dir().join(format!("exact-nearest-provider-{}", std::process::id()));
+        let app = tree.join("app");
+        let package = Path::new("node_modules/@fixture/provider");
+        for root in [&tree, &app] {
+            let dir = root.join(package);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("package.json"),
+                r#"{"exports":{".":"./exact.json"}}"#,
+            )
+            .unwrap();
+            std::fs::write(dir.join("exact.json"), "{}").unwrap();
+        }
+        let outer = tree.join(package);
+        std::fs::write(
+            outer.join("package.json"),
+            r#"{"exports":{".":"./exact.json","./linux":"./linux/exact.json"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(outer.join("linux")).unwrap();
+        std::fs::write(
+            outer.join("linux/exact.json"),
+            r#"{"kind":"implementation","implements":"sensor","targets":["linux"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            app.join("app.json"),
+            r#"{"implementations":{"sensor":{"linux":"@fixture/provider/linux"}}}"#,
+        )
+        .unwrap();
+        let result = implementation_for(&app, "sensor", &app, "linux");
+        std::fs::remove_dir_all(tree).unwrap();
+        assert!(result.unwrap_err().contains("not installed"));
+    }
+}

@@ -170,6 +170,10 @@ pub trait Backend {
     /// A new frame of this size in points at this scale, cleared to the
     /// page's colour ([`Backend::page`]; white until one is told).
     fn begin(&mut self, width: f32, height: f32, scale: f32);
+    /// The raster backing's origin and size in device pixels after `begin`.
+    fn raster_extent(&self) -> Option<crate::placement::RasterExtent> {
+        None
+    }
     /// Release idle renderer storage, keeping the visible frame unless hidden.
     fn trim(&mut self, _hidden: bool) {}
     /// Storage from a presented frame after its last reader releases it.
@@ -337,6 +341,10 @@ pub trait Backend {
         _direct: bool,
     ) {
     }
+    /// An element alive and shown nowhere: a video in a hidden `portal`
+    /// mover (LLP 1013.002 D5), whose player a reader that hosts players
+    /// keeps, or a module view that paints nothing (`Painter::unpainted`).
+    fn held(&mut self, _id: ViewId, _kind: NativeKind, _props: &str) {}
     /// An audio player whose element has no visible controls to place.
     fn boxless_audio(&mut self, id: ViewId, props: &str) {
         self.native(
@@ -407,6 +415,12 @@ pub trait Backend {
     }
     /// Whether this backend keeps rows' recordings ([`rows`]).
     fn rows(&self) -> bool {
+        false
+    }
+    /// Whether what this backend draws is replayed on a display's pixels,
+    /// box by box: the painter then draws each box on whole pixels
+    /// (`Painter::drawn`).
+    fn pixel_grid(&self) -> bool {
         false
     }
     /// Whether this geometry walk can read existing row metadata without
@@ -500,7 +514,7 @@ pub trait Backend {
         _ts: Transform,
         _pivot: (f32, f32),
         _reference: (f32, f32),
-        _base: [f32; 7],
+        _base: [f32; 8],
     ) -> bool {
         false
     }

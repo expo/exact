@@ -21,7 +21,7 @@ function transactionMode(options) {
   return foreignKeys;
 }
 
-export function createSqlite(appId, grants) {
+function connect(appId) {
   let shared = workers.get(appId);
   if (!shared) {
     shared = { worker: null, clients: new Map() };
@@ -46,6 +46,7 @@ export function createSqlite(appId, grants) {
     if (!shared.worker) {
       const worker = shared.worker = new Worker(new URL('./storage-worker.js', import.meta.url), { type: 'module' });
       worker.onmessage = ({ data }) => {
+        if (data.fatal) { failed(data.fatal); return; }
         const calls = shared.clients.get(data.client)?.pending;
         const call = calls?.get(data.id);
         if (!call) return;
@@ -66,6 +67,18 @@ export function createSqlite(appId, grants) {
       catch (error) { pending.delete(id); reject(failure(error.message)); }
     });
   }
+  return { request, dispose: () => stop('storage runtime is unloaded') };
+}
+
+// The filesystem has already admitted the path and obtained its pool id from IndexedDB.
+export async function databaseImage(appId, path, pool, sizeOnly, maxBytes) {
+  const client = connect(appId);
+  try { return await client.request('image', [path, pool, sizeOnly, maxBytes]); }
+  finally { client.dispose(); }
+}
+
+export function createSqlite(appId, grants) {
+  const { request, dispose } = connect(appId);
   function statement(database, id) {
     return Object.freeze({
       execute: (params = []) => request('statementExecute', [database, id, params]),
@@ -91,6 +104,6 @@ export function createSqlite(appId, grants) {
       path = authorize(grants, 'sqlite.open', path);
       return database(await request('open', [path]));
     },
-    dispose() { stop('storage runtime is unloaded'); },
+    dispose,
   });
 }

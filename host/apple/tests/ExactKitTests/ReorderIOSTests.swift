@@ -93,6 +93,20 @@ final class ReorderIOSTests: XCTestCase {
         XCTAssertEqual(p.views[2]?.layer.zPosition, 0)
     }
 
+    func testACancelCommandEndsTheLiftBeforeTheFingerMovesAgain() {
+        let calls = ReorderRecorder()
+        let (p, grip) = fixture(calls)
+        p.views[1]?.applyProps(set: ["id": "items"], clear: [])
+        let drag = Drag()
+        drag.at = CGPoint(x: 20, y: 120)
+        drag.state = .began; grip.reorderDragged(drag)
+        p.reorders.cancel("items")
+        drag.at.y = 170; drag.state = .changed; grip.reorderDragged(drag)
+        drag.state = .ended; grip.reorderDragged(drag)
+        XCTAssertEqual(calls.log, ["begin 3 top=0.0", "cancel 7"])
+        XCTAssertEqual(p.reorderHost!.lift?.phase, .settling)
+    }
+
     func testACancelledRecognizerCancelsAndAPointerOutsideThePortIsSaid() {
         let calls = ReorderRecorder()
         let (p, grip) = fixture(calls)

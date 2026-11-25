@@ -78,7 +78,10 @@ impl<D: DataSource> Bridge<D> {
     /// Kind 23 says how a split shows a block's route against its stack's
     /// top (LLP 1127 D8): its first f32 1 beside it, 2 under a pane over
     /// it, 0 in its stack. Kind 24 sizes a table header’s column in points.
-    /// NaN restores automatic sizing.
+    /// NaN restores automatic sizing. Kind 27 says whether a given block is
+    /// a navigation bar's item (LLP 1141.004 D3): its first f32 1 for one,
+    /// 0 for none. Kind 28 reports the widths of navigation beside the route
+    /// on its physical left and right (LLP 1123 D9), two nonnegative floats.
     pub fn covers(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let out = if let Ok(records) = records(bytes) {
@@ -399,8 +402,8 @@ pub(super) fn records(bytes: &[u8]) -> Result<Vec<&[u8]>, &'static str> {
         let size = match u32::from_le_bytes(rest[4..8].try_into().unwrap()) {
             4 => 28,
             6 | 13 => 36,
-            // An owner update's or a registration's length follows its kind
-            21 | 22 => match rest.get(8..12) {
+            // An owner update's, a registration's or the session's update's length follows its kind
+            21 | 22 | 29 => match rest.get(8..12) {
                 Some(len) => 12 + u32::from_le_bytes(len.try_into().unwrap()) as usize,
                 None => return Err("covers: truncated record"),
             },
@@ -477,6 +480,18 @@ impl BlockChanges {
             22 => {
                 let registration = exact_kernel::decode_registration(&r[12..])?;
                 self.reports.registrations.push(registration);
+            }
+            29 => {
+                let update = exact_kernel::SessionUpdate::decode(&r[12..])?;
+                self.reports.sessions.push(update);
+            }
+            27 => self.reports.bar_items.push((view, edge(8) == 1.0)),
+            28 => {
+                let sides = [edge(8), edge(12)];
+                if !sides.iter().all(|v| v.is_finite() && *v >= 0.0) {
+                    return Err("route bar: expected finite nonnegative widths");
+                }
+                self.reports.side_bars.push((view, sides));
             }
             _ => return Ok(false),
         }

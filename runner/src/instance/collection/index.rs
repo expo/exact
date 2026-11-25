@@ -64,6 +64,8 @@ struct RowHeight {
     height: f64,
     generation: u64,
     measured_epoch: Option<u64>,
+    /// Its height is the list's estimate: no layout has measured the row yet
+    estimated: bool,
 }
 
 /// A short-lived anchor around a mutation, sharing an immutable order snapshot.
@@ -228,6 +230,7 @@ impl SizeIndex {
                     height: self.estimate,
                     generation,
                     measured_epoch: None,
+                    estimated: true,
                 }
             };
             rows.push(row);
@@ -303,6 +306,7 @@ impl SizeIndex {
                         height: self.estimate,
                         generation,
                         measured_epoch: None,
+                        estimated: true,
                     }
                 }
             });
@@ -370,6 +374,11 @@ impl SizeIndex {
 
     pub(crate) fn height(&self, index: usize) -> Option<f64> {
         self.rows.get(index).map(|row| row.height)
+    }
+
+    /// Whether the row's height is still the list's estimate, never measured.
+    pub(crate) fn estimated(&self, index: usize) -> bool {
+        self.rows.get(index).is_some_and(|row| row.estimated)
     }
 
     /// The lead plus the height of rows `[0, end)`, including `end == len()`; O(log N).
@@ -446,6 +455,7 @@ impl SizeIndex {
             } else {
                 row.height = estimate;
                 row.measured_epoch = None;
+                row.estimated = true;
             }
         }
         self.tree = SumTree::new(&rows)?;
@@ -624,6 +634,7 @@ impl SizeIndex {
         if let Some(i) = self.position(key).filter(|_| size > 0.0) {
             self.tree.set(i, size)?;
             self.rows[i].height = size;
+            self.rows[i].estimated = false;
         }
         Ok(())
     }
@@ -660,6 +671,7 @@ impl SizeIndex {
         self.tree.set(i, height)?;
         self.rows[i].height = height;
         self.rows[i].measured_epoch = Some(self.epoch);
+        self.rows[i].estimated = false;
         self.tree.set_epoch(i, self.epoch);
         Ok(true)
     }
@@ -737,9 +749,11 @@ impl SizeIndex {
         self.capture_anchor_excluding(raw, viewport, follow_end, &[])
     }
 
-    /// A committed reorder anchors a visible row none of its drops moved. If
-    /// those fill the port, keep the offset instead. `within` is signed: a
-    /// successor below the port's top must stay below it after the move.
+    /// A committed reorder anchors a visible row none of its drops moved, and
+    /// a report one it does not measure for the first time
+    /// (`capture_report_anchor`). If those fill the port, the anchor has no
+    /// row and keeps the offset. `within` is signed: a successor below the
+    /// port's top must stay below it after the move.
     pub(crate) fn capture_anchor_excluding(
         &self,
         raw: f64,
@@ -777,13 +791,12 @@ impl SizeIndex {
                     }
             },
         );
-        while !follows_end
-            && row.is_some_and(|i| self.key(i).is_some_and(|k| excluded.contains(&k)))
+        // A set: a report can list every row the port shows
+        let excluded: std::collections::HashSet<&str> = excluded.iter().copied().collect();
+        while !follows_end && row.is_some_and(|i| self.key(i).is_some_and(|k| excluded.contains(k)))
         {
-            let next = self.prefix(row.unwrap() + 1).unwrap();
             row = self
-                .tree
-                .find(next - self.fixed[0], false)
+                .next_shown(row.unwrap())
                 .filter(|&i| self.prefix(i).unwrap() < offset + viewport);
             within = row.map_or(offset, |i| offset - self.prefix(i).unwrap());
         }
@@ -797,6 +810,54 @@ impl SizeIndex {
             beyond: (raw - max).max(0.0),
             raw,
         })
+    }
+
+    /// The first row after row `i` with a size of its own: the height tree's
+    /// lookup from `i`'s end in the tree's own terms, which is that row's
+    /// bottom to the bit and passes the hidden rows after it, and past a row
+    /// that is only its gap (a zero-width card).
+    fn next_shown(&self, mut i: usize) -> Option<usize> {
+        loop {
+            let next = self.tree.find(
+                self.tree
+                    .prefix(i.checked_add(1).filter(|&e| e <= self.len())?),
+                false,
+            )?;
+            if self.height(next)? - self.gap > 0.0 {
+                return Some(next);
+            }
+            i = next;
+        }
+    }
+
+    /// A report's anchor (`capture_anchor`), unless its row is among
+    /// `first_measured`, the rows the report measures for the first time:
+    /// that row's place was the estimate's, and its first height would move
+    /// the rows the reader sees below it, whose place was measured (a page
+    /// that landed above a reader at the top, the port's top in its last
+    /// row). Then the next row the port shows that the report does not
+    /// measure for the first time holds the place, as a committed drop's
+    /// anchor skips the rows it moved; with none, the row itself. A row
+    /// measured before keeps the place however its height changes, as it does
+    /// on an update, so a row that grows at its end does not scroll out from
+    /// under its reader.
+    pub(crate) fn capture_report_anchor(
+        &self,
+        raw: f64,
+        viewport: f64,
+        follow_end: bool,
+        first_measured: &[&str],
+    ) -> Result<Anchor, IndexError> {
+        let anchor = self.capture_anchor(raw, viewport, follow_end)?;
+        let estimated =
+            (anchor.row.and_then(|i| self.key(i))).is_some_and(|key| first_measured.contains(&key));
+        if estimated {
+            let past = self.capture_anchor_excluding(raw, viewport, follow_end, first_measured)?;
+            if past.row.is_some() {
+                return Ok(past);
+            }
+        }
+        Ok(anchor)
     }
 
     /// @ref LLP 1168.000 D1.2 — the anchor of a list that opens at its end
@@ -1297,6 +1358,9 @@ impl SumTree {
     }
 }
 
+#[cfg(test)]
+#[path = "index_report_tests.rs"]
+mod report_tests;
 #[cfg(test)]
 #[path = "index_tests.rs"]
 mod tests;

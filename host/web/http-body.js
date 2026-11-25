@@ -185,7 +185,7 @@ async function renderUpload(url, method, headers, body, limit, message, signal, 
   if (signal.aborted) return failed(4, 'request aborted');
   try {
     message({ event: 'exact:sending', id: '\0', data: '', coalesced: 0, received: performance.now() });
-    const response = await fetch(url, { method, headers, body, signal, credentials, redirect: 'follow' });
+    const response = await fetch(url, { method, headers, body, signal, credentials, redirect: 'follow' }, admits);
     if (body?.byteLength) message({ event: 'exact:progress', id: '\0', data: JSON.stringify({ loaded: body.byteLength, total: body.byteLength }), coalesced: 0, received: performance.now() });
     if (!response.url && response.type !== 'opaqueredirect') {
       await response.body?.cancel();
@@ -295,7 +295,7 @@ function setQueryValue(url, name, value) {
   if (!found) parts.push(pair);
   url.search = parts.join('&');
 }
-export async function readLongPoll(op, init, limit, message, controller, admits) {
+export async function readLongPoll(op, init, limit, message, controller, admits, self = false) {
   const encoder = new TextEncoder(), { cursor, from, sameCursorEvent } = op.longPoll;
   const failed = (kind, text) => ({ kind, status: 0, headers: '', body: encoder.encode(text) });
   const aborted = () => failed(4, 'request aborted');
@@ -327,7 +327,8 @@ export async function readLongPoll(op, init, limit, message, controller, admits)
     let wait, error = null;
     try {
       if (takeFault(url.href)) throw new TypeError(faultMessage(url.href));
-      const response = await fetch(url.href, { ...init, signal });
+      const options = { ...init, signal };
+      const response = globalThis.__exactFetchSelf !== false && self && !globalThis.__exactRender ? await fetch(sameOriginRequest(new Request(url.href, options)), undefined, admits) : await fetch(url.href, options, admits);
       const drop = () => response.body?.cancel().catch(() => {});
       if (!response.url && response.type !== 'opaqueredirect') {
         drop(); replied();
@@ -503,7 +504,7 @@ export async function waitForInflight(waiting, deadline) {
   return true;
 }
 
-import { admitsNetwork, admittingGrant, coversPath, grantError, scopedGrantSet } from './grant-admission.js';
+import { bundledAsset, admitsNetwork, admittingGrant, admitsFetchHop, isSelfGrant, sameOriginRequest, selfWithoutPage, coversPath, grantError, scopedGrantSet } from './grant-admission.js';
 import { answeredFetch, countFault, faultMessage, matchFault, takeFault } from './faults.js';
 import { reachRefusal, redirectFor, UNATTRIBUTED } from './address-space.js';
 
@@ -513,16 +514,22 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
   const encoder = new TextEncoder();
   const failed = (kind, message) => ({ kind, status: 0, headers: '', body: encoder.encode(String(message?.message ?? message)) });
   // `bodyBytes`: a stream's inline body as its bytes (`streamed`); `body`, base64, as the wasm host's batch gives it.
-  const { method, url, headers, body, cache } = op, bytes = op.bodyBytes?.length ? op.bodyBytes : null;
+  let { url } = op;
+  const { method, headers, body, cache } = op, bytes = op.bodyBytes?.length ? op.bodyBytes : null;
   if (!active()) return failed(4, 'request source unloaded');
-  // A long poll no host may run (LLP 1016.000 D8) is refused before anything else is tried: a native call, a socket.
-  const pollRefusal = op.longPoll && longPollRefusal(op, method, body || bytes);
-  if (pollRefusal) return failed(2, pollRefusal);
   // An upload is an http: or https: request (LLP 1016.000 D10), whatever the scheme otherwise means here.
   if (op.upload && /^[a-z][a-z0-9+.-]*:/i.test(url) && !/^https?:/i.test(url)) return failed(2, /^wss?:/i.test(url) ? 'exactUploadProgress: a WebSocket sends no body' : 'exactUploadProgress: an upload is an http: or https: request');
   const native = url === 'exact-native:';
   const effective = scopedGrantSet(grantSet, op.scope), invalid = grantError(effective);
-  const asset = method === 'GET' && !body && !bytes && Object.keys(headers).length === 0 && /^\/assets\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(url);
+  const asset = !op.stream && method === 'GET' && !body && !bytes && Object.keys(headers).length === 0 && bundledAsset(url);
+  if (!native && !asset) {
+    try { url = globalThis.__exactRender ? new Request(url).url : new URL(url, globalThis.document?.baseURI ?? globalThis.location?.href).href; }
+    catch (error) { return failed(error?.kind === 'Refused' ? 2 : 1, error); }
+    if (url !== op.url) op = { ...op, url };
+  }
+  // A long poll no host may run (LLP 1016.000 D8) is refused before anything else is tried: a native call, a socket.
+  const pollRefusal = op.longPoll && longPollRefusal(op, method, body || bytes);
+  if (pollRefusal) return failed(2, pollRefusal);
   const socket = op.stream && /^wss?:/i.test(url), capability = socket ? 'net.websocket' : 'net.fetch';
   if (op.protocols?.length && !socket) return failed(2, 'exactProtocols: only a WebSocket stream takes protocols');
   // An idle timeout is a WebSocket, event or byte stream's (LLP 1016.000 D11), refused before any other path is taken.
@@ -530,9 +537,13 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     return failed(2, 'only a WebSocket, event or byte stream takes an idle timeout');
   if (op.idleTimeoutMs !== undefined && (!Number.isInteger(op.idleTimeoutMs) || op.idleTimeoutMs < 1 || op.idleTimeoutMs > 3600000)) return failed(2, 'an idle timeout must be 1 to 3600000 ms');
   if (invalid) return failed(2, invalid);
-  if (!native && !asset) try { new URL(url); } catch (error) { return failed(1, error); }
   const grant = native || asset ? null : admittingGrant(effective, url, socket ? 'websocket' : 'fetch');
-  if (!native && !asset && !grant) return failed(2, `outside the app's grants (${capability})`);
+  const self = globalThis.__exactFetchSelf !== false && isSelfGrant(effective, grant);
+  if (!native && !asset && !grant) {
+    if (globalThis.__exactRender && admittingGrant(effective, url, socket ? 'websocket' : 'fetch', false))
+      return { refused: "fetch() outside the render server's grants" };
+    return failed(2, globalThis.__exactFetchSelf !== false && !socket && selfWithoutPage(effective, url) ? "outside the app's grants (net.fetch): net.fetch self needs a trusted HTTP(S) page URL" : `outside the app's grants (${capability})`);
+  }
   // LLP 1133.036 D6: a tool's, a wake's or the device's reach to a less public address space waits for the person.
   const unreached = native || asset ? null : reachRefusal(url, op.origin, op.reachState);
   if (unreached) return failed(2, `NotAllowedError: ${unreached}`);
@@ -557,7 +568,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     controllers.add(controller);
     try {
       return await readLongPoll(op, { method: 'GET', headers: accept, credentials: op.credentials, redirect: redirectFor(op.origin, op.redirect ?? 'follow', op.reachState), cache: cache === undefined ? 'no-store' : cache, ...(op.mode !== undefined ? { mode: op.mode } : cache === 'only-if-cached' ? { mode: 'same-origin' } : {}) },
-        op.maxResponseBytes ?? 1024 * 1024, message, controller, (u) => active() && admitsNetwork(scopedGrantSet(grantSet, op.scope), u, 'fetch'));
+        op.maxResponseBytes ?? 1024 * 1024, message, controller, (u, render) => active() && admitsFetchHop(scopedGrantSet(grantSet, op.scope), u, self, render, url), self);
     } finally { controllers.delete(controller); delete controller.retrying; }
   }
   // A socket is a stream whose URL is `ws:` or `wss:` (its grant was
@@ -645,7 +656,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     try {
       if (cache === 'only-if-cached') return failed(1, 'TypeError: Failed to fetch');
       if (redirectFor(op.origin, 'follow', op.reachState) !== 'follow') return failed(2, 'NotAllowedError: an upload follows its redirects, and one could reach a less public address space before the person answers');
-      const o = await upload(url, method, headers, decodedBody ?? fileBody ?? null, op.maxResponseBytes ?? 1024 * 1024, message, signal, u => admitsNetwork(effective, u, 'fetch'), op.credentials);
+      const o = await upload(url, method, headers, decodedBody ?? fileBody ?? null, op.maxResponseBytes ?? 1024 * 1024, message, signal, (u, render) => admitsFetchHop(effective, u, self, render, url), op.credentials);
       return o.kind === 4 && deadline?.aborted && !controller.signal.aborted ? failed(10, `the request timed out after ${op.timeoutMs} ms`) : o;
     } finally { controllers.delete(controller); }
   }
@@ -657,7 +668,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
   if (op.stream && !headers.some(([k]) => k.toLowerCase() === 'accept')) init.headers = [...headers, ['accept', 'text/event-stream']];
   if (op.stream && !asset && /^https?:/i.test(url)) controller.streamUrl = url;
   try {
-    const early = !asset && moduleLoader?.claim?.(url, init);
+    const early = !asset && !self && moduleLoader?.claim?.(url, init);
     // @ref LLP 1103 D1, D2 — a driver fault is a refused connection, never sent; a GET
     // `fetchEarly` already sent (before the fault was armed) is not one it decides.
     const fixture = !early && !asset && !op.stream && matchFault(url, true, method);
@@ -665,17 +676,21 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     if (!early && expired()) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
     if (fixture && target) return failed(2, 'answer fetch does not support exactBodyTo');
     if (fixture && signal.aborted) return failed(4, 'request aborted');
-    const checked = new Request(asset ? localAssetURL(url) : url, init);
-    const response = fixture ? answeredFetch(fixture.response, checked) : await (early || fetch(checked));
+    if (asset && globalThis.__exactRender && !globalThis.document?.URL) new Request(url);
+    const asked = new Request(asset ? localAssetURL(url) : url, init);
+    const checked = globalThis.__exactFetchSelf !== false && self && !globalThis.__exactRender ? sameOriginRequest(asked) : asked;
+    if (asset && new URL(checked.url).origin !== location.origin) return failed(2, 'host asset left the app origin');
+    const admits = (u, render) => asset && bundledAsset(url, checked.url, u) || admitsFetchHop(effective, u, self, render, url);
+    const response = fixture ? answeredFetch(fixture.response, checked) : await (early || (globalThis.__exactRender
+      ? fetch(checked, undefined, admits)
+      : fetch(checked)));
     // A redirect that left the grants names where it led (podcast F5): the
     // browser followed it, and the response's URL is the last hop's.
     if (!response.url && response.type !== 'opaqueredirect') {
       response.body?.cancel().catch(() => {});
       return failed(2, "outside the app's grants (net.fetch): response URL is unavailable");
     }
-    if (response.url && (asset
-      ? new URL(response.url).origin !== location.origin
-      : !admitsNetwork(effective, response.url, 'fetch'))) return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`);
+    if (response.url && !admits(response.url)) return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`);
     // A stream reads its body as events, or a TypeScript stream's as bytes;
     // anything else is its one answer.
     // A timeout's record wins over what the abort it made produced.

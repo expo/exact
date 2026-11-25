@@ -5,6 +5,7 @@
 //! `file:` dependency installs it.
 
 #[cfg(unix)]
+use crate::source::{boxed, Source};
 use std::os::unix::fs::symlink as symlink_dir;
 #[cfg(windows)]
 use std::os::windows::fs::symlink_dir;
@@ -205,13 +206,13 @@ fn an_unbound_module_answers_its_default_or_the_preferred_value() {
     let plan = app.compile(APP).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let status = |r: &exact_runner::Runner<NoData>| format!("{:?}", r.resource("status"));
+    let status = |r: &exact_runner::Runner<Source>| format!("{:?}", r.resource("status"));
     assert!(
         status(&r).contains("\"prompt\""),
         "{} {}",
@@ -303,13 +304,13 @@ fn a_module_send_waits_on_the_agent_s_permission_and_position_tickets() {
     let plan = app.compile(APP).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let show = |r: &exact_runner::Runner<NoData>, name: &str| {
+    let show = |r: &exact_runner::Runner<Source>, name: &str| {
         format!("{:?}", r.resource(name).or(r.slot(name)))
     };
     let mut parked = Vec::new();
@@ -369,7 +370,7 @@ fn a_position_ticket_times_out_on_the_agent_clock() {
     let plan = app.compile(body).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -437,14 +438,14 @@ fn a_precision_request_respects_the_grant_ceiling_and_ticket_answers() {
     ] {
         let mut r = exact_runner::Runner::boot(
             plan.clone(),
-            LocationData(grant),
+            boxed(LocationData(grant)),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",
         )
         .unwrap();
         let mut parked = Vec::new();
-        let show = |r: &exact_runner::Runner<LocationData>, name: &str| {
+        let show = |r: &exact_runner::Runner<Source>, name: &str| {
             format!("{:?}", r.resource(name).or(r.slot(name)))
         };
         r.act("raise", Vec::new()).unwrap();
@@ -570,7 +571,7 @@ fn a_bound_module_answers_through_the_native_slot() {
     let plan = app.compile(APP).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -590,7 +591,7 @@ fn a_bound_module_answers_through_the_native_slot() {
     })));
     r.bind_extensions(&["geolocation"], &[]);
     r.apply_announced();
-    let pump = |r: &mut exact_runner::Runner<NoData>| {
+    let pump = |r: &mut exact_runner::Runner<Source>| {
         for out in r.take_requests() {
             let exact_runner::Dispatch::Run(exact_runner::Work::Later(work)) =
                 r.native_work(&out.request)
@@ -603,7 +604,7 @@ fn a_bound_module_answers_through_the_native_slot() {
         }
     };
     pump(&mut r);
-    let show = |r: &exact_runner::Runner<NoData>, name: &str| {
+    let show = |r: &exact_runner::Runner<Source>, name: &str| {
         format!("{:?}", r.resource(name).or(r.slot(name)))
     };
     assert!(
@@ -634,7 +635,7 @@ fn a_synchronous_form_answers_from_the_substitute_until_its_module_is_bound() {
     let plan = app.compile(APP).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1126,7 +1127,7 @@ fn an_implementations_names_keep_their_owner_and_bind_through_the_interface() {
     assert!(rust.contains("pub count: ::core::primitive::f64"), "{rust}");
     let mut runner = exact_runner::Runner::boot(
         plan,
-        LocationData("device.sensor"),
+        boxed(LocationData("device.sensor")),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1227,7 +1228,7 @@ component App
         .unwrap();
     let mut runner = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1273,13 +1274,13 @@ fn implementation_declarations_with_the_same_name_remain_distinct() {
     let rust = contract::module_rust(&plan).unwrap();
     let mut runner = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    fn call(runner: &mut exact_runner::Runner<NoData>, owner: Option<&str>) -> serde_json::Value {
+    fn call(runner: &mut exact_runner::Runner<Source>, owner: Option<&str>) -> serde_json::Value {
         let request = exact_runner::Request::native(
             serde_json::json!({"extension":"sensor","owner":owner,"source":"reading","args":{}})
                 .to_string()
@@ -1437,7 +1438,7 @@ component App
     let plan = contract::compile_path(&root).unwrap();
     let mut runner = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

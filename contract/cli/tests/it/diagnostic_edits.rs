@@ -312,3 +312,101 @@ fn computed_timer_refusals_recommend_a_gated_backoff_ladder() {
     ))
     .expect("the suggested ladder compiles");
 }
+
+#[test]
+fn constant_attribute_templates_get_the_literal_diagnostic() {
+    let compile = |attr| contract::compile(&app("", &format!("text \"a\" {attr}")));
+    for (literal, template) in [
+        ("width=\"30\"", "width=`30`"),
+        ("width=\"30\"", "width=`${\"30\"}`"),
+        ("width=\"30\"", "width=`${3}${0}`"),
+        ("width=\"30\"", "width=(`${\"3\"}` + `${\"0\"}`)"),
+        (
+            "line-height=\"1.6470588235294117\"",
+            "line-height=`${28 / 17}`",
+        ),
+        ("color-scheme=\"normal\"", "color-scheme=`normal`"),
+        ("opacity=\"0.5\"", "opacity=`${1 / 2}`"),
+        ("aria-live=\"7\"", "aria-live=`${7}`"),
+        ("width=\"30\"", "width=(on ? \"unset\" : `${30}`)"),
+    ] {
+        let literal = compile(literal).unwrap_err();
+        let template = compile(template).unwrap_err();
+        assert_eq!(
+            (template.id, template.message),
+            (literal.id, literal.message)
+        );
+    }
+    let unused = "component App\n  view\n    text \"ready\"\ncomponent Unused\n  view\n    box width=`${15 * 2}`\n";
+    let error = contract::compile(unused).unwrap_err();
+    assert_eq!(error.id, "lower-attr-value");
+    assert!(error.message.contains("write `width=30`"));
+    for attr in [
+        "flex=`${2}`",
+        "width=`${0}`",
+        "max-width=`${900 / 17}rem`",
+        "width=(on ? `30px` : `unset`)",
+    ] {
+        compile(attr).unwrap_or_else(|e| panic!("{attr}: {e}"));
+    }
+}
+
+#[test]
+fn number_holes_follow_the_rows_quoted_number_grammar() {
+    let compile =
+        |attr: &str| contract::compile(&app("  state n = 1\n", &format!("text \"a\" {attr}")));
+    for (row, px) in [
+        ("width", true),
+        ("line-height", true),
+        ("opacity", false),
+        ("aria-level", false),
+    ] {
+        let error = compile(&format!("{row}=`${{n}}`")).unwrap_err();
+        assert_eq!(error.id, "lower-attr-value", "{error}");
+        assert!(
+            error.message.starts_with(&format!("write `{row}=(n)`")),
+            "{error}"
+        );
+        assert_eq!(error.message.contains("${n}px"), px, "{error}");
+        compile(&format!("{row}=(n)")).unwrap();
+        if px {
+            compile(&format!("{row}=`${{n}}px`")).unwrap();
+        }
+    }
+    for attr in [
+        "width=`${n}${n}`",
+        "width=` ${n} `",
+        "width=`${n}${\"\"}`",
+        "width=`${`${n}`}`",
+        "width=(on ? \"unset\" : `${n}`)",
+    ] {
+        assert_eq!(compile(attr).unwrap_err().id, "lower-attr-value", "{attr}");
+    }
+    for attr in [
+        "z-index=`${n}`",
+        "aria-valuenow=`${n}`",
+        "aria-label=`${n}`",
+        "width=`${on ? \"30px\" : \"unset\"}`",
+    ] {
+        compile(attr).unwrap_or_else(|e| panic!("{attr}: {e}"));
+    }
+    assert_eq!(compile("flex=`${n}`").unwrap_err().id, "lower-attr-type");
+}
+
+#[test]
+fn a_numeric_template_respects_its_element_and_the_scope_of_its_repair() {
+    for view in [
+        "button \"OK\" type=`button` buttonStyle=\"bordered\"",
+        "svg\n      rect width=`${n}` height=` ${n} ` x=(n > 1 ? `${n}` : 0)\n      circle r=`${n}${n}`",
+    ] {
+        contract::compile(&format!(
+            "component App\n  state n = 3\n  view\n    {view}\n"
+        ))
+        .unwrap();
+    }
+    let source = "component App\n  state amount = 30\n  view\n    Chip(size=amount)\ncomponent Chip\n  props\n    size: number\n  view\n    box width=`${size}`\n";
+    let error = contract::compile(source).unwrap_err();
+    assert_eq!(error.id, "lower-attr-value");
+    assert!(error.message.contains("write `width=(size)`"), "{error}");
+    contract::compile(&source.replace("`${size}`", "(size)")).unwrap();
+}

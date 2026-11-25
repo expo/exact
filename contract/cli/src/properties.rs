@@ -44,6 +44,213 @@ pub fn check_properties(
     }
 }
 
+/// Check package substitutes against the names linked into this app.
+pub fn check_test_substitutes(
+    path: &Path,
+    file: &contract_syntax::File,
+    compiled: Option<&exact_plan::Plan>,
+) -> Result<(), Vec<CompileError>> {
+    let mut hosts = Vec::new();
+    if file.tests.iter().all(|t| !t.hosts.is_empty()) {
+        for host in file.tests.iter().flat_map(|t| &t.hosts) {
+            if !hosts.contains(host) {
+                hosts.push(host.clone());
+            }
+        }
+    }
+    let steps: Vec<_> = file
+        .launch
+        .iter()
+        .map(|s| (s, &hosts))
+        .chain(
+            file.tests
+                .iter()
+                .flat_map(|t| t.steps.iter().map(|s| (s, &t.hosts))),
+        )
+        .filter_map(|(s, hosts)| match s {
+            Step::PreferExtension { key, value, span } => Some((key, value, *span, hosts)),
+            _ => None,
+        })
+        .collect();
+    if steps.is_empty() {
+        return Ok(());
+    }
+    let built;
+    let plan = match compiled {
+        Some(plan) => plan,
+        None => {
+            built = crate::compile_path(path).map_err(|e| vec![e])?;
+            &built
+        }
+    };
+    let root = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut errors = Vec::new();
+    let mut declarations = std::collections::BTreeMap::new();
+    for (key, value, span, hosts) in steps {
+        if let Err(why) =
+            test_substitute(plan, root, key, value.as_deref(), hosts, &mut declarations)
+        {
+            errors.push(crate::modules::error(
+                "test-extension-substitute",
+                format!("prefer extension: {why}"),
+                span,
+            ));
+        }
+    }
+    check_launch_arrivals(plan, file, &mut errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+// Leading values reach the package together, including a tag list written after its field.
+fn check_launch_arrivals(
+    plan: &exact_plan::Plan,
+    file: &contract_syntax::File,
+    errors: &mut Vec<CompileError>,
+) {
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    let mut arrivals = BTreeMap::new();
+    for row in &plan.modules {
+        let extension = plan.str(row.extension);
+        if !arrivals.contains_key(extension) {
+            let sub: Value = serde_json::from_str(plan.str(row.substitute)).unwrap_or_default();
+            if sub["arrival"].is_object() {
+                arrivals.insert(extension, sub["arrival"].clone());
+            }
+        }
+    }
+    if arrivals.is_empty() {
+        return;
+    }
+    for test in &file.tests {
+        let mut initial = BTreeMap::new();
+        for step in file.launch.iter().chain(
+            test.steps
+                .iter()
+                .take_while(|s| contract_syntax::is_launch(s)),
+        ) {
+            if let Step::PreferExtension { key, value, span } = step {
+                match value
+                    .as_deref()
+                    .and_then(|v| serde_json::from_str::<Value>(v).ok())
+                {
+                    Some(v) => {
+                        initial.insert(key.as_str(), (v, *span));
+                    }
+                    None => {
+                        initial.remove(key.as_str());
+                    }
+                }
+            }
+        }
+        for (extension, arrival) in &arrivals {
+            let Some(field) = arrival["field"].as_str() else {
+                continue;
+            };
+            let Some((v, span)) = initial.get(format!("{extension}.{field}").as_str()) else {
+                continue;
+            };
+            if let Some(why) =
+                exact_runner::runner::check_arrival_field(extension, field, arrival, v, |k| {
+                    initial.get(k).map(|(v, _)| v)
+                })
+            {
+                errors.push(crate::modules::error(
+                    "test-extension-substitute",
+                    format!("test `{}`: {why}", test.name),
+                    *span,
+                ));
+            }
+        }
+    }
+}
+
+fn test_substitute(
+    plan: &exact_plan::Plan,
+    root: &Path,
+    key: &str,
+    value: Option<&str>,
+    hosts: &[String],
+    declarations: &mut std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let (extension, name) = key.split_once('.').unwrap();
+    let value = value
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let mut package_words = None;
+    for row in plan
+        .modules
+        .iter()
+        .filter(|row| plan.str(row.extension) == extension)
+    {
+        let sub: serde_json::Value =
+            serde_json::from_str(plan.str(row.substitute)).unwrap_or_default();
+        let (word, owner) = name
+            .split_once('#')
+            .map_or((name, None), |(w, o)| (w, Some(o)));
+        if word == plan.str(row.declared) && owner == sub["owner"].as_str() {
+            let mut failures = std::collections::BTreeMap::<String, Vec<&str>>::new();
+            for target in contract_syntax::parser::TEST_HOSTS {
+                if !hosts.is_empty() && !hosts.iter().any(|h| h == target) {
+                    continue;
+                }
+                if let Err(why) = exact_runner::runner::check_source_substitute(
+                    plan,
+                    row,
+                    key,
+                    &sub,
+                    value.as_ref(),
+                    target,
+                    |_| None,
+                ) {
+                    failures.entry(why).or_default().push(target);
+                }
+            }
+            if !failures.is_empty() {
+                return Err(failures
+                    .into_iter()
+                    .map(|(why, targets)| format!("{why} (on {})", targets.join(", ")))
+                    .collect::<Vec<_>>()
+                    .join("; "));
+            }
+            return Ok(());
+        }
+        package_words.get_or_insert_with(|| (plan.str(row.package), sub["agent"].clone()));
+    }
+    let package_words = package_words.or_else(|| {
+        let view = plan
+            .views
+            .iter()
+            .find(|v| plan.str(v.extension) == extension)?;
+        Some((
+            plan.str(view.package),
+            serde_json::from_str(plan.str(view.agent)).unwrap_or_default(),
+        ))
+    });
+    let (package, words) =
+        package_words.ok_or_else(|| format!("unknown package `{extension}` in this app"))?;
+    let ty = words[name]
+        .as_str()
+        .ok_or_else(|| format!("unknown substitute `{name}` in package `{package}`"))?;
+    let Some(value) = value else { return Ok(()) };
+    let shapes = match declarations.entry(package.to_owned()) {
+        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(crate::declaration::agent_shapes(root, package)?)
+        }
+    };
+    if crate::declaration::agent_value_fits(ty, &value, shapes)? {
+        Ok(())
+    } else {
+        Err(format!("`{key}` expects {ty}"))
+    }
+}
+
 /// Resolve stored fixtures to the app's scopes and check state comparisons against its types.
 pub fn resolve_test_states_path(
     path: &Path,
@@ -231,8 +438,12 @@ pub fn property_program(
 /// names the same fact itself (habits F7, calendar F13).
 pub fn tests(src: &str) -> Result<Vec<TestDecl>, CompileError> {
     let file = contract_syntax::parse(src)?;
-    Ok(file
-        .tests
+    Ok(tests_with_defaults(file.tests, &file.launch))
+}
+
+/// Apply a file's launch defaults after checking the steps as written.
+pub fn tests_with_defaults(tests: Vec<TestDecl>, launch: &[Step]) -> Vec<TestDecl> {
+    tests
         .into_iter()
         .map(|mut test| {
             // By fact, among the test's own leading launch lines: a `fail
@@ -242,8 +453,7 @@ pub fn tests(src: &str) -> Result<Vec<TestDecl>, CompileError> {
                 .iter()
                 .take_while(|s| contract_syntax::is_launch(s));
             let own = |l: &Step| leading.clone().any(|s| contract_syntax::same_launch(s, l));
-            let inherited = file
-                .launch
+            let inherited = launch
                 .iter()
                 .filter(|l| !own(l))
                 .cloned()
@@ -251,5 +461,5 @@ pub fn tests(src: &str) -> Result<Vec<TestDecl>, CompileError> {
             test.steps = inherited.into_iter().chain(test.steps).collect();
             test
         })
-        .collect())
+        .collect()
 }

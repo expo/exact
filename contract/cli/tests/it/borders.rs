@@ -2,25 +2,16 @@
 //! longhands, `border-color` with one to four values, and `currentcolor`
 //! kept a keyword that follows `color`, never an RGB baked at compile time.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{BorderStyle, Color, ColorValue, Kernel, StyleId, StyleMask, StyleProps};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Event, Runner};
+use exact_runner::{Event, Runner};
 
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -28,7 +19,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style_of(r: &Runner<NoData>, id: &str) -> StyleProps {
+fn style_of(r: &Runner<Source>, id: &str) -> StyleProps {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(id)[0])
         .unwrap()
@@ -38,7 +29,7 @@ fn style_of(r: &Runner<NoData>, id: &str) -> StyleProps {
 
 /// The four sides as painted: `currentcolor` resolved against the node's
 /// computed `color`, as every host resolves it.
-fn painted(r: &Runner<NoData>, id: &str) -> [ColorValue; 4] {
+fn painted(r: &Runner<Source>, id: &str) -> [ColorValue; 4] {
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id(id)[0]).unwrap();
     let current = node
@@ -389,10 +380,13 @@ fn a_computed_shorthand_list_is_refused_naming_the_longhands() {
     if let Err(e) = contract::compile(&src("padding=`calc(${\"10px + 2px\"})`")) {
         panic!("{e}");
     }
+    contract::compile(&src("padding=`10px ${\"\"} 20px`")).unwrap();
+    let invalid =
+        contract::compile(&src("border-radius=`${\"calc(100%\"} - 10px) auto`")).unwrap_err();
+    let literal = contract::compile(&src("border-radius=\"calc(100% - 10px) auto\"")).unwrap_err();
+    assert_eq!((invalid.id, invalid.message), (literal.id, literal.message));
     for attr in [
         "padding=`calc(${pad}px + 2px) 0`",
-        "padding=`10px ${\"\"} 20px`",
-        "border-radius=`${\"calc(100%\"} - 10px) auto`",
         "padding=`${pad} ${pad}`",
     ] {
         let e = contract::compile(&src(attr)).unwrap_err();

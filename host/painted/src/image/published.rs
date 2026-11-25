@@ -122,18 +122,48 @@ impl Publisher {
             weak = Arc::downgrade(&bitmap);
             bitmap
         });
-        if stored.is_ok() {
+        // The path's previous pixels can serve no reader now, and neither
+        // can pixels no reader took whose file has changed or gone since:
+        // they leave the cache. (Taken ones left it when their last reader
+        // let go, `RasterSession::publish`.) Their files are read outside
+        // the lock a reader takes as it asks.
+        let (mut gone, others) = {
             let mut all = backend.published.lock().unwrap();
             let files = all.entry(self.generation).or_default();
+            let previous = files.remove(name).map(|p| p.demand.key);
             files.retain(|_, entry| entry.pixels.strong_count() > 0);
-            files.insert(
-                name.to_owned(),
-                Published {
-                    demand,
-                    stamp,
-                    pixels: weak,
-                },
-            );
+            if stored.is_ok() {
+                files.insert(
+                    name.to_owned(),
+                    Published {
+                        demand,
+                        stamp,
+                        pixels: weak,
+                    },
+                );
+            }
+            let others: Vec<_> = (files.iter())
+                .filter(|(other, _)| *other != name)
+                .map(|(other, entry)| (other.clone(), entry.demand.key, entry.stamp))
+                .collect();
+            (Vec::from_iter(previous), others)
+        };
+        let stale: Vec<_> = (others.into_iter())
+            .filter(|(other, _, at)| self::stamp(other) != Some(*at))
+            .collect();
+        if !stale.is_empty() {
+            let mut all = backend.published.lock().unwrap();
+            if let Some(files) = all.get_mut(&self.generation) {
+                for (other, key, _) in stale {
+                    if files.get(&other).is_some_and(|p| p.demand.key == key) {
+                        files.remove(&other);
+                    }
+                    gone.push(key);
+                }
+            }
+        }
+        for key in gone {
+            backend.session.forget_source(key.source, key.generation);
         }
     }
 }

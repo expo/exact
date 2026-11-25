@@ -25,7 +25,7 @@
 //! exactly as before.
 //!
 //! The kernel implies one block itself: the viewport, for each box in
-//! HTML's top layer (a popover; `Kernel::imply_blocks`), fitting its
+//! HTML's top layer that the host measures (`Kernel::imply_blocks`), fitting its
 //! content as the UA sheet's `fit-content` does. A host's block for the
 //! same box wins, and taking it back leaves the viewport.
 
@@ -168,6 +168,36 @@ fn bar_slots(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|e| (untaken[e] - clear[e]).max(0.0))
 }
 
+/// Where a region bar of `held`'s root lies on each edge (LLP 1123 D12,
+/// "Region"), in Taffy patch 81's terms: how far in from the root's edge its
+/// slot begins, less than 0 where UIKit's bar layout region lies in the band
+/// the host clears, and how far in from the two edges beside it the slot
+/// runs, as its host reported the region on the owner's view less the
+/// clearance `clear` there. On the bottom of a root that clears the
+/// keyboard the slot rests on the deeper of the region and the keyboard's
+/// top, the region's sides kept, since the owner view's region does not
+/// follow the keyboard (D7). `None` on an edge with no region, and for a
+/// root that is no owner or has no bars.
+fn region_slots(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [Option<[f32; 3]>; 4] {
+    let regions = arena.observations.bars.regions.get(&held.slot);
+    let Some(regions) =
+        regions.filter(|_| is_owner(arena, held) && super::bar::has_bars(arena, held.slot))
+    else {
+        return [None; 4];
+    };
+    let cover = super::keyboard::cover(arena, held.slot);
+    std::array::from_fn(|e| {
+        regions[e].map(|r| {
+            let (a, b) = if e % 2 == 0 { (3, 1) } else { (0, 2) };
+            [
+                r.distance.max(cover[e]) - clear[e],
+                r.sides[0] - clear[a],
+                r.sides[1] - clear[b],
+            ]
+        })
+    })
+}
+
 /// [`cleared`] with the edges its root takes of the container region taken,
 /// where `taking`, or none of them.
 fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
@@ -182,7 +212,14 @@ fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
     let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
     let cover = super::keyboard::cover(arena, held.slot);
     match reservation::reserved(arena, held.slot) {
-        Some(r) => r.inside_covered(band, cover),
+        // Its additional insets as UIKit applied them where its host wrote and measured them, which a
+        // child controller's floor can hold short of a negative one, as the incoming band does (D11)
+        Some(mut r) => {
+            if let Some(effect) = arena.observations.root_effects.get(&held.slot) {
+                r.added = *effect;
+            }
+            r.inside_covered(band, cover)
+        }
         None => std::array::from_fn(|e| band[e].max(cover[e])),
     }
 }
@@ -252,6 +289,9 @@ pub(crate) struct Held {
     /// Whether a box above it was replaced whole when it was last styled
     /// (`apply` makes it `display: none` then).
     buried: bool,
+    /// Whether its host shows it as a navigation bar's item, a readout that
+    /// takes the bar's type (`Kernel::set_bar_item`; LLP 1141.004 D3).
+    pub(crate) bar_item: bool,
     /// How its host shows it against its stack's top.
     shown: BlockShown,
     /// What the host cleared of it for its content root when it was last
@@ -260,6 +300,9 @@ pub(crate) struct Held {
     /// How far past its content root's edge its bars' slots began when it
     /// was last laid out (`bar_slots`).
     slots: [f32; 4],
+    /// Where its region bars' slots lay on each edge when it was last laid
+    /// out (`region_slots`).
+    regions: [Option<[f32; 3]>; 4],
     /// Its content root's width and height where its host fixes them, as
     /// they were when it was last laid out: what container units below read
     /// (`owner::container_at`, LLP 1123 D16).
@@ -285,6 +328,11 @@ impl Blocks {
     /// takes.
     pub(crate) fn bar_slots(&self, slot: u32) -> [f32; 4] {
         self.held(slot).map_or([0.0; 4], |b| b.slots)
+    }
+
+    /// Where `slot`'s region bars' slots lay when it was last laid out (`region_slots`).
+    pub(crate) fn region_slots(&self, slot: u32) -> [Option<[f32; 3]>; 4] {
+        self.held(slot).map_or([None; 4], |b| b.regions)
     }
 
     /// Whether `slot`'s bars' slots would begin elsewhere than at its last
@@ -383,7 +431,7 @@ impl Blocks {
         &self.2
     }
 
-    fn held(&self, slot: u32) -> Option<&Held> {
+    pub(crate) fn held(&self, slot: u32) -> Option<&Held> {
         self.0.iter().find(|b| b.slot == slot)
     }
 
@@ -405,9 +453,11 @@ impl Blocks {
                 given,
                 implied,
                 buried: false,
+                bar_item: false,
                 shown: BlockShown::InStack,
                 cleared: [0.0; 4],
                 slots: [0.0; 4],
+                regions: [None; 4],
                 content: [None; 2],
                 read_off: Default::default(),
             }),
@@ -441,6 +491,12 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
         at = arena.parent(s);
     }
     false
+}
+
+pub(crate) fn closed_dialog(arena: &NodeArena, slot: u32) -> bool {
+    !arena.is_root(slot)
+        && !arena.blocks.holds(slot)
+        && arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
 }
 
 /// Whether an ancestor of `slot` is `display: none`, as authored or as a box
@@ -500,7 +556,12 @@ pub(crate) fn apply(
     block: Option<HostBlock>,
     s: &mut taffy::style::Style,
 ) {
-    let Some(block) = block else { return };
+    let Some(block) = block else {
+        if closed_dialog(arena, slot) {
+            s.display = taffy::Display::None;
+        }
+        return;
+    };
     if replaced_above(arena, slot) {
         s.display = taffy::style::Display::None;
         return;
@@ -588,7 +649,7 @@ fn cyclic(block: HostBlock, s: &mut taffy::style::Style) {
     let cyclic = |d: taffy::Dimension| {
         let raw = d.into_raw();
         raw.tag() == CompactLength::PERCENT_TAG
-            || (raw.is_calc() && calc_has_percent(raw.calc_value()))
+            || (raw.has_calc() && calc_has_percent(raw.calc_value()))
     };
     let clear =
         |size: &mut taffy::Dimension, min: &mut taffy::Dimension, max: &mut taffy::Dimension| {
@@ -655,19 +716,37 @@ impl Kernel {
             }
         }
         let before = self.arena.blocks.get(slot);
+        let hosted = self.arena.hosted_readout(slot);
         // Measure the readers under a box that gains or gives back a block again, which
         // changes the band they observe; a reader elsewhere that this moves has a frame
         // that moved
+        let was_owner = owns(&self.arena, slot);
         let placed = self.arena.blocks.given(slot).is_some() != block.is_some();
         if placed {
             self.arena.observations.moved(slot);
         }
         self.arena.blocks.set(slot, block);
+        if block.is_none() {
+            // A bar item is a block the host gives: one implied in its place is not
+            if let Some(held) = self.arena.blocks.held_mut(slot) {
+                held.bar_item = false;
+            }
+        }
         self.block_changed(slot, before);
+        if hosted && !self.arena.hosted_readout(slot) {
+            self.bar_text_changed(slot);
+        }
         // Derive the owner segments' readers below a box whose host starts or stops placing
         // it while its implied block stands
         if placed && before.is_some() && self.arena.blocks.get(slot).is_some() {
-            self.segments_moved(slot);
+            if was_owner != owns(&self.arena, slot) {
+                // A native sheet can take over a measured dialog at the same size.
+                self.restyle_block(slot);
+                self.resize_content_root(slot);
+                self.targets_moved(slot);
+            } else {
+                self.segments_moved(slot);
+            }
         }
         Ok(())
     }
@@ -704,7 +783,8 @@ impl Kernel {
     /// to be another, and each block root to be styled again.
     fn implied_changes(&self) -> (Vec<(u32, Option<HostBlock>)>, Vec<u32>) {
         let arena = &self.arena;
-        if arena.top_layer_slots.is_empty() && !arena.blocks.any() {
+        let dialogs = &arena.alert_state.measured_dialogs;
+        if arena.top_layer_slots.is_empty() && dialogs.is_empty() && !arena.blocks.any() {
             return (Vec::new(), Vec::new());
         }
         let (env, lifted) = (arena.env(), &arena.top_layer_slots);
@@ -714,15 +794,40 @@ impl Kernel {
             width: BlockAxis::Fit(width),
             height: BlockAxis::Fit(height),
         });
+        // A terminal or an intrinsic measurement can leave one viewport axis
+        // indefinite. On that axis the dialog sizes to its content.
+        let dialog_axis = |length| {
+            if length > 0. {
+                BlockAxis::Fit(length)
+            } else {
+                BlockAxis::Content(0.)
+            }
+        };
+        let dialog_block = HostBlock {
+            tactic: Default::default(),
+            width: dialog_axis(width),
+            height: dialog_axis(height),
+        };
         let mut slots = arena.blocks.implied_slots();
         slots.extend(lifted.iter().filter(|s| arena.blocks.implied(*s).is_none()));
+        slots.extend(
+            dialogs
+                .iter()
+                .filter(|s| !lifted.contains(*s) && arena.blocks.implied(*s).is_none()),
+        );
         let wants: Vec<_> = slots
             .into_iter()
             .map(|slot| {
                 let boxed = !arena.is_root(slot)
                     && !arena.in_paragraph(slot)
                     && arena.cover(slot) != Some(super::HostCover::Whole);
-                (slot, viewport.filter(|_| lifted.contains(slot) && boxed))
+                let wanted = if arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
+                {
+                    (boxed && dialogs.contains(slot)).then_some(dialog_block)
+                } else {
+                    viewport.filter(|_| boxed && lifted.contains(slot))
+                };
+                (slot, wanted)
             })
             .filter(|&(slot, want)| arena.blocks.implied(slot) != want)
             .collect();
@@ -748,6 +853,60 @@ impl Kernel {
     fn resize_content_root(&mut self, slot: u32) {
         let sized = super::readers::container_readers(&self.arena, slot);
         self.restyle_readers(&sized);
+        // Resolve the relative rows in container units again, which are resolved apart from
+        // the others (`txn::relative`)
+        let mut queued = false;
+        for &s in &sized {
+            queued |= super::owner::queue_contained(&mut self.arena, s);
+        }
+        if queued {
+            let mut unmirrored = crate::layout::Unmirrored;
+            let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+            let mut receipt = crate::CommitReceipt::default();
+            crate::txn::relative::resolve(&mut self.arena, layout, &mut Vec::new(), &mut receipt);
+        }
+    }
+
+    /// Whether the host shows `view`, a block it gave, as a navigation bar's
+    /// item (LLP 1141.004 D3): a readout that takes the bar's type for what
+    /// it leaves unsaid. A block taken back is no item. Returns whether that
+    /// changed, which a layout then owes; refused for a view with no given
+    /// block.
+    pub fn set_bar_item(&mut self, view: ViewId, item: bool) -> Result<bool, KernelError> {
+        let slot = self
+            .arena
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        let Some(held) = (self.arena.blocks.held_mut(slot)).filter(|b| b.given.is_some()) else {
+            return match item {
+                true => Err(LayoutError::HostBlock("a bar item is a block its host gives").into()),
+                false => Ok(false),
+            };
+        };
+        if held.bar_item == item {
+            return Ok(false);
+        }
+        held.bar_item = item;
+        self.bar_text_changed(slot);
+        Ok(true)
+    }
+
+    /// The readouts that came to take a bar's type, or stopped, since the
+    /// last call (LLP 1141.004 D3). Their rows changed outside the commit
+    /// that styled them, so a host sends their subtrees' rows again.
+    pub fn take_bar_text_flips(&mut self) -> Vec<ViewId> {
+        std::mem::take(&mut self.arena.bar_text.flips)
+    }
+
+    /// `slot`'s text and symbol measured again in the type a bar gives it,
+    /// or no longer gives it, and its descendants that inherit it, the
+    /// lengths that read its font included (LLP 1141.004 D3).
+    fn bar_text_changed(&mut self, slot: u32) {
+        let mut unmirrored = crate::layout::Unmirrored;
+        let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+        crate::arena::bar_text::bar_type_changed(&mut self.arena, layout, slot);
+        let mut receipt = crate::CommitReceipt::default();
+        crate::txn::relative::resolve(&mut self.arena, layout, &mut Vec::new(), &mut receipt);
     }
 
     /// `slot`'s block root styled again, as its block or what is above it
@@ -984,10 +1143,12 @@ impl Kernel {
     fn clear_block(&mut self, i: usize, clear: [f32; 4]) -> (u32, Offer) {
         let content = fixed_lengths(&self.arena, &self.arena.blocks.0[i], clear);
         let slots = bar_slots(&self.arena, &self.arena.blocks.0[i], clear);
+        let regions = region_slots(&self.arena, &self.arena.blocks.0[i], clear);
         let held = &mut self.arena.blocks.0[i];
         let (slot, inner) = (held.slot, held.block.less(clear));
         let was = std::mem::replace(&mut held.cleared, clear);
         let slotted = std::mem::replace(&mut held.slots, slots) != slots;
+        let slotted = (std::mem::replace(&mut held.regions, regions) != regions) || slotted;
         // Derive the container readers again where the content root's fixed lengths
         // moved, or where one was derived against others since the last layout
         let moved = std::mem::replace(&mut held.content, content) != content;

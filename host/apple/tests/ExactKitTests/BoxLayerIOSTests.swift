@@ -606,5 +606,276 @@ final class BoxLayerIOSTests: XCTestCase {
         XCTAssertTrue((sub.sublayers?.first?.contents as AnyObject?) === mark.raster?.image.image)
         mark.raster = nil
     }
+
+    /// A scroller's children are its scroll view's, so its radius reaches them as the scroll view's corner
+    /// (expo/exact#1442): one radius over the corners that have one, on Apple's continuous curve where the style
+    /// asks, following the style, the box's size and a reach past the box. Under a border the clip is the padding
+    /// edge's, a mask that stays over the box as the scroll view scrolls and comes back after a layout transition.
+    /// A zoomed scroller keeps its zoom. Corners that differ leave the scroll view square, and so does a box whose
+    /// own layer clips.
+    func testAScrollersRadiusClipsItsContent() throws {
+        let p = Presenter(), window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        defer { window.isHidden = true }
+        p.viewport.frame = window.bounds; window.addSubview(p.viewport); window.makeKeyAndVisible()
+        let all: CACornerMask = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner, .layerMinXMaxYCorner]
+        let red: [UInt8] = [255, 0, 0, 255], blue: [UInt8] = [0, 0, 255, 255], clear: [UInt8] = [0, 0, 0, 0]
+        func look(_ rows: [String: Any], x: String = "auto") -> [String: Any] {
+            ["op": "style", "id": 2, "style": rows.merging(["overflow_x": x, "overflow_y": "auto", "min_zoom": 1, "max_zoom": 4,
+                                                             "background_color": [0, 0, 255, 255]]) { a, _ in a }]
+        }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"], ["op": "create", "id": 2, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            look(["border_radius": 24.0]),
+            ["op": "children", "id": 2, "ids": [3]], ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 200, "h": 200], ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 120, "h": 120],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 120, "h": 300], ["op": "content", "id": 2, "w": 120, "h": 300],
+            ["op": "props", "id": 2, "set": ["scrollZoom": "2"]],
+        ]))
+        let node = try XCTUnwrap(p.views[2]), child = try XCTUnwrap(p.views[3]), scroll = try XCTUnwrap(node.scroll)
+        /// The scroller as its layers draw it, 120 points square at 1x: the pixel at a point. The child covers the
+        /// whole box, over its blue ground.
+        func shot() throws -> (Int, Int) -> [UInt8] {
+            window.layoutIfNeeded()
+            node.layer.displayIfNeeded(); child.layer.displayIfNeeded()
+            let context = try XCTUnwrap(CGContext(data: nil, width: 120, height: 120, bitsPerComponent: 8, bytesPerRow: 480,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            // A bitmap's rows run top down and its context's y bottom up: the layer is drawn top down into it.
+            context.translateBy(x: 0, y: 120); context.scaleBy(x: 1, y: -1)
+            node.layer.render(in: context)
+            let bytes = Array(UnsafeBufferPointer(start: try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self), count: 120 * 480))
+            return { x, y in Array(bytes[(y * 480 + x * 4)..<(y * 480 + x * 4 + 4)]) }
+        }
+        var at = try shot()
+        XCTAssertFalse(node.clipsToBounds, "a box that scrolls both axes leaves the clip to its scroll view")
+        XCTAssertEqual(scroll.layer.cornerRadius, 24)
+        XCTAssertEqual(scroll.layer.maskedCorners, all)
+        XCTAssertEqual(scroll.layer.cornerCurve, .circular)
+        XCTAssertTrue(scroll.clipsToBounds)
+        XCTAssertNil(scroll.layer.mask, "with no border the layer's radius is the padding edge")
+        XCTAssertEqual(at(60, 60), red, "the child fills the scroller")
+        XCTAssertEqual(at(3, 3), clear, "and stops at the curve")
+        XCTAssertEqual(scroll.zoomScale, 2)
+
+        // An 8 point border: the padding edge's corner has radius 16 round the box's centre, (24, 24). (10, 10) is
+        // 19.8 from it, inside the box's curve and outside the padding edge's; (14, 14) is 14.1 from it, inside both.
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 8.0, "border_color_top": [0, 255, 0, 128]])]))
+        /// Half green over the blue ground, with none of the child's red.
+        func borderOverGround(_ ink: [UInt8], _ message: String) {
+            XCTAssertEqual(ink[0], 0, message)
+            XCTAssertEqual(Double(ink[1]), 128, accuracy: 2, message)
+            XCTAssertEqual(Double(ink[2]), 127, accuracy: 2, message)
+        }
+        for offset: CGFloat in [0, 40] {
+            scroll.contentOffset.y = offset
+            at = try shot()
+            XCTAssertEqual(scroll.contentOffset.y, offset)
+            XCTAssertEqual(scroll.layer.mask?.position, scroll.bounds.origin, "the mask is over the box, scrolled by \(offset)")
+            XCTAssertNil(scroll.layer.mask?.animationKeys(), "and is there at once")
+            XCTAssertEqual(scroll.layer.cornerRadius, 0, "no radius of a layer the size of the border box is the padding edge")
+            XCTAssertEqual(at(60, 60), red)
+            XCTAssertEqual(at(14, 14), red, "the child reaches the padding edge's curve, scrolled by \(offset)")
+            borderOverGround(at(10, 10), "and stops there, so a translucent border shows the ground in its corner, scrolled by \(offset)")
+            borderOverGround(at(60, 4), "and along its side, scrolled by \(offset)")
+            XCTAssertEqual(at(3, 3), clear)
+        }
+        scroll.contentOffset.y = 0
+        let edge = try XCTUnwrap(scroll.layer.mask)
+        node.layoutResize = CGSize(width: 0, height: 20); node.applyTransform(); node.applySurface()
+        XCTAssertFalse(scroll.layer.mask === edge, "a layout transition's surface masks the scroll view at its own size")
+        node.layoutResize = .zero; node.applyTransform(); node.applySurface()
+        XCTAssertTrue(scroll.layer.mask === edge, "and the padding edge is back when it ends")
+        borderOverGround(try shot()(10, 10), "after a layout transition")
+
+        // Borders of two widths make the padding edge's corner an ellipse, 8 by 20 round (24, 24).
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 4.0, "border_width_left": 16.0, "border_color_top": [0, 0, 0, 0]])]))
+        at = try shot()
+        XCTAssertEqual(at(18, 6), blue, "outside the ellipse, inside the padding box and the box's curve")
+        XCTAssertEqual(at(22, 12), red, "inside it")
+        // The top and bottom borders differ: the edge is the node's, top down.
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 2.0, "border_width_top": 20.0, "border_color_top": [0, 0, 0, 0]])]))
+        at = try shot()
+        XCTAssertEqual(at(60, 12), blue, "under the top border")
+        XCTAssertEqual(at(60, 24), red)
+        XCTAssertEqual(at(60, 108), red, "to the bottom border, which is thin")
+        XCTAssertEqual(at(60, 119), blue)
+        // A border wider than the radius leaves the padding edge square.
+        p.apply(wireBatch([look(["border_radius": 6.0, "border_width": 8.0, "border_color_top": [0, 0, 0, 0]])]))
+        at = try shot()
+        XCTAssertEqual(at(9, 9), red)
+        XCTAssertEqual(at(6, 6), blue)
+
+        p.apply(wireBatch([look(["border_radius": 8.0, "corner_shape": ["apple", "apple", "apple", "apple"]])]))
+        _ = try shot()
+        XCTAssertNil(scroll.layer.mask, "the border gone, the layer's radius again")
+        XCTAssertEqual(scroll.layer.cornerRadius, 8, "a new radius")
+        XCTAssertEqual(scroll.layer.cornerCurve, .continuous)
+        XCTAssertEqual(scroll.zoomScale, 2, "the zoom is kept")
+
+        p.apply(wireBatch([look(["border_radius_top_left": 24.0, "border_radius_top_right": 24.0])]))
+        _ = try shot()
+        XCTAssertEqual(scroll.layer.cornerRadius, 24)
+        XCTAssertEqual(scroll.layer.maskedCorners, [.layerMinXMinYCorner, .layerMaxXMinYCorner], "only the corners that have it")
+        XCTAssertEqual(scroll.layer.cornerCurve, .circular)
+
+        p.apply(wireBatch([look(["border_radius": 24.0]), ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 30, "h": 120]]))
+        _ = try shot()
+        XCTAssertEqual(scroll.layer.cornerRadius, 15, "reduced with the box")
+        XCTAssertEqual(scroll.layer.maskedCorners, all)
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 0, "w": 120, "h": 120]]))
+        _ = try shot()
+        XCTAssertEqual(scroll.layer.cornerRadius, 24)
+
+        node.setReach(UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
+        XCTAssertEqual(scroll.layer.cornerRadius, 0, "a scroll view drawn past the box has its corners elsewhere")
+        node.setReach(.zero)
+        XCTAssertEqual(scroll.layer.cornerRadius, 24)
+
+        p.apply(wireBatch([look(["border_radius_top_left": 18.0, "border_radius_top_right": 4.0])]))
+        _ = try shot()
+        XCTAssertEqual(scroll.layer.cornerRadius, 0, "corners that differ need a path")
+        p.apply(wireBatch([look(["border_radius": 24.0], x: "hidden")]))
+        _ = try shot()
+        XCTAssertTrue(node.clipsToBounds, "one axis hidden: the box's own layer clips")
+        XCTAssertEqual(node.layer.cornerRadius, 24)
+        XCTAssertEqual(try XCTUnwrap(node.scroll).layer.cornerRadius, 0, "and its scroll view needs no corner")
+    }
+
+    /// The padding edge's mask cuts UIKit's scroll indicators too, which lie at the scroll view's edge, over the
+    /// border (expo/exact#1442). They keep inside the edge by the border's widths, on both axes, over whatever
+    /// insets they had, and go back when the border goes; D14's writer, which writes the insets whole, adds the
+    /// widths. So under a transparent border each indicator's ink shows, inside the padding edge.
+    func testAScrollersIndicatorsKeepInsideItsPaddingEdge() throws {
+        // Below the screen's top band, whose depth UIKit would add to the vertical indicator's insets.
+        let p = Presenter(), window = UIWindow(frame: CGRect(x: 0, y: 200, width: 200, height: 200))
+        defer { window.isHidden = true }
+        p.viewport.frame = window.bounds; window.addSubview(p.viewport); window.makeKeyAndVisible()
+        func look(_ rows: [String: Any]) -> [String: Any] {
+            ["op": "style", "id": 2, "style": rows.merging(["overflow_x": "auto", "overflow_y": "auto", "border_color_top": [0, 0, 0, 0],
+                                                             "background_color": [0, 0, 255, 255]]) { a, _ in a }]
+        }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"], ["op": "create", "id": 2, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            look(["border_radius": 24.0]),
+            ["op": "children", "id": 2, "ids": [3]], ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 200, "h": 200], ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 120, "h": 120],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 400, "h": 400], ["op": "content", "id": 2, "w": 400, "h": 400],
+        ]))
+        let node = try XCTUnwrap(p.views[2]), child = try XCTUnwrap(p.views[3]), scroll = try XCTUnwrap(node.scroll)
+        // Insets it already has, as a keyboard or a page band gives them.
+        let had = (vertical: UIEdgeInsets(top: 5, left: 0, bottom: 7, right: 0), horizontal: UIEdgeInsets(top: 0, left: 3, bottom: 0, right: 9))
+        scroll.verticalScrollIndicatorInsets = had.vertical
+        scroll.horizontalScrollIndicatorInsets = had.horizontal
+        func insets(_ border: UIEdgeInsets, _ message: String) {
+            window.layoutIfNeeded()
+            XCTAssertEqual(scroll.verticalScrollIndicatorInsets, had.vertical.adding(border), message)
+            XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, had.horizontal.adding(border), message)
+        }
+        /// UIKit's two indicators, shown, as rects of the node: the taller one is the vertical.
+        func indicators() throws -> (vertical: CGRect, horizontal: CGRect) {
+            scroll.flashScrollIndicators()
+            window.layoutIfNeeded()
+            let bars = scroll.subviews.filter { String(describing: type(of: $0)) == "_UIScrollViewScrollIndicator" }
+            XCTAssertEqual(bars.count, 2, "\(scroll.subviews)")
+            for bar in bars { bar.layer.removeAllAnimations(); bar.alpha = 1 }
+            let rects = bars.map { node.convert($0.bounds, from: $0) }
+            return (try XCTUnwrap(rects.first { $0.height > $0.width }), try XCTUnwrap(rects.first { $0.width > $0.height }))
+        }
+        /// The node as its layers draw it, 120 points square at 1x: the pixel at a point.
+        func shot() throws -> (CGPoint) -> [UInt8] {
+            node.layer.displayIfNeeded(); child.layer.displayIfNeeded()
+            let context = try XCTUnwrap(CGContext(data: nil, width: 120, height: 120, bitsPerComponent: 8, bytesPerRow: 480,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            // A bitmap's rows run top down and its context's y bottom up: the layer is drawn top down into it.
+            context.translateBy(x: 0, y: 120); context.scaleBy(x: 1, y: -1)
+            node.layer.render(in: context)
+            let bytes = Array(UnsafeBufferPointer(start: try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self), count: 120 * 480))
+            return { at in Array(bytes[(Int(at.y) * 480 + Int(at.x) * 4)..<(Int(at.y) * 480 + Int(at.x) * 4 + 4)]) }
+        }
+        let red: [UInt8] = [255, 0, 0, 255], blue: [UInt8] = [0, 0, 255, 255]
+        insets(.zero, "no border: as they were")
+        // Mid-range on both axes, where each indicator is clear of the corners' curves.
+        scroll.contentOffset = CGPoint(x: 140, y: 140)
+        var bars = try indicators()
+        XCTAssertGreaterThan(bars.vertical.maxX, 112, "with no border the vertical indicator is at the box's edge")
+        XCTAssertGreaterThan(bars.horizontal.maxY, 112, "and the horizontal one at its foot")
+
+        // An 8 point transparent border: the padding box is 104 points square from (8, 8).
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 8.0])]))
+        insets(UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8), "the border's widths more, on both")
+        let edge = try XCTUnwrap((scroll.layer.mask as? CAShapeLayer)?.path), padding = CGRect(x: 8, y: 8, width: 104, height: 104)
+        for offset in [CGPoint.zero, CGPoint(x: 140, y: 140), CGPoint(x: 280, y: 280)] {
+            scroll.contentOffset = offset
+            bars = try indicators()
+            XCTAssertTrue(padding.contains(bars.vertical), "the vertical indicator is inside the padding box at \(offset): \(bars.vertical)")
+            XCTAssertTrue(padding.contains(bars.horizontal), "the horizontal indicator is inside the padding box at \(offset): \(bars.horizontal)")
+        }
+        scroll.contentOffset = CGPoint(x: 140, y: 140)
+        bars = try indicators()
+        let at = try shot()
+        for (name, bar) in [("vertical", bars.vertical), ("horizontal", bars.horizontal)] {
+            for corner in [CGPoint(x: bar.minX, y: bar.minY), CGPoint(x: bar.maxX, y: bar.minY), CGPoint(x: bar.maxX, y: bar.maxY), CGPoint(x: bar.minX, y: bar.maxY)] {
+                XCTAssertTrue(edge.contains(corner), "the \(name) indicator is inside the padding edge's mask: \(bar)")
+            }
+            let ink = at(CGPoint(x: bar.midX, y: bar.midY))
+            XCTAssertNotEqual(ink, red, "the \(name) indicator's ink shows over the child at \(bar)")
+            XCTAssertNotEqual(ink, blue, "and is not cut to the ground")
+        }
+        XCTAssertEqual(at(CGPoint(x: 60, y: 60)), red, "the child shows where no indicator is")
+        XCTAssertEqual(at(CGPoint(x: 116, y: 60)), blue, "and the transparent border shows the ground, with no indicator in it")
+        XCTAssertEqual(at(CGPoint(x: 60, y: 116)), blue)
+
+        // A keyboard's term moves by its difference, over the border's.
+        let keyboard = KeyboardInset()
+        keyboard.apply(30, to: scroll)
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets.bottom, had.vertical.bottom + 8 + 30)
+        keyboard.apply(0, to: scroll)
+        insets(UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8), "the keyboard gone")
+
+        // Borders of other widths, and a layout transition, which masks at the same edge.
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 4.0, "border_width_left": 16.0])]))
+        insets(UIEdgeInsets(top: 4, left: 16, bottom: 4, right: 4), "the new widths")
+        node.layoutResize = CGSize(width: 0, height: 20); node.applyTransform(); node.applySurface()
+        insets(UIEdgeInsets(top: 4, left: 16, bottom: 4, right: 4), "kept through a layout transition")
+        let surfaceMask = try XCTUnwrap(scroll.layer.mask)
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 2.0, "border_width_top": 12.0, "border_width_right": 6.0])]))
+        insets(UIEdgeInsets(top: 12, left: 2, bottom: 2, right: 6), "new widths while the surface owns the mask")
+        XCTAssertTrue(scroll.layer.mask === surfaceMask)
+        p.apply(wireBatch([look(["border_radius": 24.0])]))
+        insets(.zero, "the border removed while the surface owns the mask")
+        var during = ScrollInsetsIOS.Rows()
+        during.verticalIndicator = [5, 0, 7, 0]; during.horizontalIndicator = [0, 9, 0, 3]
+        ScrollInsetsIOS.write(scroll, in: window, terms: .init(), rows: during)
+        insets(.zero, "the whole-inset writer sees no removed border during the surface")
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 4.0, "border_width_left": 16.0])]))
+        ScrollInsetsIOS.write(scroll, in: window, terms: .init(), rows: during)
+        insets(UIEdgeInsets(top: 4, left: 16, bottom: 4, right: 4), "the whole-inset writer adds the current border once during the surface")
+        XCTAssertTrue(scroll.layer.mask === surfaceMask)
+        node.layoutResize = .zero; node.applyTransform(); node.applySurface()
+        insets(UIEdgeInsets(top: 4, left: 16, bottom: 4, right: 4), "and after it")
+
+        // D14's writer writes the insets whole: the same rows, with the border and without.
+        p.apply(wireBatch([look(["border_radius": 24.0])]))
+        insets(.zero, "the border gone: as they were")
+        XCTAssertNil(scroll.layer.mask)
+        var rows = ScrollInsetsIOS.Rows()
+        rows.verticalIndicator = [5, 0, 7, 0]; rows.horizontalIndicator = [0, 9, 0, 3]
+        ScrollInsetsIOS.write(scroll, in: window, terms: .init(), rows: rows)
+        let written = (vertical: scroll.verticalScrollIndicatorInsets, horizontal: scroll.horizontalScrollIndicatorInsets)
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 8.0])]))
+        ScrollInsetsIOS.write(scroll, in: window, terms: .init(), rows: rows)
+        let border = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, written.vertical.adding(border), "the writer adds the border's widths")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, written.horizontal.adding(border))
+        ScrollInsetsIOS.write(scroll, in: window, terms: .init(), rows: rows)
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, written.vertical.adding(border), "once, however often it writes")
+        p.apply(wireBatch([look(["border_radius": 24.0])]))
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, written.vertical, "and the border gone leaves what it wrote")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, written.horizontal)
+        bars = try indicators()
+        XCTAssertGreaterThan(bars.vertical.maxX, 112, "the indicators are back at the box's edge")
+        XCTAssertGreaterThan(bars.horizontal.maxY, 112)
+    }
 }
 #endif

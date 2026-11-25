@@ -21,11 +21,11 @@ pub(crate) fn render_scene(
     frame: &Frame,
     encoder: &mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,
-) {
+) -> bool {
     if let Some(surface) = surface.filter(|s| !s.is_empty()) {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         surface.prepare_assets(&gpu.device, &gpu.queue, format);
-        surface.render(frame, &gpu.device, &gpu.queue, encoder, target, format);
+        surface.render(frame, &gpu.device, &gpu.queue, encoder, target, format)
     } else {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("empty canvas layer"),
@@ -40,6 +40,7 @@ pub(crate) fn render_scene(
             })],
             ..Default::default()
         });
+        false
     }
 }
 
@@ -187,6 +188,7 @@ impl Module {
             {
                 inst.scratch = None;
             }
+            inst.input_dirty = inst.surface.input_pending();
             inst.dirty = false;
             return Some(false);
         }
@@ -368,6 +370,7 @@ impl Module {
             self.error = e;
             return None;
         }
+        inst.input_dirty = inst.surface.input_pending();
         inst.dirty = !ready;
         Some(wants || !ready)
     }
@@ -458,6 +461,7 @@ impl Module {
             self.error = e;
             return None;
         }
+        inst.input_dirty = inst.surface.input_pending();
         inst.dirty = !ready;
         Some(wants || !ready)
     }

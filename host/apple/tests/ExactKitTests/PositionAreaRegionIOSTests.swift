@@ -19,12 +19,16 @@ final class PositionAreaRegionIOSTests: XCTestCase {
         self.session = session
         let view = ExactView(session: session), host = UIViewController()
         let window = UIWindow(windowScene: scene)
-        // The page's area is Chrome's 400×600 viewport: below the status bar's band, which a scene's
-        // window at the screen's top has as its top safe area.
         window.frame = CGRect(x: 0, y: 0, width: 400, height: 600)
-        window.frame.size.height += window.safeAreaInsets.top
         window.rootViewController = host
         window.makeKeyAndVisible()
+        // The page's area is Chrome's 400×600 viewport, with none of the device's safe area
+        waitFor("the window has no safe area") {
+            let safe = window.safeAreaInsets
+            host.additionalSafeAreaInsets = UIEdgeInsets(top: -safe.top, left: -safe.left, bottom: -safe.bottom, right: -safe.right)
+            host.view.layoutIfNeeded()
+            return host.view.safeAreaInsets == .zero
+        }
         host.view.addSubview(view)
         self.window = window
         XCTAssertNil(session.boot(plan: plan, size: window.bounds.size).error)

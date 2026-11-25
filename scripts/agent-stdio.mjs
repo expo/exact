@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/apple/build.mjs';
+import { noWindowsHost } from '../host/windows/build.mjs';
 import { phone, phoneBridge, phoneStartupFailure, phoneLaunch, crashReports, displayPictureReply } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
 import { linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
@@ -106,9 +107,10 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const childEnv = { ...process.env, ...extra };
   const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED, launch: childEnv }) : null;
   if (macBuild && !macBuild.missing) refuseBackendOrigin(macBuild, a);
-  const macPlan = macBuild && !plan && !sample ? planOverride('macos', a, macBuild) : null;
+  const macPlan = macBuild && !plan && !Object.hasOwn(extra, 'EXACT_PLAN') && !sample ? planOverride('macos', a, macBuild) : null;
   if (macPlan) plan = macPlan.plan; else if (macBuild) refuseBuild('macos', macBuild, a, { sample });
   const windowsRebuild = () => ownVerb(a, 'windows') ?? `bun host/windows/build.mjs ${a.crate('windows')}`;
+  if (windows && !process.env.EXACT_WINDOWS_BIN && !ownVerb(a, 'windows') && noWindowsHost(a)) throw new Error(noWindowsHost(a));
   const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;
   // `missingBuild`: every test of a run would fail on it alike, so a test run stops at the first (LLP 1156.006.000 D8).
   if (!existsSync(device ? deviceBundle : bin)) throw Object.assign(new Error(rebuild ? `run ${rebuild} first` : `EXACT_MAC_BIN names no file: ${bin}`), { missingBuild: !!rebuild });
@@ -132,11 +134,15 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const installPhoneApp = () => {
     const installed = spawnSync('xcrun', ['devicectl', 'device', 'install', 'app', '--device', ph.udid, deviceBundle], { encoding: 'utf8' });
     if (installed.status !== 0) throw new Error(`device install: ${installed.stderr || installed.stdout || installed.error?.message}`);
-    if (world) {
+    const copyFixture = (path, name) => {
       const copied = spawnSync('xcrun', ['devicectl', 'device', 'copy', 'to', '--quiet', '--device', ph.udid,
-        '--domain-type', 'appDataContainer', '--domain-identifier', a.id, '--source', resolve(world), '--destination', 'tmp/exact-agent.world'], { encoding: 'utf8', timeout: 45000 });
-      if (copied.status !== 0) throw new Error(`phone world copy: ${copied.stderr || copied.error || copied.stdout}`);
-      extra = { ...extra, EXACT_WORLD: '~/tmp/exact-agent.world' };
+        '--domain-type', 'appDataContainer', '--domain-identifier', a.id, '--source', resolve(path), '--destination', 'tmp/' + name], { encoding: 'utf8', timeout: 45000 });
+      if (copied.status !== 0) throw new Error(`phone ${name} copy: ${copied.stderr || copied.error || copied.stdout}`);
+      return '~/tmp/' + name;
+    };
+    if (world) extra = { ...extra, EXACT_WORLD: copyFixture(world, 'exact-agent.world') };
+    if (extra.EXACT_AGENT_SUBSTITUTES?.startsWith('@')) {
+      extra = { ...extra, EXACT_AGENT_SUBSTITUTES: '@' + copyFixture(extra.EXACT_AGENT_SUBSTITUTES.slice(1), 'exact-agent-substitutes.json') };
     }
   };
   // A Mac bundle carries its own assets (bundle.mjs copies the capture into Contents/Resources); a bare binary
@@ -255,9 +261,9 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
         if (gesture) return gesture;
         const phase = ['down', 'move', 'hold', 'up', 'cancel'].includes(kind);
         // A contact that went down with `mouse` (a drag's) holds the left button through its phases (review A1).
-        // A button's point and the modifiers held, as the request says them (#107).
+        // A button's point and the modifiers held, as the request says them.
         const at = opts.at !== undefined ? { at: opts.at } : {}, held = opts.modifiers ? { modifiers: opts.modifiers } : {};
-        const r = phase ? await heldButton.ask(kind, opts, (button) => ask({ op: 'tap', phase: kind, ...(id != null ? { id } : {}), x: opts.x, y: opts.y, dx: opts.dx, dy: opts.dy, ms: opts.ms, ...(opts.virtual ? { virtual: true } : {}), ...held, ...button })) : ['contextmenu', 'dblclick', 'mouse', 'auxclick'].includes(kind) ? await ask({ op: 'tap', id, [kind]: true, ...(kind === 'dblclick' && opts.touch ? { touch: true } : {}), ...at, ...held }) : kind === 'clicks' ? await ask({ op: 'tap', id, clicks: opts.clicks, ...at, ...held }) : kind === 'pinch' ? await ask({ op: 'tap', id, pinch: opts.pinch, at: opts.at }) : kind === 'wheel' && (opts.fling || opts.hold || opts.release) ? await platformWheel(ask, id, opts, heldWheel) : kind === 'wheel' ? await ask({ op: 'tap', id, wheel: opts.wheel, ...(opts.gesture ? { gesture: true } : {}), ...at, ...held }) : kind === 'drop' ? await ask({ op: 'tap', id, drop: opts.drop }) : kind === 'dragenter' || kind === 'dragleave' ? await ask({ op: 'tap', id, [kind]: opts[kind] }) : kind === 'hover' ? await ask({ op: 'tap', id, hover: true }) : kind === 'press' ? await ask({ op: 'tap', id, ...guest, ...at, ...(opts.modifiers ? { modifiers: opts.modifiers } : {}) }) : kind === 'mediasession' ? await ask({ op: 'tap', id, mediaSession: opts.mediaSession, ...(opts.seconds != null ? { seconds: opts.seconds } : {}) }) : await ask({ op: 'type', id, text: opts.text, ...(opts.clipboard ? { clipboard: opts.clipboard } : {}), ...(opts.files ? { files: opts.files } : {}), ...(opts.image ? { image: opts.image } : {}), ...guest });
+        const r = phase ? await heldButton.ask(kind, opts, (button) => ask({ op: 'tap', phase: kind, ...(id != null ? { id } : {}), x: opts.x, y: opts.y, dx: opts.dx, dy: opts.dy, ms: opts.ms, ...(opts.virtual ? { virtual: true } : {}), ...held, ...button })) : ['contextmenu', 'dblclick', 'mouse', 'auxclick'].includes(kind) ? await ask({ op: 'tap', id, [kind]: true, ...(kind === 'dblclick' && opts.touch ? { touch: true } : {}), ...at, ...held }) : kind === 'clicks' ? await ask({ op: 'tap', id, clicks: opts.clicks, ...at, ...held }) : kind === 'pinch' ? await ask({ op: 'tap', id, pinch: opts.pinch, at: opts.at }) : kind === 'wheel' && (opts.fling || opts.hold || opts.release) ? await platformWheel(ask, id, opts, heldWheel) : kind === 'wheel' ? await ask({ op: 'tap', id, wheel: opts.wheel, ...(opts.gesture ? { gesture: true } : {}), ...at, ...held }) : ['drop', 'dragenter', 'dragleave'].includes(kind) ? await ask({ op: 'tap', id, [kind]: opts[kind], text: opts.text, url: opts.url }) : kind === 'hover' ? await ask({ op: 'tap', id, hover: true }) : kind === 'press' ? await ask({ op: 'tap', id, ...guest, ...at, ...(opts.modifiers ? { modifiers: opts.modifiers } : {}) }) : kind === 'mediasession' ? await ask({ op: 'tap', id, mediaSession: opts.mediaSession, ...(opts.seconds != null ? { seconds: opts.seconds } : {}) }) : await ask({ op: 'type', id, text: opts.text, ...(opts.clipboard ? { clipboard: opts.clipboard } : {}), ...(opts.files ? { files: opts.files } : {}), ...(opts.image ? { image: opts.image } : {}), ...guest });
         if (r.error) throw new Error(r.error);
         return r;
       },

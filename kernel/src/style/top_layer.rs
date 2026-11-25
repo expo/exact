@@ -74,8 +74,20 @@ pub(crate) fn prop_changed(
     arena: &mut NodeArena,
     layout: &mut dyn crate::layout::LayoutMirror,
     slot: u32,
-    prop: crate::PropId,
+    (prop, old): (crate::PropId, Option<&crate::PropValue>),
 ) -> bool {
+    if prop == crate::PropId::SemanticTag
+        && (arena.props(slot).str(prop) == Some("dialog")
+            || old.and_then(|v| v.as_str()) == Some("dialog"))
+    {
+        if arena.props(slot).str(prop) != Some("dialog") {
+            arena.alert_state.measured_dialogs.remove(slot);
+        }
+        if let Some(node) = arena.taffy(slot) {
+            layout.restyle(arena, slot, node);
+        }
+        return true;
+    }
     if prop != crate::PropId::Popover {
         return false;
     }

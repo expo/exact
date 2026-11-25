@@ -13,12 +13,15 @@ const GRANTS: &str = "net.fetch https://*.example.test\nfs.write app:/cache";
 const A: &str = "https://a.example.test/a";
 const B: &str = "https://b.example.test/b";
 
+/// The app's own read, which the cache serves (`cache.rs`).
 fn job(ticket: u64, url: &str) -> RequestOut {
+    let mut request = Request::get(url);
+    request.reach.origin = exact_runner::CallOrigin::App;
     RequestOut {
         completion: None,
         ticket,
         target: "cache-machine".into(),
-        request: Request::get(url),
+        request,
         forced: false,
         class: RequestClass::Read,
     }

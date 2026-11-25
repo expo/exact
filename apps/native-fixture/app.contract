@@ -116,6 +116,10 @@ component NativeFixture
   state received = ""
   action bump
     count = count + 1
+  // The bar item's pull-down's `toggle` edges, in order (expo/exact#1462).
+  state barMenuToggles = ""
+  action barMenuToggled(e: ToggleEvent)
+    barMenuToggles = `${barMenuToggles}${e.oldState}>${e.newState};`
   // What hatches ask of authored nodes (LLP 1075.003.000.001 §2.5): the `feed`
   // hatch replaces a field's value with `input`; the `presser` hatch clicks
   // its own button once when armed, and on every change while looping, which
@@ -349,12 +353,15 @@ component NativeFixture
   // route pushed with the tablist hidden, and one that asks for no bar.
   state subtitle = "Online"
   state titlePresses = 0
+  state titleHolds = 0
   action openChat
     nav = push(nav, "/chat")
   action openPhoto
     nav = push(nav, "/photo")
   action pressTitle
     titlePresses = titlePresses + 1
+  action holdTitle
+    titleHolds = titleHolds + 1
   action toggleSubtitle
     subtitle = subtitle == "" ? "Online" : ""
   // A subtitle as a line of symbols and texts (§9.10).
@@ -434,7 +441,7 @@ component NativeFixture
                     // A pressable group around the heading, with an avatar and
                     // a subtitle: the item's title, drawn, tapped (§9.10).
                     if e.name == "chat"
-                      button press=pressTitle testId="title-group" display="flex" flex-direction="row" flex=1 align-items="center" gap=8
+                      button press=pressTitle contextmenu=holdTitle contextPopover="title-menu" testId="title-group" display="flex" flex-direction="row" flex=1 align-items="center" gap=8
                         column width=32 height=32 border-radius="50%" background-color="#dcfce7" align-items="center" justify-content="center"
                           text "CD" font-size=13 color="#166534"
                         column
@@ -466,11 +473,13 @@ component NativeFixture
                       image "symbol:compose" width=20 height=20
                     // A readout after the buttons: an item nothing presses,
                     // its dot and monospaced count drawn as written, which
-                    // follows the count in place (LLP 1141.004).
+                    // follows the count in place, and a word in the bar's
+                    // own type, which it leaves unsaid (LLP 1141.004).
                     if e.name == "plain"
                       row role="status" testId="readout-plain" aria-label=`${composed} composed` display="flex" align-items="center" gap=6
                         column width=7 height=7 border-radius=3.5 background-color=(composed > 0 ? "#16a34a" : "#9ca3af")
                         text `${composed} sent` testId="readout-text" font-family="Menlo" font-size=12 color="#6b7280"
+                        text "live" testId="readout-unsaid"
                 if e.name == "plain"
                   column id="plain-about" popover="auto" testId="plain-about" padding=12 width=220
                     text "A route with no Back control of its own." font-size=13
@@ -482,7 +491,7 @@ component NativeFixture
                     button commandfor="plain-clear" command="close" testId="plain-clear-cancel"
                       text "Cancel"
                 if e.name == "home"
-                  column id="bar-menu" popover="auto" position="absolute" role="menu" aria-label="Actions" width=200 padding=8 background-color="#ffffff"
+                  column id="bar-menu" popover="auto" position="absolute" role="menu" aria-label="Actions" toggle=barMenuToggled width=200 padding=8 background-color="#ffffff"
                     button appearance="none" press=bump popovertarget="bar-menu" popovertargetaction="hide" role="menuitem" testId="bar-menu-bump" height=44 text-align="start"
                       text "Bump from the bar"
                     // Rows that open a confirmation, with no handler or after one: it presents
@@ -767,9 +776,16 @@ component NativeFixture
                         text "Subtitle"
                       button press=toggleMuted testId="toggle-muted" padding=6 background-color="#e5e7eb"
                         text "Muted"
+                      // The title's context popover: a preview card and a row
+                      column id="title-menu" popover="auto" role="menu"
+                        button contextPreview=true press=pressTitle popovertarget="title-menu" popovertargetaction="hide" testId="title-card" width=300 height=80
+                          text "CD"
+                        button press=pressTitle popovertarget="title-menu" popovertargetaction="hide" testId="title-message"
+                          text "Message"
                       button press=toggleShortChat testId="toggle-short-chat" padding=6 background-color="#e5e7eb"
                         text "Short"
                       text ("title presses " + titlePresses.toString()) testId="title-presses"
+                      text ("title holds " + titleHolds.toString()) testId="title-holds"
                       if not shortChat
                         column testId="tall-chat" height=1600 background-color="#f0fdf4"
                       text "End" testId="chat-end" margin-top="auto"

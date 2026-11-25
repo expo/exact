@@ -76,7 +76,7 @@ impl<D: DataSource> Bridge<D> {
             Ok((mut host, batch)) => {
                 self.executor = None;
                 hooks.console_into(host.runner_mut());
-                let batch = Host::ending(self.host.replace(host), batch);
+                let batch = self.replace_host(host, batch);
                 self.launch_layout.insets = None;
                 self.parked.clear();
                 self.emit(batch)

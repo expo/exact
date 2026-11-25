@@ -66,7 +66,7 @@ pub(crate) fn ripple_node(layer: u64) -> Option<NodeKey> {
 pub(crate) fn ripple_words(start: f64, duration: f64, samples: &[[f32; 4]]) -> Vec<u32> {
     let mut out = Vec::new();
     let last = samples.len().saturating_sub(1).max(1) as f64;
-    for (i, code) in [OPACITY, TX, TY, SCALE].into_iter().enumerate() {
+    for (i, code) in [(0, OPACITY), (1, TX), (2, TY), (3, SCALE), (3, SCALE_Y)] {
         out.push(code);
         f(&mut out, start);
         out.push(0);
@@ -132,6 +132,7 @@ const OPACITY: u32 = 0;
 const TX: u32 = 1;
 const TY: u32 = 2;
 const SCALE: u32 = 3;
+const SCALE_Y: u32 = 17;
 #[cfg(any(target_os = "android", test))]
 const ROTATE: u32 = 4;
 #[cfg(any(target_os = "android", test))]
@@ -477,7 +478,10 @@ impl<D: DataSource> Host<D> {
                         Value::new(base.translate.0 as f64, base.translate.1 as f64),
                         &[(TX, 0), (TY, 1)],
                     ),
-                    Property::Scale => (Value::scalar(base.scale as f64), &[(SCALE, 0)]),
+                    Property::Scale => (
+                        Value::new(base.scale.0 as f64, base.scale.1 as f64),
+                        &[(SCALE, 0), (SCALE_Y, 1)],
+                    ),
                     Property::Rotate => (
                         self.engine.target(node_u64(key), p).unwrap_or(Value::ZERO),
                         &[(ROTATE, 0)],
@@ -517,7 +521,7 @@ impl<D: DataSource> Host<D> {
             let axes: &[(u32, usize)] = match p {
                 Property::Opacity => &[(OPACITY, 0)],
                 Property::Translate => &[(TX, 0), (TY, 1)],
-                Property::Scale => &[(SCALE, 0)],
+                Property::Scale => &[(SCALE, 0), (SCALE_Y, 1)],
                 Property::Rotate => &[(ROTATE, 0)],
                 Property::Color | Property::BackgroundColor => {
                     let code = if *p == Property::Color {
@@ -576,6 +580,7 @@ fn track_component(property: Property, value: Value, axis: usize, reference: (f3
         Property::Translate if axis == 0 => value.x + value.z * f64::from(reference.0) / 100.,
         Property::Translate => value.y + value.w * f64::from(reference.1) / 100.,
         Property::Rotate => exact_motion::rotation::presented(value).x,
+        Property::Scale if axis == 1 => value.y,
         _ => value.x,
     }
 }

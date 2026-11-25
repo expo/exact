@@ -3,6 +3,7 @@ package exact.localauth
 import android.app.Activity
 import android.hardware.biometrics.BiometricPrompt
 import android.os.Looper
+import dev.exact.canvas.Cause
 import dev.exact.canvas.Exact
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
@@ -48,8 +49,7 @@ class PromptResumeTest {
     }
 
     private fun authenticate(reason: String = "Unlock", request: Int? = null, biometricOnly: Boolean = false) {
-        module.context.request = request
-        module.later("authenticate", JSONObject().put("reason", reason).put("biometricOnly", biometricOnly)) { answers += it }
+        module.later("authenticate", JSONObject().put("reason", reason).put("biometricOnly", biometricOnly), null, Cause("app", request = request)) { answers += it }
     }
     private val errors get() = answers.map { it.optString("error") }
 

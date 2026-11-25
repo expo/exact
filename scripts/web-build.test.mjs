@@ -7,9 +7,10 @@ import { spawnSync } from 'node:child_process';
 import { captureWebProducts, cargoContractReads, changedContractReads, contractReadReceipt, loopWebDist, privateNativeBuild, privateWebBuild } from './web-build.mjs';
 import { appleArtifacts } from '../host/apple/build.mjs';
 import { buildFirst, failureSummary, nativeBuild, planOverride } from './agent-build.mjs';
-import { webBuildFailure } from './app-cli.mjs';
+import { oneScheme, webBuildFailure } from './app-cli.mjs';
 import { linkedBakeDir } from './linked-plan.mjs';
-import { resolveApp } from './app.mjs';
+import { bakeTarget, buildBake, pendingBuildInputs, resolveApp } from './app.mjs';
+import { pinned } from './test-workspace.mjs';
 import { webChanges, webInputDigests, webInputPresent } from './agent-launch.mjs';
 import { replaceBuild } from '../host/web/serve.mjs';
 let fallbackRoots = [];
@@ -43,6 +44,50 @@ test("a failed build's summary keeps the compiler's first error", () => {
   // A native build: from the first when the tail would leave it out.
   const many = Array.from({ length: 12 }, (_, i) => error(i + 1, 'type-unknown-name', `unknown name \`n${i}\``)).join('\n');
   expect(failureSummary(`app: the bake failed:\n${many}\n`, { host: 'macos', code: 1, log: 'x.log' })).toStartWith(error(1, 'type-unknown-name', 'unknown name `n0`'));
+});
+
+// A failed build script's stderr is its reason, whatever it says (#1396): Cargo indents it under `--- stderr`, and a
+// mixed app's bake says its refusals there (js/bake, the generated shell's build.rs).
+test("a failed build script's stderr is said under Cargo's line", () => {
+  const line = 'error: failed to run custom build command for `demo-web v0.1.0 (/app/.exact/shells/web)`';
+  const ran = "process didn't exit successfully: `/app/target/debug/build/demo-web-1/build-script-build` (exit status: 1)";
+  const failed = (stderr, { stdout = ['cargo:rerun-if-env-changed=EXACT_VARIANT'], causes = [ran], note = false } = {}) => [
+    '   Compiling demo-web v0.1.0 (/app/.exact/shells/web)',
+    line,
+    ...(note ? ['note: To improve backtraces for build dependencies, set the CARGO_PROFILE_DEV_BUILD_OVERRIDE_DEBUG=true environment variable to enable debug information generation.'] : []),
+    '',
+    'Caused by:',
+    ...causes.map((l) => l && l !== 'Caused by:' ? `  ${l}` : l),
+    ...(stdout ? ['  --- stdout', ...stdout.map((l) => l && `  ${l}`), ''] : []),
+    ...(stderr ? ['  --- stderr', ...stderr.map((l) => l && `  ${l}`)] : []),
+    'demo: its web build script failed',
+  ].join('\n');
+  const said = (...reason) => [[line, ...reason].join('\n')];
+  const panic = ["thread 'main' panicked at web/build.rs:17:18:", 'app.ts and the data crate answer different sources, for one app: Unavailable("duplicate or empty data source: greeting")', 'note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace'];
+  for (const stderr of [
+    ['source links are not captured: /app/helper.ts'],
+    ['__exact_* and app.js (the bundle) are reserved for the producer'],
+    panic,
+    ['warning: Running the check', '', 'Compiling went wrong'],
+  ]) expect(webBuildFailure(failed(stderr))).toEqual(said(...stderr));
+  expect(webBuildFailure(failed(['', ...panic, ''], { note: true }))).toEqual(said(...panic));
+  expect(webBuildFailure(failed(['refused']).replaceAll('\n', '\r\n'))).toEqual(said('refused'));
+  // As a terminal shows it: Cargo's colours, and a progress bar drawn before `\r` on its line.
+  expect(webBuildFailure(failed(['refused']).replace(line, `\x1b[1m\x1b[91merror\x1b[0m${line.slice(5)}`))).toEqual(said('refused'));
+  expect(webBuildFailure(failed(['refused']).replace(line, `[====>   ] 1/3: demo-web(build)    \r\x1b[K${line}`))).toEqual(said('refused'));
+  // The script's own `--- stderr` line, as pkg-config's panic says one, and what it wrote to stdout besides directives.
+  expect(webBuildFailure(failed(['failed:', '--- stderr', 'Package helper was not found']))).toEqual(said('failed:', '--- stderr', 'Package helper was not found'));
+  expect(webBuildFailure(failed(['refused'], { stdout: ['cargo:rerun-if-changed=x', 'error: on stdout'] }))).toEqual(said('error: on stdout', 'refused'));
+  // A script that wrote nothing to stderr: how it ended, and what it wrote to stdout besides Cargo's directives.
+  expect(webBuildFailure(failed(null, { stdout: ['cargo:rerun-if-changed=x', 'error: missing schema'] }))).toEqual(said(ran, 'error: missing schema'));
+  const never = ['could not execute process `/app/target/debug/build/demo-web-1/build-script-build` (never executed)', '', 'Caused by:', 'Permission denied (os error 13)'];
+  expect(webBuildFailure(failed(null, { stdout: null, causes: never }))).toEqual(said(never[0], never[3]));
+  // A colour warning the script quotes is its own line, not a site the colours' one line folds in.
+  const colour = (n) => `app.contract:${n}:3 warning [lower-colour-one-scheme] colour ${n}`;
+  const stderr = [colour(1), 'error: actual cause'], close = 'app.contract:9:1 warning [lower-colour-one-scheme] these 2 colours …';
+  const failure = webBuildFailure(failed(stderr));
+  expect(failure).toEqual(said(...stderr));
+  expect(oneScheme([colour(5), ...failure, colour(6), close])).toContain(failure[0]);
 });
 
 test('loops and concurrent checks publish into directories they alone own', () => {
@@ -182,18 +227,59 @@ test('native verification owns its captures, products, bundle and receipt throug
   }
 });
 
+test.skipIf(process.platform !== 'darwin')('each Apple receipt stays fresh after Cargo builds the other install', () => {
+  const dir = pinned(realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-variant-receipt-'))));
+  const write = (file, text) => writeFileSync(resolve(dir, file), text);
+  const base = 'dev.exact.receipt', target = bakeTarget('macos');
+  try {
+    mkdirSync(resolve(dir, 'src'));
+    mkdirSync(resolve(dir, 'cargo-home'));
+    const configure = name => write('cargo-home/config.toml', `[build]\nbuild-dir=${JSON.stringify(resolve(dir, name))}\n`);
+    configure('intermediates');
+    const prepare = () => {
+      if (!existsSync(resolve(dir, 'Cargo.toml'))) write('Cargo.toml', '[workspace]\n[package]\nname="receipt-apple"\nversion="0.1.0"\nedition="2021"\n');
+    };
+    write('app.contract', 'component App\n  text "Receipt"\n');
+    write('src/lib.rs', 'pub const APP: &str = include_str!(concat!(env!("OUT_DIR"), "/logic.rs"));');
+    write('build.rs', `fn main() {
+      println!("cargo:rerun-if-env-changed=FIXTURE_APP");
+      let id = std::env::var("FIXTURE_APP").unwrap();
+      let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+      std::fs::write(out.join("logic.rs"), &id).unwrap();
+      std::fs::write(out.join("app.plan"), b"plan").unwrap();
+      std::fs::write(out.join("compat.json"), r#"${JSON.stringify({ target, inputs: { platform: 'macos', app: 'APP_ID', keys: [], store: { L: '0' } } })}"#.replace("APP_ID", &id)).unwrap();
+      std::fs::write(out.join("artifacts.json"), r#"{"version":1,"artifacts":[],"sources":{}}"#).unwrap();
+    }`);
+    const bake = id => {
+      const manifest = { app: { id, name: 'Receipt' }, rust: false, ...(id === base ? {} : { variant: { name: 'dev', base } }) };
+      const app = { dir, workspace: dir, target: resolve(dir, 'target'), name: 'receipt', id, manifest, prepare, crate: () => 'receipt-apple' };
+      return buildBake(app, 'macos', target, { profile: 'dev', output: resolve(dir, 'target/bakes', id),
+        env: { FIXTURE_APP: id, EXACT_UPDATE_TRUST: 'development', CARGO_HOME: resolve(dir, 'cargo-home') } });
+    };
+    const variant = bake(base + '.dev'), first = bake(base);
+    expect(pendingBuildInputs(variant)).toEqual([]);
+    bake(base + '.dev');
+    expect(pendingBuildInputs(first)).toEqual([]);
+    configure('moved');
+    const rebuilt = bake(base + '.dev');
+    const logic = rebuilt.binary.inputs.find(input => input.path.endsWith('/logic.rs'));
+    expect(logic.path.startsWith(resolve(dir, 'moved') + '/')).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
+
 test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build', async host => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-native-reuse-')), saved = { ...process.env };
   const sha256 = text => createHash('sha256').update(text).digest('hex');
-  let builds = 0, bakes = 0, signed, said = [];
-  const module = { appId: 'test.reuse', abi: 1, grants: '', surfaces: {}, bytecodeVersion: 96 };
+  let builds = 0, bakes = 0, said = [];
+  const receipts = new Map();
   const outputs = [];
   try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'reuse', app: { id: 'test.reuse', name: 'Reuse' } }));
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'reuse', app: { id: 'test.reuse', name: 'Reuse' }, variants: { dev: { idSuffix: '.dev', name: 'Reuse Dev' } } }));
     writeFileSync(resolve(dir, 'app.contract'), 'component App\n  text "Ready"\n');
     const source = resolve(dir, 'native.swift'); writeFileSync(source, 'native source');
-    const app = resolveApp(dir);
-    const drive = async (plan = false, exit = 0) => {
+    const base = resolveApp(dir);
+    const drive = async (plan = false, exit = 0, app = base) => {
+      const module = { appId: app.id, abi: 1, grants: '', surfaces: {}, bytecodeVersion: 96 };
       const owned = privateNativeBuild(app, 'agent'); outputs.push(owned);
       Object.assign(process.env, owned.env);
       await owned.seed?.(host);
@@ -212,9 +298,9 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
         mkdirSync(linked, { recursive: true });
         writeFileSync(resolve(linked, 'app.plan'), 'original plan'); writeFileSync(resolve(linked, 'app.module.json'), JSON.stringify(module));
         const receipt = { target: paths.target, started: new Date(Date.now() + 60_000).toISOString(), build: { trust: 'development',
-          compat: { inputs: { platform: host, linked: ['router', 'io', 'markdown'], rustMode: 'off' }, embedded: { plan: { sha256: sha256('original plan') } } }, graph: { uses: [] },
+          compat: { inputs: { app: app.id, platform: host, linked: ['router', 'io', 'markdown'], rustMode: 'off' }, embedded: { plan: { sha256: sha256('original plan') } } }, graph: { uses: [] },
           binary: { sha256: 'binary', inputs: [source, generated].map(path => ({ path, name: path, sha256: sha256(readFileSync(path)) })), missing: [], directories: [] } } };
-        signed = JSON.stringify(receipt);
+        receipts.set(app.id, JSON.stringify(receipt));
         for (const path of [resolve(paths.products, 'receipt.json'), host === 'ios' ? resolve(paths.bundle, 'receipt.json') : resolve(paths.bundle, 'Contents/Resources/receipt.json')]) {
           mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, JSON.stringify(receipt));
         }
@@ -226,12 +312,12 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
       if (plan) expect(planOverride(host, app, state)).not.toBeNull();
       else expect(state.changed).toEqual([]);
       const paths = appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
-      expect(readFileSync(host === 'ios' ? resolve(paths.bundle, 'receipt.json') : resolve(paths.bundle, 'Contents/Resources/receipt.json'), 'utf8')).toBe(signed);
+      expect(readFileSync(host === 'ios' ? resolve(paths.bundle, 'receipt.json') : resolve(paths.bundle, 'Contents/Resources/receipt.json'), 'utf8')).toBe(receipts.get(app.id));
       owned.close(exit);
       expect(existsSync(owned.env.EXACT_APPLE_OUTPUT)).toBe(false);
     };
-    const identity = createHash('sha256').update(resolve(app.dir)).digest('hex').slice(0, 16);
-    const cache = resolve(app.target, 'native-reuse', identity, host, 'development/current');
+    const identity = createHash('sha256').update(resolve(base.dir)).digest('hex').slice(0, 16);
+    const cache = resolve(base.target, 'native-reuse', identity, host, 'development/current');
     await drive();
     const firstArtifact = readFileSync(resolve(cache, 'artifact.json'), 'utf8');
     await drive();
@@ -260,14 +346,22 @@ test.each(['ios', 'macos'])('repeated private %s drives reuse a validated build'
     writeFileSync(resolve(cache, 'files', executable), 'corrupt cached executable');
     await drive();
     expect(builds).toBe(4);
+    process.env.EXACT_VARIANT = 'dev';
+    const variant = resolveApp(dir);
+    const beforeSwitch = builds;
+    await drive(false, 0, variant);
+    delete process.env.EXACT_VARIANT;
+    await drive();
+    await drive(false, 0, variant);
+    expect(builds).toBe(beforeSwitch + 1);
     // A stale build baked for another backend than the drive selects is not kept: its check would refuse it.
     writeFileSync(resolve(dir, 'app.ts'), "export const origin = 'http://127.0.0.1:4400';\n");
     writeFileSync(source, 'native source for the selected backend');
     said = [];
-    const owned = privateNativeBuild(app, 'agent'); outputs.push(owned);
+    const owned = privateNativeBuild(base, 'agent'); outputs.push(owned);
     Object.assign(process.env, owned.env);
     await owned.seed(host);
-    expect(nativeBuild(host, app).missing).toBe(true);
+    expect(nativeBuild(host, base).missing).toBe(true);
   } finally {
     for (const owned of outputs) owned.close();
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
@@ -355,11 +449,10 @@ test('JS Rust producers generate privately and read grants from their captured m
   try {
     mkdirSync(gen, { recursive: true }); writeFileSync(resolve(gen, 'app.bind.plan'), 'plan');
     const env = { resolve, mkdirSync, existsSync, dirname: path => resolve(path, '..'), cpSync, readFileSync, createHash,
-      rustLinked: true, root: dir, sep: '/', moduleSourceDirs: () => [], devReload: true, devLogic: [], opt: () => null, out, gen, app: 'fixture', canvas2d: false, appDir: dir, ts: false,
+      rustLinked: true, root: dir, sep: '/', moduleSourceDirs: () => [], devReload: true, production: false, devLogic: [], opt: () => null, out, gen, app: 'fixture', canvas2d: false, appDir: dir, ts: false,
       normalizeGrants: () => ({ entries: [] }),
-      buildModule(app, at, draw, appDir, options) {
-        expect(options.dev).toBe(true);
-        expect(at).toBe(resolve(gen, 'rust-module')); mkdirSync(at, { recursive: true });
+      builtModule() {
+        const at = resolve(gen, 'rust-module'); mkdirSync(at, { recursive: true });
         const path = resolve(at, 'app.module.wasm'); writeFileSync(path, 'captured'); return path;
       },
       async moduleGrants(path) { expect(path).toBe(resolve(out, 'rust/wasm/app.module.wasm')); return ''; },

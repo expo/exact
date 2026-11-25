@@ -241,6 +241,7 @@ function moduleType(t, inList=false) {
     return moduleType(json[1],inList);
   }
   if (t==='unit') return 'void';
+  if (t==='DOMRect') return '{ x: number; y: number; width: number; height: number }';
   // Bytes are data code's (LLP 1133.006 D8 item 1); an option that may be either takes both (LLP 1133.035 D2).
   if (t==='string|bytes') return inList ? '(string | Uint8Array)' : 'string | Uint8Array';
   if (t.endsWith('[]')) return moduleType(t.slice(0,-2),true)+'[]';
@@ -289,7 +290,14 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
   const keyed=(t)=>{ const f=shapes[String(t ?? '').trim().replace(/\[\]$/,'')]; return f && Object.keys(f).length===1 && f.record && typeof f.record==='object' ? f.record : null; };
   for (const [shape,fields] of Object.entries(shapes)) {
     // On a target none of the interface's implementations names, `supports` answers false (LLP 1133.006 D7).
-    if (keyed(shape)) { lines.push(...keyedClass(shape,fields.record,!target || implementations.some(i=>(i.targets ?? []).includes(target)))); continue; }
+    if (keyed(shape)) {
+      const writers = entries.filter(e => e.send && Object.values(e.options ?? {}).some(t => unwrapped(t) === shape));
+      const writable = !writers.length || writers.some(e => !e.substitute?.unsupported?.includes(target));
+      const here = !target || (writable && implementations.some(i => i.targets?.includes(target)));
+      const supported = here ? Object.keys(fields.record).filter(k => !fields.record[k]?.targets || fields.record[k].targets.includes(target)) : [];
+      lines.push(...keyedClass(shape,fields.record,outputs.has(shape),supported));
+      continue;
+    }
     lines.push(`export interface ${shape} {`, ...Object.entries(fields).map(([f,t])=>`  ${f}${written.has(shape) && /^option<.*>$/.test(String(t).trim()) ? '?' : ''}: ${moduleType(t)};`), '}');
   }
   const anyKeyed=Object.keys(shapes).some(s=>keyed(s));
@@ -325,18 +333,28 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
     const required=!extended && Object.values(entry.options ?? {}).some(t=>!/^option</.test(String(pathless(t)).trim()));
     const verb=entry.source ? 'source' : 'send';
     // A send that answers nothing resolves `undefined` (LLP 1133.004 D5).
-    const promised=entry.answers===null ? 'void' : [moduleType(answers),...(members[fn] ?? []).map(m=>m.answers)].join(' | ');
+    const keyedList = typeof answers === 'string' && answers.endsWith('[]') && keyed(answers);
+    const itemShape = keyedList && answers.slice(0, -2);
+    const resultType = keyedList ? `${itemShape}<${itemShape}Result>[]` : moduleType(answers);
+    const promised=entry.answers===null ? 'void' : [resultType,...(members[fn] ?? []).map(m=>m.answers)].join(' | ');
     const decoded=wired && carries(answers,false) ? ', true' : '';
     // Positional parameters (`params`), and a call that takes keyed shapes or is one of a `sequence` (LLP 1133.006 D8
     // item 1, D2): its order is taken when it is made, its views' bytes copied then, its promised data awaited after.
     const params=Array.isArray(entry.params) ? entry.params : null;
-    const signature=params ? params.map(p=>{ const [q,ts]=optional(entry.options[p]); return `${p}${q}: ${ts}`; }).join(', ') : `options: ${type}${required ? '' : ' = {}'}`;
-    const args=params ? `{ ${params.join(', ')} }` : 'options';
+    const positional = params?.map(p => { const [q,ts] = optional(entry.options[p]); return `${p}${q}: ${ts}`; });
+    const platformOptions = params && implementations.some(i => Object.keys(i.options?.[fn] ?? {}).length);
+    if (platformOptions) {
+      const keys = params.map(p => JSON.stringify(p)).join(' | ') || 'never';
+      positional.push(`options: Omit<${type}, ${keys}> = {}`);
+    }
+    const signature = positional ? positional.join(', ') : `options: ${type}${required ? '' : ' = {}'}`;
+    const args = params ? `{ ${platformOptions ? '...options, ' : ''}${params.join(', ')} }` : 'options';
     const body=`{ extension: ${JSON.stringify(extension)}, ${imported}${verb}: ${JSON.stringify(fn)}, args: ${args} }`;
     const takesKeyed=Object.values(entry.options ?? {}).some(t=>keyed(pathless(t)));
     const made=takesKeyed || entry.sequence ? `ordered(${JSON.stringify(entry.sequence ?? null)}, ${body}${decoded})` : `call(${body}${decoded})`;
+    const result = keyedList ? `.then((items: ${itemShape}Result[]) => items.map(item => new ${itemShape}<${itemShape}Result>(Object.fromEntries(Object.entries(item).filter(([, v]) => v != null)))))` : entry.answers === null ? '.then(() => undefined)' : '';
     lines.push(`export function ${fn}(${signature}): Promise<${promised}> {`,
-      `  return ${made}${entry.answers===null ? '.then(() => undefined)' : ''};`, '}');
+      `  return ${made}${result};`, '}');
     // The synchronous form (LLP 1133.002 D14): inside an answer, where the host has a synchronous path to the module.
     if (entry.sync?.name) lines.push(`export function ${entry.sync.name}(options: ${type}${required ? '' : ' = {}'}): ${moduleType(answers)} {`,
       `  return callNow({ extension: ${JSON.stringify(extension)}, ${imported}sync: ${JSON.stringify(entry.sync.name)}, args: options });`, '}');
@@ -374,11 +392,19 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
   lines.push(
     `function call(body: { extension: string; owner?: string; source?: string; send?: string; args: unknown }${wired ? ', bytes = false' : ''}): Promise<any> {`,
     ...(wired ? ['  body = { ...body, args: toWire(body.args) };'] : []),
+    '  const name = `${body.extension}.${body.source ?? body.send}`;',
     '  const via = (globalThis as any).__exact_module;',
-    '  const answer: Promise<any> = via ? via(body) : fetch("exact-native:", { method: "POST", body: JSON.stringify(body), exactIndependentHttp: { maxResponseBytes: 1048576 } } as any)',
-    '    .then((r: any) => r.text().then((t: string) => { if (r.status === 200) return JSON.parse(t); throw failed(t || "the module did not answer", "UnknownError"); }));',
-    wired ? '  return answer.then((v: any) => { const a = answered(v, `${body.extension}.${body.source ?? body.send}`); return bytes ? fromWire(a) : a; });'
-      : '  return answer.then((v: any) => answered(v, `${body.extension}.${body.source ?? body.send}`));',
+    `  const answer: Promise<any> = via ? via(body) : fetch("exact-native:", { method: "POST", body: JSON.stringify(body), exactIndependentHttp: { maxResponseBytes: ${extension === 'clipboard' ? '(body.send === "read" || body.send === "readText") ? 8388608 : 1048576' : '1048576'} } } as any)`,
+    '    .then((r: any) => r.text().then((t: string) => {',
+    '      if (r.status === 200) return JSON.parse(t);',
+    '      if (r.status === 500 && r.headers?.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/json") {',
+    '        let refusal; try { refusal = JSON.parse(t); } catch {}',
+    '        answered(refusal, name);',
+    '      }',
+    '      throw failed(t || "the module did not answer", "UnknownError");',
+    '    }));',
+    wired ? '  return answer.then((v: any) => { const a = answered(v, name); return bytes ? fromWire(a) : a; });'
+      : '  return answer.then((v: any) => answered(v, name));',
     '}',
     'function callNow(body: { extension: string; owner?: string; sync: string; args: unknown }): any {',
     '  const now = (globalThis as any).__exact_module_sync;',
@@ -417,22 +443,29 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
 
 /** A keyed shape's class (LLP 1133.006 D8 item 1), built as the Clipboard API's `ClipboardItem` is: a record of
  * type to data, `types` its keys in order, and a static `supports` answered from the declaration, and false where
- * the build's target has no implementation (`here`). A key that
+ * the build's target has no implementation or the key excludes that target. A key that
  * takes a path or bytes (`{"type": "path", "or": "bytes"}`) takes an `app:/` path, an `ArrayBuffer` or a view;
  * any key takes a promise of its data. */
-function keyedClass(shape, keys, here) {
+function keyedClass(shape, keys, returned, supported) {
   const one=(t)=>t && typeof t==='object' && t.type==='path' ? (t.or==='bytes' ? 'string | ArrayBuffer | ArrayBufferView' : 'string') : moduleType(t);
   const fields=Object.entries(keys).map(([k,t])=>`  ${JSON.stringify(k)}?: ${one(t)} | PromiseLike<${one(t)}>;`);
   return [`export interface ${shape}Data {`, ...fields, '  [type: string]: unknown;', '}',
-    `export class ${shape} {`,
+    ...(returned ? [`export type ${shape}Result = Record<string, ${[...new Set(Object.values(keys).map(t => moduleType(t)))].join(' | ')}>;`] : []),
+    `export class ${shape}${returned ? `<Data extends ${shape}Data = ${shape}Data>` : ''} {`,
     '  readonly types: readonly string[];',
-    `  constructor(items: ${shape}Data) {`,
+    `  constructor(items: ${returned ? 'Data' : shape+'Data'}) {`,
     `    const types = Object.keys(items ?? {});`,
     `    if (!types.length) throw new TypeError("${shape}: an empty dictionary");`,
     `    this.types = Object.freeze(types);`,
     `    KEYED.set(this, { shape: ${JSON.stringify(shape)}, items: { ...items } });`,
     '  }',
-    `  static supports(type: string): boolean { return ${here ? JSON.stringify(Object.keys(keys)) : '([] as string[])'}.includes(type); }`,
+    ...(returned ? [
+    '  async getType<K extends string>(type: K): Promise<Awaited<Data[K]>> {',
+    '    if (!this.types.includes(type)) throw failed(`No representation for ${type}`, "NotFoundError");',
+    '    return await KEYED.get(this)!.items[type] as Awaited<Data[K]>;',
+    '  }',
+    ] : []),
+    `  static supports(type: string): boolean { return ${supported.length ? JSON.stringify(supported) : '([] as string[])'}.includes(type); }`,
     '}'];
 }
 

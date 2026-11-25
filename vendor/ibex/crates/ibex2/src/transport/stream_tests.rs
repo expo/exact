@@ -118,10 +118,13 @@ fn abort_interrupts_body_reads_and_drop_closes_an_unread_body() {
                 });
                 entry.recv_timeout(Duration::from_secs(3)).unwrap();
                 control.abort();
-                assert!(completion
-                    .recv_timeout(Duration::from_secs(1))
-                    .unwrap()
-                    .is_err());
+                assert_eq!(
+                    completion
+                        .recv_timeout(Duration::from_secs(1))
+                        .unwrap()
+                        .unwrap_err(),
+                    control.signal().check().unwrap_err()
+                );
                 worker.join().unwrap();
             } else {
                 drop(response);

@@ -53,6 +53,17 @@ impl Surfaces {
                 }
                 continue;
             }
+            let extent = (canvas.id, width, height, scale);
+            if self.rested_pixels.get(&view) == Some(&extent)
+                && previous.contains_key(&view)
+                && !abi.frame_dirty(canvas.id, host.now())
+                // A readback has no callback of its own to retry an undecided tick.
+                && !abi.frame_pending(canvas.id)
+            {
+                result.insert(view, previous.remove(&view).unwrap());
+                continue;
+            }
+            self.rested_pixels.remove(&view);
             let (w, h) = (
                 (width * scale).round() as u32,
                 (height * scale).round() as u32,
@@ -90,6 +101,10 @@ impl Surfaces {
                 )
             };
             if matches!(code, 0 | 2) {
+                self.drawn_sizes.insert(view, (width, height));
+                if code == 0 {
+                    self.rested_pixels.insert(view, extent);
+                }
                 shown.push(view);
                 if let Some(pixels) = Pixmap::from_vec(bytes, size) {
                     result.insert(

@@ -194,6 +194,10 @@
             "file"
           ],
           "local": true
+        },
+        "targets": {
+          "macos": { "inputs": ["track", "file"] },
+          "ios": { "inputs": ["track", "file"] }
         }
       }
     }

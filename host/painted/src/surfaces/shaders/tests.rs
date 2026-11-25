@@ -140,6 +140,33 @@ fn native_device_registers_shaders_and_repaints_keep_the_native_surface() {
         unsafe { p.surfaces.abis[""].symbol::<unsafe extern "C" fn() -> u32>(b"test_readbacks")() },
         0
     );
+    let abi = p.surfaces.abis.get_mut("").unwrap();
+    abi.rendered = true;
+    let reads = unsafe { abi.symbol::<unsafe extern "C" fn() -> u32>(b"test_readbacks") };
+    let pending = unsafe { abi.symbol::<unsafe extern "C" fn(u32)>(b"test_frame_pending") };
+    let dirty = unsafe { abi.symbol::<unsafe extern "C" fn(u32)>(b"test_frame_dirty") };
+    unsafe { dirty(0) };
+    let mut pixels = p.surfaces.pixels(&mut p.host, 1., Default::default(), None);
+    let first = pixels[&view].pixels.clone();
+    pixels = p.surfaces.pixels(&mut p.host, 1., pixels, None);
+    assert!(Arc::ptr_eq(&first, &pixels[&view].pixels));
+    assert_eq!(unsafe { reads() }, 1);
+    p.surfaces.canvases.get_mut(&view).unwrap().id = 2;
+    pixels = p.surfaces.pixels(&mut p.host, 1., pixels, None);
+    assert!(!Arc::ptr_eq(&first, &pixels[&view].pixels));
+    unsafe { dirty(1) };
+    pixels = p.surfaces.pixels(&mut p.host, 1., pixels, None);
+    assert_eq!(unsafe { reads() }, 3, "replacement and input both draw");
+    unsafe {
+        dirty(0);
+        pending(1);
+    }
+    p.surfaces.pixels(&mut p.host, 1., pixels, None);
+    assert_eq!(
+        unsafe { reads() },
+        4,
+        "an undecided tick keeps the ordinary readback"
+    );
     drop(p);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

@@ -64,6 +64,8 @@ impl<D: DataSource> Presenter<D> {
             name: String::new(),
             value: String::new(),
             hint: String::new(),
+            action_owner: 0,
+            actions: Vec::new(),
         });
         let chosen = self.selected_row(select);
         let choices = kernel.select_choices(select);
@@ -94,6 +96,11 @@ impl<D: DataSource> Presenter<D> {
                 name: choice.label,
                 value: String::new(),
                 hint: String::new(),
+                action_owner: choice.view,
+                actions: kernel
+                    .node(choice.view)
+                    .map(|n| self.access_actions(&n))
+                    .unwrap_or_default(),
             });
         }
     }

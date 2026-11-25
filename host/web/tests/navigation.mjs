@@ -191,6 +191,10 @@ try {
   };
   let since = 0;
   const record = async (name, path, length, depth, presses, journal = null) => {
+    // After pushState updates the route, Chromium can still show the old joint history length.
+    await until(`history.length === ${length}`).catch(async error => {
+      throw new Error(`${name}: expected history length ${length}, found ${await evaluate('history.length')}`, { cause: error });
+    });
     const row = await evaluate(`(async()=>{const state=await exact.agent({op:'state'});return {origin:location.origin,location:location.pathname+location.search,agent:new URLSearchParams(location.search).get('agent'),length:history.length,stamp:history.state,navigation:state.navigation,backPresses:state.slots.backPresses,navigatePresses:state.slots.navigatePresses,logs:await exact.agent({op:'logs',since:${since}}),calls:historyCalls.splice(0),pops:popEvents.splice(0)};})()`);
     since = row.logs.next; rows.push({ name, ...row }); console.log(JSON.stringify({ name, ...row }));
     const shown = new URL(url + row.location); shown.searchParams.delete('agent');
@@ -238,9 +242,9 @@ try {
       renderMarkup(document.getElementById('host'), JSON.stringify(links.map((href,i)=>['link '+i,1,0,8,href])));
       for (const el of document.getElementById('host').children) el.style.display = 'block';
     })`);
-    const rendered = await evaluate(`[...document.getElementById('host').children].map(el=>({tag:el.tagName,href:el.getAttribute('href'),text:el.textContent}))`);
+    const rendered = await evaluate(`[...document.getElementById('host').children].map(el=>({tag:el.tagName,href:el.getAttribute('href'),destination:el.href}))`);
     assert.deepEqual(rendered.slice(0, unsafe.length).map(el=>[el.tag,el.href]), unsafe.map(()=>['SPAN',null]));
-    assert.deepEqual(rendered.slice(unsafe.length).map(el=>[el.tag,el.href]), safe.map(href=>['A',new URL(href,url+'/__test-mirror').href]));
+    assert.deepEqual(rendered.slice(unsafe.length).map(el=>[el.tag,el.href,el.destination]), safe.map(href=>['A',href,new URL(href,url+'/__test-mirror').href]));
     const click = async index => {
       const at = await evaluate(`(()=>{const el=document.getElementById('host').children[${index}];el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return {x:r.x+20,y:r.y+r.height/2};})()`);
       await call('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...at});
@@ -488,9 +492,11 @@ try {
     followed(undo);
     assert.deepEqual(undo.calls.filter(c => c.name === 'go').map(c => c.args[0]), [-1]);
     await tap('select-prompts'); await record('tab switch truncates Forward', '/prompts', n + 2, 1, 0);
-    await tap('select-home'); await record('select retained top pushes', '/post/42', n + 3, 2, 0);
+    await tap('select-home');
+    const home = await record('select retained top pushes', '/post/42', n + 3, 2, 0);
+    assert.deepEqual(home.calls.filter(c => c.name === 'pushState').map(c => c.args[2]), [url + '/post/42?agent=1']);
     await tap('back'); const back = await record('Back after tab switch pushes', '/', n + 4, 1, 1);
-    assert.equal(back.calls.filter(c => c.name === 'pushState').length, 1);
+    assert.deepEqual(back.calls.filter(c => c.name === 'pushState').map(c => c.args[2]), [url + '/?agent=1']);
   });
   await run('disabled Back restores once', async () => {
     const n = await fresh(); await tap('push-post'); await tap('refuse'); await record('disabled fixture', '/post/42', n + 1, 2, 0);
@@ -697,12 +703,14 @@ try {
       await record('extension route', '/post/photos.zip', n, 2, 0);
       for (const [path, accept, status] of [
         ['/post/photos.zip', 'text/html', 200], ['/post/a%2Fb.zip', 'text/html', 200],
-        ['/post/photos.zip/', 'text/html', 404], ['/post/photos.zip', '*/*', 404],
+        // The JS build's server sends a page's other spelling to the page (LLP 1048.000 D11).
+        ['/post/photos.zip/', 'text/html', js && tree === dist ? 301 : 404], ['/post/photos.zip', '*/*', 404],
         ['/deck/missing.html', 'text/html', 404], ['/missing.pdf', 'text/html', 404],
         ['/manifest.json', 'text/html', 200],
       ]) {
-        const response = await fetch(url + path, {headers: {accept}});
+        const response = await fetch(url + path, {headers: {accept}, redirect: 'manual'});
         assert.equal(response.status, status, path);
+        if (status === 301) assert.equal(response.headers.get('location'), '/post/photos.zip');
         assert.equal(response.headers.get('cache-control'), status === 200 && (!js || tree === published) ? 'no-cache' : 'no-store', path);
         if (status === 200) assert.equal(response.headers.get('content-type'), path === '/manifest.json' ? 'application/manifest+json' : 'text/html');
       }

@@ -67,7 +67,7 @@ test('browser agent settling retains render traps and quarantines all later modu
     globalThis.entries=0; globalThis.armed=false;
     Object.defineProperty(Navigator.prototype,'gpu',{get(){return {requestAdapter:async()=>({info:{}})};},configurable:true}); // the stub module's adapter
     const element=document.getElementById('host');
-    globalThis.exact={views:new Map([[1,element]]),root:document.body,now:()=>0,devAssets:[],generation:0};
+    globalThis.exact={views:new Map([[1,element]]),root:document.body,now:()=>0,devAssets:[],generation:0,wasm:{}}; // a host's exports: none here asks for performance
     await import('/gpu-glue.js'); exact.gpu.surface(1,'world',[]); await exact.gpu.settled();
     const stageLoaded=()=>true, viewBox=()=>{}, agentMode=true, gpuInPlay=()=>true, loadGpuIfNeeded=()=>{}, gpuLoading=null;
     const wasm={}, ask=()=>({lines:[],from:0,next:0}), tagged=x=>x;

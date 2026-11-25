@@ -298,6 +298,7 @@ final class NativeButtonMac: NSButton {
         clicked = false
         tracked = event
         super.mouseDown(with: event)
+        owner?.holdPresenter?.mouseLayoutPan.trackingEnded(event)
         tracked = nil
         owner?.pointerReleased(nil)
         // The loop ends a click with the action; the second of two is then
@@ -316,8 +317,9 @@ final class NativeButtonMac: NSButton {
     private var heldContact = false
     private var cancelsHeldContact = false
     func beginHeldContact() { heldContact = true }
-    func cancelHeldContact() { if heldContact { cancelsHeldContact = true } }
+    func cancelHeldContact() { if heldContact || tracked != nil { cancelsHeldContact = true } }
     override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
+        if let tracked { owner?.holdPresenter?.mouseLayoutPan.trackingEnded(tracked) }
         guard !cancelsHeldContact else { return false }
         clicked = true
         owner?.pointerReleased(nil)

@@ -1,9 +1,8 @@
 //! `perf frames` on the Android reader (LLP 1079.000 §6.2): the reader's
 //! turns, ingests and window frames reach the two sources of
 //! [`crate::frame_health::android::Reader`] here, on exact2's thread, and an
-//! agent's request reads them. The display's period they share goes to the
-//! GPU canvases too (`gpu_period`, LLP 1009), and each canvas's frame-rate
-//! cap back to the reader (`Native.frameRates`).
+//! agent's request reads them. Each canvas's frame-rate cap goes back to
+//! the reader (`Native.frameRates`).
 //!
 //! Collection runs only in a driver's launch, which a
 //! production bake never is (LLP 1069.007 D2). Under the driver's clock a
@@ -81,7 +80,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     }
 
     fn give_period(&mut self, ms: Option<f64>) {
-        if let Some(ms) = ms {
+        // A live canvas gets its window's period at the display callback, before the draw.
+        if let Some(ms) = ms.filter(|_| agent::clock(&self.p).is_some()) {
             self.p.surfaces.period(ms);
         }
     }

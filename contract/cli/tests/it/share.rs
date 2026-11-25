@@ -4,6 +4,7 @@
 //! answer is a journal line (D2, D6); a file is an `app:/` path the
 //! `fs.read` grant covers or an element's `#id`.
 
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::share::{arm, Arm, File, Reach, Share};
@@ -29,13 +30,13 @@ const NO_SHEET: Reach = Reach {
     pictures: None,
 };
 
-fn boot() -> Runner<NoData> {
+fn boot() -> Runner<Source> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus/share.contract");
     let plan = contract::compile(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -43,12 +44,12 @@ fn boot() -> Runner<NoData> {
     .unwrap()
 }
 
-fn view(r: &Runner<NoData>, test_id: &str) -> u32 {
+fn view(r: &Runner<Source>, test_id: &str) -> u32 {
     let key = r.kernel().find_by_test_id(test_id)[0];
     r.kernel().node_by_key(key).unwrap().id
 }
 
-fn press(r: &mut Runner<NoData>, test_id: &str) -> u32 {
+fn press(r: &mut Runner<Source>, test_id: &str) -> u32 {
     let id = view(r, test_id);
     r.dispatch(id, Event::Press).unwrap();
     id
@@ -151,6 +152,42 @@ fn every_host_arm_refuses_holds_or_presents_by_one_rule() {
     )
     .unwrap();
     assert!(exact_runner::agent::logs(&r, 0).contains("share: dismissed"));
+    // A host that presents a held share and fails settles the hold with its reason: that line alone.
+    // The share outcome lines journaled since `since`, without their times
+    let outcomes = |r: &exact_runner::Runner<_>, since: usize| -> Vec<String> {
+        r.journal()
+            .skip(since)
+            .filter_map(|l| l.split_once(' ').map(|(_, line)| line))
+            .filter(|l| l.starts_with("share: "))
+            .map(String::from)
+            .collect()
+    };
+    let refused_answer = |ticket: u64| {
+        format!(
+            r#"{{"op":"tap","ticket":{ticket},"choice":"cancel","refused":"app:/data/missing.pdf: No such file or directory"}}"#
+        )
+    };
+    press(&mut r, "menu-share");
+    let c = r.take_commands().pop().unwrap();
+    let Arm::Held(ticket) = arm(&mut r, Share::from_args(&c.args), c.source, true, NO_SHEET) else {
+        panic!("held");
+    };
+    let since = r.journal().count();
+    exact_runner::agent::answer_ticket(&mut r, "tap", &refused_answer(ticket));
+    assert_eq!(
+        outcomes(&r, since),
+        ["share: refused: app:/data/missing.pdf: No such file or directory"]
+    );
+    assert!(r.device_holds().is_empty());
+    // An agent's answer is the person's choice: its cancel is a dismissal, whatever else it says.
+    press(&mut r, "menu-share");
+    let c = r.take_commands().pop().unwrap();
+    let Arm::Held(ticket) = arm(&mut r, Share::from_args(&c.args), c.source, true, NO_SHEET) else {
+        panic!("held");
+    };
+    let since = r.journal().count();
+    exact_runner::agent::answer(&mut r, &refused_answer(ticket)).unwrap();
+    assert_eq!(outcomes(&r, since), ["share: dismissed"]);
 }
 
 /// LLP 1125 D12: a granted app file and the card's picture present on

@@ -29,6 +29,19 @@ impl<'a> Context<'a> {
         }
     }
 
+    pub(crate) fn template_constant(&self, e: &Expr, string_only: bool) -> Option<String> {
+        if matches!(e, Expr::Ident(..)) {
+            return None;
+        }
+        let ty = contract_types::infer(e, self.scope, self.shapes).ok()?;
+        if let Expr::Typed(inner, ..) = e {
+            if let Expr::Str(s, _) = inner.as_ref() {
+                return Some(s.clone());
+            }
+        }
+        (ty == Ty::String || (!string_only && ty == Ty::Number)).then(|| self.constant(e).ok())?
+    }
+
     /// Evaluate literal text with the runtime VM, refusing executed input reads.
     pub(crate) fn constant(&self, e: &Expr) -> Result<String, String> {
         let mut compiler = Constant {

@@ -95,9 +95,11 @@ final class ElementHatches: ElementHatching {
         nodes[id] = entry
         guard entry.told else { return }
         presenter.afterBatch { [weak self] in
-            guard let self, let now = self.nodes[id], now.node === entry.node, let word = now.node.props["hatch"] else { return }
-            let reusable = self.call(.changed, now)
-            self.say(word, node: now.node, inList: now.inList, reusable: reusable)
+            self?.presenter.session?.afterApplying { [weak self] in
+                guard let self, let now = self.nodes[id], now.node === entry.node, let word = now.node.props["hatch"] else { return }
+                let reusable = self.call(.changed, now)
+                self.say(word, node: now.node, inList: now.inList, reusable: reusable)
+            }
         }
     }
 
@@ -440,7 +442,9 @@ final class ElementHatches: ElementHatching {
         case 0:
             guard node.handlers.contains("press"), !node.disabled else { return false }
             return later(id, "click") { [weak self, weak node] in
-                if let self, let node, self.presenter.views[id] === node { self.said(id, "click (delivery: hatch)"); self.presenter.press(id) }
+                guard let self, let node, self.presenter.views[id] === node else { return }
+                self.said(id, "click (delivery: hatch)")
+                NavigationMarks.shared.acting(.program) { self.presenter.press(id) }
             }
         case 1, 2:
             return later(id, action == 1 ? "focus" : "blur") { [weak self, weak node] in

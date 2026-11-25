@@ -752,6 +752,27 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         XCTAssertEqual(p.views[34]?.accessibilityLabel ?? "", "")
     }
 
+    /// A box's extension view (LLP 1123 D13), hidden from accessibility, spends none of the walk's visits: a box whose
+    /// plain children fill the visit budget exactly (`axElements`: five visits an element, and 64) is walked whole,
+    /// before it extends and after.
+    func testABoxsExtensionSpendsNoneOfTheBudget() throws {
+        guard #available(iOS 26, *) else { throw XCTSkip("UIBackgroundExtensionView needs iOS 26") }
+        let p = try fixture()
+        let budget = 5 * 1 + 64, kids = (0..<(budget - 1)).map { 100 + $0 }
+        p.apply(wireBatch([["op": "create", "id": 6, "kind": "view", "props": ["testId": "outer"]]]
+            + kids.flatMap { id -> [[String: Any]] in
+                [["op": "create", "id": id, "kind": "view", "props": ["testId": "plain-\(id)"]],
+                 ["op": "frame", "id": id, "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0]]
+            }
+            + [["op": "children", "id": 6, "ids": kids], ["op": "children", "id": 1, "ids": [2, 3, 4, 6]],
+               ["op": "frame", "id": 6, "x": 0.0, "y": 200.0, "w": 400.0, "h": 100.0]]))
+        let box = try XCTUnwrap(p.views[6])
+        XCTAssertNil(p.axElements(roots: [box], limit: 1)["truncated"], "the box and its children fill the visits")
+        box.setExtension(UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
+        XCTAssertNotNil(box.boxExtension)
+        XCTAssertNil(p.axElements(roots: [box], limit: 1)["truncated"], "and the box's extension spends none")
+    }
+
     func testACycleIsCutAndBudgetsBoundTheWalk() throws {
         let p = try fixture()
         let box = try XCTUnwrap(p.views[4])

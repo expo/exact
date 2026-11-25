@@ -11,7 +11,7 @@ import XCTest
 /// the owner instead (LLP 1072.000 §4 B), and its commit lands with a later
 /// main-queue turn. Here a timer's deadline passes with no turn of the run
 /// loop, and then a batch lands. On the wall clock a task's timer is
-/// Foundation's (#1144): its wake is queued when the timer fires and
+/// Foundation's: its wake is queued when the timer fires and
 /// delivered as the run loop delivers it (`deliverNativeTimer`).
 final class DueBeforeFrameIOSTests: XCTestCase {
     private var session: ExactSession?

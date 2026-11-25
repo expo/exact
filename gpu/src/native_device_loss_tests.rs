@@ -33,8 +33,13 @@ fn device_loss_guards_each_gpu_entry_before_any_other_call() {
         m.set_gpu(gpu);
         let id = m.create_headless("probe").unwrap();
         m.bind(id, &[], None);
+        m.set_seekable(false);
+        m.instances.get_mut(&id).unwrap().dirty = false;
+        assert!(!m.frame_dirty(id, 300.));
         // Model the asynchronous callback, without calling lose_device first.
         m.device_lost.store(true, Ordering::Release);
+        assert!(m.frame_pending(id));
+        assert!(m.frame_dirty(id, 300.));
         match operation {
             0 => assert!(!m.child(id, 0, "", [0., 0., 1., 1.], [1, 1], &[0; 4])),
             1 => assert!(!m.texture(id, 1, 1, &[0; 4])),

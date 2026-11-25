@@ -49,6 +49,30 @@ component Discover
         text \"Reload\"
 ";
 
+#[test]
+fn grouped_subtitle_can_read_state_owned_by_its_arm() {
+    let plan = contract::compile(
+        r#"component App
+  state show = true
+  view
+    list appearance="auto"
+      section
+        column
+          text "Title"
+          if show
+            Detail()
+
+component Detail
+  state expanded = true
+  view
+    if expanded
+      text "Supporting text"
+"#,
+    )
+    .unwrap();
+    crate::emit::emit(&plan, false, false).expect("the grouped list builds");
+}
+
 /// The row is an aggregate at the root; each instance makes its own request,
 /// which its action refreshes, and its path follows the runner's.
 #[test]
@@ -58,7 +82,9 @@ fn each_instance_makes_and_refreshes_its_own_request() {
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
     assert!(js.contains(&format!("const r_0=owned({works:?})")), "{js}");
     assert!(
-        js.contains(&format!(".r0=own(r_0,()=>res({works:?},\"subjectWorks\"")),
+        js.contains(&format!(
+            ".r0=own(r_0,$path=>res({works:?},\"subjectWorks\""
+        )),
         "{js}"
     );
     assert!(js.contains(r#"R($r["r0"])"#), "{js}");
@@ -88,6 +114,28 @@ fn a_launch_instance_takes_the_bakes_answer() {
         "{js}"
     );
     assert!(js.contains("(booting()?[\"sf\"]:void 0)"), "{js}");
+}
+
+/// A store reader's instance takes the bake's answer only while the boot
+/// makes it, though the emitter writes no arguments for it. The bake gives a
+/// store-reading instance no answer (`bake_launch_answers`), so the test marks
+/// a baked row a reader.
+#[test]
+fn a_store_readers_launch_instance_takes_the_bakes_answer_only_at_boot() {
+    let first = SCREENS.replace(
+        "home \"/\"\n  discover \"/discover\"",
+        "discover \"/\"\n  home \"/home\"",
+    );
+    let mut plan = contract::bake(contract::compile(&first).unwrap(), Built).unwrap();
+    let i = (plan.resources.iter())
+        .position(|r| plan.str(r.name).starts_with("works"))
+        .unwrap();
+    plan.resources[i].reader = true;
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(
+        js.contains("(booting()?[!0,[\"baked sf\"]]:void 0)"),
+        "{js}"
+    );
 }
 
 /// A plan with no child's resource emits no instance paths.

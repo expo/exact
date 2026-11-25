@@ -49,9 +49,9 @@ final class NavigationBasicsIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+    func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+    func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
         let deadline = Date().addingTimeInterval(seconds)
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(done(), what)
@@ -59,7 +59,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
 
     /// A session over the native fixture's plan, or over the one `plan`
     /// names: `EXACT_NAVIGATION_BARS_PLAN` is `scripts/fixtures/navigation-bars.contract`.
-    private func fixture(_ label: String, plan: String = "EXACT_FIXTURE_PLAN", launch: String? = nil) throws -> ExactSession {
+    func fixture(_ label: String, plan: String = "EXACT_FIXTURE_PLAN", launch: String? = nil) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[plan], "build.mjs --test --ios compiles the fixtures' plans")))
         ExactGroupedLists.install() // navigation-bars.contract's `rows` route is a grouped list
@@ -85,13 +85,13 @@ final class NavigationBasicsIOSTests: XCTestCase {
         return session
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 
     private func journal(_ session: ExactSession) -> String { session.agent(#"{"op":"logs","since":0}"#) }
 
-    private func text(_ session: ExactSession, _ testId: String) -> String? {
+    func text(_ session: ExactSession, _ testId: String) -> String? {
         (try? node(session, testId))?.accessibleText
     }
 
@@ -380,7 +380,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
     }
 
     /// Home's stack with Chat pushed on it.
-    private func chat(_ session: ExactSession) throws -> (UITabBarController, UINavigationController, RouteController) {
+    func chat(_ session: ExactSession) throws -> (UITabBarController, UINavigationController, RouteController) {
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         try tapNode(session, "chat")
@@ -525,8 +525,13 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertNil(item.action, "nothing presses a readout")
         if #available(iOS 26.0, *) { XCTAssertTrue(item.hidesSharedBackground, "nothing in it presses: no glass") }
         until("laid out in its block") { readout.frame.width > 7 + 6 && words.frame.width > 0 }
-        XCTAssertEqual(view.intrinsicContentSize.width, readout.frame.maxX, accuracy: 0.5, "the item is the element's size")
+        until("the item is the element's size") { abs(view.bounds.width - readout.frame.maxX) < 0.5 }
         XCTAssertEqual(readout.accessibilityLabel, "0 composed", "its `aria-label`")
+        // What it leaves unsaid is the bar's: a plain bar item title's size and weight (D3); what it writes wins.
+        let unsaid = try node(session, "readout-unsaid"), bar = FieldChromeCache.barItemFont(plain.traitCollection)
+        XCTAssertEqual(unsaid.style["font_size"]?.number ?? 0, Double(bar.pointSize), accuracy: 0.01, "the bar item's size")
+        XCTAssertEqual(unsaid.style["font_weight"]?.number, 500, "and weight")
+        XCTAssertEqual(words.style["font_size"]?.number, 12, "a size it writes")
         // The bar's, not the page's: the agent does not call it unshown.
         let unshown = session.presenter.navigationHost.unshownByBar()
         for shown in ["readout-plain", "readout-text"] { XCTAssertNil(unshown[try node(session, shown).id], "\(shown) is the bar's") }
@@ -562,6 +567,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         spin(0.2)
         XCTAssertTrue(plain.navigationItem.rightBarButtonItems?.contains { $0.customView === view } == true, "still the bar's")
         XCTAssertTrue(readout.superview === view.stand)
+        XCTAssertEqual(unsaid.style["font_size"]?.number ?? 0, Double(bar.pointSize), accuracy: 0.01, "and in the bar's type")
     }
 
     /// Whether the tab bar insets a tab's content from below: a phone's (and
@@ -881,6 +887,11 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let scroller = box(sheet, y: 60, height: 506, overflow: "y")
         XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller, "the component's scroller reaches the edge")
         XCTAssertNil(NavigationHost.bottomScroller(in: route), "not with the cover unsaid: it ends 34 above the content box")
+        sheet.frame.size.height = 576
+        scroller.frame.size.height = 516
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a 24-point gap is neither the edge nor the 34-point bar")
+        sheet.frame.size.height = 566
+        scroller.frame.size.height = 506
         sheet.applyKernelContentBox(CGRect(x: 0, y: 0, width: 400, height: 546), padding: [0, 0, 20, 0])
         XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a padding under it keeps the cover")
         sheet.applyKernelContentBox(nil, padding: nil)

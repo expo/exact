@@ -16,6 +16,7 @@
 mod card;
 mod concepts;
 mod frames;
+mod notes;
 mod recipes;
 mod records;
 mod scroll;
@@ -347,6 +348,9 @@ fn one_json(name: &str) -> (Value, bool) {
     let mut doc = json!({ "name": name });
     if let Some(tag) = tag {
         doc["tag"] = tag;
+        for (label, words) in card::tag_words(name) {
+            doc[label] = words.into();
+        }
     }
     if name == "symbol" {
         doc["roles"] = exact_kernel::generated::SYMBOL_ROLES.to_vec().into();
@@ -442,6 +446,11 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         if let Some(note) = vocab::tag_note(name) {
             println!("  {note}");
         }
+        for (label, words) in card::tag_words(name) {
+            if !words.is_empty() {
+                println!("  {label} {}", words.join(" "));
+            }
+        }
     } else if let Some(tag) = &tag {
         println!("{name}: {}", tag["note"].as_str().unwrap());
     }
@@ -464,14 +473,8 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         if let Some(only) = only_on(name) {
             println!("  only on {only}");
         }
-        if name == "src" {
-            println!("  an `image`'s source is its argument: `image url` (HTML's `img src`)");
-        }
-        if matches!(name, "min" | "max" | "step") {
-            println!("  on an `input` a number of either sign is written as its text: `min=-40`, `step=0.5`, `max=1e6` (LLP 1116.010 D3); a decimal pad (`inputmode=\"decimal\"`) with a negative `min` has the ± key");
-        }
-        if name == "markup" {
-            println!("  \"markdown\" or \"none\" (the default): a `text` reads its string as Markdown, a `textarea` edits it (LLP 1045)");
+        if let Some(note) = notes::note(name) {
+            println!("  {note}");
         }
         if matches!(name, "intersect" | "intersect-margin") {
             println!("  IntersectionObserver: nearest scroller or viewport, threshold 0; mount and enter/leave. Optional final IntersectionObserverEntry: isIntersecting (bool), intersectionRatio (number). intersect-margin is a literal 1–4 px/% rootMargin, default 0px. Browser executors and shared AppKit/UIKit/Linux layout/scroll delivery; native geometry qualification remains open, see LLP 1001 for geometry deviations (LLP 1005).");
@@ -481,15 +484,6 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         }
         if matches!(name, "reachstart" | "reachend") {
             println!("  {REACH_MARGIN}");
-        }
-        if name == "resize" {
-            println!("  given an action, the element resize event: ResizeObserver's, after layout, with the content box's width and height and its `DOMRectReadOnly`");
-        }
-        if matches!(name, "focusin" | "focusout") {
-            println!("  bubbles from the focused child without making this node a Tab stop; an action may take `FocusEvent(target: string, relatedTarget: option<string>)` on every host (`focusout` also fires on a move between descendants and on the focused node's removal)");
-        }
-        if matches!(name, "swiperight" | "swipeleft") {
-            println!("  the node follows a sideways drag in that direction (a node may have both), 64 points freely and then a fifth of the finger's travel; its action runs once, when the finger lifts at or past 64 points. The direction is the screen's, in a right-to-left layout too. A finger reaches it only with `touch-action=\"pan-y\"`. A list row's Delete is `delete=` (the concept `swipe`). docs/contract-for-agents.md#swipe-to-reply");
         }
         if matches!(name, "scrolldragstart" | "scrolldragend") {
             println!("  on a scroller: a finger (or a trackpad's two fingers) began dragging it, and let go; UIKit's `scrollViewWillBeginDragging` and `scrollViewWillEndDragging`. `scrolldragend`'s action may take `ScrollDragEvent(velocityX: number, velocityY: number, targetLeft: option<number>, targetTop: option<number>)`: UIKit's velocity, CSS pixels per millisecond, positive as `scrollLeft`/`scrollTop` grow, and where the momentum will stop where the host knows (iOS), else `none`. A wheel, a keyboard or a programmatic scroll sends neither");
@@ -519,7 +513,7 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
             println!("  on a menu's trigger: a `popovertarget` button, a `header` button that opens a menu, or a node with `contextPopover`. \"fixed\" shows the menu's rows as written wherever it opens (a list of presets near the bottom of the screen); \"priority\" always puts the first row nearest the finger; \"automatic\", the default, is the platform's: iOS puts the first row nearest the finger only in a menu that opens upward, so a menu that opens from near the bottom shows its rows last first. UIKit's `preferredMenuElementOrder`; the web, the Mac and the other hosts show the rows as written and ignore it");
         }
         if name == "-exact-glass-tint" {
-            println!("  on a box with `backgroundMaterial=\"glass\"` or `\"glass-clear\"`: the colour its glass is tinted with, resolved in its colour scheme (`-exact-glass-tint=\"rgba(232,192,99,0.9)\"`, a gold button). Unset, the glass is untinted. `UIGlassEffect.tintColor` on iOS and tvOS 26 and `NSGlassEffectView.tintColor` on macOS 26: the glass takes the colour, where a `background-color` is painted behind it. The web and Linux draw it as the material's background colour; Android and Windows draw no glass. Not on a native button: tint its glass with `accent-color` and `buttonStyle=\"prominent-glass\"`");
+            println!("  on a box with `backgroundMaterial=\"glass\"` or `\"glass-clear\"`: the colour its glass is tinted with, resolved in its colour scheme (`-exact-glass-tint=\"rgba(232,192,99,0.9)\"`, a gold button). Unset, Apple hosts leave the glass untinted. `UIGlassEffect.tintColor` on iOS and tvOS 26 and `NSGlassEffectView.tintColor` on macOS 26: the glass takes the colour, where a `background-color` is painted behind it. The painted hosts (Android, Windows and Linux) draw the material's tint plus a backdrop blur, without Liquid Glass refraction or specular highlights. This colour replaces the table's tint unless a nontransparent `background-color` replaces it; the blur remains. Android before 12 draws the tint without the blur. The web also draws it as the material's background colour unless a `background-color` overrides it. Not on a native button: tint its glass with `accent-color` and `buttonStyle=\"prominent-glass\"`");
         }
         if name == "glassInteractive" {
             println!("  on a box with `backgroundMaterial=\"glass\"` or `\"glass-clear\"`: whether its glass swells and lights under a finger (`UIGlassEffect.isInteractive`). Unset, it does when the box has a `press` and is not disabled; `false` keeps a pressable box's glass still, `true` makes a box without a press react. Only iOS and tvOS 26 have interactive glass; other hosts ignore it");
@@ -537,7 +531,7 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
             println!("  on the navigation root's tablist (LLP 1075.003 §9.17): the `id` of the element iOS 26 and later show as the tab bar's accessory, a media app's mini player (UIKit's `bottomAccessory`). Write the element after every tab panel the tablist links, usually just before the tablist, where the web shows it above the tab strip; it lies outside the tablist, every route, every tab panel, a popover and a `dialog`. UIKit places and sizes the accessory and backs it with its glass (on an iPhone 18 Pro with iOS 27, 48 points high above the bar, and inline where the bar was while the bar hides); the element's box is UIKit's whatever `height` it says, and the routes clear it. Show and remove it with `if` or `display`; `\"\"` names none. The web, the Mac and Android lay the element out where CSS puts it; iOS 17 to 25, which have no accessory, leave it there, hidden under the shown tab bar. Where the compiler can prove it, a literal id that no element carries, or one the rule refuses, is an error (`lower-tab-accessory`); otherwise a development build on iOS 26 and later journals the reason (`logs`) while Exact's own tab container shows the tabs. docs/recipes/mini-player.md");
         }
         if name == "navigationSplit" {
-            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when its press does: a `link` to one of the app's routes, or a `button` or pressable whose action writes the router (`push`, `open`, `go`). A row's `image \"symbol:forward-chevron\"` (the disclosure an iOS list draws) is paint, which neither splits a list nor keeps one from splitting, and a list whose rows only select stays pushed. An action that writes the router only to go back or open a sheet looks the same, so say `navigationSplit=\"none\"` for such a list. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a narrow window pushes. Across a foldable browser's fold, two viewport segments side by side, the list fills the segment at its start and the detail the other, whatever the window's width or a number says. On iOS the split is UIKit's split view (LLP 1127), outside a tab: a compact width (an iPhone, the iPhone Duo folded) collapses it to one stack, the detail over the list with Back, and a wide one (an iPad, the iPhone Duo open) shows the columns as UIKit decides: the list beside the detail at UIKit's width (a grouped list, `appearance=\"auto\"`, as UIKit's sidebar list, the row of the detail's first route selected), the detail alone, or the list over it; under the agent's own chrome (`--chrome agent`) and on tvOS the stack pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width off a fold and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
+            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when its press does: a `link` to one of the app's routes, or a `button` or pressable whose action writes the router (`push`, `open`, `go`). A row's `image \"symbol:forward-chevron\"` (the disclosure an iOS list draws) is paint, which neither splits a list nor keeps one from splitting, and a list whose rows only select stays pushed. On hosts that infer from the router write alone, an action that goes back or opens a sheet can also qualify. Say `navigationSplit=\"none\"` for such a list. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a narrow window pushes. Across a foldable browser's fold, two viewport segments side by side, the list fills the segment at its start and the detail the other, whatever the window's width or a number says. On iOS the split is UIKit's split view (LLP 1127), in an untabbed stack. On iPad a tab keeps its stack unless its first route says `navigationSplit=\"split\"`: its tab then holds the split, including across a tab switch. On a tab route write the literal \"split\" or \"none\", or leave it out. For both presentations use two tabs or two routes. An untabbed route also accepts a binding or a positive column width. An untabbed iPad root can ask the same way for a custom primary at the platform width. On iOS a compact width (an iPhone, the iPhone Duo folded) collapses it to one stack, the detail over the list with Back, and a wide one (an iPad, the iPhone Duo open) shows the columns as UIKit decides: the list beside the detail at UIKit's width (a grouped list, `appearance=\"auto\"`, as UIKit's sidebar list, the row of the detail's first route selected), the detail alone, or the list over it; under the agent's own chrome (`--chrome agent`) and on tvOS the stack pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width off a fold and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
         }
         if matches!(
             name,
@@ -908,6 +902,8 @@ const AUTOCAPITALIZE: &str = "`words` for a person's name, `none` for a username
 /// `anywhere` broke their words.
 const OVERFLOW_WRAP: &str = "text wraps between words by default; at a large text size give the row room (flex-wrap=\"wrap\" with a flex-basis in rem) rather than breaking words. `break-word` breaks only a word wider than its line (a pasted link); `anywhere` breaks inside any word (\"Octo/ber\"), which verify names on prose: it is for a URL or a token on a `link` or in a monospace face. `word-break` is not admitted";
 
+const SCALE: &str = "one or two factors, x then y, as CSS scale: `scale=\"1 0.5\"` keeps width and halves height; one value applies to both axes. Numbers and percentages work on rows and in keyframes, transitions and springs. `none` is `1 1`.";
+
 const TRANSLATE: &str = "one or two lengths, x then y, and an optional z in px, as CSS's `translate`: each of x and y px, a percentage of the box's own border box, or a `calc()` of the two (`translate=\"calc(50% - 12px) 0\"`); transitions and keyframes interpolate the px and the percentage separately, as CSS does a `calc()`. A `rem`, viewport or `env()` length is refused";
 /// Charlie, 2026-11-10 (issues/20261021-scroll-drag-events-and-hit-slop.md).
 const HIT_SLOP: &str = "not CSS: how far past its box a pointer still reaches the node, one to four nonnegative lengths as `padding` takes them (React Native's `hitSlop`): `-exact-hit-slop=\"8px\"` on a 28px icon button takes a tap 8px outside it. Layout, paint and accessibility never see it, and `tap <target>` still aims at the box's middle. Where boxes overlap the front one takes the pointer, slop and all; an `overflow` other than `visible` on the node or an ancestor clips it. On the web a positioned pseudo-element is the slop: it reaches from the padding edge, so a border's width comes off it, and a node that says no `position` becomes `position: relative`. An `image`, `input` or other replaced element refuses it (`lower-hit-slop`): give the slop to the box or button that holds it";
@@ -1134,11 +1130,11 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
     if name == "overflow-wrap" {
         doc["note"] = OVERFLOW_WRAP.into();
     }
-    if name == "transform" {
-        doc["note"] = vocab::BOX_TRANSFORM_REFUSAL.into();
-    }
-    if name == "translate" {
-        doc["note"] = TRANSLATE.into();
+    match name {
+        "transform" => doc["note"] = vocab::BOX_TRANSFORM_REFUSAL.into(),
+        "scale" => doc["note"] = SCALE.into(),
+        "translate" => doc["note"] = TRANSLATE.into(),
+        _ => {}
     }
     if matches!(name, "reachstart" | "reachend") {
         doc["note"] = vocab::collection_edge_refusal(name).into();
@@ -1300,11 +1296,11 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
             if matches!(name, "-exact-min-zoom" | "-exact-max-zoom") {
                 lines.push(ZOOM.into());
             }
-            if name == "transform" {
-                lines.push(vocab::BOX_TRANSFORM_REFUSAL.into());
-            }
-            if name == "translate" {
-                lines.push(TRANSLATE.into());
+            match name {
+                "transform" => lines.push(vocab::BOX_TRANSFORM_REFUSAL.into()),
+                "scale" => lines.push(SCALE.into()),
+                "translate" => lines.push(TRANSLATE.into()),
+                _ => {}
             }
             lines
         }

@@ -44,6 +44,14 @@ impl Module {
             if index == inst.each.len() {
                 inst.each.push(None);
             }
+            inst.child_geometry.resize_with(inst.each.len(), || None);
+            if inst.child_geometry[index]
+                .as_ref()
+                .is_some_and(|(old, rect)| old == name && *rect == frame)
+            {
+                return true;
+            }
+            inst.child_geometry[index] = Some((name.to_owned(), frame));
             inst.each[index] = None;
             inst.surface.child(index, name, None, frame);
             inst.dirty = true;
@@ -76,6 +84,9 @@ impl Module {
         }
         if inst.each.len() == index {
             inst.each.push(None);
+        }
+        if let Some(rect) = inst.child_geometry.get_mut(index) {
+            *rect = None;
         }
         let size = wgpu::Extent3d {
             width,
@@ -142,8 +153,9 @@ impl Module {
                 inst.surface.child(index, "", None, [0.0; 4]);
             }
             inst.each.truncate(count);
+            inst.child_geometry.truncate(count);
+            inst.dirty = true;
         }
-        inst.dirty = true;
         true
     }
 

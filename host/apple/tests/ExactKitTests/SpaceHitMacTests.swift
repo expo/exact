@@ -38,6 +38,25 @@ final class SpaceHitMacTests: XCTestCase {
         return (p, p.views[1]!, p.views[2]!)
     }
 
+    func testPerAxisScaleHitsAndMapsThroughNegativeAndCollapsedAxes() throws {
+        let (p, parent, child) = fixture(parent: [:], child: [:])
+        for (x, y) in [(1.0, 0.5), (-1.0, -0.5), (0.0, 0.5), (1.0, 0.0)] {
+            p.apply(wireBatch([["op": "present", "id": 2, "property": "scale", "x": x, "y": y]]))
+            let rect = child.drawnRect(child.bounds, in: parent)
+            XCTAssertEqual(rect.width, 100 * abs(x), accuracy: 1e-6)
+            XCTAssertEqual(rect.height, 100 * abs(y), accuracy: 1e-6)
+            for y: CGFloat in [60, 80, 100, 120, 140] {
+                XCTAssertEqual(hit(parent, 100, y) === child, x != 0 && y > 75 && y < 125 && child.scale.y != 0)
+            }
+            if x != 0 && y != 0 {
+                let point = CGPoint(x: 25, y: 80)
+                let local = child.local(child.drawnPoint(point))
+                XCTAssertEqual(local.x, point.x, accuracy: 1e-6)
+                XCTAssertEqual(local.y, point.y, accuracy: 1e-6)
+            }
+        }
+    }
+
     func testAnAnimatedAxisUsesTheStaticSpatialTransform() {
         let (p, _, child) = fixture(parent: [:], child: [:], frame: [50, 50, 120, 60],
             present: [["op": "present", "id": 2, "property": "rotate", "x": -45.0, "y": 1.0, "w": 0.0, "h": 0.0]])
@@ -91,7 +110,7 @@ final class SpaceHitMacTests: XCTestCase {
         }
         let drawn = width()
         XCTAssertEqual(drawn, 52.46, accuracy: 0.01)
-        p.apply(wireBatch([["op": "animations", "id": 1, "specs": [["id": "grow#0#transform.scale", "k": "transform.scale", "s": 0.0, "dl": 0.0,
+        p.apply(wireBatch([["op": "animations", "id": 1, "specs": [["id": "grow#0#transform.scale.x", "k": "transform.scale.x", "s": 0.0, "dl": 0.0,
             "d": 1.0, "n": -1.0, "t": [0.0, 1.0], "v": [1.0, 2.0], "c": [], "fill": 0.0]]]]))
         XCTAssertEqual(parent.layer?.anchorPoint, CGPoint(x: 0.5, y: 0.5))
         XCTAssertEqual(width(), drawn, accuracy: 0.01)
@@ -212,6 +231,26 @@ final class SpaceHitMacTests: XCTestCase {
         XCTAssertEqual(seen.minY, expected.y - clip.bounds.origin.y, accuracy: 1e-6)
         XCTAssertEqual(seen.width, 60, accuracy: 1e-6)
         XCTAssertEqual(seen.height, 60, accuracy: 1e-6)
+
+        button.placementHidden = true
+        button.placement = nil
+        button.alphaValue = 1
+        XCTAssertFalse(hit(box, 180, 80) === button, "A hidden placement has no hit")
+        XCTAssertEqual(button.accessibilityFrame(), .zero)
+
+        let child = NodeView(id: 4, kind: "view", presenter: p)
+        button.addSubview(child)
+        button.removeFromSuperview()
+        XCTAssertTrue(child.placedAncestor === button, "A detached hidden placement still covers its children")
+        let replacement = NodeView(id: button.id, kind: "view", presenter: p)
+        replacement.addSubview(child)
+        replacement.placement = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0]
+        button.placementHidden = false
+        XCTAssertTrue(child.placedAncestor === replacement, "Clearing the old view leaves its replacement placed")
+        replacement.placement = nil
+        XCTAssertNil(child.placedAncestor)
+        try XCTUnwrap(canvas.overlay).addSubview(button)
+        XCTAssertTrue(hit(box, 120, 20) === button, "Clearing placement restores the ordinary hit")
     }
 
     func testAnUnturnedBoxIsUnchanged() {

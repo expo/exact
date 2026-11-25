@@ -54,6 +54,13 @@ impl<D: DataSource> Runner<D> {
         check_arguments(self.mutation_name(m), args)
     }
 
+    /// [`Self::query`] under the cause resource `i` is asked with (LLP
+    /// 1133.023 D7a), which its device's re-asks reuse.
+    pub(super) fn query_caused(&mut self, i: usize, args: &[Value]) -> Result<Answer, RunnerError> {
+        let cause = self.cause_for(super::Target::Resource(i));
+        self.as_cause(cause, |r| r.query(i, args))
+    }
+
     pub(super) fn query(&mut self, i: usize, args: &[Value]) -> Result<Answer, RunnerError> {
         self.resources[i].render_urls.clear();
         let row = self.resource_row(i);

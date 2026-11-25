@@ -110,6 +110,44 @@ pub struct Palette {
     pub dark: [u32; MATERIAL_ROLES],
 }
 
+/// Each family’s tones 10 through 90, 95 and 99, then its light and dark palette keys.
+pub(crate) type BarSwatches = [[u32; 13]; 3];
+
+/// The reader's role tables, contrast setting and available wallpaper swatches.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReaderPalette {
+    pub(crate) roles: Palette,
+    pub(crate) contrast: f32,
+    pub(crate) swatches: BarSwatches,
+}
+
+impl ReaderPalette {
+    /// Read the two role tables, optionally followed by contrast and the three accent families.
+    pub fn from_words(words: &[i32]) -> Option<Self> {
+        let (table, tail) = words.split_at_checked(2 * MATERIAL_ROLES)?;
+        let roles = Palette::from_words(table)?;
+        let (contrast, extra) = match tail {
+            [] => (0., &[][..]),
+            [bits, extra @ ..] if extra.is_empty() || extra.len() == 3 * 13 => {
+                (f32::from_bits(*bits as u32), extra)
+            }
+            _ => return None,
+        };
+        if !(-1.0..=1.0).contains(&contrast) {
+            return None;
+        }
+        let mut swatches = BarSwatches::default();
+        for (dst, &src) in swatches.iter_mut().flatten().zip(extra) {
+            *dst = src as u32;
+        }
+        Some(Self {
+            roles,
+            contrast,
+            swatches,
+        })
+    }
+}
+
 use Material::*;
 
 /// Exact's roles as Material's (LLP 1115.001 D4's table): the name an
@@ -176,6 +214,12 @@ pub(crate) fn material_of(name: &str) -> Option<(Material, u32)> {
 }
 
 impl Palette {
+    /// Decode the reader's two role tables and its Material contrast level.
+    pub fn from_reader_words(words: &[i32]) -> Option<(Self, f32)> {
+        let read = ReaderPalette::from_words(words)?;
+        Some((read.roles, read.contrast))
+    }
+
     /// A palette from the shell's colours, every role light and then
     /// every role dark; `None` for any other count.
     pub fn from_words(words: &[i32]) -> Option<Palette> {
@@ -239,7 +283,7 @@ pub fn material(role: Material, dark: bool) -> Option<[u8; 4]> {
 
 impl Palette {
     /// `role` under a scheme, as RGBA.
-    fn rgba(&self, role: Material, dark: bool) -> [u8; 4] {
+    pub(super) fn rgba(&self, role: Material, dark: bool) -> [u8; 4] {
         let table = if dark { self.dark } else { self.light };
         let [a, r, g, b] = table[role as usize].to_be_bytes();
         [r, g, b, a]
@@ -264,6 +308,7 @@ pub(crate) fn reported_accent(dark: bool) -> Option<([u8; 4], [u8; 4])> {
 #[derive(Default)]
 pub(super) struct State {
     pub contrast: super::contrast::State,
+    pub material_contrast: f32,
     /// The reported table's generation this presenter last painted from,
     /// and the palette, whose roles past the table's (read by [`material`])
     /// can change while the table does not.
@@ -271,6 +316,15 @@ pub(super) struct State {
 }
 
 impl<D: DataSource> Presenter<D> {
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn set_reader_palette(&mut self, palette: &ReaderPalette) {
+        if self.colors.material_contrast != palette.contrast {
+            self.colors.material_contrast = palette.contrast;
+            self.dirty = true;
+        }
+        self.apply_palette(&palette.roles, &palette.swatches);
+    }
+
     /// The device's palette, as its shell resolved it (LLP 1115.001 D4):
     /// told before the first frame and again, whole, whenever it changes (a
     /// new wallpaper changes the dynamic palette). Every role resolves to
@@ -279,6 +333,13 @@ impl<D: DataSource> Presenter<D> {
     /// in place, a later one transitions, LLP 1095 D6) and nothing kept
     /// from a paint under the old colours stands.
     pub fn set_palette(&mut self, palette: &Palette) {
+        self.apply_palette(palette, &BarSwatches::default());
+    }
+
+    fn apply_palette(&mut self, palette: &Palette, swatches: &BarSwatches) {
+        if self.bars.set_device_inks(palette, swatches) {
+            self.dirty = true;
+        }
         let generation = palette.tell();
         if self.colors.seen == Some((generation, *palette)) {
             return;
@@ -294,6 +355,17 @@ impl<D: DataSource> Presenter<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn role_words_keep_the_device_palette_and_carry_optional_contrast() {
+        let mut roles = vec![0; 2 * MATERIAL_ROLES];
+        let palette = Palette::from_words(&roles).unwrap();
+        assert_eq!(Palette::from_reader_words(&roles), Some((palette, 0.)));
+        roles.push(0.5f32.to_bits() as i32);
+        assert_eq!(Palette::from_reader_words(&roles), Some((palette, 0.5)));
+        *roles.last_mut().unwrap() = f32::NAN.to_bits() as i32;
+        assert_eq!(Palette::from_reader_words(&roles), None);
+    }
 
     #[test]
     fn a_palette_is_every_material_role_light_then_dark_and_reads_by_its_name() {

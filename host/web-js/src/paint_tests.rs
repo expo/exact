@@ -1070,3 +1070,67 @@ fn bound_animation_stacking_matches_kernel() {
         disagreements.join("\n")
     );
 }
+
+#[test]
+fn press_timing_from_a_bound_transition_matches_literal_lowering() {
+    exact_kernel::style::link_all();
+    let parser = crate::paint::transitions(&crate::paint::motion_words());
+    let spring = crate::style::transition_spring();
+    let map = crate::paint::press_timing_map(&parser, &spring, true);
+    let declarations = [
+        "none",
+        "all 0s",
+        "all 200ms linear -25ms, color 150ms ease-in, translate 0ms linear 50ms, opacity 0s",
+        "all -exact-spring(), color 20ms linear, scale 0s",
+        "scale -exact-spring(180, 12, 1) 0s 20ms",
+    ];
+    let emitted = crate::style::tests::run(&map, &declarations);
+    for (transition, bound) in declarations.into_iter().zip(emitted.as_array().unwrap()) {
+        let mut style = exact_kernel::StyleProps::default();
+        use exact_kernel::StyleValue::{Number, Text};
+        for (row, value) in [
+            (StyleId::Transition, Text(transition.into())),
+            (StyleId::PressTranslate, Text("4px 8px".into())),
+            (StyleId::PressOpacity, Number(0.5)),
+            (StyleId::PressScale, Number(0.8)),
+            (StyleId::PressColor, Text("red".into())),
+            (StyleId::PressBackgroundColor, Text("blue".into())),
+        ] {
+            style.set_dynamic(row, &value).unwrap();
+        }
+        let css = exact_web::css::css_text(&style, &[]).0;
+        let (_, timing) = css.split_once("--exact-press-timing:").unwrap();
+        let literal: serde_json::Value =
+            serde_json::from_str(timing.trim_end_matches(';')).unwrap();
+        let bound: serde_json::Value = serde_json::from_str(bound.as_str().unwrap()).unwrap();
+        for (name, item) in literal.as_object().unwrap() {
+            let dynamic = &bound[name];
+            assert_eq!(dynamic[2], item[2], "{transition} for {name}");
+            for i in 0..2 {
+                assert!(
+                    (dynamic[i].as_f64().unwrap() - item[i].as_f64().unwrap()).abs() < 1e-9,
+                    "{transition} for {name}"
+                );
+            }
+        }
+        assert_eq!(
+            literal.as_object().unwrap().len(),
+            bound.as_object().unwrap().len(),
+            "{transition}"
+        );
+    }
+}
+
+#[test]
+fn a_refused_bound_transition_keeps_only_its_written_intent() {
+    exact_kernel::style::link_all();
+    let parser = crate::paint::transitions(&crate::paint::motion_words());
+    let sampler = crate::style::transition_spring();
+    let values = ["scale 100ms linear, refused 1s", "unset"];
+    let run = |written| {
+        let map = crate::paint::press_timing_map(&parser, &sampler, written);
+        crate::style::tests::run(&map, &values)
+    };
+    assert_eq!(run(true), serde_json::json!(["{}", "{}"]));
+    assert_eq!(run(false), serde_json::json!([null, null]));
+}

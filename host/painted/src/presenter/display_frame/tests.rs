@@ -814,7 +814,7 @@ fn timer_demand_changed_timer_and_final_motion_frame_remain_visible() {
     assert!(!p.dirty());
     assert!(p.advance(400.).is_none());
     assert!(!p.host.motion(), "final sample has settled");
-    assert_eq!(p.host.presented(id(&p, "ticks")).scale, 2.);
+    assert_eq!(p.host.presented(id(&p, "ticks")).scale.0, 2.);
     assert!(
         p.dirty(),
         "settling sample must still reach a final picture"

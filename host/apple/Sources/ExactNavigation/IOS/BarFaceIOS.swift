@@ -90,8 +90,15 @@ extension NavigationHost {
     }
 
     /// The item a header's control is drawn as in a bar that shows, if it is one.
+    /// The bar that shows `controller`'s top route's items: nested in a
+    /// split's list column, the detail's top shows them in that column's
+    /// bar (LLP 1127 §1, item 2).
+    func shownBar(of controller: UINavigationController) -> UINavigationBar {
+        split.flatMap { $0.nested && controller === $0.detail ? $0.list.navigationBar : nil } ?? controller.navigationBar
+    }
     func shownBarItem(_ id: UInt32) -> UIBarButtonItem? {
         #if os(iOS)
+        if let (item, _) = bottomItem(id) { return item }
         if let item = shownDialogBars.lazy.compactMap({ $0.barItemsMade[id]?.bar }).first { return item }
         #endif
         return controllers.values.lazy.filter { $0.viewIfLoaded?.window != nil }.compactMap { $0.barItemsMade[id]?.bar }.first

@@ -861,6 +861,11 @@ extension Agent {
         // for the recording, once AppKit reports it visible, and goes back after.
         if let window = session.presenter.viewport.window, window.level == .agentBehind, window.isVisible,
            !window.screenOcclusionState.contains(.visible) {
+            // A HUD stays below the person's windows throughout a drive (LLP 1030.004 D7).
+            if window is RoutePanel {
+                completed(["unavailable": true, "reason": "panel is covered", "clockMode": session.clock == nil ? "real" : "virtual"])
+                return
+            }
             var seen: NSObjectProtocol?
             var started = false
             let start = { [self] in

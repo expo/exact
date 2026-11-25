@@ -106,6 +106,10 @@ impl Module {
             return self.fail(error);
         }
         self.check_device();
+        #[cfg(windows)]
+        if let Some(window) = self.window.as_mut().filter(|w| w.canvas == id) {
+            window.rested = None;
+        }
         if let Some(why) = shaders::missing(self.registry.shaders) {
             self.error = why;
             return None;
@@ -151,6 +155,7 @@ impl Module {
         }
         if inst.surface.is_empty() {
             out[..len].fill(0);
+            inst.input_dirty = false;
             inst.dirty = false;
             inst.drain();
             return Some(false);
@@ -208,6 +213,7 @@ impl Module {
         }
         match result {
             Ok(()) => {
+                inst.input_dirty = inst.surface.input_pending();
                 inst.dirty = false;
                 // A canvas with no target of its own is shown by its host
                 // composing these pixels (Linux's display baseline), and a
@@ -220,6 +226,7 @@ impl Module {
                 {
                     inst.presented.now();
                 }
+                let wants = wants || (!self.seekable && !inst.surface.frame_ready());
                 Some(wants)
             }
             Err(e) => {
@@ -233,7 +240,7 @@ impl Module {
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct Solid;
+    struct Solid(bool);
     impl Surface for Solid {
         fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
             Ok(())
@@ -247,6 +254,7 @@ mod tests {
             view: &wgpu::TextureView,
             _: wgpu::TextureFormat,
         ) -> bool {
+            self.0 = frame.now_ms > 31.;
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -264,11 +272,17 @@ mod tests {
                 })],
                 ..Default::default()
             });
+            false
+        }
+        fn frame_ready(&self) -> bool {
+            self.0
+        }
+        fn frame_presentable(&self) -> bool {
             true
         }
     }
     static REGISTRY: Registry = Registry {
-        surfaces: &[("solid", 0, || Box::new(Solid))],
+        surfaces: &[("solid", 0, || Box::new(Solid(false)))],
         shaders: &[],
     };
 
@@ -297,7 +311,10 @@ mod tests {
             frame.now_ms = red;
             let len = width as usize * 2 * 4;
             let mut output = vec![77; len + 4];
-            assert_eq!(module.readback_into(id, &frame, &mut output), Some(true));
+            assert_eq!(
+                module.readback_into(id, &frame, &mut output),
+                Some(red == 31.)
+            );
             assert!(output[..len]
                 .as_chunks::<4>()
                 .0

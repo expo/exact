@@ -139,6 +139,7 @@ pub struct RendererWithAssets<const ASSETS: bool> {
     hook_binding: Option<crate::hooks::FrameBinding>,
     custom_bindings: Option<crate::hooks::MaterialBindings>,
     hook_targets: Option<crate::hooks::HookTargets>,
+    pub(crate) idle_hook_reads: Option<std::cell::RefCell<Vec<crate::hooks::HookRead>>>,
     pub(crate) hook_metrics: Option<Box<crate::hooks::metrics::Metrics>>,
     /// A look frame's instruments, armed for one encode (`probe.rs`).
     pub(crate) probe: Option<probe::Probe>,
@@ -448,6 +449,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             hook_binding: None,
             custom_bindings: None,
             hook_targets: None,
+            idle_hook_reads: None,
             hook_metrics: None,
             probe: None,
             probe_built: Default::default(),

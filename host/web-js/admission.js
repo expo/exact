@@ -1,8 +1,11 @@
 import { rt } from './rt-link.js';
-import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
+import { bundledAsset, admittingGrant, admitsFetchHop, isSelfGrant, sameOriginRequest, selfWithoutPage, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 import { answeredFetch, countFault, delayFixture, faultMessage, matchFault } from '../web/faults.js';
 import { redirectFor, reachRefusal, UNATTRIBUTED } from '../web/address-space.js';
 export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, grantWords, hasGrant, rawGrantText, trimGrant, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
+// A driver's fixtures and faults answer only where the agent may drive the page: a release has none, and its bundle
+// drops their code (agent-gate.mjs writes this false).
+const AGENT_ADMITTED = true;
 
 // Captured while the entry graph loads. App source injection never replaces
 // the page global, so separately loaded host modules retain browser authority.
@@ -13,9 +16,19 @@ export class FetchError extends Error {
 }
 
 const refusal = capability => `outside the app's grants (${capability})`;
-const assetPath = value => typeof value === 'string' && /^\/assets\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(value);
+// Keep the authored asset spelling for the host's bundled-file exception. Other inputs take
+// their URL at the call, before a stream, mutation or file read can wait for a different base.
+export function fetchTarget(input, init) {
+  if (input instanceof Request) return input;
+  if (bundledAsset(input) && init?.exactStream === undefined && !init?.exactPrefetch && init?.exactBodyFrom === undefined &&
+      hostAsset(input, init ?? {}) && (!globalThis.__exactRender || globalThis.document?.URL)) return input;
+  try { return fetchURL(String(input)); }
+  catch (error) { throw new FetchError(error.kind ?? 'Network', error.message); }
+}
+const fetchURL = value => globalThis.__exactRender ? new Request(value).url
+  : new URL(value, globalThis.document?.baseURI ?? globalThis.location?.href).href;
 const noHeaders = headers => headers == null || [...new Headers(headers)].length === 0;
-const hostAsset = (input, init) => assetPath(input) && String(init.method ?? 'GET').toUpperCase() === 'GET'
+const hostAsset = (input, init) => bundledAsset(input) && String(init.method ?? 'GET').toUpperCase() === 'GET'
   && init.body == null && noHeaders(init.headers);
 
 // `exactTimeout` (ms): the whole exchange ends by then, as on native, and the
@@ -91,17 +104,26 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   const ceiling = ceilingOf(init);
   try {
     asset = hostAsset(input, init);
+    if (asset && globalThis.__exactRender && !globalThis.document?.URL) fetchURL(input);
     value = typeof Request === 'function' && input instanceof Request ? input.url
-      : asset ? new URL(String(input), globalThis.location?.href).href : new URL(String(input)).href;
+      : asset ? new URL(String(input), globalThis.location?.href).href : fetchURL(String(input));
   }
-  catch (error) { throw new FetchError('Network', error?.message ?? error); }
+  catch (error) { throw new FetchError(error?.kind ?? 'Network', error?.message ?? error); }
+  if (asset && new URL(value).origin !== globalThis.location?.origin)
+    throw new FetchError('Refused', 'host asset left the app origin');
   const invalid = grantError(set);
   if (invalid) throw new FetchError('Refused', invalid);
-  if (!asset && !admitsNetwork(set, value, 'fetch')) throw new FetchError('Refused', refusal('net.fetch'));
+  const grant = !asset && admittingGrant(set, value, 'fetch');
+  const self = globalThis.__exactFetchSelf !== false && isSelfGrant(set, grant);
+  if (!asset && !grant) {
+    if (globalThis.__exactRender && admitsNetwork(set, value, 'fetch', false)) throw Object.assign(new Error("fetch() outside the render server's grants"), { renderDeferred: true, unavailable: 'a network grant held by the reader' });
+    if (globalThis.__exactFetchSelf !== false && selfWithoutPage(set, value)) throw new FetchError('Refused', "outside the app's grants (net.fetch): net.fetch self needs a trusted HTTP(S) page URL");
+    throw new FetchError('Refused', refusal('net.fetch'));
+  }
   // @ref LLP 1103 D1, D2 — a driver fault: the refused connection's failure, never sent.
   const suppliedMethod = init.method;
   const method = suppliedMethod === undefined ? input?.method ?? 'GET' : String(suppliedMethod);
-  const fixture = !asset && matchFault(value, true, /^(get|post|put|head|delete|options)$/i.test(method) ? method.toUpperCase() : method);
+  const fixture = AGENT_ADMITTED && !asset ? matchFault(value, true, /^(get|post|put|head|delete|options)$/i.test(method) ? method.toUpperCase() : method) : null;
   const delay = fixture?.response?.afterMs ?? 0;
   const timeout = delay && deadline && deadline.ms <= delay ? deadline.ms : 0;
   const due = delay && (rt.clock?.now ?? 0) + (timeout || delay);
@@ -143,8 +165,12 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
     const requestInput = typeof Request === 'function' && input instanceof Request ? input : value;
     const options = { ...rest, ...(signal ? { signal } : {}), redirect };
     // The browser validates the request even when the driver supplies its response.
-    const checked = new Request(requestInput, options);
-    const response = fixture ? answeredFetch(fixture.response, checked) : await browserFetch(checked);
+    const asked = new Request(requestInput, options);
+    const checked = self && !globalThis.__exactRender ? sameOriginRequest(asked) : asked;
+    const admits = (url, render) => asset && bundledAsset(input, value, url) || admitsFetchHop(set, url, self, render, value);
+    const response = fixture ? answeredFetch(fixture.response, checked) : await (globalThis.__exactRender
+      ? browserFetch(checked, undefined, admits)
+      : browserFetch(checked));
     // A no-cors response hides its destination; a manual redirect is the browser's opaque-redirect result.
     if (!response.url && response.type !== 'opaqueredirect') {
       response.body?.cancel().catch(() => {});
@@ -152,9 +178,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
     }
     // A redirect that left the grants names where it led (podcast F5), as
     // the native executor does; the browser followed it to this last hop.
-    if (response.url && (asset
-      ? new URL(response.url).origin !== globalThis.location?.origin
-      : !admitsNetwork(set, response.url, 'fetch'))) throw new FetchError('Refused', `${refusal('net.fetch')}: redirected to ${new URL(response.url).origin}`);
+    if (response.url && !admits(response.url)) throw new FetchError('Refused', `${refusal('net.fetch')}: redirected to ${new URL(response.url).origin}`);
     const landingRefusal = !asset && response.url ? reachRefusal(response.url, origin) : null;
     if (landingRefusal) { response.body?.cancel().catch(() => {}); throw new FetchError('Refused', `NotAllowedError: ${landingRefusal}`); }
     // Its clone is read whole before it answers, as the native executor
@@ -172,7 +196,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
       }
       countFault(value, fixture);
       if (delay) {
-        await delayFixture(rt, wait, due, own);
+        await delayFixture({ clock: rt.clock, drive: rt.drive }, wait, due, own);
         if (timeout) throw new FetchError('Timeout', `the request timed out after ${timeout} ms`);
       }
     }
@@ -182,6 +206,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   catch (error) {
     if (globalThis.__exactRender && error?.renderDeferred) throw error;
     if (error instanceof FetchError) throw error;
+    if (globalThis.__exactRender && error?.kind === 'Refused') throw new FetchError('Refused', error.message);
     if (deadline && signal?.aborted && signal.reason === deadline.signal.reason) throw new FetchError('Timeout', `the request timed out after ${until.ms} ms`);
     // The caller's own abort rejects with its signal's reason, as Fetch and the native prelude do: an
     // `AbortError` for a bare `abort()`, or the very value the app gave it.

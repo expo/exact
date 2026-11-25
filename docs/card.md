@@ -4,51 +4,46 @@ functions: call -> result
   xs.at(i) -> option<T>  (-1 is last)
   back(router) -> Router
   calendarDiff(from, to, "years"|"months") -> option<number>  (whole; YYYY-MM-DD)
-  ceil(n) -> number
+  ceil|floor(n) -> number
   xs.concat(ys) -> T[]
-  cos(rad) -> number
+  cos|sin(rad) -> number
   depth(router) -> number
   elementFromPoint(x, y) -> option<string>
   elementsFromPoint(x, y) -> string[]
-  encodeRouteSegment(text) -> string
-  encodeURIComponent(text) -> string
+  encodeRouteSegment|encodeURIComponent(text) -> string
   text.endsWith(suffix) -> bool
   xs.filter(x => bool) -> T[]
   first(xs) -> option<T>
   xs.flat() -> T[]
-  floor(n) -> number
   formatDate(msOrDayKey, offset, "medium"|"month-year"|"month-day"|"iso") -> string
   formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
   formatDecimal(units, digits) -> string  (cents to "12.34"; literal digits)
   formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD"|digits) -> string  (1,234.5; 26%)
+  formatShortcut(chord) -> string  (⇧⌘O or Ctrl+Shift+O; empty on server)
   formatTime(ms, offset, "short"|"2-digit") -> string  ("2:13 PM"; offset: min east of UTC)
   fragment(entry) -> string
   frame(id) -> Geometry  (action)
-  go(router, location) -> Router
+  go|open|push|replace(router, location) -> Router
   s.includes(x) -> bool  (text or list)
   s.indexOf(x) -> number  (-1 for none)
   s.isEmpty() -> bool
   xs.join(sep) -> string
   s.length -> number  (text or list)
   xs.map(x => U) -> U[]
-  max(a, b) -> number
+  max|min(a, b) -> number
   measure("id") -> Geometry  (action)
-  min(a, b) -> number
-  open(router, location) -> Router
   params(router, parameterName) -> string[]
   parseNumber(text) -> option<number>  (none for "12px")
   performanceNow() -> number  (ms since launch)
-  push(router, location) -> Router
   querySelectorAll(selector) -> string[]
   range(n) -> number[]
   rangeFrame(id, start, end) -> Geometry  (action)
-  replace(router, location) -> Router
   text.replaceAll(find, with) -> string
   round(n) -> number  (half up)
+  scrollMetrics(id) -> option<ScrollMetrics>
   searchParam(entry, name) -> string
   select(router, tabName) -> Router
   sharedFiles(entry, name) -> SharedFiles
-  sin(rad) -> number
   s.slice(start, end?) -> text|list
   sortBy(xs, x => key, "desc"?) -> T[]  (stable)
   text.split(separator) -> string[]
@@ -65,13 +60,14 @@ functions: call -> result
   pending(resourceOrMutation)  current(resource)  failed(resourceOrMutation)  failure(resourceOrMutation)  path("route", args…)  empty(field=value, …)  some(expr)  DeclaredShape(field=value, …)
 
 tags: attributes; on events. Every tag also takes CSS style attributes and colour roles (`contract vocab <style>`)
-  view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd: id testId role title tabindex; on press hover key keyup focus blur contextmenu dblclick
+  view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd: id testId role title tabindex aria-live; on press hover key keyup focus blur contextmenu dblclick
   text "…": markup; on selectionchange
   image "…": alt; on load
   button: disabled buttonStyle destructive; on press
   link: href; on press
-  input: value type inputmode min max step maxlength placeholder enterkeyhint autocomplete autocapitalize autofocus disabled readonly checked name accept multiple; on input change submit select selectionchange beforeinput
-  textarea: value placeholder maxlength enterkeyhint; on input change select selectionchange beforeinput
+  input textarea: value placeholder maxlength inputmode enterkeyhint autocomplete autocapitalize autocorrect spellcheck autofocus disabled readonly emojiPicker; on input change select selectionchange beforeinput
+  input: type min max step checked name accept multiple; on submit
+  textarea: rows markup
   select: value disabled; on change
   option "…": value
   time: datetime format
@@ -97,22 +93,22 @@ test steps (app.test.contract, docs/contract-grammar.md)
   expect text "id" == "…"
   expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
+  tap "intro" drag 0 -170 over 400 hold 200
+  rotate <orientation>
   back
   presence allow (cancel, fail, lockout, invalidated)
-  fail fetch "<prefix>", pass fetch …
-  drop stream "<prefix>"
+  fail fetch, pass fetch, drop stream "<prefix>"
   answer fetch "<prefix>" with 200 {…}, answer source s with {…}
   request POST "/items" {…} as grace expect 409
   size 390x844, at "/item/7#moves", epoch, time-zone, locale, seed, before data
 
-ops: a target is a testId, else a view's exact text or label
-  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
+ops:
+  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · rotate <orientation> (iOS simulator) · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
-  tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up
-  type <target> <text>|key <Name>   (a select, date or checkbox: its value)
-  clock data|settle|held|+<ms> [real]    replies · transitions · push
-  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars
-  Android reader drives refuse film and play layers only under --live. Record a live or normal run with adb shell screenrecord.
+  tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up (testId, exact text or label)
+  type <target> <text>|key <Name>  (a select, date or checkbox: its value)
+  clock data|settle|held|+<ms> [real]  replies · transitions · push
+  check [dark|both] · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>
 
 how (snippets compile)
@@ -142,7 +138,7 @@ a second screen, a sheet: Use a route for a screen. A sheet has `navigationPrese
             text "New" role="heading"
             button press=save buttonStyle="bordered-prominent" aria-label="Save"
               image "symbol:checkmark"
-a confirmation: Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. Open: `command="show-modal"` or `showModal(id)`.
+a confirmation: Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. `showModal(id)` opens it too.
   state n = 1
   action remove
     n = 0
@@ -153,7 +149,7 @@ a confirmation: Confirm irreversible actions: `aria-label` asks; `press` acts; `
       text "Delete"
     button commandfor="remove" command="close"
       text "Cancel"
-a timer: `every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`. More: `vocab timers`.
+a timer: `every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`.
   state now = 0
   task tick mount
     every(1000, step)
@@ -184,13 +180,13 @@ a dated record: The write reads the clock, not a ticked `now`; `performanceNow()
   action log
     let at = time.epochAtZero + performanceNow()
     days = days.concat([formatDate(at, time.utcOffset, "iso")])
-a test, and verify: Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
+a test, and verify: Fresh store per test. `reload` keeps it. `clock data` lands replies, `clock settle` ends transitions. `bun exact.mjs verify` checks ends and relaunches. Run `verify ios` last. Keep its `contract verify` receipt and `--shots <dir>`.
   test "a pick survives a relaunch"
     tap "pick"
     clock data
     reload
     expect text "n" == "1"
-composing a screen: One focal point. Emphasis is a part, not paint on a `button`; the main action is `buttonStyle="filled"`. Search: `input type="search"` in the `header`, live. A form is a grouped list (`grouped-form`); no rows, an `EmptyState`, its `button` indented under it.
+composing a screen: One focal point. Use parts, a filled button and live header search. See `grouped-form`. Nest buttons under `EmptyState`.
   use SummaryCard from "exact:content"
   column gap=16 padding=16
     SummaryCard(label="Streak", value="12", detail="days in a row", progress=none, symbol=none)
@@ -198,7 +194,7 @@ composing a screen: One focal point. Emphasis is a part, not paint on a `button`
       text "Log today"
 
 rules
-- An event's payload follows captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; none for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
+- After captured arguments, fields, selects and dates pass text. Checkboxes and switches pass bools. Ranges pass numbers. `press` and `submit` pass none. `change=set(i.id)` calls `set(id, payload)`.
 
 ```contract
 component App
@@ -215,6 +211,7 @@ component App
 ```
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
+- No announce call: a screen reader reads a mounted `text role="status"` (or `"alert"`) as its text changes (`vocab live`).
 - Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
-idioms with code (vocab <name>): bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics status-bar toast titlebar share use members svg env safe-area var media css cache rtl :active
+idioms with code: viewport-and-container-units bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics symbol-effect status-bar live toast titlebar share use members svg env safe-area var media css cache rtl :active
 symbol roles ("symbol:<role>"; * has a <role>-fill; symbol:sf/<name> is Apple-only): back close compose add microphone send search copy select-text more delete forward home* person* messages notifications* settings repeat activity bookmark* document select* reorder list cart sort filter heart* reply share ellipsis photo play* pause* skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop* circle alert* minus-circle pencil waveform info* camera star* minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag* phone smartphone article radio running walking stopwatch timer history ruler speed location* location-off* skip-next* finish

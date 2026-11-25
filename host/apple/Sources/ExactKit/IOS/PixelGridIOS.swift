@@ -146,7 +146,7 @@ extension Presenter {
         func origin(_ holder: UIView) -> GridOrigin? {
             var ancestor: UIView? = holder
             while let a = ancestor, !(a is NodeView) { ancestor = a.superview }
-            guard let node = ancestor as? NodeView, node.container === holder else { return nil }
+            guard let node = ancestor as? NodeView, node.container === holder || node.scrollportHolder === holder else { return nil }
             return node.grid?.origin ?? .zero
         }
         guard let holder = view.superview else { return .zero }
@@ -169,7 +169,10 @@ extension Presenter {
         // A frame is set untransformed (UIKit's `frame` is undefined
         // under a transform); the presentation goes back on after.
         v.transform = .identity
-        v.frame = groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn
+        // A box that does not scroll is drawn past its frame by its reach (LLP 1123 D13)
+        let reached = v.reached(place)
+        v.frame = reached?.frame ?? (groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn)
+        if let origin = reached?.origin ?? (v.reach != .zero && v.scrollView == nil ? .zero : nil), v.bounds.origin != origin { v.bounds.origin = origin }
         v.textRasterGeometryChanged()
         v.scroll?.frame = v.scrollFrame
         if v.fieldWaits, rect.width > 0 || rect.height > 0 { v.makeWaitingField() } // its box laid out (MenuHost.waitingFields)
@@ -177,6 +180,7 @@ extension Presenter {
         v.layoutTextArea()
         v.metal?.frame = v.bounds
         v.overlay?.frame = v.bounds
+        v.placeExtension()
         v.web?.frame = v.bounds
         v.fitScroll()
         v.applyTransform()
@@ -206,6 +210,7 @@ extension Presenter {
             applyFrame(child, old.layout)
         }
         for case let child as NodeView in parent.container.subviews { regrid(child) }
+        parent.scrollportHolder?.bars.compactMap(\.view).forEach(regrid) // a scroller's bars on its scrollport
         navigation.lifted?.lifted(from: parent).forEach(regrid)
         // A grouped list's carried rows are its children too, in their cells.
         if groupedLists?.carriesRows == true { groupedLists?.carried(from: parent.container).forEach(regrid) }

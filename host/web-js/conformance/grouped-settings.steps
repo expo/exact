@@ -1,0 +1,14 @@
+drag move-Account to move-Display 400
+clock settle
+expect slots.last == "Account in settings to settings"
+expect slots.rows.3 == "Account"
+key move-Account Space
+key move-Account ArrowUp
+key move-Account Escape
+clock settle
+key move-Privacy Space
+key move-Privacy ArrowDown
+key move-Privacy Enter
+clock settle
+expect slots.last == "Privacy in settings to settings"
+expect slots.rows.1 == "Privacy"

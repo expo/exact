@@ -24,6 +24,7 @@
 //!   came raises `added` and each that went `removed`, with the entry, as
 //!   the device would.
 
+use super::super::provenance::Cause;
 use super::super::{DataSource, Runner};
 use super::{error_code, CallOrigin, Decision, Json, ModulesRow, Route, Waits};
 use serde_json::json;
@@ -134,7 +135,7 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         row: &ModulesRow,
         args: &Json,
-        origin: CallOrigin,
+        cause: Cause,
         decision: &Decision,
     ) {
         let answered = match decision {
@@ -154,25 +155,20 @@ impl<D: DataSource> Runner<D> {
             _ => None,
         };
         let result = answered.map(|a| a.get("result").cloned().unwrap_or(a));
-        self.play(row, args, origin, token, result);
+        self.play(row, args, cause, token, result);
     }
 
     /// An effect (a send answering nothing) the substitute did: kept where
     /// it is `played`.
-    pub(in crate::runner) fn effect_played(
-        &mut self,
-        row: &ModulesRow,
-        args: &Json,
-        origin: CallOrigin,
-    ) {
-        self.play(row, args, origin, None, None);
+    pub(in crate::runner) fn effect_played(&mut self, row: &ModulesRow, args: &Json, cause: Cause) {
+        self.play(row, args, cause, None, None);
     }
 
     fn play(
         &mut self,
         row: &ModulesRow,
         args: &Json,
-        origin: CallOrigin,
+        cause: Cause,
         token: Option<u64>,
         result: Option<Json>,
     ) {
@@ -182,7 +178,7 @@ impl<D: DataSource> Runner<D> {
         };
         let mut entry = args.as_object().cloned().unwrap_or_default();
         entry.retain(|_, v| !v.is_null() || sub["played"]["by"].is_string());
-        entry.insert("origin".into(), json!(origin.word()));
+        entry.insert("origin".into(), json!(cause.origin().word()));
         if let Some(token) = token {
             entry.insert("ref".into(), json!(token));
         }

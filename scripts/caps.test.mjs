@@ -964,7 +964,7 @@ for (const [name, html, files, expectCode, expect] of [
   result('Apple packages reject linked static files and roots', copied && appRefused && hostRefused && danglingRootRefused);
 }
 
-// Exercise the driver's actual method with a quantized wall clock (#285).
+// Exercise the driver's actual method with a quantized wall clock.
 test('clock +N real never seeks behind the last reply and ends at from + N', async () => {
   const source = readFileSync(new URL('./agent-session.mjs', import.meta.url), 'utf8');
   const start = source.indexOf("    async clock(spec = 'settle'"); // (its parameters after the spec are its own)

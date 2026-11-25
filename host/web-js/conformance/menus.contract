@@ -1,7 +1,7 @@
 // Synthetic conformance plan (review b5-b 3, 4): a `contextmenu` is heard by
 // the nearest node that declares it, not its ancestors too, and a field's
 // own edit menu is the browser's (no handler runs there); a control's input
-// has none, so its node hears it and its node's popover opens (#487); a
+// has none, so its node hears it and its node's popover opens; a
 // `wheel` reaches a disabled box (`disabled` means nothing on a div) and not
 // a disabled button.
 component Menus

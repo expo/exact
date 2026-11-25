@@ -3,8 +3,11 @@
 //! person reads, what a node's identity outlives, what an open surface
 //! leaves of the page, a hosted field's place, what a statement says
 //! changed, what an action does, and that a host whose shell never asks
-//! (desktop Linux) builds nothing.
+//! builds nothing.
 use super::*;
+
+#[path = "access_tests/actions.rs"]
+mod actions;
 use crate::fields::{FieldFace, FieldMetrics};
 use crate::presenter::top::SurfacePainter;
 use exact_runner::{DataError, Value};
@@ -315,6 +318,15 @@ fn told(words: &[i32]) -> Told {
         let (name, next) = string(words, at + 18);
         let (value, next) = string(words, next);
         let (hint, next) = string(words, next);
+        let mut at_action = next + 1;
+        let actions = (0..words[next])
+            .map(|_| {
+                let id = words[at_action];
+                let (name, end) = string(words, at_action + 1);
+                at_action = end;
+                (id as ViewId, name)
+            })
+            .collect();
         nodes.push(Node {
             id: w[0],
             parent: w[1],
@@ -338,8 +350,10 @@ fn told(words: &[i32]) -> Told {
             name,
             value,
             hint,
+            action_owner: w[2] as ViewId,
+            actions,
         });
-        at = next;
+        at = at_action;
     }
     assert_eq!(at, words.len(), "the statement is read to its end");
     Told {

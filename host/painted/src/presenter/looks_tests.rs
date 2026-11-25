@@ -1,6 +1,6 @@
 //! LLP 1121 D8 on the Linux host's CPU painter (Android's Canvas reader
 //! replays what it records; its layers are not exercised here): `:active` is
-//! the press paint, eased on the press's curve,
+//! the press paint, each property on its own timing (LLP 1061 D7 "Timing"),
 //! its opacity an absolute target from what shows; a `:hover` look shows at
 //! once while a mouse hovers the node (or a child of it), its opacity in
 //! place of the node's, under the press's paint; a disabled node takes none.
@@ -133,6 +133,7 @@ fn a_disabled_node_takes_no_look_and_a_finger_hovers_none() {
     p.set_pointer_kind(PointerKind::Touch);
     p.pointer_down(b.0 + 20., b.1 + 30., 2.).unwrap();
     p.pointer_up(b.0 + 20., b.1 + 30., 3.).unwrap();
+    p.frame();
     p.clock(200.);
     assert_eq!(
         pixel(&mut p, b.0 + b.2 - 20., b.1 + 30.),
@@ -161,6 +162,7 @@ fn a_looks_opacity_is_never_kept() {
     for t in [0., 200.] {
         p.pointer_down(ground.0, ground.1, t).unwrap();
         p.pointer_up(ground.0, ground.1, t + 10.).unwrap();
+        p.frame();
         p.clock(t + 150.);
     }
     p.pointer_move(390., 390., 400.).unwrap();
@@ -291,7 +293,7 @@ fn hover_scale_moves_paint_and_hits_without_moving_layout() {
     let frame = p.host.kernel().node(card).unwrap().frame;
     p.pointer_move(100., 100., 0.).unwrap();
     p.clock(75.);
-    assert!((p.host.presented(card).scale - 1.1).abs() < 1e-5);
+    assert!((p.host.presented(card).scale.0 - 1.1).abs() < 1e-5);
     assert_eq!(p.host.kernel().node(card).unwrap().frame, frame);
     p.clock(150.);
     assert_eq!(
@@ -302,7 +304,7 @@ fn hover_scale_moves_paint_and_hits_without_moving_layout() {
     assert_eq!(pixel(&mut p, 45., 100.), [255, 0, 0]);
     p.pointer_move(390., 390., 150.).unwrap();
     p.clock(300.);
-    assert!((p.host.presented(card).scale - 1.).abs() < 1e-5);
+    assert!((p.host.presented(card).scale.0 - 1.).abs() < 1e-5);
     assert_ne!(p.hit(45., 100.), Some(card));
 }
 
@@ -334,23 +336,23 @@ fn a_hover_scale_moves_on_the_nodes_transition_and_lays_nothing_out() {
     let (b, below) = (rect(&mut p, "eased"), rect(&mut p, "snaps"));
     let (x, y) = (b.0 + b.2 / 2., b.1 + b.3 / 2.);
     p.pointer_move(x, y, 0.).unwrap();
-    assert_eq!(shown(&p, "eased").scale, 1.);
+    assert_eq!(shown(&p, "eased").scale.0, 1.);
     p.clock(75.);
-    assert!((shown(&p, "eased").scale - 1.1).abs() < 1e-4, "halfway");
+    assert!((shown(&p, "eased").scale.0 - 1.1).abs() < 1e-4, "halfway");
     assert_eq!(
         rect(&mut p, "snaps"),
         below,
         "the box below stays: no layout"
     );
     p.clock(150.);
-    assert!((shown(&p, "eased").scale - 1.2).abs() < 1e-6);
+    assert!((shown(&p, "eased").scale.0 - 1.2).abs() < 1e-6);
     assert!(!p.host.motion(), "settled");
     // Pressed: the press's factor over the look's scale.
     assert!(p.pointer_down(x, y, 150.).unwrap());
     p.clock(300.);
     let pressed = shown(&p, "eased");
     assert!(
-        (pressed.scale * pressed.press - 0.6).abs() < 1e-4,
+        (pressed.scale.0 * pressed.press - 0.6).abs() < 1e-4,
         "{pressed:?}"
     );
     p.pointer_up(x, y, 300.).unwrap();
@@ -358,16 +360,16 @@ fn a_hover_scale_moves_on_the_nodes_transition_and_lays_nothing_out() {
     // Away midway back: from what shows, not from the target.
     p.pointer_move(390., 390., 450.).unwrap();
     p.clock(525.);
-    assert!((shown(&p, "eased").scale - 1.1).abs() < 1e-4);
+    assert!((shown(&p, "eased").scale.0 - 1.1).abs() < 1e-4);
     p.clock(600.);
-    assert_eq!(shown(&p, "eased").scale, 1.);
+    assert_eq!(shown(&p, "eased").scale.0, 1.);
     // No transition: at once.
     let s = rect(&mut p, "snaps");
     p.pointer_move(s.0 + 5., s.1 + 5., 600.).unwrap();
-    assert_eq!(shown(&p, "snaps").scale, 2.);
+    assert_eq!(shown(&p, "snaps").scale.0, 2.);
 }
 
-/// CSS Transitions' reversing shortening (§3.2) on a look's scale: leaving
+/// Reversing shortening (CSS Transitions 1 §3.1) on a look's scale: leaving
 /// 75 ms into a 150 ms hover returns in 75 ms, not 150.
 #[test]
 fn leaving_a_hover_scale_midway_returns_in_the_time_it_took() {
@@ -384,17 +386,17 @@ fn leaving_a_hover_scale_midway_returns_in_the_time_it_took() {
     let b = rect(&mut p, "eased");
     p.pointer_move(b.0 + 50., b.1 + 20., 0.).unwrap();
     p.clock(75.);
-    assert!((p.host.presented(id).scale - 1.1).abs() < 1e-4);
+    assert!((p.host.presented(id).scale.0 - 1.1).abs() < 1e-4);
     p.pointer_move(390., 390., 75.).unwrap();
     p.clock(75. + 37.5);
-    let half = p.host.presented(id).scale;
+    let half = p.host.presented(id).scale.0;
     assert!(
         (half - 1.05).abs() < 1e-4,
         "half the way back at half the shortened time: {half}"
     );
     p.clock(150.);
     assert!(
-        (p.host.presented(id).scale - 1.).abs() < 1e-5,
+        (p.host.presented(id).scale.0 - 1.).abs() < 1e-5,
         "back by 150 ms, not 225"
     );
 }
@@ -415,13 +417,13 @@ fn a_zero_scale_look_animates() {
     let b = rect(&mut p, "eased");
     p.pointer_move(b.0 + 50., b.1 + 20., 0.).unwrap();
     p.clock(50.);
-    assert!((p.host.presented(id).scale - 0.5).abs() < 1e-4);
+    assert!((p.host.presented(id).scale.0 - 0.5).abs() < 1e-4);
     p.clock(100.);
-    assert!(p.host.presented(id).scale.abs() < 1e-5);
+    assert!(p.host.presented(id).scale.0.abs() < 1e-5);
     p.pointer_move(390., 390., 100.).unwrap();
     p.clock(150.);
     assert!(
-        (p.host.presented(id).scale - 0.5).abs() < 1e-4,
+        (p.host.presented(id).scale.0 - 0.5).abs() < 1e-4,
         "and back from 0"
     );
 }

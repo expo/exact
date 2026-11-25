@@ -572,6 +572,22 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
     finally { await d.close(); }
   }
 
+  // A real long press on a pressable title in UIKit's bar opens its group's context menu (LLP 1021 §5.1): UIKit's
+  // interaction on the title runs the group's `contextmenu` as the menu shows. A simulator only (the touch runner).
+  if (host === 'ios' && !device) {
+    const d = await open({ host, chrome: 'platform', touch: 'platform' });
+    try {
+      await d.tap('chat'); await settle(d); await d.clock('settle');
+      const holds = async () => byTestId(await d.tree(), 'title-holds')?.props.text;
+      const before = await holds();
+      const press = await d.tap('title-group', { drag: { dx: 0, dy: 0, press: 1000 } });
+      await d.clock('settle');
+      check(press.delivery === 'platform' && before === 'title holds 0' && (await holds()) === 'title holds 1',
+        `${host} native: a real long press on the bar's title runs its group's contextmenu: ${before} → ${await holds()}, ${JSON.stringify(press)}`);
+    } catch (error) { check(false, `${host} native: the bar title's long press: ${error.message}`); }
+    finally { await d.close(); }
+  }
+
   // A route pushed in a sheet's own stack (Detail over Sheet), popped by
   // UIKit's bar Back and by the edge swipe, real touches both (a session
   // with UIKit's bars, `--chrome platform`, and the touch runner): each is

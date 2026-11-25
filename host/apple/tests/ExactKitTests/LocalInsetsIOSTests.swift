@@ -194,7 +194,12 @@ final class LocalInsetsIOSTests: XCTestCase {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the bars and the safe area are a scene window's")
         }
-        let (session, _) = try fixture(scene, "BAR_HERO")
+        try checkTopClearance(in: scene, plan: "BAR_HERO")
+        try checkTopClearance(in: scene, plan: "ROUTE_SCROLL_EDGES")
+    }
+
+    private func checkTopClearance(in scene: UIWindowScene, plan: String) throws {
+        let (session, _) = try fixture(scene, plan)
         until("the route shows under its bar") {
             guard let route = self.node(session, "route"), let c = session.presenter.navigationHost.controllers[route.id] else { return false }
             return c.viewIfLoaded?.window != nil && c.view.safeAreaInsets.top > 0 && c.collapseScroll != nil
@@ -212,6 +217,241 @@ final class LocalInsetsIOSTests: XCTestCase {
         XCTAssertEqual(onScreen(hero).minY, 0, accuracy: 0.5, "the hero's background starts at the screen's top, under the bar")
         XCTAssertEqual(sv.contentOffset.y + sv.adjustedContentInset.top, 0, accuracy: 0.5, "at its start")
         if case .edges(let edges)? = session.presenter.navigationHost.covers[route.id] { XCTAssertEqual(edges.top, 0, "no top cover") }
+        guard plan == "ROUTE_SCROLL_EDGES" else { return }
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        XCTAssertEqual(onScreen(sv).maxY, onScreen(tabs.view).maxY, accuracy: 0.5)
+        XCTAssertEqual(sv.adjustedContentInset.bottom, c.view.safeAreaInsets.bottom, accuracy: 0.5)
+        XCTAssertGreaterThan(sv.adjustedContentInset.bottom, try XCTUnwrap(window).safeAreaInsets.bottom)
+        let bar = try XCTUnwrap(c.navigationController?.navigationBar)
+        sv.contentInsetAdjustmentBehavior = .automatic
+        session.presenter.navigationHost.selectScrollEdges(of: c)
+        XCTAssertEqual(sv.contentInsetAdjustmentBehavior, .never)
+        XCTAssertEqual(sv.adjustedContentInset.top, 0, accuracy: 0.5)
+        let expanded = bar.bounds.height
+        sv.setContentOffset(CGPoint(x: 0, y: 600), animated: false)
+        waitFor("scrolling collapses the large title") { bar.bounds.height < expanded - 1 }
+    }
+
+    func testBottomClearanceLeavesAPulledScrollOffsetAlone() {
+        let presenter = Presenter()
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 300, height: 600))
+        scroll.contentSize = CGSize(width: 300, height: 2400)
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.setContentOffset(CGPoint(x: 0, y: -40), animated: false)
+        let inset = ClearanceInset(scroll: scroll, unadjustedBottom: 83)
+        presenter.navigationHost.applyClearance([ObjectIdentifier(scroll): inset])
+        XCTAssertEqual(scroll.contentInset.bottom, 83)
+        XCTAssertEqual(scroll.contentOffset.y, -40)
+        presenter.navigationHost.applyClearance([:])
+        XCTAssertEqual(scroll.contentOffset.y, -40)
+    }
+
+    func testRouteScrollInsetsMatchUIKitOnEachEdge() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the tab and navigation bars need a scene") }
+        try checkScrollEdges(in: scene, cover: false)
+    }
+
+    func testCoverRouteGivesItsBottomInsetToTheScrollerThatReachesTheTabBar() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the tab bar needs a window") }
+        let (session, _) = try fixture(scene, "COVER_SCROLL_EDGES")
+        let route = try XCTUnwrap(session.presenter.navigationHost.activeRoute)
+        let tabs = try XCTUnwrap(route.tabBarController)
+        guard let bar = RouteGeometry.shownBar(tabs.tabBar), onScreen(bar).midY > scene.screen.bounds.midY else {
+            throw XCTSkip("the fixture needs a bottom tab bar")
+        }
+        func press(_ id: String) throws {
+            session.presenter.press(try XCTUnwrap(node(session, id)).id)
+            session.presenter.settlePump()
+        }
+        let foot = onScreen(tabs.view).maxY, safe = onScreen(bar).minY
+        try press("clipped")
+        let clip = try XCTUnwrap(node(session, "clip"))
+        let clipped = try XCTUnwrap(node(session, "clipped-list")?.scrollView)
+        until("the last scroller and its clipping wrapper reach the tab bar together") {
+            abs(self.onScreen(clip).maxY - foot) < 0.5 && abs(self.onScreen(clipped).maxY - foot) < 0.5
+                && abs(clipped.adjustedContentInset.bottom - (foot - safe)) < 0.5
+        }
+        let page = try XCTUnwrap(node(session, "list")?.scrollView)
+        try press("footer")
+        until("the footer keeps the list above the bar") { self.onScreen(page).maxY < safe && route.edgeScroll == nil }
+        try press("padded")
+        let padded = foot - (try XCTUnwrap(window)).safeAreaInsets.bottom
+        until("only the band above the authored padding insets the list") {
+            abs(self.onScreen(page).maxY - padded) < 0.5 && abs(page.adjustedContentInset.bottom - (padded - safe)) < 0.5
+        }
+        try press("short-route")
+        until("a route ending above the bar gives back the bottom edge") { self.onScreen(page).maxY < safe && route.edgeScroll == nil }
+        try press("top")
+        try press("barless")
+        until("a route without a navigation bar still runs under the tabs") {
+            route.navigationController?.isNavigationBarHidden == true && abs(self.onScreen(page).maxY - foot) < 0.5
+                && abs(page.adjustedContentInset.bottom - (foot - safe)) < 0.5
+        }
+    }
+
+    func testCoverRouteWithoutTabsKeepsItsBottomClearance() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the home indicator needs a window") }
+        let (session, _) = try fixture(scene, "COVER_SCROLL")
+        let route = try XCTUnwrap(session.presenter.navigationHost.activeRoute)
+        let page = try XCTUnwrap(node(session, "home-scroll")?.scrollView)
+        let window = try XCTUnwrap(window)
+        waitFor("the list ends at the window's safe edge") {
+            abs(self.onScreen(page).maxY - window.safeAreaLayoutGuide.layoutFrame.maxY) < 0.5
+        }
+        XCTAssertNil(route.edgeScroll)
+        XCTAssertEqual(page.adjustedContentInset.bottom, 0, accuracy: 0.5)
+    }
+
+    func testCoverRouteScrollInsetsMatchUIKitOnEachEdge() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the tab and navigation bars need a scene") }
+        try checkScrollEdges(in: scene, cover: true)
+    }
+
+    private func checkScrollEdges(in scene: UIWindowScene, cover: Bool) throws {
+        let (session, _) = try fixture(scene, cover ? "COVER_SCROLL_EDGES" : "ROUTE_SCROLL_EDGES")
+        let navigation = session.presenter.navigationHost
+        waitFor("the tab's large-title route appears") {
+            navigation.tabController?.selectedViewController != nil && self.node(session, "end") != nil && !navigation.inTransition
+        }
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
+        let bottomTabs = RouteGeometry.shownBar(tabs.tabBar).map {
+            $0.bounds.width > $0.bounds.height && onScreen($0).midY > onScreen(tabs.view).midY
+        } ?? false
+        if !bottomTabs && !cover { throw XCTSkip("the UIKit reference needs tabs at the bottom of the screen") }
+        session.presenter.press(try XCTUnwrap(node(session, "open")).id)
+        waitFor("UIKit takes the pushed route") { nav.viewControllers.count == 2 }
+        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        XCTAssertEqual(route.edgeScroll != nil, bottomTabs, "UIKit takes the pushed route's bottom scroller when its tabs are there")
+        waitFor("the orientation route is on screen") {
+            nav.viewControllers.count == 2 && !navigation.inTransition && self.node(session, "open") == nil
+        }
+        let window = try XCTUnwrap(window)
+        let top = try XCTUnwrap(node(session, "window-top")).bounds.height
+        let bottom = try XCTUnwrap(node(session, "window-bottom")).bounds.height
+        XCTAssertEqual(top, cover ? window.safeAreaInsets.top : 0, accuracy: 0.5)
+        XCTAssertEqual(bottom, cover ? window.safeAreaInsets.bottom : 0, accuracy: 0.5)
+        let list = try XCTUnwrap(node(session, "list"))
+        let page = try XCTUnwrap(list.scrollView)
+        XCTAssertTrue(page.isDescendant(of: route.view))
+        if !bottomTabs {
+            XCTAssertNil(route.edgeScroll)
+            XCTAssertEqual(onScreen(page).maxY, window.safeAreaLayoutGuide.layoutFrame.maxY, accuracy: 0.5)
+            XCTAssertEqual(page.adjustedContentInset.bottom, 0, accuracy: 0.5)
+            return
+        }
+        let last = try XCTUnwrap(node(session, "end"))
+
+        let reference = UIViewController()
+        let opaque = UINavigationBarAppearance()
+        opaque.configureWithOpaqueBackground()
+        reference.navigationItem.standardAppearance = opaque
+        reference.navigationItem.scrollEdgeAppearance = opaque
+        reference.title = "Window"
+        reference.navigationItem.largeTitleDisplayMode = .always
+        let native = UIScrollView()
+        reference.view.addSubview(native)
+        native.frame = reference.view.bounds
+        native.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        native.contentSize = CGSize(width: 100, height: 2500)
+        reference.setContentScrollView(native, for: .all)
+        let stack = UINavigationController(rootViewController: UIViewController())
+        stack.pushViewController(reference, animated: false)
+        stack.navigationBar.prefersLargeTitles = true
+        let container = UITabBarController()
+        container.viewControllers = [stack]
+        let oracle = UIWindow(windowScene: scene)
+        oracle.rootViewController = container
+        oracle.isHidden = false
+        defer { oracle.isHidden = true }
+        waitFor("both controllers have their bars") {
+            oracle.layoutIfNeeded()
+            return native.safeAreaInsets.bottom > oracle.safeAreaInsets.bottom && route.view.safeAreaInsets.bottom > oracle.safeAreaInsets.bottom
+        }
+
+        func press(_ id: String) throws {
+            session.presenter.press(try XCTUnwrap(node(session, id)).id)
+            session.presenter.settlePump()
+        }
+        for transparent in [false, true] {
+            if transparent {
+                try press("bar")
+                let appearance = UINavigationBarAppearance()
+                appearance.configureWithTransparentBackground()
+                reference.navigationItem.scrollEdgeAppearance = appearance
+            }
+            // Toggling one edge at a time also exercises changes on the same mounted scroller.
+            for (topOff, bottomOff, toggle) in [(true, false, ""), (true, true, "bottom"), (false, true, "top"), (false, false, "bottom")] {
+                if !toggle.isEmpty { try press(toggle) }
+                let underTop = topOff || transparent
+                let label = "top off \(topOff), bottom off \(bottomOff), transparent \(transparent)"
+                // UIKit selects automatic adjustment for the whole scroll view. With an explicit
+                // top, give it the bottom band by hand. With an automatic top, cancel an opted-out bottom.
+                native.contentInsetAdjustmentBehavior = underTop ? .never : .automatic
+                native.contentInset.bottom = underTop ? (bottomOff ? 0 : native.safeAreaInsets.bottom) : (bottomOff ? -native.safeAreaInsets.bottom : 0)
+                native.setContentOffset(CGPoint(x: 0, y: -native.adjustedContentInset.top), animated: false)
+                page.setContentOffset(CGPoint(x: 0, y: -page.adjustedContentInset.top), animated: false)
+                waitForMainQueue()
+                oracle.layoutIfNeeded()
+                session.presenter.settlePump()
+                waitFor("the scroller reaches the same bottom edge as UIKit: \(label)", facts: {
+                    "adjusted \(page.adjustedContentInset), content \(page.contentInset), frame \(self.onScreen(page)), route \(route.node.contentBox()), clearance \(String(describing: navigation.clearance[ObjectIdentifier(page)]))"
+                }) {
+                    abs(page.adjustedContentInset.bottom - native.adjustedContentInset.bottom) < 0.5 && abs(self.onScreen(page).maxY - self.onScreen(native).maxY) < 0.5
+                }
+                XCTAssertEqual(RouteGeometry.clearanceOff(route.node), (topOff ? 1 : 0) + (bottomOff ? 4 : 0), label)
+                XCTAssertEqual(RouteGeometry.transparentBar(route.node), transparent, label)
+                XCTAssertEqual(onScreen(page).minY, onScreen(native).minY, accuracy: 0.5, label)
+                XCTAssertEqual(page.adjustedContentInset.top, native.adjustedContentInset.top, accuracy: 0.5, label)
+                XCTAssertEqual(session.presenter.scrollOwnedChanges(list), [], "Exact's own insets are not a hatch write: \(label)")
+                XCTAssertTrue(route.contentScrollView(for: .top) === page, label)
+                if !bottomOff { XCTAssertTrue(route.contentScrollView(for: .bottom) === page, label) }
+
+                waitFor("the last row rests at the end: \(label)", facts: { "\(self.onScreen(last)), offset \(page.contentOffset), size \(page.contentSize)" }) {
+                    session.presenter.settlePump()
+                    for scroller in [native, page] {
+                        let end = scroller.contentSize.height + scroller.adjustedContentInset.bottom - scroller.bounds.height
+                        if abs(scroller.contentOffset.y - end) > 0.5 {
+                            scroller.setContentOffset(CGPoint(x: 0, y: end), animated: false)
+                            return false
+                        }
+                    }
+                    return abs(self.onScreen(last).maxY - (self.onScreen(native).maxY - native.adjustedContentInset.bottom)) < 1
+                }
+                if !bottomOff { XCTAssertLessThanOrEqual(onScreen(last).maxY, onScreen(tabs.tabBar).minY + 1, label) }
+                XCTAssertEqual(nav.navigationBar.bounds.height, stack.navigationBar.bounds.height, accuracy: 0.5, "the scrolled title: \(label)")
+                for scroller in [native, page] {
+                    scroller.setContentOffset(CGPoint(x: 0, y: -scroller.adjustedContentInset.top), animated: false)
+                }
+                waitForMainQueue()
+            }
+            if #available(iOS 18.0, *), cover {
+                try press("tabs")
+                waitFor("the hidden tab bar gives the cover page its bottom edge back", facts: {
+                    "frame \(self.onScreen(page)), inset \(page.adjustedContentInset), edge \(String(describing: route.edgeScroll))"
+                }) {
+                    route.edgeScroll == nil && abs(self.onScreen(page).maxY - window.safeAreaLayoutGuide.layoutFrame.maxY) < 0.5 && page.adjustedContentInset.bottom == 0
+                }
+                try press("tabs")
+                waitFor("the scroller takes the tab bar again") {
+                    route.edgeScroll === list && abs(page.adjustedContentInset.bottom - native.adjustedContentInset.bottom) < 0.5
+                }
+            }
+            if !transparent { try press("top") }
+        }
+
+        // A shorter list can end exactly one tab bar above the foot, even after the
+        // route has given up its padding. It takes only the safe area it overlaps.
+        try press("height")
+        waitFor("the height-limited list ends above the tab bar with no bottom inset", facts: {
+            "frame \(self.onScreen(page)), bar \(self.onScreen(tabs.tabBar)), adjusted \(page.adjustedContentInset), safe \(page.safeAreaInsets)"
+        }) {
+            abs(self.onScreen(page).maxY - self.onScreen(tabs.tabBar).minY) < 0.5 && abs(page.adjustedContentInset.bottom) < 0.5
+        }
+        try press("height")
+        waitFor("the list regains its bottom inset when it grows under the bar") {
+            abs(self.onScreen(page).maxY - self.onScreen(native).maxY) < 0.5 && abs(page.adjustedContentInset.bottom - native.adjustedContentInset.bottom) < 0.5
+        }
     }
 
     func testAScrollerBelowAControlBarGetsNoInsetForIt() throws {

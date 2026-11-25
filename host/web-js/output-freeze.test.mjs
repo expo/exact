@@ -18,10 +18,12 @@ function serve() {
   } });
 }
 
-async function outputPage({ reader = null, sequence = false } = {}) {
+// `hapticOnly`: a page whose only output is a haptic, linked as the compiler links it (`watchOutput`), with no sounds or
+// MIDI to install the freeze settlement for it.
+async function outputPage({ reader = null, sequence = false, hapticOnly = false } = {}) {
   const server = serve(), browser = await suiteBrowser(), page = await browser.newPage();
   await page.goto(server.url.href);
-  await page.evaluate(async ({ reader, sequence }) => {
+  await page.evaluate(async ({ reader, sequence, hapticOnly }) => {
     const started = [], stopped = [], sent = [], vibrated = [];
     const parameter = value => ({ value, cancelScheduledValues() {}, setValueAtTime() {}, linearRampToValueAtTime() {} });
     let decoded = 0;
@@ -61,9 +63,12 @@ async function outputPage({ reader = null, sequence = false } = {}) {
     const { haptic } = await import('/host/web-js/commands.js');
     const sourceA = 'data:audio/wav;base64,AAAA', sourceB = 'data:audio/wav;base64,AAAB';
     rt.data.grants = 'device.midi test';
+    if (hapticOnly) (await import('/host/web-js/output.js')).watchOutput();
     rt.useCommands({ haptic });
-    install([[sourceA, 48000, 48000], [sourceB, 48000, 48000]]);
-    midi({}, true);
+    if (!hapticOnly) {
+      install([[sourceA, 48000, 48000], [sourceB, 48000, 48000]]);
+      midi({}, true);
+    }
 
     let online;
     if (reader) {
@@ -105,6 +110,7 @@ async function outputPage({ reader = null, sequence = false } = {}) {
     });
     window.fixture = {
       rt, sourceA, sourceB, snapshot,
+      holdHaptic() { hold(() => rt.C('haptic', ['impact-light'])); },
       holdStarts() {
         hold(() => {
           rt.C('playSound', [sourceA, rt.clock.now, 1, '']);
@@ -156,8 +162,8 @@ async function outputPage({ reader = null, sequence = false } = {}) {
         await transition.finished;
       },
     };
-  }, { reader, sequence });
-  await page.waitForFunction(() => exact.sounds?.state().output.decoded === '2/2' && exact.midi?.state().state === 'granted');
+  }, { reader, sequence, hapticOnly });
+  if (!hapticOnly) await page.waitForFunction(() => exact.sounds?.state().output.decoded === '2/2' && exact.midi?.state().state === 'granted');
   return { server, browser, page, close: async () => { await page.close(); await browser.close(); server.stop(true); } };
 }
 
@@ -172,6 +178,16 @@ for (const reader of [null, 'onLine']) {
     } finally { await fixture.close(); }
   }, 30_000);
 }
+
+test('a freeze discards a held haptic on a page whose only output is haptics', async () => {
+  const fixture = await outputPage({ hapticOnly: true });
+  try {
+    await fixture.page.evaluate(() => { fixture.holdHaptic(); fixture.freeze(); });
+    expect(await fixture.page.evaluate(() => fixture.snapshot())).toMatchObject({ vibrated: [] });
+    await fixture.page.evaluate(() => fixture.release());
+    expect(await fixture.page.evaluate(() => fixture.snapshot())).toMatchObject({ vibrated: [] });
+  } finally { await fixture.close(); }
+}, 30_000);
 
 test('a freeze delivers held standalone cleanup before presentation releases', async () => {
   const fixture = await outputPage();

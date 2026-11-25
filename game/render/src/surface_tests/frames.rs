@@ -93,6 +93,257 @@ fn state(s: &mut WorldSurface<Dice>) -> serde_json::Value {
 }
 
 #[test]
+fn a_resting_world_ticks_input_before_deciding_to_draw() {
+    use std::task::Poll::{Pending, Ready};
+    struct Shake;
+    impl Game for Shake {
+        const ID: &'static str = "frames-shake";
+        type Args = DiceArgs;
+        fn setup(w: &mut World, a: &DiceArgs) {
+            Dice::setup(w, a);
+        }
+        fn tick(w: &mut World, input: &Input, _: &DiceArgs) {
+            if let Some(sample) = input.sensor(exact_game::SensorKind::Accelerometer) {
+                if sample.values[0] < 0. {
+                    w.get_mut::<Transform>("die").unwrap().position.y = 2.;
+                } else if sample.values[0] > 4. {
+                    w.get_mut::<Transform>("die").unwrap().position.x += 0.5;
+                }
+            }
+        }
+        fn render_idle(w: &World, _: &DiceArgs) -> bool {
+            w.get::<Transform>("die").unwrap().position.x == 0.
+        }
+    }
+    let Some(gpu) = gpu() else { return };
+    let mut world = WorldSurface::<Shake>::default();
+    world.poll_input_before_draw();
+    world.clock(false);
+    world.bind(&args(false, 0, 0), None).unwrap();
+    let rest = (0..10)
+        .map(|i| f64::from(i) * PERIOD)
+        .find(|&now| !fixture::render(&gpu, &mut world, &live(now)).unwrap().1)
+        .expect("world rests");
+    let mut now = rest + 5000.;
+    let sample = |at_ms, x| InputEvent::Sensor {
+        sensor: exact_gpu::SensorKind::Accelerometer,
+        values: [x, 9.8, 0., 0.],
+        dropped: 0,
+        at_ms,
+    };
+    let tick = world.sim().unwrap().world().tick();
+    world.input(&InputEvent::Pad {
+        index: 0,
+        connected: true,
+        standard: true,
+        buttons: [0.; 17],
+        axes: [0.; 4],
+        at_ms: now - 4.,
+    });
+    for repeat in [false, true] {
+        world.input(&InputEvent::Key {
+            code: "KeyA".into(),
+            key: "a".into(),
+            down: true,
+            repeat,
+            at_ms: now - 3.,
+        });
+    }
+    world.input(&InputEvent::Pointer {
+        id: 1,
+        phase: exact_gpu::PointerPhase::Move,
+        x: 4.,
+        y: 5.,
+        dx: 1.,
+        dy: 1.,
+        kind: exact_gpu::PointerKind::Mouse,
+        buttons: 0,
+        shift_key: false,
+        ctrl_key: false,
+        alt_key: false,
+        meta_key: false,
+        at_ms: now - 2.,
+    });
+    world.input(&sample(now - 2., 0.));
+    world.input(&sample(now - 1., 0.));
+    assert_eq!(world.redraw_for_input(now, PERIOD), Ready(false));
+    assert!(world.sim().unwrap().world().tick() > tick);
+    assert!(world.still && world.sim().unwrap().render_idle());
+
+    world.input(&sample(now, 0.));
+    assert_eq!(
+        world.redraw_for_input(now, PERIOD),
+        Pending,
+        "between ticks"
+    );
+    now += 6. * PERIOD;
+    let waiting_at = world.sim().unwrap().world().tick();
+    assert_eq!(world.redraw_for_input(now, PERIOD), Ready(false));
+    assert!(
+        world.sim().unwrap().world().tick() >= waiting_at + 5,
+        "a late retry keeps elapsed time"
+    );
+
+    now += PERIOD;
+    world.input(&sample(now - PERIOD, -9.8));
+    assert_eq!(
+        world.redraw_for_input(now, PERIOD),
+        Ready(true),
+        "a one-tick change of pose"
+    );
+    for _ in 0..4 {
+        fixture::render(&gpu, &mut world, &live(now)).unwrap();
+        if world.resting {
+            break;
+        }
+        now += PERIOD;
+    }
+    assert!(world.resting);
+    now += 3. * PERIOD;
+    world.input(&sample(now - PERIOD, 9.8));
+    assert_eq!(world.redraw_for_input(now, PERIOD), Ready(true));
+    let tick = world.sim().unwrap().world().tick();
+    assert!(fixture::render(&gpu, &mut world, &live(now)).unwrap().1);
+    assert_eq!(world.sim().unwrap().world().tick(), tick);
+    assert!(!world.still);
+    for _ in 0..12 {
+        now += PERIOD;
+        world.input(&sample(now - 1., 9.8));
+        assert_eq!(world.redraw_for_input(now, PERIOD), Ready(true));
+        assert!(fixture::render(&gpu, &mut world, &live(now)).unwrap().1);
+    }
+}
+
+#[test]
+fn slow_and_paused_worlds_rest_with_input_already_running() {
+    use std::task::Poll;
+    struct Slow;
+    impl Game for Slow {
+        const ID: &'static str = "slow-sensor";
+        const HZ: u32 = 10;
+        type Args = DiceArgs;
+        fn setup(w: &mut World, a: &DiceArgs) {
+            Dice::setup(w, a);
+        }
+        fn tick(_: &mut World, _: &Input, _: &DiceArgs) {}
+        fn render_idle(_: &World, _: &DiceArgs) -> bool {
+            true
+        }
+        fn paused(a: &DiceArgs) -> bool {
+            a.paused
+        }
+    }
+    let Some(gpu) = gpu() else { return };
+    for paused in [false, true] {
+        let mut world = WorldSurface::<Slow>::default();
+        world.poll_input_before_draw();
+        world.clock(false);
+        let mut options = args(false, 0, 0);
+        options[3] = Value::Bool(paused);
+        world.bind(&options, None).unwrap();
+        let mut draw = true;
+        let mut quiet = 0;
+        for i in 0..40 {
+            let now = f64::from(i) * PERIOD;
+            world.input(&InputEvent::Sensor {
+                sensor: exact_gpu::SensorKind::Accelerometer,
+                values: [0., 9.8, 0., 0.],
+                dropped: 0,
+                at_ms: now,
+            });
+            if draw || world.redraw_for_input(now, PERIOD) == Poll::Ready(true) {
+                draw = fixture::render(&gpu, &mut world, &live(now)).unwrap().1;
+                quiet = 0;
+            } else {
+                quiet += 1;
+            }
+        }
+        assert!(
+            quiet >= 20,
+            "rest with samples arriving before every tick, paused={paused}"
+        );
+        assert!(world.still);
+        if paused {
+            assert!(
+                !world.sim().unwrap().input_pending(),
+                "paused samples are applied at delivery"
+            );
+            world
+                .sim
+                .as_mut()
+                .unwrap()
+                .input(exact_game::InputEvent::Message {
+                    player: 0,
+                    text: "resume".into(),
+                    at_ms: 42. * PERIOD,
+                });
+            assert!(world.sim().unwrap().input_pending());
+            assert_eq!(
+                world.redraw_for_input(40. * PERIOD, PERIOD),
+                Poll::Ready(false)
+            );
+            options[3] = Value::Bool(false);
+            world.bind(&options, None).unwrap();
+            for i in 41..55 {
+                fixture::render(&gpu, &mut world, &live(f64::from(i) * PERIOD)).unwrap();
+            }
+            assert!(!world.sim().unwrap().input_pending());
+        } else {
+            assert!(world.sim().unwrap().world().tick() > 3);
+        }
+    }
+}
+
+#[test]
+fn a_quiet_hook_redraws_for_an_observed_tick_or_a_paused_sensor_change() {
+    #[derive(Default)]
+    struct Indicator(bool);
+    impl crate::Hooks for Indicator {
+        fn prepare(
+            &mut self,
+            _: &crate::HookGpu<'_>,
+            _: &crate::FrameView<'_>,
+            world: &crate::RenderWorld<'_>,
+        ) -> Result<(), crate::RenderError> {
+            if self.0 || world.tick() % 2 == 0 {
+                let _ = world.resource::<exact_game::SensorState>();
+            }
+            Ok(())
+        }
+    }
+    let Some(gpu) = gpu() else { return };
+    for paused in [false, true] {
+        let mut s = WorldSurface::<Dice, (), false, Indicator>::default();
+        s.hooks.0 = paused;
+        s.poll_input_before_draw();
+        s.clock(false);
+        let mut options = args(false, 0, 0);
+        options[3] = Value::Bool(paused);
+        s.bind(&options, None).unwrap();
+        for i in 0..8 {
+            if !fixture::render(&gpu, &mut s, &live(f64::from(i) * PERIOD))
+                .unwrap()
+                .1
+            {
+                break;
+            }
+        }
+        assert!(s.still);
+        s.input(&InputEvent::Sensor {
+            sensor: exact_gpu::SensorKind::Accelerometer,
+            values: [0., 9.8, 0., 0.],
+            dropped: 0,
+            at_ms: 950.,
+        });
+        assert_eq!(
+            s.redraw_for_input(1000., PERIOD),
+            std::task::Poll::Ready(true),
+            "paused={paused}"
+        );
+    }
+}
+
+#[test]
 fn catch_up_draw_and_pause_without_timing() {
     let Some(gpu) = gpu() else { return };
     let mut s = live_dice(true);
@@ -484,4 +735,122 @@ fn a_live_render_scale_steps_at_the_next_frame() {
     assert_eq!(exact_gpu::Surface::render_scale(&s), 1.0);
     s.bind(&[Value::Bool(true)], None).unwrap();
     assert_eq!(exact_gpu::Surface::render_scale(&s), 0.25);
+}
+
+#[test]
+fn an_absent_component_with_the_same_name_cannot_mask_a_hook_read() {
+    mod first {
+        #[derive(Default, exact_game::Component)]
+        pub struct Same {
+            pub value: u32,
+        }
+    }
+    mod second {
+        #[derive(Default, exact_game::Component)]
+        pub struct Same;
+    }
+    struct Lamp;
+    impl Game for Lamp {
+        const ID: &'static str = "hook-lamp";
+        type Args = DiceArgs;
+        fn setup(w: &mut World, args: &DiceArgs) {
+            Dice::setup(w, args);
+            w.spawn_named("lamp", first::Same::default());
+        }
+        fn tick(w: &mut World, input: &Input, _: &DiceArgs) {
+            if input
+                .sensor(exact_game::SensorKind::Accelerometer)
+                .is_some_and(|s| s.values[0] > 4.)
+            {
+                w.get_mut::<first::Same>("lamp").unwrap().value = 1;
+            }
+        }
+        fn render_idle(_: &World, _: &DiceArgs) -> bool {
+            true
+        }
+    }
+    #[derive(Default)]
+    struct Indicator(u32, crate::Needs);
+    impl crate::Hooks for Indicator {
+        fn needs(&self) -> crate::Needs {
+            self.1
+        }
+        fn prepare(
+            &mut self,
+            _: &crate::HookGpu<'_>,
+            _: &crate::FrameView<'_>,
+            world: &crate::RenderWorld<'_>,
+        ) -> Result<(), crate::RenderError> {
+            assert!(world.get::<second::Same>("lamp").is_none());
+            self.0 = world.get::<first::Same>("lamp").unwrap().value;
+            Ok(())
+        }
+    }
+
+    let Some(gpu) = gpu() else { return };
+    let mut surface = WorldSurface::<Lamp, (), false, Indicator>::default();
+    surface.poll_input_before_draw();
+    surface.clock(false);
+    surface.bind(&args(false, 0, 0), None).unwrap();
+    let rest = (0..10)
+        .map(|i| f64::from(i) * PERIOD)
+        .find(|&now| !fixture::render(&gpu, &mut surface, &live(now)).unwrap().1)
+        .expect("lamp rests");
+    assert_eq!(surface.render_hooks().0, 0);
+    for (x, draw, now) in [(0., false, rest + 1000.), (9.8, true, rest + 2000.)] {
+        surface.input(&InputEvent::Sensor {
+            sensor: exact_gpu::SensorKind::Accelerometer,
+            values: [x, 9.8, 0., 0.],
+            dropped: 0,
+            at_ms: now - PERIOD,
+        });
+        assert_eq!(
+            surface.redraw_for_input(now, PERIOD),
+            std::task::Poll::Ready(draw)
+        );
+        if draw {
+            fixture::render(&gpu, &mut surface, &live(now)).unwrap();
+            assert_eq!(surface.render_hooks().0, 1);
+        }
+    }
+    for demand in [crate::Needs::ANIMATE, crate::Needs::PENDING] {
+        surface.hooks.1 = crate::Needs::NONE;
+        let rest = (0..10)
+            .map(|i| 3000. + f64::from(i) * PERIOD)
+            .find(|&now| !fixture::render(&gpu, &mut surface, &live(now)).unwrap().1)
+            .expect("lamp rests after its change");
+        surface.hooks.1 = demand;
+        surface.input(&InputEvent::Sensor {
+            sensor: exact_gpu::SensorKind::Accelerometer,
+            values: [0.; 4],
+            dropped: 0,
+            at_ms: rest,
+        });
+        assert_eq!(
+            surface.redraw_for_input(rest + PERIOD, PERIOD),
+            std::task::Poll::Ready(true)
+        );
+    }
+}
+
+#[test]
+fn a_refused_device_event_reports_its_error_at_delivery() {
+    static GAMES: exact_gpu::Registry = exact_gpu::Registry {
+        surfaces: &[("dice", 0, || Box::new(WorldSurface::<Dice>::default()))],
+        shaders: &[],
+    };
+    let mut module = exact_gpu::Module::new(&GAMES);
+    let id = module.create_headless("dice").unwrap();
+    assert!(module.bind(id, &args(false, 0, 0), None));
+    assert!(!module.input(
+        id,
+        &InputEvent::Key {
+            code: "GamepadA".into(),
+            key: "".into(),
+            down: true,
+            repeat: false,
+            at_ms: 1.,
+        }
+    ));
+    assert!(module.take_error().contains("is a pad button"));
 }

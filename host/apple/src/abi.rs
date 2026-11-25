@@ -63,6 +63,8 @@ pub struct Bridge<D: DataSource> {
     /// activated source's native slot, so it outlives activations.
     app_module: Option<exact_runner::NativeHandler>,
     app_call: Option<exact_runner::NativeCall>,
+    binding_observer: Option<exact_runner::Announce>,
+    binding_target: Option<(usize, usize)>,
     /// The extensions the app's module binds (`bind_extensions`), as given.
     bound: Option<String>,
     /// The pan contact's velocity samples (LLP 1057 §10.6; `crate::pan_velocity`).
@@ -126,6 +128,8 @@ impl<D: DataSource> Bridge<D> {
             start_on_frame: false,
             app_module: None,
             app_call: None,
+            binding_observer: None,
+            binding_target: None,
             bound: None,
             pan: crate::pan_velocity::PanVelocity::new(),
             canvas_deferred: false,
@@ -501,22 +505,6 @@ impl<D: DataSource> Bridge<D> {
             .as_mut()
             .map_or_else(not_booted, |h| h.sync_delivery());
         self.emit(out)
-    }
-
-    /// The session's app module (LLP 1067.000): `later(ctx, body, len,
-    /// reply)` takes each long native call on the executor's thread and
-    /// answers it once ([`crate::app_module::reply`]); `call` answers a
-    /// `native.call` before it returns ([`crate::app_module::answer`]).
-    /// `None` removes each.
-    pub fn set_app_module(
-        &mut self,
-        later: Option<crate::app_module::LaterFn>,
-        call: Option<crate::app_module::CallFn>,
-        ctx: *mut c_void,
-    ) {
-        self.app_module = later.map(|later| crate::app_module::handler(later, ctx));
-        self.app_call = call.map(|call| crate::app_module::caller(call, ctx));
-        self.adopt_app_module();
     }
 
     /// The app module announced `topic` (LLP 1016.002): the live source's
@@ -921,10 +909,9 @@ impl<D: DataSource> Bridge<D> {
         self.wake = candidate.hooks.wake.map(|w| (w, candidate.hooks.wake_ctx));
         self.executor = executor;
         self.restore_window.clear();
-        let batch = Host::ending(self.host.replace(candidate.host), candidate.batch);
+        let batch = self.replace_host(candidate.host, candidate.batch);
         self.launch_layout.insets = None;
         self.adopt_app_module();
-        self.rebind();
         self.parked.clear();
         self.emit(batch)
     }
@@ -1006,9 +993,9 @@ impl<D: DataSource> Bridge<D> {
             // replacement input (48), a key's down (6), up (43) and capture (44) with its code and repeat
             // toggle (50), focusin (46) and focusout (47) with their targets, scrollend (51),
             // a file drag's enter (55) and leave (56), a paste with files (57), an iframe's record (58), an atom's press (59),
-            // the history swipe the Mac tracks (60), swipeleft (61), and a scroll
-            // drag's start (62) and release (63) (`Event::of_host_kind`).
-            6 | 10 | 13 | 19 | 20 | 21 | 28..=38 | 40..=44 | 46..=48 | 50..=63 => {
+            // the history swipe the Mac tracks (60), swipeleft (61), a scroll
+            // drag's start (62) and release (63), pointercancel (65) and swipe (66) (`Event::of_host_kind`).
+            6 | 10 | 13 | 19 | 20 | 21 | 28..=38 | 40..=44 | 46..=48 | 50..=63 | 65 | 66 => {
                 match Event::of_host_kind(kind, &payload) {
                     Ok(event) => event,
                     Err(error) => return self.refuse(error),
@@ -1057,10 +1044,10 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
-    /// Consume the exact120-byte paired transform packet from the owned input buffer.
+    /// Consume the exact 128-byte paired transform packet from the owned input buffer.
     pub fn transform_motion(&mut self, len: usize) -> u32 {
         let out = match self.host.as_mut() {
-            Some(host) if len == 120 && self.input.len() >= len => {
+            Some(host) if len == 128 && self.input.len() >= len => {
                 host.transform_motion(&self.input[..len])
             }
             Some(host) => crate::batch::WrappedBatch::new(
@@ -1099,18 +1086,17 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
     /// Move only a live header/target/token triple.
-    pub fn height_drag_update(&mut self, token: u64, height: f64, now_ms: f64) -> u32 {
-        let out = self
-            .host
-            .as_mut()
-            .map_or_else(not_booted, |h| h.height_drag_update(token, height, now_ms));
+    pub fn height_drag_update(&mut self, token: u64, height: f64, now_ms: f64, at_ms: f64) -> u32 {
+        let out = self.host.as_mut().map_or_else(not_booted, |h| {
+            h.height_drag_update(token, height, now_ms, at_ms)
+        });
         self.emit(out)
     }
     /// Apply the final sample and typed release action while held.
     /// At the engine's measured velocity (LLP 1057.001 §3).
-    pub fn height_drag_release(&mut self, token: u64, height: f64, now_ms: f64) -> u32 {
+    pub fn height_drag_release(&mut self, token: u64, height: f64, now_ms: f64, at_ms: f64) -> u32 {
         let out = self.host.as_mut().map_or_else(not_booted, |h| {
-            h.dispatch_height_measured(token, height, now_ms)
+            h.dispatch_height_measured(token, height, now_ms, at_ms)
         });
         self.emit(out)
     }
@@ -1153,19 +1139,20 @@ impl<D: DataSource> Bridge<D> {
         self.host.as_ref().is_some_and(|h| h.has_hold(token))
     }
 
-    /// Update presentation using a runtime-owned opaque handle.
-    pub fn hold_update(&mut self, token: u64, x: f64, y: f64, now_ms: f64) -> u32 {
+    /// Update presentation using a runtime-owned opaque handle, the value
+    /// sampled at `at_ms` on the input's own timeline.
+    pub fn hold_update(&mut self, token: u64, x: f64, y: f64, now_ms: f64, at_ms: f64) -> u32 {
         let out = self.host.as_mut().map_or_else(not_booted, |h| {
-            h.hold_update(token, exact_motion::Value::new(x, y), now_ms)
+            h.hold_update_at(token, exact_motion::Value::new(x, y), now_ms, at_ms)
         });
         self.emit(out)
     }
 
     /// Release (or cancel) a live hold after its authored action.
-    /// `cancel`: 0 releases at `vx, vy`, 1 cancels, 2 releases at the
-    /// engine's measured velocity (LLP 1057.001 §3).
-    pub fn hold_end(&mut self, token: u64, cancel: u32, vx: f64, vy: f64, now_ms: f64) -> u32 {
-        let end = match cancel {
+    /// `mode`: 0 releases at `vx, vy`, 1 cancels, 2 releases at the
+    /// engine's measured velocity (LLP 1057.001 §3), read `at`.
+    pub fn hold_end(&mut self, token: u64, mode: u32, vx: f64, vy: f64, now: f64, at: f64) -> u32 {
+        let end = match mode {
             0 => exact_motion::HoldEnd::Release {
                 velocity: exact_motion::Value::new(vx, vy),
             },
@@ -1173,7 +1160,7 @@ impl<D: DataSource> Bridge<D> {
                 let out = self
                     .host
                     .as_mut()
-                    .map_or_else(not_booted, |h| h.hold_end_measured(token, now_ms));
+                    .map_or_else(not_booted, |h| h.hold_end_measured(token, now, at));
                 return self.emit(out);
             }
             _ => exact_motion::HoldEnd::Cancel,
@@ -1181,7 +1168,7 @@ impl<D: DataSource> Bridge<D> {
         let out = self
             .host
             .as_mut()
-            .map_or_else(not_booted, |h| h.hold_end(token, end, now_ms));
+            .map_or_else(not_booted, |h| h.hold_end(token, end, now));
         self.emit(out)
     }
 

@@ -27,9 +27,7 @@ pub(super) fn list_region<'a>(
                 Child::Node(n) => {
                     let selectable = plan.map_or(selectable, |p| selectable.at(n, p, policy));
                     if n.view == view {
-                        return n
-                            .collection()
-                            .map(|c| (c, selectable, n.children.as_slice()));
+                        return n.collection().map(|c| (c, selectable, &n.children[..]));
                     }
                     // A nested list lives in a mounted row (LLP 1070 §4.7).
                     if let Some(c) = n.collection() {

@@ -25,6 +25,13 @@ test('--live selects the wall-clock carrier on Apple devices and preserves the c
     assert.equal(options.touch, 'platform');
     assert.equal(options.env.EXACT_AGENT, 'live');
     await assert.rejects(main(['macos', '--live', '--timing', 'agent', 'state'], injected), /keeps the platform clock/);
+    assert.equal(await main(['macos', '--live', '--display', 'LG UltraFine', 'state'], injected), 0);
+    assert.equal(options.env.EXACT_AGENT_DISPLAY, 'LG UltraFine');
+    assert.equal(await main(['macos', 'state'], injected), 0);
+    assert.equal(options.env.EXACT_AGENT_DISPLAY, undefined);
+    await assert.rejects(main(['ios', '--display', '1', 'state'], injected), /--display places a Mac window; ios opens none/);
+    await assert.rejects(main(['macos', '--display', '1', '--test', 'app.test.contract'], injected), /not a test run's/);
+    await assert.rejects(main(['macos', '--display'], injected), /--display needs a value/);
   } finally {console.log = output;}
 });
 

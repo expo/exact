@@ -103,7 +103,7 @@ extension NavigationHost {
     var back: NavigationBack.Way? {
         guard let root = container, let route = selectedRoute else { return nil }
         return NavigationBack.way(control: backControl?.id, declared: declaresBack(route), hearsNavigate: root.handlers.contains("navigate"),
-                                    beneath: { [presenter] in route.props["navigationKey"].flatMap { presenter.session?.runtime.locationBeneath($0) } })
+                                    beneath: { [presenter] in route.props["navigationKey"].flatMap { presenter.session?.locationBeneath($0) } })
     }
 
     /// Whether a route holds an element named by the root's `navigationBack`.

@@ -29,6 +29,23 @@ final class PressFeedbackIOSTests: XCTestCase {
         return (p, try XCTUnwrap(p.views[1]))
     }
 
+    func testPressMultipliesBothScaleAxes() throws {
+        let (p, v) = try fixture(style: ["press_scale": 0.5, "transform_origin": [0.0, 0.0]])
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 2.0, "y": 0.5]]))
+        let unpressed = v.drawnPoint(.zero)
+        v.press = PressFeedback(from: 0.5, to: 0.5, start: 0)
+        v.layoutOffset = CGPoint(x: 7, y: 11)
+        v.applyTransform()
+        let t = v.transform
+        XCTAssertEqual(t.a, 1, accuracy: 1e-9)
+        XCTAssertEqual(t.d, 0.25, accuracy: 1e-9)
+        let origin = v.drawnPoint(.zero)
+        XCTAssertEqual(origin.x, unpressed.x + 7, accuracy: 1e-6)
+        XCTAssertEqual(origin.y, unpressed.y + 11, accuracy: 1e-6)
+        v.rebind(99)
+        XCTAssertEqual(v.scale, CGPoint(x: 1, y: 1), "pool reuse resets both axes")
+    }
+
     func testTheEaseIsCSSCubicBezier() {
         // cubic-bezier(.16, 1, .3, 1), sampled by bisection off-device.
         for (x, y) in [(0.0, 0.0), (0.1, 0.49439), (0.25, 0.82562), (0.5, 0.97178), (0.75, 0.99768), (1.0, 1.0)] {
@@ -154,7 +171,7 @@ final class PressFeedbackIOSTests: XCTestCase {
         let (p, v) = try fixture()
         // Held at the pressed scale.
         v.press = PressFeedback(from: 0.97, to: 0.97, start: 0)
-        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 2.0]]))
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 2.0, "y": 2.0]]))
         XCTAssertEqual(v.transform.a, 2 * 0.97, accuracy: 1e-9, "the engine's write keeps the press")
         XCTAssertEqual(v.transform.d, 2 * 0.97, accuracy: 1e-9)
         // A relayout sets the frame untransformed, then the presentation back.
@@ -294,7 +311,7 @@ final class PressFeedbackIOSTests: XCTestCase {
         // model, is the model pressed to 0.75.
         let k: CGFloat = 0.75 / 0.5, o = v.transformOriginPoint, d = CGPoint(x: o.x - v.bounds.midX, y: o.y - v.bounds.midY)
         let mid = CATransform3DConcat(CATransform3DMakeAffineTransform(CGAffineTransform(translationX: d.x, y: d.y).scaledBy(x: k, y: k).translatedBy(x: -d.x, y: -d.y)), pressed)
-        let model = CATransform3DConcat(try XCTUnwrap(v.spaceTransform(origin: d, scale: 0.75)), CATransform3DIdentity)
+        let model = CATransform3DConcat(try XCTUnwrap(v.spaceTransform(origin: d, scale: CGPoint(x: 0.75, y: 0.75))), CATransform3DIdentity)
         for (a, b) in zip(entries(mid), entries(model)) { XCTAssertEqual(a, b, accuracy: 1e-9, "inside the rotation part way too") }
     }
 
@@ -329,9 +346,9 @@ final class PressFeedbackIOSTests: XCTestCase {
     /// D6: every transform turns about `transform-origin`.
     func testTheTransformTurnsAboutTheTransformOrigin() throws {
         let (p, v) = try fixture(style: ["transform_origin": [["pct": 0], ["pct": 0]]])
-        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 0.5]]))
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 0.5, "y": 0.5]]))
         XCTAssertEqual(v.frame, CGRect(x: 50, y: 50, width: 100, height: 50), "the top-left corner stays put")
-        p.apply(wireBatch([["op": "present", "id": 1, "property": "rotate", "x": 90.0], ["op": "present", "id": 1, "property": "scale", "x": 1.0]]))
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "rotate", "x": 90.0], ["op": "present", "id": 1, "property": "scale", "x": 1.0, "y": 1.0]]))
         XCTAssertEqual(v.frame.minX, -50, accuracy: 1e-9, "a quarter turn about it swings the box to its left")
         XCTAssertEqual(v.frame.minY, 50, accuracy: 1e-9)
         p.apply(wireBatch([["op": "style", "id": 1, "style": [:] as [String: Any]]]))

@@ -323,9 +323,10 @@ it while the world runs.
 drawing. Return true when nothing it shows is changing (the dice lie still). The
 canvas draws until both ticks it interpolates between are idle, then asks the
 host for no frame until input, a bind, an asset, a resize or a render hook's
-`Needs::ANIMATE` or `Needs::PENDING` wakes it; queued input and a pending hold or
-tap keep it drawing. The idle time never runs as ticks: the first frame after a
-wake advances one display period, and input that arrived meanwhile lands on its
+`Needs::ANIMATE` or `Needs::PENDING` wakes it. Painted hosts tick queued input
+before drawing a resting canvas. Input that wakes the world draws on that
+callback, and a pending hold or tap keeps it drawing. The first frame after a
+wake advances one display period. Input from the idle interval lands on its
 first tick. The agent's clock ignores it, so a seeked run ticks every
 millisecond as before. `Game::max_fps(world, args)` caps the drawn frames per
 second (0, the default, for the display's rate), changeable at any frame: 60 at
@@ -334,8 +335,8 @@ hook's `Hooks::max_fps` can cap lower (a budget or a thermal cap), and the lower
 non-zero cap stands. `Game::samples(args)` chooses scene sampling (by default
 `Game::SAMPLES`); a change makes the renderer again under the same world, as a
 "smooth edges" setting needs. None of the three is saved or hashed. The web, iOS,
-macOS and Android hosts rest and cap a canvas; the Linux and Windows desktop
-hosts draw a mounted world every display frame and take no cap
+macOS and Android hosts rest and cap a canvas. The Linux and Windows desktop
+hosts keep a resting canvas’s picture between window frames and take no cap
 ([GPU module ABI](../gpu/README.md#frame-pacing-and-timing)).
 
 `Game::quality(args)` picks the renderer's rung of the quality ladder, read once,
@@ -638,10 +639,10 @@ arguments for settings, messages for things that happen once. A paused world hol
 a message for its first tick after the pause.
 
 A message carries who posted it (LLP 1133.022 D6). One from a tool's commit, or
-a wake's, arrives marked with that origin; the world keeps the least privileged
-origin it has heard until a fresh start (and saves it), and marks each string it
-`emit`s with it, so the `message=` handler runs as that origin and a tool cannot
-start a device through the world. A person's or the app's own post leaves no mark;
+a wake's, arrives marked with its origins; the world keeps every origin it has
+heard until a fresh start (and saves them), and marks each string it `emit`s
+with that set, so the `message=` handler runs under each one's rules and a tool
+cannot start a device through the world. A person's or the app's own post leaves no mark;
 `state` shows `origin` only for a marked world. The runner and the engine carry the
 mark; a game never sees it.
 

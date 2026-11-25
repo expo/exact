@@ -1,6 +1,7 @@
 //! LLP 1161.002: a resource that asks nothing while its `when` is false, and
 //! what `current(x)` says of it (LLP 1161.001 D1).
 
+use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_runner::{
     Answer, DataError, DataSource, Outcome, Request, Response, Runner, Store, Value,
@@ -55,10 +56,10 @@ const SRC: &str = "component App
     text results
 ";
 
-fn boot() -> Runner<Search> {
+fn boot() -> Runner<Source> {
     Runner::boot(
         contract::compile(SRC).unwrap(),
-        Search::default(),
+        boxed(Search::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -79,7 +80,7 @@ fn flag<D: DataSource>(r: &Runner<D>, name: &str) -> bool {
 }
 
 /// Lands the one request out.
-fn land(r: &mut Runner<Search>) {
+fn land(r: &mut Runner<Source>) {
     let requests = r.take_requests();
     assert_eq!(requests.len(), 1, "one request out");
     r.fulfill(requests[0].ticket, ok()).unwrap();
@@ -88,7 +89,7 @@ fn land(r: &mut Runner<Search>) {
 #[test]
 fn a_closed_gate_asks_nothing_at_boot() {
     let r = boot();
-    assert_eq!(r.data_ref().asks, 0);
+    assert_eq!(r.source_ref::<Search>().asks, 0);
     assert_eq!(r.resource("results"), Some(&Value::str("")));
     assert!(!flag(&r, "busy"));
     assert!(!flag(&r, "shown"));
@@ -131,10 +132,10 @@ fn waking_asks_again_and_is_not_current_until_it_answers() {
     r.act("show", vec![]).unwrap();
     land(&mut r);
     r.act("hide", vec![]).unwrap();
-    let asks = r.data_ref().asks;
+    let asks = r.source_ref::<Search>().asks;
     r.act("show", vec![]).unwrap();
     assert_eq!(
-        r.data_ref().asks,
+        r.source_ref::<Search>().asks,
         asks + 1,
         "the same arguments, asked again"
     );
@@ -153,9 +154,9 @@ fn a_refresh_while_idle_asks_nothing() {
     r.act("show", vec![]).unwrap();
     land(&mut r);
     r.act("hide", vec![]).unwrap();
-    let asks = r.data_ref().asks;
+    let asks = r.source_ref::<Search>().asks;
     r.act("again", vec![]).unwrap();
-    assert_eq!(r.data_ref().asks, asks);
+    assert_eq!(r.source_ref::<Search>().asks, asks);
     assert!(r.take_requests().is_empty());
 }
 
@@ -216,8 +217,8 @@ impl DataSource for Profile {
 
 /// A store reader asleep behind a closed gate asks nothing, so a store write,
 /// the app's own or a peer's, settles without it and is not remembered:
-/// waking asks as with no write before, reads the store as it is then, and an
-/// answer outside its shape refuses the action that opens the gate.
+/// waking asks as with no write before and reads the store as it is then: an
+/// answer outside its shape fails the reader, which keeps its last answer.
 #[test]
 fn a_store_write_settles_while_a_store_reader_sleeps() {
     let src = "component App
@@ -235,7 +236,7 @@ fn a_store_write_settles_while_a_store_reader_sleeps() {
 ";
     let mut r = Runner::boot(
         contract::compile(src).unwrap(),
-        Profile,
+        boxed(Profile),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -250,5 +251,14 @@ fn a_store_write_settles_while_a_store_reader_sleeps() {
     assert_eq!(r.resource("me"), Some(&Value::str("bob")));
     r.act("hide", vec![]).unwrap();
     r.store_changed(peer("bad")).unwrap();
-    assert!(r.act("show", vec![]).is_err());
+    assert!(r.failed_resources().is_empty(), "asleep, it read nothing");
+    r.act("show", vec![]).unwrap();
+    assert_eq!(
+        r.failed_resources(),
+        [(
+            "me",
+            "`me` answered outside its shape: string: a String was declared, and 1 answered"
+        )]
+    );
+    assert_eq!(r.resource("me"), Some(&Value::str("bob")));
 }

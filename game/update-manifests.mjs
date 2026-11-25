@@ -1,9 +1,13 @@
 import { isDeepStrictEqual } from 'node:util';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { pathFrom } from '../scripts/app.mjs';
+import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { INHERITING_KEYS, checkoutPathDependencies, pathFrom } from '../scripts/app.mjs';
+import { MEMBER_OF, appCrates } from '../scripts/cargo-check.mjs';
+import { exact2Crates } from '../scripts/app-shells.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
+// The workspaces exact2 generates, as a crate that joins one names it in package.workspace.
+const GENERATED = [...Object.values(MEMBER_OF), '../.shells'];
 const hosts = ['exact-apple', 'exact-apple-update', 'exact-linux', 'exact-painted', 'exact-linux-update', 'exact-windows'];
 const tableAt = (doc, keys) => keys.reduce((value, key) => value?.[key], doc);
 const keyText = keys => keys.map(key => /^[\w-]+$/.test(key) ? key : JSON.stringify(key)).join('.');
@@ -86,6 +90,50 @@ function relocate(text, expected, from, crates, advice) {
     tableAt(expected, keys).path = path;
   }
   return replaceSpans(text, edits);
+}
+
+/** A crate that joins a generated workspace, its paths through the app's link into the checkout written as
+ * `<key>.workspace = true` (scripts/paths.mjs `cargoCheckout`), keeping the keys an inheriting dependency may keep. A
+ * dependency the workspace cannot provide under its key (one renamed, versioned, or not a crate exact2 lists) is left,
+ * and the build's refusal says what to write. */
+function inheritCheckout(text, expected, manifest, advice) {
+  const named = checkoutPathDependencies(manifest, expected);
+  if (!named.length) return text;
+  const offered = exact2Crates(), found = named.filter(({ key, dep, dir }) => offered.has(key) && realpathSync(offered.get(key)) === dir &&
+    Object.keys(dep).every(k => k === 'path' || INHERITING_KEYS.includes(k)));
+  let prefix = '__exact_update_inherit_';
+  while (text.includes(prefix)) prefix += '_';
+  const candidates = strings(text).filter(s => found.some(f => f.dep.path === s.value));
+  const marked = Bun.TOML.parse(replaceSpans(text, candidates.map((s, i) => ({ ...s, value: JSON.stringify(prefix + i) }))));
+  const edits = [];
+  for (const { keys, key } of found) {
+    const at = [...keys, key];
+    advice.push(`in ${keyText(at)}, remove path and write workspace = true`);
+    const span = candidates.find((_, i) => tableAt(marked, at)?.path === prefix + i);
+    const head = span && /(?:\bpath|"path"|'path')[ \t]*=[ \t]*$/.exec(text.slice(0, span.start));
+    if (!head) throw new Error('could not locate a dependency path');
+    edits.push({ start: span.start - head[0].length, end: span.end, value: 'workspace = true' });
+    const table = tableAt(expected, at);
+    delete table.path;
+    table.workspace = true;
+  }
+  return replaceSpans(text, edits);
+}
+
+/** Each crate beside app.json that joins a generated workspace, written with `inheritCheckout`; the notes to print. */
+function inheritInMembers(dir) {
+  const notes = [];
+  for (const { manifest } of appCrates(dir)) {
+    const text = readFileSync(manifest, 'utf8'), advice = [];
+    let expected; try { expected = Bun.TOML.parse(text); } catch { continue; } // The build names an unreadable manifest.
+    if (!GENERATED.includes(expected.package?.workspace?.replace?.(/\/+$/, ''))) continue;
+    try {
+      const next = inheritCheckout(text, expected, manifest, advice);
+      if (!isDeepStrictEqual(Bun.TOML.parse(next), expected)) throw new Error('the edit changed the manifest meaning');
+      if (next !== text) { writeFileSync(manifest, next); notes.push(`${relative(dir, manifest)} takes exact2's crates from its workspace`); }
+    } catch (error) { notes.push(`${manifest}: left unchanged; ${advice.join('; ')} (${error.message})`); }
+  }
+  return notes;
 }
 
 export function editManifest(text, from, crates, { prepared = text, workspaceProvider = false, rootProvider = false } = {}) {
@@ -290,4 +338,4 @@ function packagePaths(dir) {
   } catch (error) { return [`package.json: left unchanged; could not refresh @exact package paths (${error.message})`]; }
 }
 
-export const updateScaffold = dir => [...androidCanvas(dir), ...packagePaths(dir)];
+export const updateScaffold = dir => [...androidCanvas(dir), ...packagePaths(dir), ...inheritInMembers(dir)];

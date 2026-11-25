@@ -89,7 +89,7 @@ extension DialogHost {
         if let inline = responder as? InlineKeyView, inline.run?.props["href"] != nil { return false }
         if let focus = presenter.keyTarget(responder) {
             if focus.pressesOnReturn { return false }
-            if focus.textArea != nil || focus.props["href"] != nil || focus.canvasInput != nil { return false }
+            if focus.textArea != nil || focus.linkDestination != nil || focus.canvasInput != nil { return false }
             if let field = focus.field {
                 if focus.handlers.contains("submit") { return false }
                 presenter.commitEdit(focus.id, field.stringValue, change: focus.handlers.contains("change"))

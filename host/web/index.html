@@ -71,33 +71,19 @@
      the image is itself draggable (LLP 1094.000 D6). */
   #exact-root img[data-symbol-source], #exact-root :is(button, a[href], [data-exact-on~="press"]) img { -webkit-touch-callout: none; }
   #exact-root :is(img[data-symbol-source], :is(button, a[href], [data-exact-on~="press"]) img):not([draggable="true" i]) { -webkit-user-drag: none; }
-  /* The unsaid press (LLP 1115.000 D6): a custom `button`, a link or a box
-     with a `press` that declares no feedback shows 65% of its opacity, the iOS
-     host's dim (PressFeedback.swift), while marked `data-pressed` by the input
-     glue. The mark follows pointer and keyboard presses, including touch delay
-     in scrollers. Using `:active` would keep a mouse press lit after dragging
-     off the box and can flash feedback as a touch becomes a scroll. On release,
-     the dim holds at least 0.1 s from when it appeared, then fades over 0.2 s
-     (`dimHold`, `dimFade`). Only the innermost pressable is marked. Not dimmed, in the
-     selector's order: a disabled button; a native control, which keeps its own
-     feedback, and a game's action button, which is held; an authored press,
-     which replaces it (`-exact-press-scale`, the pressed paint of LLP 1061
-     D7, which the input glue shows, or `pointerdown` or `pointerup`
-     handlers, which draw one; a `hover` handler observes and replaces
-     nothing); a pressable covering the window, a surface the input glue
-     measures at the press; anything in a row of a `list` whose rows are
-     cells (`data-listrows`, LLP 1115.000 D16: the look's own row answers
-     there, neutral.css), or a grouped list's row in its section. A list
-     that is no cell list (`appearance="none"`, a carousel) holds ordinary
-     pressables, which dim. An `opacity` the author wrote on the node wins
-     (inline, or the JS target's classes). */
-  #exact-root :is(button, a[data-view][href], [data-exact-on~="press"])[data-pressed]:not(
+  /* --exact-dims tells input-glue.js which pressables can show the default dim (LLP 1061 D7, LLP 1115.000 D6).
+     Native controls and cell rows show their own feedback. A game's action button stays held, and pointerdown
+     and pointerup handlers can draw their own press. Full-page surfaces leave their paint alone. Ordinary
+     pressables in a non-cell list can still dim. data-exact-opacity marks a class that writes opacity, so one
+     that computes to 1 does not read as the default. */
+  @property --exact-dims { syntax: "<number>"; inherits: false; initial-value: 0; }
+  #exact-root :is(button, a[data-view][href], [data-exact-on~="press"]):not(
     :disabled,
     [data-button-style], [data-native], input, select, textarea, [data-action],
     [style*="--exact-press:"], [style*="--exact-press-translate:"], [style*="--exact-press-opacity:"], [style*="--exact-press-opacity-to:"], [style*="--exact-press-background-color:"], [style*="--exact-press-color:"],
     [data-exact-on~="pointerdown"], [data-exact-on~="pointerup"],
-    [data-exact-surface],
-    [data-listrows] *, :is([data-liststyle], [data-liststyle] > :where([data-exact-list-item])) > section > * > *) { opacity: .65; }
+    [data-exact-surface], [data-exact-opacity],
+    [data-listrows] *, :is([data-liststyle], [data-liststyle] > :where([data-exact-list-item])) > section > * > *) { --exact-dims: 1; }
   /* A disabled custom button dims as the drawn switch does, and takes no press; not one whose
      author styles its own disabled state (Contract's `disabledStyled`, LLP 1115.000 D6). */
   #exact-root button:disabled:not([data-button-style], [data-native], [data-disabledstyled]) { opacity: .5; }
@@ -398,6 +384,7 @@
   /* LLP 1123 D9: a content owner's local insets, which a length reads as `var(--exact-safe-area-inset-*)`, each
      registered so it computes to a length and inherits. The document's are the browser's `env()`; a sheet the
      look draws says its own (neutral.css). */
+  :root { --exact-bar-inset-start: 0px; --exact-bar-inset-end: 0px; }
   @property --exact-safe-area-inset-top { syntax: "<length>"; inherits: true; initial-value: 0px; }
   @property --exact-safe-area-inset-right { syntax: "<length>"; inherits: true; initial-value: 0px; }
   @property --exact-safe-area-inset-bottom { syntax: "<length>"; inherits: true; initial-value: 0px; }
@@ -415,9 +402,11 @@
   @property --exact-symbol-position { syntax: "*"; inherits: false; }
   @property --exact-symbol-size-authored { syntax: "*"; inherits: false; }
   @property --exact-symbol-weight-authored { syntax: "*"; inherits: false; }
-  /* LLP 1061: a press multiplies the scale row's current number, including
+  /* LLP 1061: a press multiplies each scale factor, including
      during a CSS transition. Keep it local to the node, as `scale` is. */
   @property --exact-press-factor { syntax: "<number>"; inherits: false; initial-value: 1; }
+  @property --exact-press-scale-progress { syntax: "<number>"; inherits: false; initial-value: 0; }
+  #exact-root [style*="--exact-press:"] { --exact-press-factor: calc(1 + (var(--exact-press) - 1) * var(--exact-press-scale-progress)); }
   @property --exact-rotate-axis { syntax: "*"; inherits: false; initial-value: z; }
   @property --exact-translate-composes { syntax: "<number>"; inherits: false; initial-value: 0; }
   @property --exact-translate-x { syntax: "<length-percentage>"; inherits: false; initial-value: 0px; }
@@ -431,11 +420,12 @@
   @property --exact-press-x { syntax: "<length-percentage>"; inherits: false; initial-value: 0px; }
   @property --exact-press-y { syntax: "<length-percentage>"; inherits: false; initial-value: 0px; }
   @property --exact-scale { syntax: "<number>"; inherits: false; initial-value: 1; }
-  /* LLP 1061 D7: the pressed paint. The input glue writes each painting node an important rule of its own (a
-     background layer, a mask; the text colour) and eases its progress, `--exact-press-paint`, 0 to 1. It reads the
-     node's pressed opacities here as numbers and its pressed colours in sRGB (a token or light-dark resolved,
-     as these registered copies compute them; a scheme flip mid-press repaints from them). */
-  @property --exact-press-paint { syntax: "<number>"; inherits: false; initial-value: 0; }
+  @property --exact-scale-y { syntax: "<number>"; inherits: false; initial-value: 1; }
+  /* LLP 1061 D7: each press paint property uses its own animation progress.
+     The registered copies of the targets resolve tokens and light-dark() on the pressed node. */
+  @property --exact-press-background-progress { syntax: "<number>"; inherits: false; initial-value: 0; }
+  @property --exact-press-color-progress { syntax: "<number>"; inherits: false; initial-value: 0; }
+  @property --exact-press-opacity-progress { syntax: "<number>"; inherits: false; initial-value: 0; }
   @property --exact-press-opacity-number { syntax: "<number>"; inherits: false; initial-value: 1; }
   @property --exact-press-opacity-to-number { syntax: "<number>"; inherits: false; initial-value: 1; }
   @property --exact-press-color-in-srgb { syntax: "<color>"; inherits: false; initial-value: transparent; }

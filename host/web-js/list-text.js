@@ -1,6 +1,9 @@
 // Logical copy uses live paragraphs for mounted rows and compiled, read-only
 // expressions for unmounted rows. Projecting a row never mounts its views.
-import { scope, end, untracked } from './rt.js';
+// The runtime's scopes, which list.js hands over as it loads this chunk: a chunk that imports rt.js is shared code a
+// single-file bundle cannot make (dynamic-chunks.test.js).
+let R = null;
+export const useRuntime = runtime => { R = runtime; };
 
 const controls = new Set(['button', 'link', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'checkbox', 'radio', 'switch', 'treeitem']);
 function state(parent, props) {
@@ -53,8 +56,8 @@ function rowText(c, position) {
   const mounted = c.mounted.find(m => m.position === position);
   if (mounted) return domParagraphs(mounted.wrapper);
   const out = [];
-  const temporary = scope(() => untracked(() => projected(c.o.text(() => c.items[position], () => position), domState(c.el), out)), null);
-  end(temporary);
+  const temporary = R.scope(() => R.untracked(() => projected(c.o.text(() => c.items[position], () => position), domState(c.el), out)), null);
+  R.end(temporary);
   return out;
 }
 // The fixed lead or trail's paragraphs, counted across its children

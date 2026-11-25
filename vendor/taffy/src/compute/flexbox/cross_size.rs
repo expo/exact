@@ -13,21 +13,39 @@ pub(super) fn determine_hypothetical_cross_size(
     tree: &mut impl LayoutFlexboxContainer,
     line: &mut FlexLine,
     constants: &AlgoConstants,
+    node_size: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
 ) {
+    // If the flex container is single-line and has a definite cross size then that is the cross size of the
+    // line, whatever the hypothetical cross sizes of the items are
+    let line_cross_size_is_known = !constants.is_wrap && node_size.cross(constants.dir).is_some();
+
     for child in line.items.iter_mut() {
         // EXACT PATCH 54: transfer the used height (Flexbox §9.4). The
         // content probe keeps height bounds when the preferred height is auto.
-        if constants.is_column {
+        if constants.is_column && child.aspect_ratio.is_some() {
             if let Some(width) = crate::compute::ratio::minimum_ratio_width(
                 tree, child.node, constants.node_inner_size, Some(child.target_size.height),
             ) {
                 child.min_size.width = Some(width).maybe_max(child.min_size.width);
             }
         }
+        // An item that will be stretched to a line whose cross size is already known is not measured: its
+        // hypothetical cross size would be used neither for the line nor for the item
+        // (see `calculate_cross_size` and `determine_used_cross_size`), except when Patch 49 needs the
+        // hypothetical cross size for an indefinite-cross-size row ratio item.
+        if line_cross_size_is_known
+            && child.is_stretched(constants.dir)
+            && !child.participates_in_baseline_alignment(constants.dir)
+            && !(constants.is_row && child.aspect_ratio.is_some() && !constants.has_definite_cross_size)
+        {
+            continue;
+        }
         let padding_border_sum = (child.padding + child.border).cross_axis_sum(constants.dir);
 
-        let child_known_main = constants.container_size.main(constants.dir).into();
+        // The available space passed to the child excludes the child's margins
+        let child_available_main =
+            (constants.container_size.main(constants.dir) - child.margin.main_axis_sum(constants.dir)).max(0.0).into();
 
         // Sizes transferred through the aspect ratio clamp the hypothetical cross size
         // https://github.com/w3c/csswg-drafts/issues/10997
@@ -81,11 +99,13 @@ pub(super) fn determine_hypothetical_cross_size(
             .node_inner_size
             .cross(constants.dir)
             .map(|val| constants.divided_cross_space(val))
-            .maybe_sub(child.margin.cross_axis_sum(constants.dir));
+            .maybe_sub(child.margin.cross_axis_sum(constants.dir))
+            .maybe_max(0.0);
         let cross_keyword = resolve_sizing_keyword(
             child.size_style.cross(constants.dir),
             cross_stretch_size,
             constants.node_inner_size.cross(constants.dir),
+            |val, basis| tree.calc(val, basis),
         );
         let child_available_cross = match cross_keyword {
             Some(SizingKeywordResolution::Measure(available)) => available,
@@ -137,8 +157,8 @@ pub(super) fn determine_hypothetical_cross_size(
                     known_dimensions_are_definite: item_known_dimension_definiteness(constants, child),
                     parent_size: constants.node_inner_size,
                     available_space: Size {
-                        width: if constants.is_row { child_known_main } else { child_available_cross },
-                        height: if constants.is_row { child_available_cross } else { child_known_main },
+                        width: if constants.is_row { child_available_main } else { child_available_cross },
+                        height: if constants.is_row { child_available_cross } else { child_available_main },
                     },
                     vertical_margins_are_collapsible: Line::FALSE,
                 },
@@ -208,6 +228,7 @@ pub(super) fn calculate_children_base_lines(
                     },
                     known_dimensions_are_definite: item_known_dimension_definiteness(constants, child),
                     parent_size: constants.node_inner_size,
+                    // The available space passed to the child excludes the child's margins
                     available_space: Size {
                         width: if constants.is_row {
                             constants.container_size.width.into()
@@ -219,22 +240,16 @@ pub(super) fn calculate_children_base_lines(
                         } else {
                             constants.container_size.height.into()
                         },
-                    },
+                    }
+                    .maybe_sub(child.margin.sum_axes())
+                    .maybe_max(Size::ZERO),
                     vertical_margins_are_collapsible: Line::FALSE,
                 },
             );
 
-            let baseline = measured_size_and_baselines.baselines.first;
             let height = measured_size_and_baselines.size.height;
-
-            // Scroll containers' baselines are determined from their content as if scrolled to the
-            // initial position, but are additionally clamped to their border box.
-            // See https://github.com/w3c/csswg-drafts/issues/7660
-            let baseline = if child.overflow.y.is_scroll_container() {
-                baseline.unwrap_or(height).min(height).max(0.0)
-            } else {
-                baseline.unwrap_or(height)
-            };
+            let baseline = child_first_baseline(measured_size_and_baselines.baselines.first, height, child.overflow.y)
+                .unwrap_or(height);
 
             child.baseline = baseline + child.margin.top;
         }
@@ -360,28 +375,14 @@ pub(super) fn determine_used_cross_size(
             let child_style = tree.get_flexbox_child_style(child.node);
             // A cross size of `stretch` stretches to the flex line like align-self: stretch
             // (but regardless of the alignment style)
-            let cross_is_stretch = child.size_style.cross(constants.dir).is_stretch();
             child.target_size.set_cross(
                 constants.dir,
-                if !child.margin_is_auto.cross_start(constants.dir)
-                    && !child.margin_is_auto.cross_end(constants.dir)
-                    && (cross_is_stretch
-                        || (child.align_self == AlignSelf::STRETCH
-                            && child_style.size().cross(constants.dir).is_auto()))
-                {
+                if child.is_stretched(constants.dir) {
                     // For some reason this particular usage of max_width is an exception to the rule that max_width's transfer
                     // using the aspect_ratio (if set). Both Chrome and Firefox agree on this. And reading the spec, it seems like
                     // a reasonable interpretation. Although it seems to me that the spec *should* apply aspect_ratio here.
-                    // EXACT PATCH 10: the inline size is the basis on every side.
-                    let padding = child_style
-                        .padding()
-                        .resolve_or_zero(constants.node_inner_size.width, |val, basis| tree.calc(val, basis));
-                    let border = child_style
-                        .border()
-                        .resolve_or_zero(constants.node_inner_size.width, |val, basis| tree.calc(val, basis));
-                    let pb_sum = (padding + border).sum_axes();
-                    let box_sizing_adjustment =
-                        if child_style.box_sizing() == BoxSizing::ContentBox { pb_sum } else { Size::ZERO };
+                    let pb_sum = (child.padding + child.border).sum_axes();
+                    let box_sizing_adjustment = child.box_sizing_adjustment(&child_style);
 
                     // EXACT PATCH 78: a keyword maximum, which resolves to none here,
                     // is the item's resolved one.
@@ -497,8 +498,7 @@ pub(super) fn distribute_remaining_free_space(flex_lines: &mut [FlexLine], const
         let num_items = line.items.len();
         let layout_reverse = constants.dir.is_reverse();
         let gap = constants.gap.main(constants.dir);
-        let raw_justify_content_mode = constants.justify_content.unwrap_or(JustifyContent::FLEX_START);
-        let justify_content_mode = apply_alignment_fallback(free_space, num_items, raw_justify_content_mode);
+        let justify_content_mode = apply_alignment_fallback(free_space, num_items, constants.justify_content);
 
         let justify_item = |(i, child): (usize, &mut FlexItem)| {
             child.offset_main =
@@ -668,10 +668,13 @@ pub(super) fn align_flex_items_along_cross_axis(
                 0.0
             }
         }
-        // SelfStart/SelfEnd are resolved to Start/End against the item's own direction when
-        // flex items are generated.
-        AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd
-            | AlignItemsKeyword::Left | AlignItemsKeyword::Right => unreachable!(),
+        // Normal is resolved to Stretch, and SelfStart/SelfEnd are resolved to Start/End
+        // against the item's own direction when flex items are generated.
+        AlignItemsKeyword::Normal
+        | AlignItemsKeyword::SelfStart
+        | AlignItemsKeyword::SelfEnd
+        | AlignItemsKeyword::Left
+        | AlignItemsKeyword::Right => unreachable!(),
     }
 }
 

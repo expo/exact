@@ -12,15 +12,24 @@
 //! Under the Material look a press is a ripple from the touch on whatever
 //! presses (LLP 1115.001 D9; `paint/ripple.rs`).
 use super::*;
+use crate::host::press::Edge;
+use exact_kernel::NodeKey;
 
 impl<D: DataSource> Presenter<D> {
+    /// A press `edge` on `key`, landed at once under the agent's clock (LLP
+    /// 1061 D7 "Timing" item 4).
+    pub(super) fn press_feedback(&mut self, key: NodeKey, edge: Edge, now: f64) {
+        self.host
+            .press_feedback(key, edge, now, !self.agent || self.live_clock.is_some());
+    }
+
     /// What shows a state at or above `id`: the control (a press on a
     /// button's title is the button's), or the nearest node that presses
     /// when it is in a list's row. A row's own press look replaces the
     /// wash, as it does on the web: `-exact-press-scale`, the pressed paint
     /// (LLP 1061 D7, which `:active` lowers to), or `pointerdown`
     /// or `pointerup` handlers, which draw one. A disabled row shows none.
-    fn feedback_at(&self, id: ViewId) -> Option<ViewId> {
+    pub(super) fn feedback_at(&self, id: ViewId) -> Option<ViewId> {
         let kernel = self.host.kernel();
         let mut at = Some(id);
         while let Some(id) = at {

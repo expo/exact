@@ -75,7 +75,26 @@ fn bake(
     controls: Value,
     activities: bool,
     grants: &str,
+    target: (&str, &str),
+) -> Result<(Value, String), String> {
+    baked(
+        dir,
+        controls,
+        activities,
+        grants,
+        target,
+        ("development", false),
+    )
+}
+
+/// [`bake`] with `trust` as the build's, as a qualification build when `qualify`.
+fn baked(
+    dir: &Path,
+    controls: Value,
+    activities: bool,
+    grants: &str,
     (platform, target): (&str, &str),
+    (trust, qualify): (&str, bool),
 ) -> Result<(Value, String), String> {
     let mut manifest = json!({
         "name": "App", "icons": [{"src": "assets/a.png"}],
@@ -91,7 +110,9 @@ fn bake(
     let plan = contract::compile_path(&dir.join("app.contract")).map_err(|e| format!("{e:?}"))?;
     let m = Manifest::read(dir).unwrap();
     let mut c = compatibility_with_trust(dir, platform, target, &m, Some(grants), "development")?;
-    super::derive(&mut c, &plan, &m, platform, target)?;
+    // A production compat needs signing keys this fixture has none of; the trust is what the placement reads.
+    c.embedded["trust"] = json!(trust);
+    super::place(&mut c, &plan, &m, (platform, target), None, qualify)?;
     Ok((c.inputs["controls"].clone(), c.id))
 }
 
@@ -139,7 +160,6 @@ fn ios_offers_url_and_activity_controls_and_names_what_it_omits() {
     for target in [
         ("ios", "aarch64-apple-tvos"),
         ("macos", "aarch64-apple-darwin"),
-        ("android", "aarch64-linux-android"),
         ("linux", "x86_64-unknown-linux-gnu"),
     ] {
         let (controls, _) = bake(&dir, rows.clone(), true, MIC, target).unwrap();
@@ -173,7 +193,7 @@ fn a_recording_control_needs_its_activity_and_the_background_grant() {
     assert!(silent.starts_with("control-recording-activity"), "{silent}");
     let foreground = refused(control("r", "record"), true, "device.microphone mic");
     assert!(foreground.starts_with("grant-needs"), "{foreground}");
-    let android = ("android", "aarch64-linux-android");
+    let android = ("linux", "aarch64-linux-android");
     bake(&dir, json!([control("r", "silent")]), false, MIC, android)
         .expect("only iOS stops a recording without its activity");
 }
@@ -185,13 +205,121 @@ fn a_control_moves_each_native_binary_it_is_compiled_or_named_in() {
         let row = json!([{ "kind": "glance", "title": title, "symbol": "s", "tool": "glance" }]);
         [
             IOS,
-            ("android", "aarch64-linux-android"),
+            ("linux", "aarch64-linux-android"),
             ("web", "wasm32-unknown-unknown"),
         ]
         .map(|t| bake(&dir, row.clone(), true, MIC, t).unwrap().1)
     };
     let (first, retitled) = (ids("Show"), ids("Glance"));
     assert_ne!(first[0], retitled[0], "iOS compiles the title");
-    assert_ne!(first[1], retitled[1], "Android's build names its omission");
+    assert_ne!(first[1], retitled[1], "Android compiles the tile's title");
     assert_eq!(first[2], retitled[2], "the web has none");
+}
+
+#[test]
+fn a_qualification_build_offers_what_awaits_a_device_and_production_refuses_it() {
+    let dir = app("qualify");
+    let rows = json!([
+        control("plain", "plain"),
+        control("record", "record"),
+        control("film", "film")
+    ]);
+    let (controls, id) = baked(&dir, rows.clone(), true, MIC, IOS, ("development", true)).unwrap();
+    let placement = |kind: &str| {
+        let all = controls.as_array().unwrap();
+        &all.iter().find(|c| c["control"]["kind"] == kind).unwrap()["placement"]
+    };
+    assert_eq!(
+        placement("plain"),
+        &json!({ "offered": [{ "from": "26.0", "intent": "tool" }], "qualifying": "control-process" })
+    );
+    assert_eq!(
+        placement("record"),
+        &json!({ "offered": [{ "from": "18.0", "intent": "recording" }], "qualifying": "control-recording-unqualified" })
+    );
+    assert_eq!(placement("film")["omitted"], "control-capture");
+    let (_, ordinary) = bake(&dir, rows.clone(), true, MIC, IOS).unwrap();
+    assert_ne!(
+        id, ordinary,
+        "a qualification binary is never an ordinary build's cohort"
+    );
+    let refused = baked(&dir, rows.clone(), true, MIC, IOS, ("production", true)).unwrap_err();
+    assert!(refused.starts_with("EXACT_QUALIFY_CONTROLS"), "{refused}");
+    let m = Manifest::read(&dir).unwrap();
+    let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
+    let mut c = compatibility_with_trust(&dir, "ios", IOS.1, &m, Some(MIC), "development").unwrap();
+    super::place(&mut c, &plan, &m, IOS, Some("controls,intents"), true).unwrap();
+    let record = c.inputs["controls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["control"]["kind"] == "record")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        record["placement"]["omitted"], "control-recording-unqualified",
+        "a build without its activity offers no recording"
+    );
+    c.embedded["trust"] = json!("production");
+    let web = super::place(
+        &mut c,
+        &plan,
+        &m,
+        ("web", "wasm32-unknown-unknown"),
+        None,
+        true,
+    )
+    .unwrap_err();
+    assert!(
+        web.starts_with("EXACT_QUALIFY_CONTROLS"),
+        "refused where no control is placed too: {web}"
+    );
+    let missing = baked(
+        &dir,
+        json!([control("r", "silent")]),
+        true,
+        MIC,
+        IOS,
+        ("development", true),
+    )
+    .unwrap_err();
+    assert!(
+        missing.starts_with("control-recording-activity"),
+        "the prerequisites stand: {missing}"
+    );
+}
+
+#[test]
+fn android_offers_a_tile_for_each_control_and_opens_the_app_for_a_capture() {
+    let dir = app("android");
+    let rows = json!([
+        { "kind": "open", "title": "Open", "symbol": "house", "url": "/" },
+        control("glance", "glance"),
+        control("plain", "plain"),
+        control("film", "film"),
+        control("record", "record"),
+        control("silent", "silent"),
+    ]);
+    let android = ("linux", "aarch64-linux-android");
+    // Neither the activity nor the background grant: the visible app records.
+    let (controls, _) = bake(&dir, rows, false, "device.microphone mic", android).unwrap();
+    let placement = |kind: &str| {
+        let all = controls.as_array().unwrap();
+        all.iter().find(|c| c["control"]["kind"] == kind).unwrap()["placement"].clone()
+    };
+    let offered = |intent: &str| json!({ "offered": [{ "from": "10", "intent": intent }] });
+    assert_eq!(placement("open"), offered("open"));
+    assert_eq!(placement("glance"), offered("tool"));
+    assert_eq!(placement("plain"), offered("tool"));
+    assert_eq!(placement("film")["omitted"], "control-capture");
+    assert_eq!(placement("record"), offered("foreground"));
+    assert_eq!(placement("silent"), offered("foreground"));
+    assert_eq!(controls[0]["conformances"], json!([]));
+    let refused = bake(&dir, json!([control("r", "silent")]), false, "", android).unwrap_err();
+    assert!(refused.starts_with("grant-needs"), "{refused}");
+    let (film, _) = bake(&dir, json!([control("f", "film")]), false, "", android).unwrap();
+    assert_eq!(
+        film[0]["placement"]["omitted"], "control-capture",
+        "an omitted control needs no grant"
+    );
 }

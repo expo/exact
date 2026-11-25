@@ -216,34 +216,42 @@ final class DragOutMacTests: XCTestCase {
         XCTAssertNotNil(NSApp.nextEvent(matching: .leftMouseUp, until: Date().addingTimeInterval(2), inMode: .default, dequeue: true), "to the session's window")
     }
 
-    func testTheItemsArePromisesThenTheURLAndTextOnTheFirst() throws {
+    /// With files, the URL and the text are pasteboard items of their own (LLP 1094.000 D5).
+    func testTheItemsArePromisesThenTheURLThenTheText() throws {
         let p = presenter(["draggable": "true", "dataTransferFiles": "assets/apple/1016-thumb.jpg\napp:/data/notes.pdf",
                            "dataTransferUrl": "https://example.com/1016", "dataTransferText": "Mount Fuji"])
         let items = DragItemsMac.items(of: try XCTUnwrap(p.views[10]), in: nil)
-        XCTAssertEqual(items.count, 2, "one item a file")
-        let first = try XCTUnwrap(items[0].item as? DragItemsMac.Promise)
+        XCTAssertEqual(items.count, 4, "one item a file, then the URL and the text")
+        guard items.count == 4 else { return }
+        let first = try XCTUnwrap(items[0].item as? NSFilePromiseProvider)
         XCTAssertEqual(first.fileType, UTType.jpeg.identifier)
         XCTAssertEqual(first.delegate?.filePromiseProvider(first, fileNameForType: first.fileType), "1016-thumb.jpg")
-        let types = first.writableTypes(for: .general)
-        XCTAssertEqual(Array(types.suffix(2)), [.URL, .string], "url, then text, after the promise's own")
-        XCTAssertEqual(first.pasteboardPropertyList(forType: .URL) as? String, "https://example.com/1016")
-        XCTAssertEqual(first.pasteboardPropertyList(forType: .string) as? String, "Mount Fuji")
-        let second = try XCTUnwrap(items[1].item as? DragItemsMac.Promise)
+        XCTAssertFalse(first.writableTypes(for: .general).contains(.URL), "the promise alone")
+        let second = try XCTUnwrap(items[1].item as? NSFilePromiseProvider)
         XCTAssertEqual(second.fileType, UTType.pdf.identifier)
-        XCTAssertFalse(second.writableTypes(for: .general).contains(.URL))
+        let link = try XCTUnwrap(items[2].item as? NSPasteboardItem), words = try XCTUnwrap(items[3].item as? NSPasteboardItem)
+        XCTAssertEqual(link.string(forType: .URL), "https://example.com/1016")
+        XCTAssertNil(link.string(forType: .string))
+        XCTAssertEqual(words.string(forType: .string), "Mount Fuji")
+        XCTAssertNil(words.string(forType: .URL))
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("exact-drag-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.writeObjects([first]), "the promise writes to a pasteboard")
-        XCTAssertEqual(pasteboard.string(forType: .URL), "https://example.com/1016", "with its url")
-        XCTAssertEqual(pasteboard.string(forType: .string), "Mount Fuji", "and its text")
         let promised = NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type")
-        XCTAssertEqual(pasteboard.string(forType: promised), UTType.jpeg.identifier, "and still promises the file: \(pasteboard.types ?? [])")
+        XCTAssertEqual(pasteboard.string(forType: promised), UTType.jpeg.identifier, "and promises the file: \(pasteboard.types ?? [])")
         XCTAssertEqual(items[0].draggingFrame.size, CGSize(width: 200, height: 120), "the node's own frame")
         XCTAssertNotNil(items[0].imageComponents?.first, "and its picture")
     }
 
     func testWithNoFileOnePasteboardItemCarriesTheURLAndText() throws {
+        let titled = DragItemsMac.items(of: try XCTUnwrap(presenter(["draggable": "true", "dataTransferUrl": "https://example.com/1016",
+                                                                    "dataTransferText": "Mount Fuji"]).views[10]), in: nil)
+        XCTAssertEqual(titled.count, 1, "a link keeps its title on its own item")
+        let both = try XCTUnwrap(titled.first?.item as? NSPasteboardItem)
+        XCTAssertEqual(both.string(forType: .URL), "https://example.com/1016")
+        XCTAssertEqual(both.string(forType: .string), "Mount Fuji")
+        XCTAssertEqual(both.types.filter { $0 == .URL || $0 == .string }, [.URL, .string], "the URL, then its title")
         let p = presenter(["draggable": "true", "dataTransferUrl": "https://example.com/1016", "dataTransferText": ""])
         let items = DragItemsMac.items(of: try XCTUnwrap(p.views[10]), in: nil)
         XCTAssertEqual(items.count, 1)

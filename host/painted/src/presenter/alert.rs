@@ -27,7 +27,7 @@ pub(super) struct Open {
     anchor: Option<Rect4>,
     reading_anchor: bool,
     point: Option<(f32, f32)>,
-    serial: u32,
+    pub(super) serial: u32,
     key: NodeKey,
     pub(super) restore: Option<NodeKey>,
     /// Whether the invoker is a programmatic `source` (it invokes nothing
@@ -191,6 +191,17 @@ impl<D: DataSource> Presenter<D> {
             return false;
         }
         let anchor = invoker.and_then(|id| self.box_of(id)).map(|b| b.rect);
+        let dismissible = modal
+            || self
+                .host
+                .kernel()
+                .node(id)
+                .is_some_and(|n| n.props.str(PropId::Popover) != Some("manual"));
+        let request = if dismissible {
+            self.request_back_layer(3)
+        } else {
+            None
+        };
         let restore = self.replace_surface(invoker, now);
         if let Err(e) = self.pointer_cancel(now) {
             self.host.log(e);
@@ -204,6 +215,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // A surface presented by a synchronous blur handler owns focus and paint.
         if self.top_open() {
+            self.resolve_back_layer(request);
             return false;
         }
         // A blur handler can destroy or replace the dialog.
@@ -216,9 +228,10 @@ impl<D: DataSource> Presenter<D> {
             if let Some(e) = self.set_focus(restore, now) {
                 self.host.log(e);
             }
+            self.resolve_back_layer(request);
             return false;
         }
-        let serial = self.next_surface_serial();
+        let serial = request.unwrap_or_else(|| self.next_surface_serial());
         let node = self.host.kernel().node(id);
         let by_source = invoker
             .and_then(|i| self.host.kernel().node(i))
@@ -244,7 +257,9 @@ impl<D: DataSource> Presenter<D> {
             measured: None,
             placement: top::area::History::default(),
         });
+        self.resolve_back_layer(request);
         if !modal {
+            self.host.runner_mut().kernel_mut().measure_dialog(id, true);
             if let Err(e) = self
                 .host
                 .runner_mut()
@@ -322,6 +337,7 @@ impl<D: DataSource> Presenter<D> {
         let Some(open) = self.alert.take() else {
             return;
         };
+        self.update_hosted_back();
         self.queue_surface_closed(open.key, open.modal);
         if !open.modal {
             self.report_top_layer();
@@ -338,6 +354,7 @@ impl<D: DataSource> Presenter<D> {
                     let _ = k.set_alert_prefix(id, false);
                 }
                 if !open.modal {
+                    k.measure_dialog(id, false);
                     let _ = k.set_popover_source_visible(id, false);
                 }
                 let _ = k.set_host_block(id, None);
@@ -580,7 +597,7 @@ impl<D: DataSource> Presenter<D> {
             )
         };
         let offset = (f.x - origin.0, f.y - origin.1);
-        let dark = self.host.presented(id).dark.unwrap_or(self.dark());
+        let dark = self.dark_at(id);
         let backdrop = self.backdrop(id, dark);
         let scroll = self.alert_scroll(id);
         let title = title.map(|(label, p)| {
@@ -663,7 +680,7 @@ impl<D: DataSource> Presenter<D> {
             root_font: k.root_font_size(),
             scale: self.brush.scale,
             fonts: self.host.runner().runtime_font_count(),
-            dark: self.host.presented(id).dark.unwrap_or(self.dark()),
+            dark: self.dark_at(id),
             scroll: self.alert_scroll(id),
             anchor: self.alert.as_ref()?.anchor,
         })
@@ -686,6 +703,8 @@ impl<D: DataSource> Presenter<D> {
                     self.host.content_region(),
                     &node,
                     None,
+                    &|id| self.host.presented(id),
+                    self.host.scaled_presented(),
                 );
                 bounds.max.0 > 0. || bounds.max.1 > 0.
             })
@@ -719,9 +738,14 @@ impl<D: DataSource> Presenter<D> {
         let Some(node) = kernel.node(id) else {
             return false;
         };
-        let bounds = self
-            .brush
-            .scroll_bounds(kernel, self.host.content_region(), &node, None);
+        let bounds = self.brush.scroll_bounds(
+            kernel,
+            self.host.content_region(),
+            &node,
+            None,
+            &|id| self.host.presented(id),
+            self.host.scaled_presented(),
+        );
         let border = node
             .computed_style(exact_kernel::StyleMask::EMPTY)
             .border_widths_in(&kernel.env_of(id));

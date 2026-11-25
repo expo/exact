@@ -215,8 +215,7 @@ fn arguments(text: &str) -> Vec<&str> {
 }
 
 /// A function as its row's index and value. The row's own parser reads a
-/// length or an angle when the row lowers; a number is read here, since
-/// `scale(x, y)` must be one factor and the `scale` row is a number.
+/// length or an angle when the row lowers; scale factors are read here.
 fn function(name: &str, args: &[&str], span: Span) -> Result<(usize, Expr), String> {
     let lower = name.to_ascii_lowercase();
     let one_factor = |a: &str| -> Result<f64, String> {
@@ -243,20 +242,13 @@ fn function(name: &str, args: &[&str], span: Span) -> Result<(usize, Expr), Stri
         ("scale", [n]) => (2, Expr::Number(one_factor(n)?, span)),
         ("scale", [x, y]) => {
             let (x, y) = (one_factor(x)?, one_factor(y)?);
-            if x != y {
-                return Err(format!(
-                    "`scale({}, {})` scales the axes differently; the `scale` row is one factor for both",
-                    args[0], args[1]
-                ));
-            }
-            (2, Expr::Number(x, span))
+            (2, Expr::Str(format!("{x} {y}"), span))
         }
+        ("scalex", [x]) => (2, Expr::Str(format!("{} 1", one_factor(x)?), span)),
+        ("scaley", [y]) => (2, Expr::Str(format!("1 {}", one_factor(y)?), span)),
         ("scale", _) => return Err("`scale(…)` takes one or two numbers".into()),
-        ("scalex" | "scaley" | "scalez" | "scale3d", _) => {
-            return Err(format!(
-                "`{name}(…)` scales one axis; the `scale` row is one factor for both"
-            ));
-        }
+        ("scalex" | "scaley", _) => return Err(format!("`{name}(…)` takes one number")),
+        ("scalez" | "scale3d", _) => return Err(format!("`{name}(…)` is a 3D function")),
         ("matrix" | "matrix3d" | "skew" | "skewx" | "skewy", _) => {
             return Err(format!("`{name}(…)` has no individual property"));
         }

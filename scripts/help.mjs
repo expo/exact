@@ -35,7 +35,7 @@ const DRIVE = [
   ['--size <w>x<h>', 'viewport; Linux: unrotated panel; 90/270 swap layout'],
   ['--scale <n>', 'screenshots at n pixels per point (exact.mjs agent on ios, macos: 1; an iPhone\'s own: 3)'],
   ['--chrome platform|agent', 'UIKit\'s bars (exact.mjs on iOS); agent paints the header'],
-  ['--attach [pid] · --live · --timing platform · --bind <extension>', 'macOS: read the development app a person has open, after its Develop ▸ Enable Agent Attach and their Allow · wall clock on macOS, iOS and Android reader · Apple native transitions · use a module implementation'],
+  ['--attach [pid] · --live · --display <name|index> · --timing platform · --bind <extension>', 'macOS, the iOS simulator and a web dev loop\'s tab: read the development app a person has open, after its Enable Agent Attach (Develop menu; iOS developer menu; ⌥⇧A in the tab, whose code goes on stdin) and their Allow; on Apple, tap, type and call after their Allow Agent Input · wall clock on macOS, iOS and Android reader · the Mac display a drive\'s window opens on (NSScreen name or index; a live one stays in front there, never activated) · Apple native transitions · use a module implementation'],
   ['--touch platform', 'iOS simulator or paired iPhone: send taps and drags through XCTest'],
   ['--epoch <ISO|ms|now> · --login [hidden]', 'the date at the clock\'s zero (default 2026-01-01) · a launch the login item made, hidden: with no window'],
   ['--locale <tag> · --format-locale <tag> · --time-zone <zone> · --seed <n>', 'default en-US, the locale (the Region\'s format, exactTime().formatLocale), UTC, 1'],
@@ -49,7 +49,7 @@ const DRIVE = [
   ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --configuration <json> · --placement <name> · --state <json>', 'gallery: widget variant/props/configuration choices or activity placement/state; --size large|xxxl is widget text size'],
   ['--json', 'one compact JSON object per op reply, one per line (default: short text)'],
 ];
-const TEST_IGNORES = ['--attach [pid]', '--live', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
+const TEST_IGNORES = ['--attach [pid]', '--live', '--display <name|index>', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
 // The drive flags a first build reaches for; `--help all` shows the rest.
 const DRIVE_FIRST = ['--storage', '--size', '--chrome', '--epoch', '--sim', '--json'];
 const naming = (names, keep) => ([row]) => specs(row).some((spec) => names.includes(name(spec))) === keep;
@@ -175,7 +175,7 @@ Backend  start snapback4 dev on app.ts’s selected origin’s port first; check
 Lines    tap, type, expect text|tree|state|disabled|refusal, clock data|settle|+<ms>|until state …, reload, back, fail|pass
          fetch, answer fetch "<prefix>" with <status> [json], request: docs/recipes/tests.md;
          all: docs/contract-grammar.md "Authored tests".`,
-    bodyAll: `A phone's build is ios --device's; on macOS with multiple Apple teams, set EXACT_IDENTITY=- or DEVELOPMENT_TEAM=<team-id>.
+    bodyAll: `A phone's build is ios --device's; on macOS with multiple Apple teams, set EXACT_IDENTITY=- or DEVELOPMENT_TEAM=<team-id>. macOS and iOS simulator tests reuse the startup build check on reload. The next run checks edits.
 Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: headless Chrome over a pipe; the page on 127.0.0.1, each test at a
          port fixed by its own store's name (20000-47999).
          ${NATIVE_PORTS}`,
@@ -190,15 +190,15 @@ Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: head
     more: DRIVE.filter(naming(DRIVE_FIRST, false)),
     internal: ['--test <file>', ...DRIVE_INTERNAL],
     body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock
-  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
+  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · rotate <orientation> (iOS simulator) · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
   tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up (testId, exact text or label)
-  type <target> <text>|key <Name>   (a select, date or checkbox: its value)
-  clock data|settle|held|+<ms> [real]    replies · transitions · push
-  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
+  type <target> <text>|key <Name>  (a select, date or checkbox: its value)
+  clock data|settle|held|+<ms> [real]  replies · transitions · push
+  check [dark|both] · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
   Android reader drives refuse film and play layers only under --live. Record a live or normal run with adb shell screenrecord.
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>`,
-    bodyAll: `Unnamed, the host is one app.json ships, as test's. Builds if stale, launches, runs each quoted op and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down" "screenshot <png>" "tap up". A drag takes [hold ms during "read"] [then dx dy …] in one iOS touch. Dragging into the keyboard needs --touch platform and the keyboard open. clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
+    bodyAll: `On an iOS simulator, rotate takes portrait, portraitUpsideDown, landscapeLeft or landscapeRight. Unnamed, the host is one app.json ships, as test's. Builds if stale, launches, runs each quoted op and closes. A game's world: post [<surface>] <text> is a message its next tick reads (type <surface> message <text>). No --storage, no storage; --reset-storage empties a native store, --keep-storage keeps a web or compare's. A deep link is typed on the navigate= root: "type <root> euxy://p/1" (macOS, iOS: through protocol_handlers, no alert). Held contact: "tap <t> down [at <x> <y>]" "tap hold <ms>" "tap move [by] <x> <y> [over <ms>]" "tap up"; a drag from a point is "tap <t> drag <dx> <dy> from <x> <y>". A drag takes [hold ms during "read"] [then dx dy …], one finger throughout, as a test's does; under the agent's clock it moves the clock by its press, over and hold. Dragging into the keyboard needs --touch platform and the keyboard open. clock held [<target>…] [<n>s] waits for a held reply with the clock frozen, then runs clock data (default bound: 20 s). clock until state <path> == <JSON literal> within <ms> waits, the clock frozen, until state reads it (a stream's state after its first message); a miss names the last value. state media (Apple): each video's player (renderer, paused, currentTime, muted, volume); under the agent a video takes no audio session, and on iOS AVKit's own controls answer only --touch platform.
 Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else free. ${NATIVE_PORTS}`,
     example: 'bun exact.mjs agent web --storage s1 tree "tap add" "screenshot .exact/a.png"',
   },
@@ -285,7 +285,7 @@ Ports    none. Runs to completion (--run too); --prebuild returns at once, the b
       ['--force', 'publish over the other branch\'s link instead'],
       ['--json', 'one JSON object on stdout: url, revision, branch, action (or code and error)'],
     ],
-    internal: ['--app <name>'],
+    internal: ['--app <name>', '--login <number>'],
     body: `Run it when the app is ready for a person to try on their phone, and send them the link
 (stdout's last line). They open it on their iPhone, and AppDrop installs the app with their
 own Apple ID. The first share makes the link; later ones publish a new version to it, and
@@ -600,11 +600,11 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
     example: 'bun exact.mjs shells',
   },
   lock: {
-    line: 'refresh Cargo.lock and the app’s Swift Package.resolved',
+    line: 'refresh Cargo and Swift locks and check the Android Maven lock',
     usage: 'bun exact.mjs lock',
     flags: [],
     internal: ['--lock'],
-    body: 'Use after exact update reports app lock drift, after this checkout moves or after adding a dependency.\nApps preserve locked versions where possible, resolve Cargo offline first and fetch missing dependencies when needed; games fetch and recapture their lock. Swift products declared by the app or its packages resolve into Package.resolved. Review and commit changed locks. Builds never change them.\nPorts    none. Runs to completion.',
+    body: 'Use after exact update reports app lock drift, after this checkout moves or after adding a dependency.\nApps preserve locked versions where possible, resolve Cargo offline first and fetch missing dependencies when needed. Games fetch and recapture their lock. Swift products declared by the app or its packages resolve into Package.resolved. If gradle.lockfile exists, the command checks it through Gradle or names the tools needed to check it. Run bun exact.mjs android --write-locks to refresh the Android lock and checksums. Review and commit changed locks. Builds never change them.\nPorts    none. Runs to completion.',
     example: 'bun exact.mjs lock',
   },
   windows: {

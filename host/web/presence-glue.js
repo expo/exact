@@ -144,6 +144,39 @@ function contentClip(sf) {
   };
 }
 
+// A box that clips its children clips them to the shown box: it stops clipping
+// while its size moves, keeping the layout clipping gave it. A box that
+// `hidden` makes a scroll container keeps that container's automatic minimum
+// size of 0 as a flex or grid item (CSS Flexbox §4.5, CSS Grid §6.6) and, as
+// a block, its own formatting context, held by `display: flow-root`, which
+// Firefox does not animate (there it keeps clipping at its laid-out box). A
+// box keeps clipping too where clipping places more than that: a scroller or
+// a box scrolled, which would lose its offset and its scrollbar's room; an
+// inline-level box, whose baseline is its bottom edge only while it clips
+// (CSS 2 §10.8.1); and one holding a sticky box, which sticks to the nearest
+// scroll container (`sticky`, read when the move starts). What it holds is
+// read from its own style with the hold off, again after each batch, so a
+// restyle mid-move is its own.
+function unclip(hold, el, sticky) {
+  hold.effect.setKeyframes([]);
+  const cs = getComputedStyle(el), axes = [cs.overflowX, cs.overflowY];
+  if (sticky || cs.display.startsWith('inline') || axes.some(v => v === 'auto' || v === 'scroll') || el.scrollTop || el.scrollLeft) return;
+  const held = { overflow: 'visible' };
+  if (axes.includes('hidden')) {
+    if (cs.minWidth === 'auto') held.minWidth = '0px';
+    if (cs.minHeight === 'auto') held.minHeight = '0px';
+    if (cs.display === 'block') {
+      // Alone, `flow-root` leaves a clipping block's layout as it is.
+      held.display = 'flow-root';
+      hold.effect.setKeyframes([{ display: 'flow-root' }, { display: 'flow-root' }]);
+      const animates = getComputedStyle(el).display === 'flow-root';
+      hold.effect.setKeyframes([]);
+      if (!animates) return;
+    }
+  }
+  hold.effect.setKeyframes([held, held]);
+}
+
 // The linear part (rotation, scale, skew) of a matrix.
 const linear = m => new DOMMatrix([m.a, m.b, m.c, m.d, 0, 0]);
 
@@ -243,6 +276,7 @@ function createPresence(root) {
     for (const [el, letGo] of globalThis.exact?.motionHolds ?? []) if (leaving.contains(el)) letGo();
   };
   let first = new Map();
+  const exitBoxes = new Map();
 
   // Read the element's presented paint without our transparent surface or
   // layout offset. Paint animations keep their clocks: only their painted
@@ -371,8 +405,12 @@ function createPresence(root) {
         sf.shape = el.animate([{ clipPath: content }, { clipPath: content }], timing);
         parts.push(sf.shape);
       }
-      // A box that clips its children clips them to the shown box.
-      if (sf.clips) parts.push(el.animate([{ overflow: 'visible' }, { overflow: 'visible' }], timing));
+      if (sf.clips) {
+        sf.sticky = [...el.querySelectorAll('*')].some(d => getComputedStyle(d).position === 'sticky');
+        sf.unclip = el.animate([], timing);
+        unclip(sf.unclip, el, sf.sticky);
+        parts.push(sf.unclip);
+      }
       surfaces.add(el);
     }
     const f = { animation, parts, surface: sf, d, v, config };
@@ -404,14 +442,14 @@ function createPresence(root) {
     // says which (`still`, rt.js `commit`), and the wasm host's then holds
     // only its clock stamp (`at`). A view the page no longer holds is
     // tracked no longer, whether or not the batch measures.
-    before(batch, views) {
+    before(batch, views, departures = []) {
       first = new Map();
+      const place = measure();
       for (const el of surfaces) reveal(flips.get(el));
       for (const el of tracked) if (!el.isConnected) tracked.delete(el);
       const still = batch.still ?? !batch.ops?.some(op => op.op !== 'at');
       if (batch.presenceSnap) { for (const el of tracked) stop(el); }
       else if (!still) {
-        const place = measure();
         const gains = (batch.ops ?? []).filter(op => op.op === 'style' && op.css?.includes(LAYOUT)).map(op => views.get(op.id));
         for (const el of new Set([...tracked, ...gains])) {
           const at = el && place(el);
@@ -420,22 +458,25 @@ function createPresence(root) {
       }
       // The batch's leaving views, each read before any exit takes one out of flow
       const exits = (batch.ops ?? []).filter(op => op.op === 'exit').map(op => [views.get(op.id), op.css]).filter(([el]) => el?.isConnected);
+      exitBoxes.clear();
+      // Only a confirmed exit releases holds. A JS region may rescue portal content as it leaves.
       for (const [el] of exits) release(el);
-      const readings = exits.map(([el]) => kept(el));
+      for (const el of new Set([...departures, ...exits.map(([el]) => el)])) {
+        exitBoxes.set(el, { kept: kept(el), block: el.offsetParent, local: place(el) });
+      }
       // Let this commit update the underlying row before reapplying the
       // ghost policy in after(). Both run in the same task, before paint.
       for (const [parent, held] of ghostParents) {
         restoreIsolation(parent, held);
         held.released = true;
       }
-      exits.forEach(([el, css], i) => this.exit(el, css, readings[i]));
+      for (const [el, css] of exits) this.exit(el, css);
     },
-    // `at`: what `kept` returned for it, when `before` read it ahead of the batch's exits
-    exit(el, css, at) {
+    exit(el, css) {
       if (!el?.isConnected || !css) return;
       stop(el);
       release(el);
-      const [box, ranked] = at ?? kept(el), s = el.style;
+      const [box, ranked] = exitBoxes.get(el)?.kept ?? kept(el), s = el.style;
       if (el.parentElement.hasAttribute('data-exact-list-item')) unwrapListItem(el.parentElement);
       const parent = el.parentElement;
       // No input, no accessibility, no focus, no ids: a view re-created with
@@ -487,6 +528,16 @@ function createPresence(root) {
     // whose box moved plays back from where it was. All are measured before
     // any starts, so no move reads another's first frame.
     after(batch, views) {
+      // A restyle can establish or drop the containing block the saved offsets were relative to.
+      // Express the old box in the new block before measuring surviving layout transitions.
+      const locate = measure(), corrections = [];
+      for (const [el, { block, local }] of exitBoxes) {
+        if (!local || !el.hasAttribute('data-exiting') || block === el.offsetParent) continue;
+        const at = locate(el);
+        if (at) corrections.push([el.style, parseFloat(el.style.left) + local[0] - at[0], parseFloat(el.style.top) + local[1] - at[1]]);
+      }
+      for (const [style, x, y] of corrections) { style.left = `${x}px`; style.top = `${y}px`; }
+      exitBoxes.clear();
       const restyled = new Set((batch.ops ?? []).filter(op => op.op === 'style').map(op => views.get(op.id)));
       for (const [parent, held] of ghostParents) {
         if (held.released || restyled.has(parent)) {
@@ -502,6 +553,13 @@ function createPresence(root) {
         if (!el) continue;
         if (el.style.getPropertyValue(LAYOUT)) tracked.add(el);
         else { tracked.delete(el); stop(el); }
+      }
+      // A move whose box is gone (a restyle to `display: none`) ends with it.
+      for (const el of [...surfaces]) {
+        const sf = flips.get(el)?.surface;
+        sf?.unclip?.effect.setKeyframes([]);
+        if (!size(getComputedStyle(el))) stop(el);
+        else if (sf?.unclip) unclip(sf.unclip, el, sf.sticky);
       }
       const place = measure(), moves = [];
       for (const [el, [was, [d, v]]] of first) {

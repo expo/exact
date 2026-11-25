@@ -15,9 +15,21 @@ impl<D: DataSource> Runner<D> {
     /// changed: re-answer, in one commit, every `exactPage` resource whose
     /// shape reads a field that changed; the same facts again, or no such
     /// reader, commit nothing. Focus moves each time the person switches
-    /// windows, and asks nothing of a reader of `onLine` alone (#114). Size
+    /// windows, and asks nothing of a reader of `onLine` alone. Size
     /// readers are not asked.
+    ///
+    /// A page that shows is the person's ([`Runner::as_shown`]): a launch
+    /// or a switch back reaches a desktop app only so (expo/exact#1424).
     pub fn set_page(&mut self, page: Page) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.as_shown(!page.hidden, |r| r.set_page_as(page))
+    }
+
+    /// [`Self::set_page`] under the cause installed: a wake's own hiding
+    /// of the page is not the person's.
+    pub(in crate::runner) fn set_page_as(
+        &mut self,
+        page: Page,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
         self.replace_fact(
             |r| &mut r.page,
             page,
@@ -69,7 +81,21 @@ impl<D: DataSource> Runner<D> {
             seen: true,
             ..self.presented
         };
-        self.set_presented(presented)
+        self.as_person(|r| r.set_presented(presented))
+    }
+
+    /// A host observation runs as the app's while the page shows (LLP 1133.023
+    /// D7a). A hidden page keeps the installed cause, such as its booting wake's.
+    /// Outside other work a hidden observation has no cause or grant.
+    pub(in crate::runner) fn as_shown<T>(
+        &mut self,
+        shown: bool,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        match shown {
+            true => self.as_person(f),
+            false => f(self),
+        }
     }
 
     /// `prefer presented` (LLP 1069.000 D6): `Some` holds the fact at that
@@ -82,7 +108,7 @@ impl<D: DataSource> Runner<D> {
             preferred,
             ..self.presented
         };
-        self.set_presented(presented)
+        self.as_person(|r| r.set_presented(presented))
     }
 
     fn set_presented(

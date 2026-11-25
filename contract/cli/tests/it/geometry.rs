@@ -3,16 +3,9 @@
 //! the kernel, as on a native host. Outside an action there is no read at all
 //! (the compiler refuses it: `contract/corpus/rejects.txt`).
 
+use crate::source::{boxed, measure_dialogs, NoData, Source};
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{Capability, DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Capability, Runner, Value};
 
 const SRC: &str = r#"component App
   state room = 0
@@ -37,20 +30,20 @@ const SRC: &str = r#"component App
         text "read"
 "#;
 
-fn num(r: &Runner<NoData>, name: &str) -> f64 {
+fn num(r: &Runner<Source>, name: &str) -> f64 {
     r.slot(name).and_then(Value::as_number).unwrap()
 }
 
-fn flag(r: &Runner<NoData>, name: &str) -> bool {
+fn flag(r: &Runner<Source>, name: &str) -> bool {
     matches!(r.slot(name), Some(Value::Bool(true)))
 }
 
-fn boot() -> Runner<NoData> {
+fn boot() -> Runner<Source> {
     let plan = contract::compile(SRC).unwrap();
     assert!(exact_runner::uses(&plan).has(Capability::Geometry));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -58,7 +51,7 @@ fn boot() -> Runner<NoData> {
     .unwrap()
 }
 
-fn lay_out(r: &mut Runner<NoData>) {
+fn lay_out(r: &mut Runner<Source>) {
     let root = r.kernel().roots()[0];
     r.kernel_mut()
         .compute_layout(root, Offer::definite(400.0, 800.0))
@@ -128,7 +121,7 @@ fn a_read_sees_the_box_where_the_viewer_does_with_every_scroll_above_it_applied(
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -194,7 +187,7 @@ fn a_read_sees_the_box_through_every_transform_above_it() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -250,14 +243,14 @@ fn resize_given_an_action_is_the_element_resize_event_and_a_string_is_css() {
     );
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     lay_out(&mut r);
-    let view = |r: &Runner<NoData>, id: &str| {
+    let view = |r: &Runner<Source>, id: &str| {
         let key = r.kernel().find_by_id(id)[0];
         r.kernel().arena().local_id(key.index)
     };
@@ -302,6 +295,45 @@ fn resize_given_an_action_is_the_element_resize_event_and_a_string_is_css() {
     );
 }
 
+/// A round gives the nodes of one depth in view order, which is mount order,
+/// as `intersect_due` breaks its ties.
+#[test]
+fn a_resize_round_gives_one_depths_nodes_in_mount_order() {
+    let plan = contract::compile(
+        r#"component App
+  state heard = 0
+  action note(w: number, h: number)
+    heard = heard + 1
+  view
+    column
+      column height=10 resize=note
+      column height=11 resize=note
+      column height=12 resize=note
+      column height=13 resize=note
+      column height=14 resize=note
+      column height=15 resize=note
+      column height=16 resize=note
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        crate::source::boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    lay_out(&mut r);
+    // Mount order is the order the siblings are written in, heights 10 to 16
+    let heights: Vec<f64> = r
+        .resize_due(0)
+        .into_iter()
+        .map(|(_, rect, _)| rect.height)
+        .collect();
+    assert_eq!(heights, [10., 11., 12., 13., 14., 15., 16.]);
+}
+
 /// `elementFromPoint(x, y)` (LLP 1094 D10): the `id` nearest the front-most
 /// box at a viewport point, over `frame`'s boxes, as DOM's
 /// `elementFromPoint(x, y)?.closest("[id]")?.id`.
@@ -335,14 +367,14 @@ fn element_from_point_names_the_front_most_box_by_its_nearest_id() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
     lay_out(&mut r);
-    let at = |r: &mut Runner<NoData>, x: f64, y: f64| {
+    let at = |r: &mut Runner<Source>, x: f64, y: f64| {
         r.act("probe", vec![Value::Number(x), Value::Number(y)])
             .unwrap();
         r.slot("hit").and_then(Value::as_str).unwrap().to_owned()
@@ -398,7 +430,7 @@ fn elements_from_point_reads_every_own_id_in_paint_order() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -436,7 +468,7 @@ fn elements_from_point_keeps_the_first_entry_when_an_idless_child_overflows() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -473,7 +505,7 @@ fn elements_from_point_skips_an_idless_inspect_layer_inside_its_card() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -515,7 +547,7 @@ fn query_selector_all_reads_mounted_data_words_in_tree_order() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -575,7 +607,7 @@ fn query_selector_all_excludes_closed_top_layer_and_native_split_list() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -625,7 +657,7 @@ fn elements_from_point_skips_inert_subtrees() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -657,12 +689,13 @@ fn open_top_layer_escapes_its_authored_clip() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     lay_out(&mut r);
     let key = r.kernel().find_by_id("dialog")[0];
     r.top_layer(&[r.kernel().arena().local_id(key.index)]);
@@ -695,12 +728,13 @@ fn top_layer_uses_presented_frames_and_stack_order() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     lay_out(&mut r);
     let view = |id| {
         let key = r.kernel().find_by_id(id)[0];
@@ -745,7 +779,7 @@ fn structural_reads_skip_a_covered_stack_route() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -783,7 +817,7 @@ fn a_resize_rect_is_placed_by_padding_not_border() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -835,7 +869,7 @@ fn a_resize_rect_of_a_box_across_columns_is_its_stitched_size() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -880,7 +914,7 @@ fn a_column_childs_percentage_padding_is_of_the_column() {
     .unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -914,7 +948,7 @@ fn intersect_compiles_and_dispatches_its_entry_after_authored_arguments() {
     assert_eq!(plan.handlers[0].event, exact_plan::EventKind::Intersect);
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -977,7 +1011,7 @@ fn measure_is_the_border_box_at_auto_height_and_frame_the_laid_out_box() {
         let src = format!("component App\n  state natural = -1\n  state drawn = -1\n  state answered = false\n  task boot mount\n    after(1, read)\n  action read\n    natural = measure(\"root\").height\n    drawn = frame(\"root\").height\n    answered = not measure(\"root\").unavailable\n  view\n    main id=\"root\" height=\"100%\"{root}\n      column position=\"absolute\" inset=0\n        text \"route\"\n");
         let mut r = Runner::boot(
             contract::compile(&src).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",

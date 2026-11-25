@@ -36,7 +36,7 @@ final class VideoTrack {
     /// Under the agent: the camera it shows.
     var facing = "environment"
     var settings: [String: Any] = [:], capabilities: [String: Any] = [:]
-    var consumers: [ObjectIdentifier: (consumer: ExactTrackConsumer, origin: String)] = [:]
+    var consumers: [ObjectIdentifier: (consumer: ExactTrackConsumer, cause: ExactTrackCause)] = [:]
     /// Outputs that are not consumers (LLP 1133.027 D17 item 1): told what consumers are told, holding no lease.
     var observers: [ObjectIdentifier: ExactTrackConsumer] = [:]
     /// The capture whose lease it holds, if it holds one.
@@ -72,7 +72,7 @@ final class VideoTracks: ExactTrackOwner {
     private func disclose() {
         context.state(["videoTracks": tracks.values.sorted { $0.id < $1.id }.map { t -> [String: Any] in
             var out = shape(t)
-            out["consumers"] = t.consumers.values.map(\.origin).sorted()
+            out["consumers"] = t.consumers.values.map(\.cause.origin).sorted()
             out["observers"] = t.observers.count
             out["lease"] = t.leased
             if let w = t.waiting { out["waiting"] = w }
@@ -131,7 +131,7 @@ final class VideoTracks: ExactTrackOwner {
             || (apple["deviceType"] as? String).map { word in t.device.map { Cameras.word($0.deviceType) != word } ?? true } ?? false
         if moves {
             // Another camera under the same id (D1): a capture start (D6).
-            guard origin == "app", context.foreground else {
+            guard origin == "app", context.foreground, !t.leased || hasAppConsumer(t) else {
                 say("\(t.id): not moved, a capture start needs the app's own origin in the foreground (\(origin))")
                 return reply(["error": "NotAllowedError"])
             }
@@ -222,20 +222,30 @@ final class VideoTracks: ExactTrackOwner {
         }
     }
 
-    /// The app went to the background or came back (D6): on iOS the system
-    /// interrupts the session and resumes it itself; on macOS nothing changes.
+    fileprivate func hasAppConsumer(_ track: VideoTrack) -> Bool {
+        track.consumers.values.contains { $0.cause.origin == "app" && $0.cause.holdsCapture }
+    }
+
+    fileprivate func startGrants(_ t: VideoTrack) -> [ExactTrackCause] {
+        guard t.readyState == "live", t.enabled, context.foreground else { return [] }
+        return t.consumers.values.map(\.cause).filter { $0.origin == "app" }
+    }
+
+    /// iOS resumes a held capture session itself. Only an authorized holder can keep it across the interruption.
     func foreground(_ shown: Bool) {
-        guard context.agent else {
-            for t in tracks.values where t.readyState == "live" {
-                guard let capture = t.capture else { continue }
-                say("\(t.id): foreground=\(shown), running=\(capture.session.isRunning), interrupted=\(capture.session.interrupted), muted=\(t.muteReason ?? "none")")
-            }
-            return
+        for t in tracks.values where t.readyState == "live" { foreground(t, shown) }
+    }
+
+    func foreground(_ t: VideoTrack, _ shown: Bool) {
+        if shown {
+            if !t.leased { lease(t, origin: "app") }
+        } else if t.leased && (VideoCapture.oneForProcess || context.agent) && !hasAppConsumer(t) {
+            release(t)
         }
-        for t in tracks.values where t.readyState == "live" && t.leased {
-            t.platformMute = shown ? overlay : "background"
-            settle(t)
-        }
+        t.capture?.updateAdmission()
+        if t.leased { settle(t) }
+        else if shown && t.waiting == nil { mute(t, "idle") }
+        else if !shown { mute(t, "background") }
     }
 
     func dispose(_ id: String) { if let t = tracks[id] { end(t, "disposed") } }
@@ -243,10 +253,12 @@ final class VideoTracks: ExactTrackOwner {
 
     // MARK: leases (D3)
 
-    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, origin: String) throws -> ExactSubscription {
-        guard let t = tracks[id] else { throw ExactTrackError("NotFoundError") }
+    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, cause: ExactTrackCause) throws -> ExactSubscription {
+        let origin = cause.origin
+        guard cause.current, let t = tracks[id] else { throw ExactTrackError("NotFoundError") }
         if t.readyState == "ended" { consumer.ended(); return ExactSubscription {} }
-        t.consumers[ObjectIdentifier(consumer)] = (consumer, origin)
+        t.consumers[ObjectIdentifier(consumer)] = (consumer, cause)
+        t.capture?.updateAdmission()
         if t.leased {
             consumer.live(video: t.capture)
             if t.muted { consumer.muted(t.muteReason ?? "idle") }
@@ -261,8 +273,12 @@ final class VideoTracks: ExactTrackOwner {
         disclose()
         return ExactSubscription { [weak self, weak t, weak consumer] in
             guard let self, let t, let consumer, t.consumers.removeValue(forKey: ObjectIdentifier(consumer)) != nil else { return }
-            if t.consumers.isEmpty {
+            if !self.hasAppConsumer(t) {
                 t.waiting = nil
+                if t.leased && (t.platformMute != nil || !self.context.foreground) { self.release(t); self.mute(t, "idle") }
+            }
+            t.capture?.updateAdmission()
+            if t.consumers.isEmpty {
                 if t.leased { self.release(t); self.mute(t, "idle") }
             }
             self.disclose()
@@ -309,12 +325,14 @@ final class VideoTracks: ExactTrackOwner {
 
     /// The platform's mute over a held lease, or none.
     func settle(_ t: VideoTrack) {
-        if let reason = t.platformMute { mute(t, reason) } else { unmute(t) }
+        if !context.foreground && (VideoCapture.oneForProcess || context.agent) { mute(t, "background") }
+        else if let reason = t.platformMute { mute(t, reason) } else { unmute(t) }
     }
 
     /// Take the lease, admitted with `origin` (D3, D6): the capture runs, or the track waits `in-use`.
     func lease(_ t: VideoTrack, origin: String) {
-        guard !t.leased, t.readyState == "live" else { return }
+        guard !t.leased, t.readyState == "live", t.enabled, context.foreground, origin == "app",
+              hasAppConsumer(t) else { return }
         if context.agent {
             t.agentLease = true
         } else {
@@ -330,6 +348,7 @@ final class VideoTracks: ExactTrackOwner {
             t.waiting = nil
             read(t)
         }
+        t.platformMute = t.capture?.interruption ?? overlay
         each(t) { $0.live(video: t.capture) }
         settle(t)
     }
@@ -344,7 +363,7 @@ final class VideoTracks: ExactTrackOwner {
 
     /// A lease another track gave back: a waiting track of this session takes it, with its kept origin.
     func retry(_ t: VideoTrack) {
-        guard let origin = t.waiting, !t.consumers.isEmpty, t.readyState == "live", t.enabled else { t.waiting = nil; return }
+        guard let origin = t.waiting else { return }
         t.waiting = nil
         lease(t, origin: origin)
     }
@@ -353,7 +372,10 @@ final class VideoTracks: ExactTrackOwner {
     func interrupted(_ t: VideoTrack, _ reason: String?) {
         say("\(t.id): interruption=\(reason ?? "ended")")
         t.platformMute = reason ?? overlay
-        settle(t)
+        if !t.leased || !hasAppConsumer(t) {
+            release(t)
+            mute(t, reason ?? "idle")
+        } else { settle(t) }
     }
 
     /// A device change the capture made (a pinch's zoom, the torch).
@@ -405,6 +427,22 @@ final class VideoTracks: ExactTrackOwner {
     }
 }
 
+/// Grant changes arrive on main. The device queue checks the live grant again when it can start.
+final class CameraStarts {
+    private let lock = NSLock()
+    private var grants: [ExactTrackCause] = []
+    var admitted: Bool { lock.withLock { grants.contains { $0.holdsCapture } } }
+
+    func update(_ current: [ExactTrackCause], on queue: DispatchQueue, start: @escaping () -> Void) {
+        let gained = lock.withLock {
+            let was = grants.contains { $0.holdsCapture }
+            grants = current
+            return !was && current.contains { $0.holdsCapture }
+        }
+        if gained { queue.async { if self.admitted { start() } } }
+    }
+}
+
 /// The process's captures (D3).
 final class VideoCapture: NSObject, ExactVideoSource {
     /// iOS runs one camera at a time in an app; macOS one capture per camera.
@@ -416,6 +454,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
     private static var captures: [String: VideoCapture] = [:]
 
     let session = AVCaptureSession()
+    private(set) var interruption: String?
     private(set) var device: AVCaptureDevice
     private let queue = DispatchQueue(label: "dev.exact.media-capture.camera")
     private let onQueue = DispatchSpecificKey<Bool>()
@@ -450,12 +489,15 @@ final class VideoCapture: NSObject, ExactVideoSource {
             capture.start(device)
             if let rate = t.frameRate { capture.apply(["frameRate": rate]) }
         }
+        capture.updateAdmission()
         return capture
     }
 
     /// `t` gives its lease back: the last one stops the capture, and a track waiting for the camera takes it.
     func unlease(_ t: VideoTrack) {
-        guard holders.removeValue(forKey: ObjectIdentifier(t)) != nil, holders.isEmpty else { return }
+        guard holders.removeValue(forKey: ObjectIdentifier(t)) != nil else { return }
+        updateAdmission()
+        guard holders.isEmpty else { return }
         stop()
         VideoCapture.captures[VideoCapture.key(device)] = nil
         for waiting in VideoCapture.waiters() { waiting.tracks?.retry(waiting) }
@@ -468,6 +510,16 @@ final class VideoCapture: NSObject, ExactVideoSource {
         let tracks = waiting.compactMap { $0() }.filter { $0.waiting != nil }
         waiting = tracks.map { t in { [weak t] in t } }
         return tracks
+    }
+
+    private let starts = CameraStarts()
+
+    fileprivate func updateAdmission() {
+        let grants = holders.values.compactMap { $0() }.flatMap { $0.tracks?.startGrants($0) ?? [] }
+        starts.update(grants, on: queue) { [weak self] in
+            guard let self, !session.interrupted, !session.isRunning else { return }
+            session.startRunning()
+        }
     }
 
     private func start(_ device: AVCaptureDevice) {
@@ -484,7 +536,6 @@ final class VideoCapture: NSObject, ExactVideoSource {
             }
             hatch?(session)
             session.commitConfiguration()
-            session.startRunning()
         }
         log("camera \(device.localizedName): capture started")
     }
@@ -525,9 +576,10 @@ final class VideoCapture: NSObject, ExactVideoSource {
     /// Interruptions as `muteReason` (D3); after any but the background, the session runs again while leased.
     private func listen() {
         observers = Self.listen(session, queue: queue, log: { [weak self] in self?.log($0) },
-                                leased: { [weak self] in self?.holders.isEmpty == false }) { [weak self] reason in
+                                leased: { [weak self] in self?.starts.admitted == true }) { [weak self] reason in
             guard let self else { return }
-            for get in self.holders.values { if let t = get() { t.tracks?.interrupted(t, reason) } }
+            self.interruption = reason
+            for get in Array(self.holders.values) { if let t = get() { t.tracks?.interrupted(t, reason) } }
         }
     }
 
@@ -566,7 +618,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
             erred = false
             tell(nil)
             guard leased() else { return }
-            queue.async { if !session.isRunning { session.startRunning() } }
+            queue.async { if leased() && !session.isRunning { session.startRunning() } }
         })
         observers.append(center.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { note in
             log("camera: runtime error \((note.userInfo?[AVCaptureSessionErrorKey] as? Error).map { "\($0)" } ?? "")")
@@ -574,6 +626,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
             tell("interrupted")
             guard leased() else { return }
             queue.async {
+                guard leased() else { return }
                 session.startRunning()
                 guard session.isRunning else { return }
                 DispatchQueue.main.async {
@@ -591,18 +644,34 @@ final class VideoCapture: NSObject, ExactVideoSource {
     func configure(stopped: Bool, _ change: @escaping (AVCaptureSession) -> Void) {
         let session = session
         queue.async {
-            Self.configure(session, stopped: stopped, change)
+            if !Self.configure(session, stopped: stopped, admitted: { self.starts.admitted }, change) {
+                DispatchQueue.main.async {
+                    for get in Array(self.holders.values) {
+                        if let track = get(), track.capture === self, !self.starts.admitted {
+                            track.tracks?.interrupted(track, "idle")
+                        }
+                    }
+                }
+            }
         }
     }
 
-    static func configure(_ session: AVCaptureSession, stopped: Bool, _ change: (AVCaptureSession) -> Void) {
+    /// False when the change stopped capture and its holders could no longer restart it.
+    @discardableResult static func configure(_ session: AVCaptureSession, stopped: Bool, admitted: () -> Bool = { true }, _ change: (AVCaptureSession) -> Void) -> Bool {
         // Intrinsic-matrix delivery is set on an output connection before startRunning().
         let running = stopped && session.isRunning
-        if running { session.stopRunning() }
+        if running {
+            guard admitted() else { return true }
+            session.stopRunning()
+        }
         session.beginConfiguration()
         change(session)
         session.commitConfiguration()
-        if running { session.startRunning() }
+        if running {
+            guard admitted() else { return false }
+            session.startRunning()
+        }
+        return true
     }
 
     func run(_ work: @escaping (AVCaptureSession) -> Void) {
@@ -622,7 +691,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
         let pending = DispatchQueue.getSpecific(key: onQueue) == true ? nil : queue
         Cameras.apply(constraints, to: device, queue: pending) { [weak self] in
             guard let self else { return }
-            for get in self.holders.values { if let t = get() { t.tracks?.changed(t) } }
+            for get in Array(self.holders.values) { if let t = get() { t.tracks?.changed(t) } }
         }
     }
 

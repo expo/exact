@@ -1,11 +1,49 @@
 <!--
 `contract vocab <name>` answers each concept below with its whole idiom (LLP 1116.004 D5.1):
 what a builder looked up a recipe or the grammar for, answered in one lookup. A section is
-`## <name>: <what it does>`, then `names: …`, the other names it answers to, then the answer:
+`## <name>: <what it does>`, then `names: …` lines for its aliases, then the answer:
 a sentence or two, the minimal complete code, and the recipe for depth. A name that is also a
 tag, attribute or function prints its entry first, then the concept. Every `contract` block
 compiles (`contract/cli/tests/it/vocab.rs`).
 -->
+
+## viewport-and-container-units: viewport and container lengths
+names: viewport-units, vw, vh, vmin, vmax, svw, svh, lvw, lvh, dvw, dvh
+names: cqw, cqh, cqi, cqb, cqmin, cqmax
+
+Write viewport lengths as quoted CSS strings: `width="100vw"` is the viewport's
+width. `vw` and `vh` are 1% of its width and height; `vmin` and `vmax` are 1% of
+its smaller and larger side. `svw`/`svh`, `lvw`/`lvh` and `dvw`/`dvh` use the
+small, large and dynamic viewports. Browsers resolve `vw`/`vh` against the large
+viewport; native windows have no retractable browser chrome, so those three
+sizes coincide. Lengths update on resize. On iOS, every viewport unit is the
+window's in every sheet, never the sheet's.
+
+Dimension rows (width/height, their min/max, padding/margins, offsets and border
+radii) and scalar rows (`font-size`, `line-height`, `letter-spacing`,
+`text-indent`, gaps, border widths, border spacing and `shape-margin`) take
+them, including in `calc()`, `min()`, `max()` and `clamp()` where the row admits
+those forms. `padding-left="calc(100vw - 100%)"` is the viewport width minus the
+containing block's width. Property-specific subsets still apply: `translate`,
+grid tracks and pixel-only rows such as `perspective` refuse viewport units.
+Unsupported units include `vi`, `vb` and the `s`/`l`/`d` forms of `vmin`/`vmax`.
+
+```contract
+component App
+  view
+    column width="100%" min-height="100dvh" padding-left="calc(100vw - 100%)"
+      text "Viewport lengths"
+```
+
+Dimension rows also accept container units (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`,
+`cqmax`), alone or in a math function: a share of the nearest content owner's
+content root on each axis its host fixes, else of the small viewport
+(LLP 1123 D16). The text and spacing rows that take viewport units take them
+too; custom properties and inset overrides refuse them.
+The web keeps CSS's units, which use the small viewport until a content root
+declares a container there; an SVG attribute using one is left unwritten.
+
+docs/contract-for-agents.md#viewport-and-container-units; CSS Values 4: https://www.w3.org/TR/css-values-4/#viewport-relative-lengths
 
 ## bluetooth: Bluetooth grants for an app's native module
 names: device.bluetooth, device.bluetooth-background
@@ -546,6 +584,9 @@ component App
   finger and the one action runs when it lifts past 64 points, with no button revealed
   (a message's swipe to reply; `contract vocab swipeleft`). A row that shows Delete is
   `delete=`.
+- `swipe=action swipe-direction="down"` is not a swipe action either: the platform's discrete
+  swipe, which nothing follows, runs the action once (a flick down on a composer that puts the
+  keys away; `contract vocab swipe-direction`).
 - Other actions than Delete (Pin, Flag, a leading action, several) are the long form: a
   horizontal snap `scroll` laid out as a row (`display="flex"`), naming its content
   (`swipeContent`) and its actions (`swipeTrailing`, `swipeLeading`: buttons' `id`s, inside
@@ -1200,8 +1241,8 @@ A root `-exact-menu-keys="close-window=none"` keeps File ▸ Close Window with n
 chord, so ⌘W reaches the page; declare `-exact-menu-remove="close-all"` with it,
 or AppKit's Close All ⌥⌘W shows as a row of its own. `close-window=Meta+Shift+W`
 gives it ⇧⌘W. `close-window` is the one id; the chord is one `aria-keyshortcuts`
-chord with `Meta` that is not the host's or the system's own (⌘Q, ⌘W, ⌘H, ⌘M,
-⌘-comma and the like). Another id, an id named twice, a chord without `Meta`, a
+chord with `Meta` or `Mod` that is not the host's or the system's own (⌘Q, ⌘W, ⌘H, ⌘M,
+⌘-comma and the like). Another id, an id named twice, a chord without `Meta` or `Mod`, a
 standard chord and nested use fail with `lower-menu-keys`. An app command with
 the chord still takes it; without the declaration Close Window has ⌘W (LLP 1021
 §5.3.3).
@@ -1333,7 +1374,10 @@ surface of your own takes `backgroundMaterial`: `"glass"` or `"glass-clear"` is
 `.dark` and so on: no material's grey wash, as expo-blur's `tint="dark"`), and `"sidebar"`,
 `"menu"`, `"popover"`, `"hud-window"` the Mac's. On macOS, `"sidebar"` blends with the
 content behind the window. The node's own fill and content still paint above it.
-The web and Linux draw a blur that approximates each. A glass button is `buttonStyle="glass"` or
+The painted hosts (Android, Windows and Linux) approximate each material with its
+table tint and backdrop blur; `"glass"` and `"glass-clear"` have no Liquid Glass
+refraction or specular highlights there. Android before 12 draws only the tint.
+The web also approximates each with tint and blur. A glass button is `buttonStyle="glass"` or
 `"prominent-glass"`, and `glassGroup=<points>` on a box merges the glass inside it as
 SwiftUI's `GlassEffectContainer` does. On iOS a glass a tap adds to a group grows out of the
 nearest glass within that spacing, and one it removes is drawn back into it.
@@ -1349,8 +1393,9 @@ component App
 ```
 
 - CSS's `backdrop-filter="blur(12px) saturate(1.8)"` blurs what is behind on the web, macOS
-  and Linux; iOS draws a fixed light material for it, so a surface meant for iPhone says
-  `backgroundMaterial`, which wins when both are written.
+  and the painted hosts (Android 12 and later, Windows and Linux). iOS draws a fixed light
+  material for it, so a surface meant for iPhone says `backgroundMaterial`, which wins
+  when both are written.
 - A material's strength is the platform's: UIKit's blurs take no radius or intensity, so there
   is no "dark at 40%" (expo-blur's `intensity` holds a paused animation part way). To darken
   the blurred result, put the content in one child that fills the box and paints the colour,
@@ -1358,13 +1403,17 @@ component App
   `column backgroundMaterial="dark" border-radius=16` holding
   `column flex=1 border-radius=16 padding=12 background-color="rgba(14,16,21,0.5)"`. The
   box's own `background-color` is no way to do it, as each host differs: iOS paints it under
-  the blur, so it colours what is blurred; the Mac's material covers it; the web and Linux
-  paint it in place of the material's tint.
+  the blur, so it colours what is blurred; the Mac's material covers it; the web and
+  painted hosts paint a nontransparent background in place of the material's tint.
 - A navigation bar's buttons share one glass capsule on iOS 26; `buttonStyle="glass"` on
   each gives it a capsule of its own (`contract vocab bar-buttons`).
-- `-exact-glass-tint="rgba(10,12,16,0.55)"` tints the glass itself (`UIGlassEffect.tintColor`);
-  a `background-color` is painted behind it. Glass reacts to a finger on a box with a `press`;
-  `glassInteractive=false` keeps it still, `true` makes it react without one.
+- `-exact-glass-tint="rgba(10,12,16,0.55)"` tints the glass itself on iOS/tvOS 26
+  (`UIGlassEffect.tintColor`) and macOS 26 (`NSGlassEffectView.tintColor`); a
+  `background-color` is painted behind their glass. On the web and painted hosts,
+  the tint replaces the material table's tint unless a background colour overrides it.
+- On iOS and tvOS 26, glass reacts to a finger on a box with a `press` that is not disabled;
+  `glassInteractive=false` keeps it still, `true` makes it react without one. Other hosts
+  ignore `glassInteractive`.
 
 ## bar-buttons: the navigation bar's buttons, grouped or each in its own capsule
 names: bar button, bar-button, barbuttons, UIBarButtonItem, sharesBackground, headerRight, headerLeft, toolbarItem, ToolbarItem, ToolbarItemGroup
@@ -1429,6 +1478,31 @@ component App
       text `${n}`
 ```
 
+## symbol-effect: a symbol that bounces or pulses, once per change or while set
+names: -exact-symbol-effect, symbolEffectValue, symbolEffect, addSymbolEffect, SymbolEffect
+
+`-exact-symbol-effect` on a `symbol:` image plays an SF Symbol effect: `bounce`, `pulse`,
+`wiggle`, `breathe`, `rotate`, `variable-color` or `scale` (`replace` plays when the source
+changes). `symbolEffectValue` picks the form, as SwiftUI's `value:` and `isActive:` do. With
+it, the effect plays once each time the value changes; without it, the effect runs while it
+is set. `scale` has no once form, so it holds while set either way; `bounce`, `wiggle`,
+`breathe` and `rotate` need iOS 18 or macOS 15 to run while set, and `wiggle`, `breathe` and
+`rotate` to play at all. The web stands in for `bounce`, `pulse` and `scale`; Android, Linux
+and Windows draw none.
+
+```contract
+component App
+  state taps = 0
+  action tap
+    taps = taps + 1
+  view
+    column
+      image "symbol:sf/bell.fill" -exact-symbol-effect="bounce" symbolEffectValue=`${taps}` testId="bell"
+      image "symbol:sf/wifi" -exact-symbol-effect="pulse" testId="waiting"
+      button press=tap testId="ring"
+        text "Ring"
+```
+
 ## status-bar: the phone's status bar icons, and hiding the system bars
 names: status bar, statusbar, setStatusBarStyle, UIStatusBarStyle, preferredStatusBarStyle, expo-status-bar, system-bars-hidden, statusBarHidden, prefersStatusBarHidden, prefersHomeIndicatorAutoHidden, autoHideHomeIndicator, immersive
 
@@ -1451,6 +1525,30 @@ that must fill the screen (a game's canvas) takes `-exact-safe-area="none"` and 
 controls with `var(--exact-safe-area-inset-*)`.
 
 More: docs/contract-for-agents.md (`status-bar-style`, `system-bars-hidden`)
+
+## live: telling a screen reader what changed (a live region, an announcement)
+names: aria-live, status, live-region, polite, assertive, announceForAccessibility, AccessibilityInfo, accessibilityLiveRegion, UIAccessibility
+
+No call announces. A screen reader reads a `text role="status"` politely as its text
+changes, and a `text role="alert"` at once where the platform allows (`aria-live="polite"`
+and `"assertive"` without the role). Keep the `text` mounted and change its text; put the
+role on the `text`, not on a box around it, and give it no `aria-label`.
+
+```contract
+component App
+  state picked = 0
+  action pick
+    picked = picked + 1
+  view
+    column padding=16 gap=8
+      button press=pick testId="pick"
+        text "Pick one"
+      text (picked == 0 ? "" : `${picked} selected`) role="status" testId="picked"
+```
+
+- iOS, tvOS and macOS post the platform's announcement, the web leaves it to the browser,
+  Android and Windows mark a live region; the Linux host and watchOS say nothing yet
+  (docs/contract-for-agents.md#announcing-a-change; `vocab announce` for the recipe).
 
 ## toast: a message that shows for a moment
 names: Toast, snackbar, Snackbar, react-native-toast-message, burnt

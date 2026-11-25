@@ -1,10 +1,11 @@
-import { listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
+import { onVisualViewport, listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, orientationCode, onPreferences, inertAncestor, modalLayers, stampOpenings, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
 import { send, applyBatch } from "./wasm/commit.js";
 import { positionContexts, contextPanel } from "./wasm/context.js";
 import { syncViewportFit } from "./wasm/views.js";
 import { boot, loadRust, main, reportColors, replacements } from "./wasm/boot.js";
 import { agentInputReady, agent, agentSettled } from "./wasm/agent.js";
 placePopovers();
+stampOpenings();
 // @ref LLP 1007 §3: the wasm DOM host and its live session state.
 export const host = {};
 host.guestOutline = undefined;
@@ -493,6 +494,7 @@ const resizeRunner = () => {
   if (host.wasm && host.incarnation && innerWidth > 0 && innerHeight > 0) {
     const told = host.wasm.exact_set_viewport_geometry && document.body ? writeIn(pageGeometry()) : 0;
     host.wasm.exact_set_update?.(updateCode());
+    host.wasm.exact_set_orientation?.(orientationCode());
     host.wasm.exact_set_screen_reader(pageFacts.screenReaderCode());
     const batch = JSON.parse(readOut(host.wasm.exact_resize(innerWidth, innerHeight, now(), preferences() | foldBits(), told)));
     // Only a size the runner took is told: a refused one is asked again, never followed by geometry alone.
@@ -566,7 +568,7 @@ export const scrollDocs = new Set(), markScrollDocument = () => {
   }
   host.pagePath = path;
 };
-visualViewport?.addEventListener("resize", syncViewportFit);
+onVisualViewport(syncViewportFit);
 host.sending = 0;
 // batches being applied: a dispatch run while another's applies (a focus it moved) is one deeper
 // LLP 1016: grants come from one whole-set parse; `unparsed` names why an
@@ -711,7 +713,7 @@ export const INHERITED_CSS = {
   widows: "widows",
   orphans: "orphans"
 };
-// A field's value as agent output shows it: a password's is the runner's fixed mark, whatever its length (#134).
+// A field's value as agent output shows it: a password's is the runner's fixed mark, whatever its length.
 export const shownValue = (el) => el.type === "password" && el.value ? "•••" : el.value;
 export const SETTLE_DEADLINE_MS = 2e4, REPLACE_SETTLE_MS = 1e3, GLIDE_BOUND_MS = 4e3;
 // a glide: as a native host waits for a scroll view a finger left moving (agent.mjs reason `scroll`)

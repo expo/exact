@@ -4,7 +4,7 @@ import Foundation
 import ImageIO
 
 final class AgentClipTrack: ExactTrackOwner {
-    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, origin: String) throws -> ExactSubscription {
+    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, cause: ExactTrackCause) throws -> ExactSubscription {
         consumer.live(video: nil)
         return ExactSubscription {}
     }
@@ -63,8 +63,7 @@ struct AgentClipSuite {
         precondition(module.agentPictureData() == card)
         let view = try module.view("exact-camera", id: "finder", props: ["srcObject": "t"],
             events: ExactPackageEvents(send: { _, _ in }, size: { _ in }))
-        module.bound("finder", "srcObject", origin: "app")
-        module.displayed("finder", true, origin: "app")
+        tracks.commitViewBindings(["exact-camera": ["finder": ["srcObject": ExactViewBinding(value: "t", origin: "app")]]])?()
         var changes = 0
         let observation = entry.observePicture { changes += 1 }
         var images: [CGImage] = []

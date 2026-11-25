@@ -142,7 +142,7 @@ pub struct Transform {
     /// `rotate` in degrees, presented.
     pub rotate: f32,
     /// `scale`, presented.
-    pub scale: f32,
+    pub scale: (f32, f32),
     /// The `transform` list's matrix.
     pub matrix: Affine,
 }
@@ -152,7 +152,10 @@ impl Transform {
     pub fn individual(&self) -> Affine {
         tf::mul(
             tf::translate(self.translate.0, self.translate.1),
-            tf::mul(tf::rotate(self.rotate), tf::scale(self.scale, self.scale)),
+            tf::mul(
+                tf::rotate(self.rotate),
+                tf::scale(self.scale.0, self.scale.1),
+            ),
         )
     }
 
@@ -641,7 +644,7 @@ impl<'k> Resolver<'k, '_> {
         );
         let scale = self
             .value(key, Property::Scale)
-            .map_or(style.scale, |v| v.x as f32);
+            .map_or((style.scale.x, style.scale.y), |v| (v.x as f32, v.y as f32));
         let matrix = style.transform.matrix();
         // An animated element keeps its transform (its origin) even at the
         // identity: a host that plays the animation itself needs somewhere
@@ -649,7 +652,7 @@ impl<'k> Resolver<'k, '_> {
         if translate == (0.0, 0.0)
             && percent == (0.0, 0.0)
             && rotate == 0.0
-            && scale == 1.0
+            && scale == (1.0, 1.0)
             && tf::is_identity(matrix)
             && !style.mask.has(StyleId::Animation)
         {
@@ -1209,5 +1212,31 @@ impl Scene {
             }
         }
         go(&self.items, f);
+    }
+}
+
+#[cfg(test)]
+mod per_axis_tests {
+    use super::*;
+
+    #[test]
+    fn per_axis_scale_keeps_svg_origin_and_collapsed_axes() {
+        let base = Transform {
+            reference: (100., 80.),
+            origin: (50., 40.),
+            translate: (0., 0.),
+            rotate: 0.,
+            scale: (1., 0.5),
+            matrix: tf::scale(1., 1.),
+        };
+        assert_eq!(base.affine(), [1., 0., 0., 0.5, 0., 20.]);
+        assert_eq!(
+            Transform {
+                scale: (-1., 0.),
+                ..base
+            }
+            .affine(),
+            [-1., 0., 0., 0., 100., 40.]
+        );
     }
 }

@@ -1,6 +1,6 @@
-import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers } from "../glue.js";
+import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers, track } from "../glue.js";
 import { send, applyBatch } from "./commit.js";
-import { navigation, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
+import { navigation, shortcutKeyboard, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, orientationCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
 import { WINDOW_STATE } from "../navigation/store.js";
 import { startClock } from "./flow.js";
@@ -292,7 +292,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   // The date and place the boot's first settle reads (LLP 1027.000.000).
   if (host.wasm.exact_set_launch) {
     const [epoch, offset] = reportTime(now());
-    host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()));
+    host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()), shortcutKeyboard());
   }
   const kept = keeps ? focus.keep(ask({ op: "tree" }), Number(document.activeElement?.closest?.("[data-view]")?.dataset.view)) : undefined;
   reportColors();
@@ -318,6 +318,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     payload.set(bytes);
     payload.set(launch, bytes.length);
     host.wasm.exact_set_update?.(updateCode());
+    host.wasm.exact_set_orientation?.(orientationCode());
     host.wasm.exact_set_screen_reader(pageFacts.screenReaderCode());
     len = host.wasm.exact_boot_plan(bytes.length, innerWidth, innerHeight, launch.length, preferences() | foldBits());
   } else {
@@ -331,6 +332,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     // a drive's clock starts at zero (page.rs)
     new Uint8Array(host.memory.buffer, ptr, launch.length).set(launch);
     host.wasm.exact_set_update?.(updateCode());
+    host.wasm.exact_set_orientation?.(orientationCode());
     host.wasm.exact_set_screen_reader(pageFacts.screenReaderCode());
     len = host.wasm.exact_boot(innerWidth, innerHeight, launch.length, preferences() | foldBits());
   }
@@ -413,6 +415,12 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     el.exactNative?.destroy();
     el.exactResize?.();
     el.exactIntersect?.();
+    el.exactPanRetire?.();
+  }
+  if (HAS_PACKAGE_VIEWS) {
+    host.packageViews?.dispose();
+    host.packageViews = null;
+    host.packageNative = null;
   }
   views.clear();
   messageFrames.clear();
@@ -436,6 +444,8 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   globalThis.exact.holdQuiet?.();
   if (!host.page?.holding) {
     root.replaceChildren();
+    // The last plan's hidden `portal` movers (commit.js).
+    document.querySelector("[data-exact-portals]")?.remove();
   }
   document.getElementById("exact-theme")?.remove();
   document.getElementById("exact-looks")?.remove();
@@ -733,6 +743,7 @@ export async function main() {
         release: (id, payload) => send(host.wasm.exact_dispatch(id, 28, writeIn(payload), now())),
         velocity: motion.pan,
         log,
+        track,
         documents: () => documentsGlue()
       });
     }).then(() => host.inputHandlers.arrive()).catch(console.error);

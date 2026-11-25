@@ -56,6 +56,12 @@ impl<D: DataSource> Host<D> {
 
     /// Set a held presentation. Stale requests cannot move the host's clock.
     pub fn hold_update(&mut self, handle: u64, value: Value, now_ms: f64) -> String {
+        self.hold_update_at(handle, value, now_ms, now_ms)
+    }
+
+    /// [`Host::hold_update`], the value sampled at `at_ms` on the input's own
+    /// timeline ([`exact_motion::Engine::update_hold_at`]).
+    pub fn hold_update_at(&mut self, handle: u64, value: Value, now_ms: f64, at_ms: f64) -> String {
         let mut batch = Batch::new();
         let Some(token) = self
             .holds
@@ -70,7 +76,9 @@ impl<D: DataSource> Host<D> {
         {
             return self.hold_refusal("height hold outside finite nonnegative layout range");
         }
-        let result = self.engine.update_hold(token, now_ms / 1000., value);
+        let result = self
+            .engine
+            .update_hold_at(token, now_ms / 1000., at_ms / 1000., value);
         let layout_error = if matches!(result, Ok(true)) {
             self.now_ms = now_ms;
             self.height_layout_if_needed(&mut batch).err()
@@ -88,12 +96,13 @@ impl<D: DataSource> Host<D> {
     }
 
     /// Release at the velocity the engine measured over the hold's values, for
-    /// input the platform gives no velocity (LLP 1057.001 §3).
-    pub fn hold_end_measured(&mut self, handle: u64, now_ms: f64) -> String {
+    /// input the platform gives no velocity (LLP 1057.001 §3), read at `at_ms`
+    /// on the samples' timeline.
+    pub fn hold_end_measured(&mut self, handle: u64, now_ms: f64, at_ms: f64) -> String {
         let velocity = self
             .holds
             .get(&handle)
-            .and_then(|t| self.engine.hold_velocity(*t, now_ms / 1000.))
+            .and_then(|t| self.engine.hold_velocity(*t, at_ms / 1000.))
             .filter(|v| v.x.is_finite() && v.y.is_finite())
             .unwrap_or(exact_motion::Value::ZERO);
         self.hold_end(handle, HoldEnd::Release { velocity }, now_ms)

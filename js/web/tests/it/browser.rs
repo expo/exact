@@ -222,7 +222,7 @@ const startupStub=()=>{
       exact_compat:()=>out({inputs:{app:'test.startup'}}),exact_logic:()=>out(rustOnly?null:{appId:'test.startup',grants:''}),
       ...(rustOnly?{}:{exact_module_artifact:()=>0}),
       exact_plan:()=>out([]),exact_plan_fonts:()=>out([]),exact_boot:()=>out(batch),exact_boot_plan:()=>out(batch),
-      exact_agent:()=>out({nodes:[]}),
+      exact_set_screen_reader:()=>{},exact_agent:()=>out({nodes:[]}),
       exact_data_ready:()=>{startup.activations++;startup.activated=true;startup.painted=!!document.getElementById('exact-root').dataset.frameCallbackMs;return out({ops:[
         {op:'props',id:7,set:{disabled:'true'},clear:[]},
         {op:'props',id:8,set:{},clear:['disabled']}
@@ -699,26 +699,32 @@ try {
       // A picked file's entry is the browser's own File (LLP 1069.002 D5).
       await files.putBlob('app:/data/picked.jpg',new File([photo],'picked.jpg',{type:'image/jpeg'}));
       files.close();
-      const sent=[], fetchBefore=globalThis.fetch;
-      globalThis.fetch=async(url,init)=>{
-        sent.push({url:String(url),body:init.body,headers:init.headers});
-        return Object.defineProperty(new Response('stored'),'url',{value:String(url)});
+      const sent=[], fetchBefore=globalThis.fetch, RequestBefore=globalThis.Request;
+      // Fetch exposes a stream on the constructed request. Keep the input to check that the host passed a Blob.
+      globalThis.Request=class extends RequestBefore {
+        constructor(input,init){super(input,init);this.sourceInit=init;}
+      };
+      globalThis.fetch=async request=>{
+        sent.push(request);
+        return Object.defineProperty(new Response('stored'),'url',{value:request.url});
       };
       try {
         const host={grantSet:storageIdentity.grantSet,controllers:new Set(),bodyFile:(path,grants)=>requestBody(storageIdentity.appId,grants,path)};
         const op=(path,headers=[])=>({op:'request',ticket:1,method:'POST',url:'https://example.test/upload',headers,body:'',bodyFrom:path,cache:'default',scope:null});
         const typed=await runRequest(op('app:/data/photo.jpg',[['content-type','image/jpeg']]),host);
         const picked=await runRequest(op('app:/data/picked.jpg'),host);
-        if(typed.kind!==0||picked.kind!==0||sent.length!==2)throw new Error(`exactBodyFrom on the page: ${typed.kind} ${picked.kind} ${sent.length}`);
+        for(const reply of [typed,picked])if(reply.kind!==0)throw new Error(`exactBodyFrom on the page: kind ${reply.kind}: ${new TextDecoder().decode(reply.body)}`);
+        if(sent.length!==2)throw new Error(`exactBodyFrom on the page: ${sent.length} fetches`);
         for(const reply of [typed,picked])if(reply.status!==200||new TextDecoder().decode(reply.body)!=='stored')throw new Error('exactBodyFrom: the upload reply changed');
         // The file's bytes as a Blob with no type, so the browser adds no Content-Type; the author's headers as they were.
-        for(const one of sent)if(!(one.body instanceof Blob)||one.body.type!==''||await hash(await one.body.arrayBuffer())!==await hash(photo))throw new Error('exactBodyFrom: the body is not the file as an untyped Blob');
-        if(JSON.stringify(sent[0].headers)!=='[["content-type","image/jpeg"]]'||sent[1].headers.length)throw new Error('exactBodyFrom: the headers changed');
+        for(const one of sent)if(!(one.sourceInit.body instanceof Blob)||one.sourceInit.body.type!==''||await hash(await one.arrayBuffer())!==await hash(photo))throw new Error('exactBodyFrom: the body is not the file as an untyped Blob');
+        if(JSON.stringify(sent[0].sourceInit.headers)!=='[["content-type","image/jpeg"]]'||sent[1].sourceInit.headers.length)throw new Error('exactBodyFrom: the author headers changed before fetch');
+        if(JSON.stringify([...sent[0].headers])!=='[["content-type","image/jpeg"]]'||[...sent[1].headers].length)throw new Error('exactBodyFrom: the headers changed');
         const refusal=async path=>{const r=await runRequest(op(path),host);return r.kind+' '+new TextDecoder().decode(r.body);};
         const denied=await refusal('app:/tmp/photo.jpg'), missing=await refusal('app:/data/absent.jpg');
         if(!denied.startsWith('2 exactBodyFrom app:/tmp/photo.jpg: denied: fs.read')||!missing.startsWith('2 exactBodyFrom app:/data/absent.jpg: no such file')||sent.length!==2)
           throw new Error(`exactBodyFrom's refusals on the page: ${denied} / ${missing}`);
-      } finally {globalThis.fetch=fetchBefore;}
+      } finally {globalThis.fetch=fetchBefore;globalThis.Request=RequestBefore;}
     }
     onWorker.dispose();
     const workerCount=workersCreated;

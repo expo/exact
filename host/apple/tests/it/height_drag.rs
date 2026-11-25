@@ -138,7 +138,7 @@ fn changed_handle_binding_and_disabled_header_cancel_before_late_action() {
     for action in ["rebind", "disable"] {
         let (mut h, _) = fixture();
         let hold = begin(&mut h, "header");
-        good(&h.height_drag_update(hold, 450., 10.));
+        good(&h.height_drag_update(hold, 450., 10., 10.));
         good(&h.dispatch_at(id(&h, action), Event::Press, 10.));
         assert!(!h.has_hold(hold));
         assert_eq!(h.height_owner(), Some(key(&h, "sheet"))); // second handle survives
@@ -167,7 +167,7 @@ fn stale_generation_and_invalid_live_payload_preflight_before_clock_or_action() 
     good(&h.dispatch_at(id(&h, "remove"), Event::Press, 0.));
     assert!(!h.has_hold(hold));
     good(&h.height_drag_begin(header, target, f64::NAN));
-    good(&h.height_drag_update(hold, f64::NAN, f64::NAN));
+    good(&h.height_drag_update(hold, f64::NAN, f64::NAN, f64::NAN));
     good(&h.dispatch_height_held(hold, f64::NAN, f64::NAN, f64::NAN));
     assert_eq!(h.engine().now(), 0.);
 }
@@ -252,7 +252,7 @@ fn accepted_unbind_cancels_at_receipt_time_while_stale_deliveries_cannot_seek() 
     let header = key(&h, "header");
     let target = key(&h, "sheet");
     let hold = token(&h.height_drag_begin(header, target, 100.));
-    good(&h.height_drag_update(hold, 450., 100.));
+    good(&h.height_drag_update(hold, 450., 100., 100.));
     good(&h.dispatch_at(id(&h, "rebind"), Event::Press, 200.));
     assert_eq!(h.height_owner(), Some(target)); // the second header still owns the target
     assert!(!h.has_hold(hold));
@@ -268,7 +268,7 @@ fn accepted_unbind_cancels_at_receipt_time_while_stale_deliveries_cannot_seek() 
         h.engine().value(motion_node(target), Property::Height),
         Some(Value::scalar(450.))
     );
-    good(&h.height_drag_update(hold, 600., 500.));
+    good(&h.height_drag_update(hold, 600., 500., 500.));
     good(&h.dispatch_height_held(hold, 600., 200., 500.));
     good(&h.height_drag_begin(header, target, f64::NAN));
     assert_eq!(h.engine().now(), 0.2);
@@ -311,7 +311,7 @@ fn unbind_uses_latest_none_or_zero_transition_before_cancelling_unchanged_target
         .unwrap();
         let target = key(&h, "sheet");
         let held = token(&h.height_drag_begin(key(&h, "header"), target, 100.));
-        good(&h.height_drag_update(held, 450., 100.));
+        good(&h.height_drag_update(held, 450., 100., 100.));
         good(&h.dispatch_at(id(&h, "unbind"), Event::Press, 200.));
         assert_eq!(h.height_owner(), Some(target));
         assert!(!h.has_hold(held));
@@ -356,7 +356,7 @@ fn unbind_with_retarget_and_negative_delay_starts_from_held_value_once() {
     .unwrap();
     let target = key(&h, "sheet");
     let held = token(&h.height_drag_begin(key(&h, "header"), target, 100.));
-    good(&h.height_drag_update(held, 450., 100.));
+    good(&h.height_drag_update(held, 450., 100., 100.));
     good(&h.dispatch_at(id(&h, "unbind"), Event::Press, 200.));
     assert!(!h.has_hold(held));
     assert_eq!(h.engine().now(), 0.2);
@@ -585,9 +585,14 @@ fn measured_release_velocity_follows_the_constrained_height_shown() {
         .unwrap();
         let hold = begin(&mut h, "header");
         for i in 1..=4 {
-            good(&h.height_drag_update(hold, 200. + 20. * i as f64, 10. * i as f64));
+            good(&h.height_drag_update(
+                hold,
+                200. + 20. * i as f64,
+                10. * i as f64,
+                10. * i as f64,
+            ));
         }
-        good(&h.dispatch_height_measured(hold, 280., 40.));
+        good(&h.dispatch_height_measured(hold, 280., 40., 40.));
         let Some(exact_runner::Value::Number(v)) = h.runner().slot("seen") else {
             panic!()
         };
@@ -600,6 +605,57 @@ fn measured_release_velocity_follows_the_constrained_height_shown() {
         clamped < free / 2.,
         "the shown height stopped at 230: {clamped}"
     );
+}
+
+/// The release velocity is the input's, over the times it was sampled,
+/// whatever the clock did meanwhile: a driver may hold the clock still while
+/// a finger moves, or run it ahead of the finger (LLP 1057.001 §3). The settle
+/// starts on the clock, from the height shown, at the same velocity.
+#[test]
+fn measured_release_velocity_follows_the_input_time_not_the_clock() {
+    let plan = contract::compile(
+        r#"component App
+  state seen = 0
+  action release(height: number, velocity: number)
+    seen = velocity
+  view
+    column id="sheet" testId="sheet" height=200 box-sizing="border-box" transition="height -exact-spring(180, 12, 1)"
+      box testId="header" heightDragFor="sheet" heightrelease=release height=32
+"#,
+    )
+    .unwrap()
+    .encode();
+    let clocks: [fn(f64) -> f64; 2] = [|_| 1000., |at| 1000. + 3. * at];
+    for clock in clocks {
+        let (mut h, _) = Host::boot(
+            &plan,
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            800.,
+            900.,
+        )
+        .unwrap();
+        let target = key(&h, "sheet");
+        let hold = token(&h.height_drag_begin(key(&h, "header"), target, 1000.));
+        // 80 points in 40 ms, sampled every 10 ms from where the drag began.
+        for i in 1..=4 {
+            let at = 10. * i as f64;
+            good(&h.height_drag_update(hold, 200. + 2. * at, clock(at), 1000. + at));
+        }
+        good(&h.dispatch_height_measured(hold, 280., clock(40.), 1040.));
+        let Some(exact_runner::Value::Number(seen)) = h.runner().slot("seen") else {
+            panic!()
+        };
+        assert!((seen - 2000.).abs() < 1e-6, "{seen}");
+        good(&h.hold_end_measured(hold, clock(40.), 1040.));
+        let spring = h
+            .engine()
+            .spring_descriptor(motion_node(target), Property::Height)
+            .unwrap();
+        assert_eq!(spring.start, clock(40.) / 1000.);
+        assert_eq!(spring.from, Value::scalar(280.));
+        assert!((spring.velocity.x - 2000.).abs() < 1e-6, "{spring:?}");
+    }
 }
 
 #[test]
@@ -629,10 +685,10 @@ fn overdue_timer_motion_starts_before_the_height_release_sample() {
     .unwrap();
     let target = key(&h, "sheet");
     let hold = token(&h.height_drag_begin(key(&h, "header"), target, 50.));
-    good(&h.height_drag_update(hold, 210., 60.));
+    good(&h.height_drag_update(hold, 210., 60., 60.));
     for now in [f64::NAN, f64::INFINITY, 59.] {
         assert!(!h
-            .dispatch_height_measured(hold, 300., now)
+            .dispatch_height_measured(hold, 300., now, now)
             .contains("\"error\":null"));
         assert_eq!(h.engine().now(), 0.06);
         assert_eq!(
@@ -640,7 +696,7 @@ fn overdue_timer_motion_starts_before_the_height_release_sample() {
             Some(&exact_runner::Value::Number(1.))
         );
     }
-    good(&h.dispatch_height_measured(hold, 300., 150.));
+    good(&h.dispatch_height_measured(hold, 300., 150., 150.));
     let node = motion_node(target);
     let curve = h
         .engine()

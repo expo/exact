@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 import CExact
 import ExactCore
 
@@ -18,11 +19,22 @@ extension ExactSession {
 #endif
 
 extension ExactSession {
+    /// The location of the visit beneath the route keyed `key` on its stack,
+    /// nil for a stack's root (`Runtime.locationBeneath`). For the router's
+    /// top it is what the batch that made it the top carried
+    /// (`Batch.beneath`), so main does not wait on the owner to learn
+    /// whether Back goes (LLP 1072 T2).
+    package func locationBeneath(_ key: String) -> String? {
+        if let heard = routerBeneath, UInt64(key) == heard.visit { return heard.location.isEmpty ? nil : heard.location }
+        return runtime.locationBeneath(key)
+    }
+
     /// Releases completed background actions and tells launch and navigation TTI to read outstanding work
     /// again. Work that shows nothing new can end the last of it (a skipped
     /// batch, owner work landing, a canvas replay or an SVG picture done), so
     /// this follows every end of work, not only an apply.
     func workEnded() {
+        workEndedAt = CACurrentMediaTime()
         notificationHost.backgroundActionsApplied(self)
         ExactLaunch.shared.workEnded(self)
         NavigationMarks.shared.workEnded(self)

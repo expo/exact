@@ -21,14 +21,14 @@ extension NodeView {
         let box = convert(clip.frame.origin, from: clip.superview)
         var result = proposed, snapped = false
         for vertical in [false, true] where vertical ? kind.y : kind.x {
-            // The snapport is the clip less its insets and `scroll-padding`
+            // The snapport is the padding box less the clip's insets and `scroll-padding`
             // (§4.1); positions are where its start is, an origin plus `shift`.
             let size = vertical ? clip.bounds.height : clip.bounds.width
             let inset = clip.contentInsets
-            let padding = { (side: String) in self.style["scroll_padding_\(side)"]?.length(basis: size) ?? 0 }
+            let (before, after) = snapportInsets(size, vertical: vertical)
             let lead = vertical ? inset.top : inset.left, trail = vertical ? inset.bottom : inset.right
-            let shift = lead + padding(vertical ? "top" : "left")
-            let port = max(1, size - lead - trail - padding(vertical ? "top" : "left") - padding(vertical ? "bottom" : "right"))
+            let shift = lead + before
+            let port = max(1, size - lead - trail - before - after)
             let low = (vertical ? document.frame.minY : document.frame.minX) - lead
             let high = (vertical ? document.frame.maxY : document.frame.maxX) + trail - size
             let range = (low + shift)...(max(low, high) + shift)
@@ -37,7 +37,7 @@ extension NodeView {
                 for node in NodeView.committed(view.subviews) where !node.isHidden {
                     if let align = ScrollSnap.align(node.style["scroll_snap_align"]?.string, vertical: vertical) {
                         // The area is the border box grown by `scroll-margin` (§4.3).
-                        let rect = IntoView.inset(node.convert(node.bounds, to: clip), style: node.style, family: "scroll_margin", outward: true)
+                        let rect = IntoView.area(node.convert(node.bounds, to: clip), style: node.style)
                         areas.append(ScrollSnap.area(lo: vertical ? rect.minY : rect.minX, hi: vertical ? rect.maxY : rect.maxX, align: align,
                                                      stop: node.style["scroll_snap_stop"]?.string == "always", port: port, range: range, id: node.id))
                     }

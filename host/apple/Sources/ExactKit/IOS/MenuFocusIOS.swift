@@ -167,16 +167,19 @@ final class MenuButton: InvokerButton {
     /// The invoker's own layer fill (not a glass material's) lent to a
     /// sublayer of its shape, under its children, until `returnFill`. The
     /// box paints it there meanwhile (`applyBoxLayer`), so a style change or
-    /// a new size while the menu shows reaches the stand-in.
+    /// a new size while the menu shows reaches the stand-in. An extension's
+    /// picture holds the fill while the box extends (`pictureHost`, LLP 1123
+    /// D13), and the extension ends while the fill is lent.
     private func lendFill() {
         guard lentFrom == nil, let node = invoker, node.glassBody == nil, node.extras?.lentFill == nil,
-              let fill = node.layer.backgroundColor, fill.alpha > 0 else { return }
+              let fill = node.pictureHost.backgroundColor, fill.alpha > 0 else { return }
         let lent = CAShapeLayer()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         node.layer.insertSublayer(lent, at: 0)
         node.more.lentFill = lent
         node.applyBoxLayer()
+        node.applyExtension()
         CATransaction.commit()
         lentFrom = node
     }
@@ -191,6 +194,7 @@ final class MenuButton: InvokerButton {
         node.more.lentFill = nil
         lent.removeFromSuperlayer()
         node.applyBoxLayer()
+        node.applyExtension()
         CATransaction.commit()
     }
     // An invoker hidden or out of the window (unmounted while its menu

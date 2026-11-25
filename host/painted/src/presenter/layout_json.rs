@@ -2,6 +2,34 @@
 use super::*;
 
 impl<D: DataSource> Presenter<D> {
+    /// A retained CSS-hidden subtree has a known empty rectangle. A host cover
+    /// can also set the kernel's HIDDEN bit, so check the authored display on
+    /// the path to a mounted root before using that rectangle.
+    fn laid_out_display_none(&self, id: ViewId) -> bool {
+        let kernel = self.host.kernel();
+        let arena = kernel.arena();
+        let Some(mut slot) = arena.slot_of(id) else {
+            return false;
+        };
+        if !arena.flags(slot).has(exact_kernel::NodeFlags::HIDDEN)
+            || !self.display.shows_epoch(kernel.epoch())
+        {
+            return false;
+        }
+        let alert = self.alert_root();
+        let mut hidden = false;
+        loop {
+            hidden |= arena.style(slot).display == exact_kernel::Display::None;
+            if arena.is_root(slot) || Some(arena.local_id(slot)) == alert {
+                return hidden;
+            }
+            let Some(parent) = arena.parent(slot) else {
+                return false;
+            };
+            slot = parent;
+        }
+    }
+
     /// The agent's `layout`: every node's box in the viewport (scroll
     /// folded in), scroll containers with their offsets, by id. With a
     /// `node`, the runner's explanation of that node (LLP 1035.002 D1) plus
@@ -16,7 +44,7 @@ impl<D: DataSource> Presenter<D> {
         let mut s = String::new();
         // LLP 1012 §1: the insets a device's shell told (`window.rs`; zeros
         // on a host with none, which has no safe area or software keyboard);
-        // the fold is whatever the agent preferred (LLP 1078 D7).
+        // the segment rectangles are the same ones CSS reads (LLP 1078).
         let fold = self.host.runner().viewport().fold;
         let [top, right, bottom, left, keyboard] = self.env_insets().map(|v| num(r2(v)));
         let _ = write!(
@@ -29,7 +57,7 @@ impl<D: DataSource> Presenter<D> {
             fold.cols,
             fold.rows
         );
-        for (i, r) in self.segments.iter().enumerate() {
+        for (i, r) in self.host.kernel().env().segments.iter().enumerate() {
             if i > 0 {
                 s.push(',');
             }
@@ -89,12 +117,16 @@ impl<D: DataSource> Presenter<D> {
             // @ref LLP 1038 D6; LLP 1035.002 D1 — hidden rows remain in
             // the kernel, but have no painted box and refuse input.
             let (route_hidden, inert) = self.host.route_visibility(id);
-            let hidden = route_hidden || self.placement_hidden(id);
+            let painted = self.box_of(id);
+            let empty = !route_hidden
+                && (self.placement_hidden(id)
+                    || painted.is_none() && self.laid_out_display_none(id));
+            let hidden = route_hidden || empty;
             let _ = write!(
                 detail,
                 ",\"visible\":{{\"hidden\":{hidden},\"inert\":{inert}}}"
             );
-            match self.box_of(id) {
+            match painted {
                 Some(b) => {
                     let local = if self.host.kernel().node(id).is_some_and(|node| node.is_inline_run()) {
                         self.inline_block(id).and_then(|owner| self.brush.inline_text.get(&owner)?.local_baseline(id))
@@ -116,7 +148,7 @@ impl<D: DataSource> Presenter<D> {
                         num(r2(b.rect.3))
                     );
                 }
-                None if self.placement_hidden(id) => detail.push_str(",\"space\":{\"viewport\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0},\"capture\":{\"scale\":1}}"),
+                None if empty => detail.push_str(",\"space\":{\"viewport\":{\"x\":0,\"y\":0,\"w\":0,\"h\":0},\"capture\":{\"scale\":1}}"),
                 None => detail.push_str(",\"space\":{\"capture\":{\"scale\":1}}"),
             }
             // @ref LLP 1043.000 §3 D7 — ordinary paragraphs keep the existing

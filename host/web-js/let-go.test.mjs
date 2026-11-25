@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // Whether an answer in flight was let go (ts-fetch.js `letGo`), which its later sends, timers and fetches ask.
 // The call and its ticket are made by hand, as rt.js ties them; ts-fetch.js loads beside a stand-in admission, as
@@ -11,8 +12,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 test('an answer is let go when its owner no longer holds its ticket: one ticket, or one of a parallel mutation\'s', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-let-go-'));
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
-  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, signalDeadline, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
+  writeFileSync(resolve(dir, 'admission.js'), `export { fetchTarget, ownWithout, redirectOf, signalDeadline, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
 export class FetchError extends Error {} export const overlaying = { on: false }; export const inOverlay = what => new Error(what); export const fetchWith = () => Promise.resolve();
 `);
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};\n');

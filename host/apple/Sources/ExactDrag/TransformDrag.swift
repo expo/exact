@@ -38,25 +38,28 @@ package struct TransformDragPacket {
     var scaleToken: UInt64 = 0
     let values: [Double]
     let now: Double
+    /// When the input was sampled, on its own timeline carried onto the clock
+    /// from where the drag began; the clock's own time for geometry.
+    let at: Double
 
     package init(op: UInt32, runtime: UInt64, handleKey: UInt64, targetKey: UInt64, clipKey: UInt64, sequence: UInt64,
-                 translateToken: UInt64 = 0, scaleToken: UInt64 = 0, values: [Double], now: Double) {
+                 translateToken: UInt64 = 0, scaleToken: UInt64 = 0, values: [Double], now: Double, at: Double? = nil) {
         self.op = op; self.runtime = runtime; self.handleKey = handleKey; self.targetKey = targetKey; self.clipKey = clipKey
         self.sequence = sequence; self.translateToken = translateToken; self.scaleToken = scaleToken
-        self.values = values; self.now = now
+        self.values = values; self.now = now; self.at = at ?? now
     }
 
+    /// Wire v3, 128 bytes (`host/apple/src/transform_drag.rs`).
     func encoded() -> Data? {
         guard values.count == 6 else { return nil }
-        var bytes = Data(capacity: 120)
+        var bytes = Data(capacity: 128)
         func append<T: FixedWidthInteger>(_ value: T) {
             var word = value.littleEndian
             withUnsafeBytes(of: &word) { bytes.append(contentsOf: $0) }
         }
-        append(UInt32(2)); append(op)
+        append(UInt32(3)); append(op)
         for word in [runtime, handleKey, targetKey, clipKey, sequence, translateToken, scaleToken] { append(word) }
-        for value in values { append(value.bitPattern) }
-        append(now.bitPattern)
+        for value in values + [now, at] { append(value.bitPattern) }
         return bytes
     }
 }

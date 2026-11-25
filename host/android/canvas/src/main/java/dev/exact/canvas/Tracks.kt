@@ -43,10 +43,11 @@ class Tracks internal constructor() {
     fun lookup(id: String): TrackEntry? = entries[id]
     fun remove(id: String) { entries.remove(id) }
 
-    /** [consumer] joins track [id] through its owner; the returned function leaves. */
-    fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String = "app"): () -> Unit {
+    /** [consumer] joins track [id] through its owner under [cause], the call that made the consumer, which it keeps
+     * for as long as it stays; the returned function leaves. */
+    fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit {
         val owner = entries[id]?.owner ?: throw TrackError("NotFoundError")
-        return owner.subscribe(id, consumer, start, origin)
+        return owner.subscribe(id, consumer, start, cause)
     }
     /** Observe a track without starting or holding its capture (LLP 1133.027 D17). The returned function leaves. */
     fun observe(id: String, observer: TrackConsumer): () -> Unit {
@@ -93,8 +94,9 @@ class TrackError(val code: String) : Exception(code)
 
 /** The implementation that opened a track: it decides whether a consumer joining takes the track's lease (D6). */
 interface TrackOwner {
-    /** [start] is an explicit start, which reopens an idle track; [origin] is `app`, `tool` or `wake`. */
-    fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String): () -> Unit
+    /** [start] is an explicit start, which reopens an idle track; [cause] made the consumer ([Cause.none] for one the
+     * host made on its own, which opens no capture). */
+    fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit
     /** Whether track [id]'s capture runs: [Tracks.hold] is refused while one does. */
     fun leased(id: String): Boolean = false
     /** Receives consumer notifications and may attach outputs, but never counts as a consumer or takes a lease. */

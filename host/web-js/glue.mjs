@@ -20,7 +20,7 @@ export const HOST_WEB_GLUE = [
   'auth-glue.js', 'storage-environment.js', 'http-body.js', 'faults.js', 'address-space.js',
   // The scroll to a location's fragment, at its first (router.js; LLP 1153 D5).
   'fragment.js',
-  'drag-out.js', 'drag-input.js',
+  'drag-out.js', 'drag-input.js', 'drag-in.js',
 ];
 
 /** `code`, the source of `file`, with each constant in `names` that it declares true written false, so the bundler
@@ -54,14 +54,8 @@ export function driverRuntime(root) {
     ...hostModuleSources(root, ['host/web/navigation.js'])])];
 }
 
-/** A runtime module's `../web/…` imports, pointed at the copies beside it. */
-export const localImports = text => text
-  .replaceAll('"../web/symbol-geometry.js"', '"./symbol-geometry.js"')
-  .replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'")
-  .replaceAll("'../web/faults.js'", "'./faults.js'")
-  .replaceAll("'../web/drag-out.js'", "'./drag-out.js'")
-  .replaceAll("'../web/address-space.js'", "'./address-space.js'")
-  .replaceAll('"../web/address-space.js"', '"./address-space.js"');
+/** A runtime module's imports from `../web/`, every one, pointed at the copies beside it. */
+export const localImports = text => text.replace(/(\b(?:from|import)\s*\(?\s*)(['"])\.\.\/web\/((?:[\w-]+\/)*[\w-]+\.js)\2/g, '$1$2./$3$2');
 
 // @ref LLP 1043.000 §3 D7/D8 — one inventory for host builds, serving and fixtures.
 // Groups preserve capability-based shipping; none of these imports enters boot.
@@ -69,7 +63,7 @@ export const localImports = text => text
 // reads storage-environment.js, so it ships in base, not only with storage.
 const WEB_HOST_GROUPS = {
   base: ['glue.js', 'navigation.js', 'audio-session.js', 'frame-messages.js', 'frame-navigation.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js', 'input-glue.js', 'agent-input.js',
-    'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'drag-out.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
+    'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'drag-out.js', 'drag-in.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
     'motion-glue.js', 'group-glue.js', 'collection-glue.js', 'canvas2d-glue.js', 'presence-glue.js', 'picker-glue.js',
     'documents-glue.js', 'storage-environment.js', 'auth-glue.js', 'image-glue.js', 'geometry-glue.js', 'resize-glue.js', 'intersect-glue.js', 'sound-glue.js', 'midi-glue.js', 'prompt-glue.js', 'alert-message.js', 'wakelock-glue.js', 'orientationlock-glue.js', 'menu-rows.js', 'fragment.js'],
   module: ['module-glue.js', 'module-worker.js', 'module-binary.js', 'module-prelude.js'],
@@ -137,12 +131,13 @@ export async function bundleModuleGlue(root, file, { production, minify = true }
 
 /** Bundle one host entry; the wasm glue keeps navigation as its other shipped module. `unused`: the navigation
  * behaviours the page leaves out (navigation.flag; LLP 1047.002 D2.1). */
-export async function bundleHostModule(root, name, { grants = false, production = false, unused = [] } = {}) {
+export async function bundleHostModule(root, name, { grants = false, production = false, unused = [], packageViews = false } = {}) {
   const web = resolve(root, 'host/web');
   const external = name === 'glue.js' ? 'navigation.js' : grants ? 'grant-admission.js' : null;
   const { rolldown } = await import('rolldown'), { gateAgent } = production ? await import('./agent-gate.mjs') : {};
   const bundle = await rolldown({
     input: resolve(web, name),
+    transform: { define: { HAS_PACKAGE_VIEWS: String(Boolean(packageViews)), PACKAGE_VIEW_OWNERS: JSON.stringify(packageViews || {}) } },
     treeshake: false,
     optimization: { inlineConst: false },
     plugins: [{
@@ -168,12 +163,12 @@ export async function bundleHostModule(root, name, { grants = false, production 
 }
 
 /** Build the host files consumed by the wasm build, servers and bare-plan fixtures. */
-export async function buildHostGlue(root, { production = false, out = resolve(root, 'target/web-host') } = {}) {
+export async function buildHostGlue(root, { production = false, packageViews = false, out = resolve(root, 'target/web-host') } = {}) {
   mkdirSync(out, { recursive: true });
   const stage = mkdtempSync(resolve(out, '.build-'));
   try {
     for (const name of HOST_ENTRIES) {
-      writeFileSync(resolve(stage, name), await bundleHostModule(root, name, { production }));
+      writeFileSync(resolve(stage, name), await bundleHostModule(root, name, { production, packageViews }));
     }
     const admission = await import(resolve(root, 'host/web/grant-admission.js'));
     writeFileSync(resolve(stage, 'grant-admission.js'), `export { ${Object.keys(admission).join(', ')} } from './navigation.js';\n`);

@@ -181,7 +181,7 @@ impl Read {
                     self.request = None;
                     return Err(e);
                 }
-                Some(RequestStatus::WaitingBudget) => backend.session.available_bytes(),
+                Some(RequestStatus::WaitingBudget) => backend.session.unheld_bytes(),
                 Some(_) => return Ok(None),
                 None => {
                     backend.forget(request);

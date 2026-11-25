@@ -14,8 +14,9 @@ import {
   scrollDrag,
   contextAt,
   liveById,
+  isInputClick,
 } from './navigation.js';
-import { Owner, onEnd, Media, inflight, Sounds, Flushing, FocusQueue } from './rt.js';
+import { Owner, onEnd, Origin, Media, inflight, Sounds, Flushing, FocusQueue } from './rt.js';
 import { clock, advance } from './clock.js';
 import { Mutations } from './resources.js';
 import { start } from './mount.js';
@@ -31,11 +32,12 @@ export const OnHooks = {};
 export function on(e, kind, f, bind) {
   // The runner's dispatch_at fires what is due at the event's time first (a focus's `then` before the input); a refusal
   // still lets the event run.
+  let received;
   const ends = kind === 'close' || kind === 'scrollend',
     go = f,
     wall = !clock.agent,
     own = ends ? Owner : null,
-    pointer = kind === 'pointerdown' || kind === 'pointerup',
+    pointer = kind === 'pointerdown' || kind === 'pointerup' || kind === 'pointercancel',
     // another event's handler run inside a pointer handler (a focus it moved) is not that pointer event's: its
     // `stopPropagation()` does not stop it
     run = (...a) => {
@@ -53,13 +55,26 @@ export function on(e, kind, f, bind) {
     // A change action's receipt boundary yields (true): what is due after it runs before the event too.
     if (clock.timers.some(t => t.due <= to && !(wall && t.frame)) || Mutations.some(m => m.due <= to || m.next <= to))
       while (advance(to, wall) === true);
-    if (!ends || (e.isConnected && !own?.gone)) return run(...a);
+    if (ends && (!e.isConnected || own?.gone)) return;
+    const outer = Origin.input;
+    const event = received ?? KeyEvent ?? Propagating;
+    const activates = ['press', 'contextmenu', 'dblclick'].includes(kind)
+      || (kind === 'key' || kind === 'keycapture') && event?.key !== 'Escape'
+      || kind === 'pointerdown' && event?.pointerType === 'mouse'
+      || kind === 'pointerup' && event?.pointerType !== 'mouse';
+    Origin.input = activates && (event?.isTrusted || isInputClick(event)) || kind === 'submit' && KeyEvent?.isTrusted === true;
+    try { return run(...a); } finally { Origin.input = outer; }
   };
   // A queued dialog close (or a scroll's end a due task's removal outlived) can outlive its arm, even while an exit
   // animation keeps the element connected.
   const l = (t, g, capture = false) => {
-    e.addEventListener(t, g, capture);
-    if (ends) onEnd(() => e.removeEventListener(t, g, capture));
+    const listener = ev => {
+      const outer = received;
+      received = ev;
+      try { return g(ev); } finally { received = outer; }
+    };
+    e.addEventListener(t, listener, capture);
+    if (ends) onEnd(() => e.removeEventListener(t, listener, capture));
   };
   if (OnHooks.file && e.localName === 'input' && e.type === 'file' && OnHooks.file(e, kind, f)) return;
   // media.js: the glue's reports
@@ -255,7 +270,9 @@ export const onSubmit = (e, kind, f, l) => {
             run.done = true;
             e.removeEventListener('keydown', run, true);
             e.removeEventListener('beforeinput', run, true);
-            f();
+            const outer = KeyEvent;
+            KeyEvent = ev;
+            try { f(); } finally { KeyEvent = outer; }
           };
           e.addEventListener('keydown', run, true);
           if (ev.target.localName !== 'textarea' && !ev.target.isContentEditable)

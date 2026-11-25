@@ -888,10 +888,14 @@ test('the largest text size: its findings once each with the screens they were o
     { id: 5, x: 220, y: 300, w: 240, h: 64, control: 'press', sized: 'author', outX: 58 },
     { id: 6, x: 16, y: 500, w: 200, h: 20, text: 'Fine' },
     { id: 7, x: 16, y: 600, w: 100, h: 20, text: 'Total due', over: [40, 0] },
+    { id: 8, x: 0, y: 874, w: 402, h: 0, squeezed: { axis: 'y', port: 0, content: 73031.4 } },
   ] };
-  const nodes = new Map([[4, { id: 4, type: 'Text', props: { text: 'Party size' } }], [5, { id: 5, type: 'View', props: { testId: 'rsvp-maybe' } }]]);
+  const nodes = new Map([[4, { id: 4, type: 'Text', props: { text: 'Party size' } }], [5, { id: 5, type: 'View', props: { testId: 'rsvp-maybe' } }], [8, { id: 8, type: 'List', props: { testId: 'col-list' } }]]);
   const found = judge(obs, null, { host: 'ios' });
-  assert.deepEqual(found.map((f) => f.kind), ['squeezed', 'clipped', 'overflow']);
+  assert.deepEqual(found.map((f) => f.kind), ['squeezed', 'squeezed', 'clipped', 'overflow']);
+  // A list squeezed to no height under controls that took the screen (#1477): its remedy keeps the text's size too.
+  const list = found.splice(1, 1)[0];
+  assert.equal(line({ ...list, hint: largeRemedy(list) }, nodes), "  squeezed col-list [0,874 402×0]: its port is squeezed to 0 pt tall of its 73031.4 pt of content, so none of it shows; let what sits above it scroll with it (inside the scroll, or in the list's first section), or give it a `min-height` in rem");
   const lines = found.map((f) => line({ ...f, hint: largeRemedy(f) }, nodes));
   const wrap = 'wrap the row: flex-wrap="wrap" with a flex-basis in rem on its items (docs/recipes/responsive-columns.md)';
   assert.equal(lines[0], `  squeezed Text "Party size"#4 [16,300 0×120]: its box is squeezed to no width, so none of its text shows; let it keep its words (no min-width: 0 or px width beside it), or ${wrap}`);

@@ -4,6 +4,7 @@
 //! samples on its grid. The package is the repository's own, installed
 //! beside the app as `exact add` would.
 
+use crate::source::{boxed, Source};
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
@@ -78,12 +79,12 @@ impl exact_runner::DataSource for Granted {
     }
 }
 
-fn boot(app: &App) -> Runner<Granted> {
+fn boot(app: &App) -> Runner<Source> {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     Runner::boot(
         plan,
-        Granted,
+        boxed(Granted),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -93,7 +94,7 @@ fn boot(app: &App) -> Runner<Granted> {
 
 /// Every request dispatched (a held one parked), released work run, each
 /// outcome fulfilled, until nothing is left.
-fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -123,12 +124,12 @@ fn pump(r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn logs(r: &Runner<Granted>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
 /// Resource `name`'s answer as JSON, as the agent's `state` shows it.
-fn answer(r: &Runner<Granted>, name: &str) -> Json {
+fn answer(r: &Runner<Source>, name: &str) -> Json {
     let state = exact_runner::agent::handle(r, r#"{"op":"state"}"#);
     let state: Json = serde_json::from_str(&state).unwrap();
     let v = state["resources"][name].clone();
@@ -137,7 +138,7 @@ fn answer(r: &Runner<Granted>, name: &str) -> Json {
 }
 
 /// A data-code call of `body`, its answer.
-fn data_call(r: &mut Runner<Granted>, body: Json) -> Json {
+fn data_call(r: &mut Runner<Source>, body: Json) -> Json {
     let request = exact_runner::Request::native(body.to_string().into_bytes());
     let Dispatch::Run(work) = r.native_work(&request) else {
         panic!("a module call is work");
@@ -157,7 +158,7 @@ fn data_call(r: &mut Runner<Granted>, body: Json) -> Json {
     serde_json::from_slice(&body).unwrap()
 }
 
-fn prefer(r: &mut Runner<Granted>, request: Json) {
+fn prefer(r: &mut Runner<Source>, request: Json) {
     let (_, reply) = r.extension_agent(&request.to_string()).expect("a prefer");
     reply.unwrap_or_else(|e| panic!("{e}"));
 }
@@ -404,7 +405,7 @@ fn a_canvas_input_is_leased_while_its_canvas_is_displayed() {
     r.act("tilt", Vec::new()).unwrap();
     pump(&mut r, &mut parked);
     assert_eq!(r.surface_sensor_events(0.0).len(), 1);
-    let world = |r: &Runner<Granted>| {
+    let world = |r: &Runner<Source>| {
         let state: Json = serde_json::from_str(&r.extensions_json().unwrap()).unwrap();
         state["motion"]["surfaces"]["world"].clone()
     };

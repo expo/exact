@@ -43,7 +43,8 @@ impl Em<'_> {
             }
             opts = format!(
                 "{{...{opts},fixed:[p=>{{{}}},p=>{{{}}}]}}",
-                bodies[0], bodies[1]
+                crate::hoist::mark(&bodies[0]),
+                crate::hoist::mark(&bodies[1])
             );
         }
         self.list = true;

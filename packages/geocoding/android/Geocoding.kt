@@ -10,6 +10,7 @@ import android.location.Geocoder
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -23,10 +24,12 @@ class GeocodingModule(context: ExtensionContext) : ExactExtension(context) {
     /** The sends let go: their answers are dropped (Android's geocoder has no cancel). */
     private val cancelled = HashSet<Int>()
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         val android = args.optJSONObject("android") ?: JSONObject()
         val locale = android.optString("locale").ifEmpty { null }?.let(Locale::forLanguageTag) ?: Locale.getDefault()
-        val request = context.request
+        val request = cause.request
         val answer: (List<Address>?, String?) -> Unit = { places, error ->
             main.post {
                 if (request != null && cancelled.remove(request)) return@post

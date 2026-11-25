@@ -78,6 +78,11 @@ export async function assertWebDistApp(dist, app) {
       `web dist is not a complete build for selected app ${app.id}; stale receipt ${resolve(dist, '.exact-build.json')}; run ${ownWebBuild(app, dist) ?? `EXACT_APP_DIR=${shellQuote(app.dir)} EXACT_WEB_DIST=${shellQuote(resolve(dist))} bun host/web/build.mjs ${app.crate('web')}`}`,
     );
 }
+/** Package substitutes belong only to the driven top-level document. */
+export function substitutesScript(values, origin, restore) {
+  return `if (window === window.top && location.origin === ${JSON.stringify(origin)}) globalThis.__exactLaunchSubstitutes = JSON.parse(${JSON.stringify(JSON.stringify({ values, restore }))});`;
+}
+
 /** Install the first launch's settings in the namespace the app actually opens. */
 export function storedScript(env, origin) {
   if (env?.EXACT_AGENT_STORAGE_FRESH !== '1' || !env.EXACT_AGENT_STORED) return '';
@@ -498,6 +503,12 @@ async function openWebUnlocked({
       if (faultScript) await call('Page.removeScriptToEvaluateOnNewDocument', { identifier: faultScript });
       faultScript = (await call('Page.addScriptToEvaluateOnNewDocument', { source })).identifier;
     };
+    let substituteScript;
+    const installSubstitutes = async (values, restore = false) => {
+      if (substituteScript) await call('Page.removeScriptToEvaluateOnNewDocument', { identifier: substituteScript });
+      substituteScript = values && Object.keys(values).length ? (await call('Page.addScriptToEvaluateOnNewDocument', { source: substitutesScript(values, page.origin, restore) })).identifier : undefined;
+    };
+    await installSubstitutes(facts.substitutes, facts.restoreSubstitutes);
     await installFaults(facts.failFetch);
     // `prefer display-mode`'s substitute (LLP 1039 D7), set in each new document before the page's scripts run, as
     // CDP's emulated media are in place at boot: a reload keeps it, and a new session starts without it.
@@ -603,10 +614,11 @@ async function openWebUnlocked({
         const ms = await evaluate("document.getElementById('exact-root')?.dataset.gpuMs ?? null");
         return ms == null ? null : Number(ms);
       },
+      installSubstitutes,
       /** A fresh test clears storage and history; `keep` reloads the current entry with its history and store
        * (LLP 1038 D7). A new `session` on a reused carrier starts from the launch display preferences and pointer,
        * never the last session's `prefer` (LLP 1069.007 D2; agent-prefer.mjs). */
-      async reset({ keep = false, failFetch, epoch, session = false } = {}) {
+      async reset({ keep = false, failFetch, substitutes, epoch, session = false } = {}) {
         if (session) {
           if (safeArea !== undefined) {
             await call('Emulation.setSafeAreaInsetsOverride', { insets: {} });
@@ -643,6 +655,7 @@ async function openWebUnlocked({
           await call('Storage.clearDataForOrigin', { origin: page.origin, storageTypes: 'all' });
         }
         const destination = withEpoch(withFaults(keep ? await evaluate('location.href') : page.href, failFetch), epoch);
+        if (!keep || substitutes !== undefined) await installSubstitutes(keep ? substitutes : facts.substitutes, keep || facts.restoreSubstitutes);
         await installFaults(failFetch ?? (keep ? undefined : facts.failFetch ?? ''));
         const previousLoader = documentLoader,
           deadline = Date.now() + 30000;
@@ -817,13 +830,13 @@ async function openWebUnlocked({
             // CDP wants epoch seconds; performance.timeOrigin plus the
             // runner's clock makes the DOM event's timeStamp that clock,
             // independent of how long the carrier took between operations.
-            const t = ((await evaluate('performance.timeOrigin')) + (await ask({ op: 'tags' })).clock) / 1000;
+            const origin = await evaluate('performance.timeOrigin'), t = (origin + (await ask({ op: 'tags' })).clock) / 1000;
             if (!mouse) await evaluate(`(${pageContact})('start', ${JSON.stringify({ x: px, y: py })})`);
             if (mouse) {
               await button('mouseMoved', { x: px, y: py }, t, 0);
               await button('mousePressed', { x: px, y: py }, t, 1);
             } else await finger('touchStart', [{ x: px, y: py }], t);
-            contact = { x: px, y: py, t, mouse, modifiers: held };
+            contact = { x: px, y: py, t, origin, mouse, modifiers: held };
             await frame();
             return {
               contact: id,
@@ -834,9 +847,13 @@ async function openWebUnlocked({
             };
           }
           if (!contact) throw new Error('no contact is down');
+          // A clock moved while the contact was down (`clock +500` between legs) moves its timestamps too, so a
+          // velocity read from them sees the pause; the move's own time ends at the clock's.
+          const caught = async (ms) => { contact.t = Math.max(contact.t, (contact.origin + (await ask({ op: 'tags' })).clock - ms) / 1000); };
           if (kind === 'move') {
             const to = { x: opts.x ?? contact.x + (opts.dx ?? 0), y: opts.y ?? contact.y + (opts.dy ?? 0) };
             const ms = Math.max(0, opts.ms ?? 0);
+            await caught(ms);
             const steps = Math.max(1, Math.round(ms / 16));
             for (let i = 1; i <= steps; i++) {
               const t = i / steps;
@@ -846,7 +863,7 @@ async function openWebUnlocked({
               else await finger('touchMove', [at], contact.t);
               if (ms) await sleep(ms / steps);
             }
-            contact = { ...to, t: contact.t, mouse, modifiers: held };
+            contact = { ...contact, ...to, mouse, modifiers: held };
             await frame();
             return { phase: 'move', at: [to.x, to.y], delivery: 'platform' };
           }
@@ -857,6 +874,7 @@ async function openWebUnlocked({
             }
             return { phase: 'hold', at: [contact.x, contact.y], delivery: 'platform' };
           }
+          await caught(0);
           // A mouse has no cancel: its button comes up where it is.
           if (mouse) await button('mouseReleased', contact, contact.t + 0.008, 0);
           else await finger(kind === 'up' ? 'touchEnd' : 'touchCancel', [], contact.t + 0.008);
@@ -886,7 +904,7 @@ async function openWebUnlocked({
         if (kind === 'wheel') await cdpWheel(call, frame, { ...opts, x, y, modifiers });
         else if (kind === 'drop' || kind === 'dragenter' || kind === 'dragleave')
           // Chrome's own drag (agent-drag.mjs)
-          dragged = await fileDrag({ kind, opts, id, x, y, dragged, call, evaluate });
+          dragged = await fileDrag({ kind, opts, id, x, y, dragged, call, evaluate }).catch((e) => { if ('dragged' in e) dragged = e.dragged; throw e; });
         else if (kind === 'hover') await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
         else if (kind === 'dblclick' && opts.touch)
           // a finger's double tap (LLP 1057.001.000 §6): two touches 80 ms apart

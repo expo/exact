@@ -1,4 +1,4 @@
-import { glueDeclarations, glueCase } from './glue-fixture.mjs';
+import { glueDeclarations, glueCase, glueStandIns } from './glue-fixture.mjs';
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // The production presence controller under Chrome's layout and animation
 // clocks, including the host's resize entry and child reconciliation.
@@ -37,7 +37,8 @@ const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 const glue = readFileSync(resolve(WEB, 'glue.js'), 'utf8');
 const children = glueCase(glue, 'children');
-const resize = glueDeclarations(glue, ['resizeRunner', 'mediaChanged', 'pageChanged']);
+const resizeNames = ['resizeRunner', 'mediaChanged', 'pageChanged'];
+const resize = glueDeclarations(glue, resizeNames), resizeStandIns = glueStandIns(glue, resizeNames, ['presenceLoader', 'animationClock', 'settleValue']);
 const page = `<style>
   body { margin:0 } #exact-root { position:relative; padding:20px }
   #card { width:100px; height:40px; background:red; --exact-layout-transition:1000 0 linear }
@@ -46,6 +47,8 @@ const page = `<style>
 </style><div id="exact-root"></div>
 <script type="module">
   import { presenceLoader, animationClock, settleValue } from './navigation.js';
+  ${resizeStandIns}
+  {
   window.exact = {};
   const { shownClip } = await import('./presence-glue.js');
   window.shownClip = shownClip;
@@ -67,7 +70,7 @@ const page = `<style>
   }
   const readOut = x => x, now = () => 0, preferences = () => 0;
   const positionContexts = () => {}, onPreferences = () => {}, foldBits = () => 0, onFold = () => {}; // no fold posture (LLP 1078 D6)
-  const wasm = { exact_resize: () => JSON.stringify(window.resizeBatch) };
+  const wasm = { exact_resize: () => JSON.stringify(window.resizeBatch), exact_set_screen_reader() {} };
   const host = { wasm, incarnation: 1 };
   ${resize}
   window.fixture = html => {
@@ -84,6 +87,7 @@ const page = `<style>
   window.tracking = () => presence.live.tracking();
   window.leave = css => presence.live.exit(document.getElementById('card'), css);
   window.ready = true;
+  }
 </script>`;
 
 // Register the shared browser's cleanup in the file, outside the beforeAll hook.

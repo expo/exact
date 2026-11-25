@@ -4,7 +4,7 @@
 //! **Sheets.** Where a shell shows bars (Android's reader), a `modal`
 //! route is Material 3's modal bottom sheet: as wide as the window up to
 //! 640, rounded 28 at its top, `surfaceContainerLow` under a route that
-//! says no background, a 32 by 4 drag handle 22 below its top edge, over a
+//! says no background, an optional 32 by 4 drag handle 22 below its top edge, over a
 //! scrim of 32 % black that dims the page and its bars. It rests at its
 //! `navigationDetent` heights (`medium` half the tallest, `large` the
 //! window below the status bar, a point height or a percentage of the
@@ -49,6 +49,8 @@ use std::rc::Rc;
 use tiny_skia::Transform;
 
 mod authored;
+mod flights;
+use flights::bounds_spring;
 #[cfg(test)]
 pub(super) mod tests;
 mod touch;
@@ -60,10 +62,23 @@ use exact_kernel::StyleId;
 /// The room a sheet's drag handle takes at its top, points: Material's
 /// handle, 4 tall with 22 above and below.
 pub const SHEET_HANDLE: f32 = 48.0;
+pub(crate) fn sheet_handle(route: &exact_kernel::NodeRef<'_>) -> f32 {
+    if route.props.str(PropId::NavigationGrabber) == Some("hidden") {
+        0.0
+    } else {
+        SHEET_HANDLE
+    }
+}
 /// Material 3's sheet: its widest, its top corners, and its scrim.
 const SHEET_MAX_WIDTH: f32 = 640.0;
 const SHEET_CORNER: f32 = 28.0;
 const SCRIM: f32 = 0.32;
+/// A centered Material sheet's left margin and width in the page.
+pub(crate) fn sheet_span(page_width: f32) -> (f32, f32) {
+    let width = page_width.min(SHEET_MAX_WIDTH);
+    ((page_width - width) / 2.0, width)
+}
+
 /// Material's motion: a sheet's entrance (emphasized decelerate), its exit
 /// (emphasized accelerate), a settle between detents, and the shared axis.
 const ENTER_MS: f64 = 350.0;
@@ -188,11 +203,17 @@ struct Sheet {
     /// beneath that route, as it was, and takes no touch.
     covered: bool,
     reader_dragging: bool,
+    handle: f32,
+    /// Its route's scheme (LLP 1034 §8), which it keeps from the
+    /// ancestors it is lifted out of, and keeps as it slides out; `None`
+    /// follows the session's.
+    scheme: Option<bool>,
 }
 
 /// A sheet whose route has gone, sliding out of the window.
 struct Closing {
     shown: NodeKey,
+    handle: f32,
     /// Its left edge and width.
     x: f32,
     width: f32,
@@ -201,6 +222,7 @@ struct Closing {
     from: f32,
     /// What a predictive Back had shrunk it to.
     scale: f32,
+    scheme: Option<bool>,
 }
 
 /// A route crossing.
@@ -264,6 +286,7 @@ pub(super) struct Pose {
     dx: f32,
     dy: f32,
     scale: f32,
+    scale_axes: (f32, f32),
     /// Degrees clockwise, about `origin`.
     rotate: f32,
     /// The point it scales and turns about, in that drawing space.
@@ -280,6 +303,7 @@ impl Pose {
         dx: 0.0,
         dy: 0.0,
         scale: 1.0,
+        scale_axes: (1.0, 1.0),
         rotate: 0.0,
         origin: (0.0, 0.0),
         opacity: 1.0,
@@ -292,23 +316,11 @@ impl Pose {
         Transform::from_translate(at.0 + self.dx, at.1 + self.dy)
             .pre_translate(self.origin.0, self.origin.1)
             .pre_rotate(self.rotate)
-            .pre_scale(self.scale, self.scale)
+            .pre_scale(
+                self.scale * self.scale_axes.0,
+                self.scale * self.scale_axes.1,
+            )
             .pre_translate(-self.origin.0, -self.origin.1)
-    }
-}
-
-/// Compose's default `boundsTransform` for a shared element, `spring()`
-/// with damping ratio 1 and stiffness 400 (LLP 1013.004 D4).
-fn bounds_spring() -> Transition {
-    Transition {
-        property: exact_motion::TransitionProperty::All,
-        duration: 0.0,
-        delay: 0.0,
-        timing: exact_motion::TimingFunction::Spring(exact_motion::SpringConfig {
-            stiffness: 400.0,
-            damping: 40.0,
-            mass: 1.0,
-        }),
     }
 }
 
@@ -407,9 +419,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// A sheet's left edge and width.
     fn sheet_span(&self) -> (f32, f32) {
-        let w = self.viewport.0;
-        let width = w.min(SHEET_MAX_WIDTH);
-        ((w - width) / 2.0, width)
+        sheet_span(self.viewport.0)
     }
 
     fn sheet_top_now(&self, sheet: &Sheet) -> f32 {
@@ -493,11 +503,13 @@ impl<D: DataSource> Presenter<D> {
             if !still && presents && self.brush.kept(sheet.shown) {
                 self.stage.closing.push(Closing {
                     shown: sheet.shown,
+                    handle: sheet.handle,
                     x,
                     width,
                     top: Glide::new(from, h, now, EXIT_MS, Curve::Accelerate),
                     from,
                     scale,
+                    scheme: sheet.scheme,
                 });
             }
             if matches!(&self.stage.gesture, Some(touch::Gesture::Drag { modal, .. }) if *modal == sheet.modal)
@@ -528,6 +540,7 @@ impl<D: DataSource> Presenter<D> {
         for (i, last) in wanted {
             let kernel = self.host.kernel();
             let node = kernel.node(stack[i]).expect("a live route");
+            let handle = sheet_handle(&node);
             let detent = node.props.str(PropId::NavigationDetent).map(str::to_owned);
             let initial = node
                 .props
@@ -570,8 +583,11 @@ impl<D: DataSource> Presenter<D> {
             let covered = kinds[i..]
                 .iter()
                 .any(|k| matches!(k, Presented::Over | Presented::Full));
+            let scheme = self.scheme_of(stack[i]);
             match self.stage.sheets.iter_mut().find(|s| s.modal == keys[i]) {
                 Some(sheet) => {
+                    sheet.scheme = scheme;
+                    sheet.handle = handle;
                     sheet.shown = keys[last];
                     sheet.covered = covered;
                     sheet.measured = measured;
@@ -610,7 +626,9 @@ impl<D: DataSource> Presenter<D> {
                         said,
                         measured,
                         reader_dragging: false,
+                        handle,
                         covered,
+                        scheme,
                     });
                 }
             }
@@ -641,6 +659,7 @@ impl<D: DataSource> Presenter<D> {
                 self.host.land_seeking();
             }
         }
+        self.update_hosted_back();
         self.hold_arriving();
         self.place_sheets(&stack, &kinds);
         self.dirty |= self.stage_moving();
@@ -868,22 +887,6 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// The names a push from `old` to `new`, or a pop of `old`, pairs.
-    fn pairs(&self, forward: bool, (old, new): (NodeKey, NodeKey)) -> Vec<(NodeKey, NodeKey)> {
-        match forward {
-            true => pair_routes(self.host.kernel(), old, new),
-            false if self.stage.pops.1 == Some(old) => self.stage.pops.2.clone(),
-            false => Vec::new(),
-        }
-    }
-
-    /// Fly the names a push from `old` to `new`, or a pop of `old`, pairs.
-    fn fly_routes(&mut self, forward: bool, (old, new): (NodeKey, NodeKey), curve: &Transition) {
-        for (from, to) in self.pairs(forward, (old, new)) {
-            self.host.fly(from, to, curve, true);
-        }
-    }
-
     /// Whether anything on the stage moves on its own: frames are owed.
     pub(crate) fn stage_moving(&self) -> bool {
         let now = self.host.now();
@@ -915,6 +918,24 @@ impl<D: DataSource> Presenter<D> {
     /// The open sheets nothing presented covers, bottom first.
     fn front_sheets(&self) -> impl DoubleEndedIterator<Item = &Sheet> {
         self.stage.sheets.iter().filter(|s| !s.covered)
+    }
+
+    /// Sheets keep their callback positions while another route covers them. Only a sheet
+    /// that is itself the selected route can take the route's Back.
+    pub(super) fn back_sheets(&self) -> (Vec<ViewId>, Option<ViewId>) {
+        let mut sheets = Vec::new();
+        let mut selected = None;
+        if self.stage_presents() {
+            for sheet in &self.stage.sheets {
+                if let Some(n) = self.host.kernel().node_by_key(sheet.modal) {
+                    sheets.push(n.id);
+                    if self.stage.seen.last() == Some(&sheet.modal) {
+                        selected = Some(n.id);
+                    }
+                }
+            }
+        }
+        (sheets, selected)
     }
 
     /// Whether a sheet is open in front.
@@ -1197,16 +1218,20 @@ impl<D: DataSource> Presenter<D> {
         // A sheet runs on to the window's foot, under the gesture bar, on a
         // page laid out above it as well.
         let foot = window.1 - page[1];
-        let container = |route: Option<exact_kernel::NodeRef<'_>>| -> [u8; 4] {
+        use crate::presenter::top::look::Role;
+        let container = |route: Option<exact_kernel::NodeRef<'_>>, dark| -> [u8; 4] {
             let written =
                 route.is_some_and(|n| n.style.written.has(exact_kernel::StyleId::BackgroundColor));
             match written {
                 true => [0; 4],
-                false => crate::presenter::top::look::Role::SurfaceContainerLow.color(self.dark()),
+                false => Role::SurfaceContainerLow.color(dark),
             }
         };
-        let handle = crate::presenter::top::look::Role::OnSurfaceVariant.color(self.dark());
-        let handle = [handle[0], handle[1], handle[2], (0.4 * 255.0) as u8];
+        let grip = |width: f32, dark, ts| {
+            let [r, g, b, _] = Role::OnSurfaceVariant.color(dark);
+            let shape = Shape::new(((width - 32.0) / 2.0, 22.0, 32.0, 4.0), [2.0; 4]);
+            Item::Fill(shape, [r, g, b, (0.4 * 255.0) as u8], ts)
+        };
         let (x, width) = self.sheet_span();
         for sheet in &self.stage.sheets {
             let Some(shown) = kernel.node_by_key(sheet.shown) else {
@@ -1244,7 +1269,8 @@ impl<D: DataSource> Presenter<D> {
             let body = (0.0, 0.0, width, (foot - top).max(tallest));
             let shape = Shape::new(body, [SHEET_CORNER, SHEET_CORNER, 0.0, 0.0]);
             items.push(Item::Clip(shape, ts));
-            items.push(Item::Fill(shape, container(modal), ts));
+            let dark = sheet.scheme.unwrap_or(self.dark());
+            items.push(Item::Fill(shape, container(modal, dark), ts));
             // A crossing inside this sheet, else the route it shows.
             let inner = (self.stage.shift.as_ref())
                 .filter(|s| s.sheet == Some(sheet.modal))
@@ -1290,8 +1316,9 @@ impl<D: DataSource> Presenter<D> {
                     });
                 }
             }
-            let grip = Shape::new(((width - 32.0) / 2.0, 22.0, 32.0, 4.0), [2.0; 4]);
-            items.push(Item::Fill(grip, handle, ts));
+            if sheet.handle > 0.0 {
+                items.push(grip(width, dark, ts));
+            }
             items.push(Item::PopClip);
             match sheet.covered {
                 true => stage.beneath.push((shown.id, items)),
@@ -1314,11 +1341,15 @@ impl<D: DataSource> Presenter<D> {
             .transform((closing.x, top));
             let body = (0.0, 0.0, closing.width, (foot - closing.from).max(1.0));
             let shape = Shape::new(body, [SHEET_CORNER, SHEET_CORNER, 0.0, 0.0]);
+            let dark = closing.scheme.unwrap_or(self.dark());
             stage.sheets.push(Item::Clip(shape, ts));
-            stage.sheets.push(Item::Fill(shape, container(None), ts));
+            stage
+                .sheets
+                .push(Item::Fill(shape, container(None, dark), ts));
             stage.sheets.push(Item::Taped(closing.shown, ts));
-            let grip = Shape::new(((closing.width - 32.0) / 2.0, 22.0, 32.0, 4.0), [2.0; 4]);
-            stage.sheets.push(Item::Fill(grip, handle, ts));
+            if closing.handle > 0.0 {
+                stage.sheets.push(grip(closing.width, dark, ts));
+            }
             stage.sheets.push(Item::PopClip);
         }
     }
@@ -1401,53 +1432,6 @@ impl<D: DataSource> Presenter<D> {
                 None => (p.page_pose(now, width, self.viewport.1), Pose::REST),
             },
             None => (Pose::REST, Pose::REST),
-        }
-    }
-
-    /// Take the crossing's pose off each flight's destination, so the
-    /// reader aims at its rest, as Compose aims at the lookahead bounds
-    /// (LLP 1013.004 D4). A container's elements keep its pose: on its
-    /// clock, they move with the box as one transform.
-    pub(crate) fn unpose_flights(&mut self) {
-        let crossing = |s: &&Shift| !s.through && s.container.is_none();
-        let Some(shift) = self.stage.shift.as_ref().filter(crossing) else {
-            return;
-        };
-        let poses = self.shift_poses(self.host.now(), shift.sheet);
-        let kernel = self.host.kernel();
-        for f in &mut self.brush.shared.frames {
-            let mut route = kernel.node_by_key(f.to);
-            while let Some(node) = route
-                .as_ref()
-                .filter(|n| ![shift.incoming, shift.outgoing].contains(&n.key))
-            {
-                route = node.parent.and_then(|id| kernel.node(id));
-            }
-            let Some(route) = route else {
-                continue;
-            };
-            let pose = if route.key == shift.incoming {
-                poses.1
-            } else {
-                poses.0
-            };
-            let mut at = (0.0, 0.0);
-            let mut next = Some(route);
-            while let Some(node) = next {
-                at = (at.0 + node.frame.x, at.1 + node.frame.y);
-                next = node.parent.and_then(|id| kernel.node(id));
-            }
-            // posed = at + d + o + s(p - o) for p in the route; rest = at + p.
-            let (o, d, s) = (pose.origin, (pose.dx, pose.dy), pose.scale);
-            // A route scaled to nothing has no rest to aim at yet.
-            if s.abs() < 1e-3 {
-                continue;
-            }
-            f.unpose = [
-                1.0 / s,
-                at.0 + o.0 - (at.0 + d.0 + o.0) / s,
-                at.1 + o.1 - (at.1 + d.1 + o.1) / s,
-            ];
         }
     }
 

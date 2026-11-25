@@ -34,7 +34,7 @@ extension GroupedListHost {
         }
     }
 
-    func prepare(_ ops: [BatchOp]) { for list in lists.values { list.prepare(ops) } }
+    func prepare(_ ops: [BatchOp]) { for list in lists.values where list.movingRow == nil { list.prepare(ops) } }
 
     func placing(_ container: UIView, _ want: [NodeView]) -> [NodeView] {
         lists.values.reduce(want) { $1.placing(container, $0) }
@@ -147,6 +147,7 @@ extension GroupedListView {
     /// The row `id` is carried no longer, wherever its view is.
     func forget(_ id: UInt32) {
         guard let place = carried.removeValue(forKey: id) else { return }
+        if let grip = place.grip { grip.node.isHidden = grip.hidden }
         if let accessory = place.accessory { accessory.node.isHidden = accessory.hidden }
         if !carried.values.contains(where: { $0.parent === place.parent }) { homes[ObjectIdentifier(place.parent)] = nil }
     }

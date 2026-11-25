@@ -112,14 +112,7 @@ impl NodeInst {
             id: self.view,
             looks: resolved,
         });
-        match looks.tokens {
-            0 => {
-                u.ids.theme.looks.remove(&self.view);
-            }
-            _ => {
-                u.ids.theme.looks.insert(self.view, looks);
-            }
-        }
+        u.ids.theme.set_look(self.view, looks);
         Ok(())
     }
 }

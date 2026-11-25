@@ -24,6 +24,10 @@ use contract::Manifest;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[path = "compat_android.rs"]
+mod android;
+pub(crate) use android::{android_linked, android_uses, plan_extensions};
+
 /// The C ABI's header, whose `EXACT_ABI_VERSION` is one of the numbers.
 const ABI_HEADER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -87,7 +91,10 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// D11), which a prelude of 9 to 14 refuses, failing the stream. A bundle
 /// names the option alike on a socket, so every use needs 15.
 /// 16: per-source turn budgets. Older native hosts give every source 100 ms.
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 16;
+/// 17: browser automation uses document realms. An older binary ignores the
+/// target and could run the call in an unnamed frame.
+/// 18: browser automation passes functions for channel arguments and delivers their messages.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 18;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -163,14 +170,13 @@ pub fn typescript_runtime_of(bundle: &[u8], grants: &str) -> u32 {
         .iter()
         .find(|(_, option)| text.contains(option))
         .map_or(0, |(runtime, _)| *runtime);
-    let sqlite = grants.lines().map(str::trim).any(|line| {
-        !line.starts_with('#') && line.split_whitespace().next() == Some("sqlite.open")
-    });
-    if sqlite {
-        named.max(10)
-    } else {
-        named
-    }
+    grants.lines().fold(named, |runtime, line| {
+        match line.split_whitespace().next() {
+            Some("browser.automation") => runtime.max(18),
+            Some("sqlite.open") => runtime.max(10),
+            _ => runtime,
+        }
+    })
 }
 /// The domain separator over the canonical inputs.
 const DOMAIN: &str = "exact2 compatibility id v1\n";
@@ -477,6 +483,21 @@ pub fn compatibility_id_pinned(
             compat.inputs["grantCeiling"].as_str(),
             &contract::native::app_text(app_dir),
         );
+        if std::env::var_os("OUT_DIR").is_some() {
+            println!("cargo:rerun-if-env-changed=EXACT_ANDROID_MANIFEST_PERMISSIONS");
+        }
+        if let Ok(inventory) = std::env::var("EXACT_ANDROID_MANIFEST_PERMISSIONS") {
+            let names: Vec<String> = serde_json::from_str(&inventory)
+                .map_err(|e| format!("merged Android manifest permissions: {e}"))?;
+            if names.windows(2).any(|pair| pair[0] >= pair[1]) || names.iter().any(String::is_empty)
+            {
+                return Err(
+                    "the merged Android permission inventory must contain sorted, unique names"
+                        .into(),
+                );
+            }
+            compat.inputs["androidLinked"]["permissions"] = serde_json::json!(names);
+        }
         compat.id = compatibility_digest(&compat.inputs);
     }
     crate::icon_rules::apply(&mut compat, ships, entries)?;
@@ -512,43 +533,6 @@ pub fn compatibility_id_pinned(
         )?;
     }
     Ok(compat)
-}
-
-/// What an APK is composed from beyond the compatibility inputs' other
-/// fields (LLP 1030.006 D4a): the plan's capabilities (`uses.txt`, which
-/// decides what the reader links), the Android permissions its grant lines
-/// and the source's use of module names derive (`permissions.txt`), and the
-/// package extensions it binds a Kotlin implementation for. A generation
-/// that needs more than this is a new APK; the hatch words are `hatches`.
-pub(crate) fn android_linked(
-    plan: &exact_plan::Plan,
-    ceiling: Option<&str>,
-    source: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "uses": android_uses(plan),
-        "permissions": contract::native::android_permissions(plan, ceiling, source),
-        "extensions": plan_extensions(plan),
-    })
-}
-
-/// What the APK links for the plan, by name, as its build reads it
-/// (`contract::native::android_reach`).
-pub(crate) fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
-    contract::native::android_uses(plan)
-}
-
-/// The package extensions the plan's modules, views and events name, sorted.
-pub(crate) fn plan_extensions(plan: &exact_plan::Plan) -> Vec<String> {
-    let names = plan
-        .modules
-        .iter()
-        .map(|m| m.extension)
-        .chain(plan.views.iter().map(|v| v.extension))
-        .chain(plan.module_events.iter().map(|e| e.extension));
-    let names: std::collections::BTreeSet<String> =
-        names.map(|name| plan.str(name).to_string()).collect();
-    names.into_iter().collect()
 }
 
 /// The faced tools this platform's binary compiles a door for (LLP 1133.023
@@ -694,6 +678,9 @@ pub(crate) fn compatibility_with_trust(
         return Err(format!("deploy.store.{platform} must be \"0\" or \"A\""));
     }
     let binary_only = store == "0";
+    if platform == "linux" && target.contains("-windows") && !binary_only {
+        return Err("the headless Linux host on Windows has no update store; set deploy.store.linux to \"0\"".into());
+    }
     let keys = if binary_only {
         Value::Null
     } else {
@@ -853,6 +840,11 @@ pub(crate) fn compatibility_with_trust(
         "store": { "L": store, "acceptedKinds": if binary_only { vec![] } else { kinds } },
         "app": manifest.id,
     });
+    if platform == "android" {
+        if let Some(schemes) = manifest.json.pointer("/open_url/schemes") {
+            inputs["capabilities"]["openUrlSchemes"] = schemes.clone();
+        }
+    }
     // A variant's base identity, which a Rust source naming its own id names
     // (LLP 1030.008 D2); absent otherwise, so no other app's id moves.
     if let Some(variant) = manifest.json.get("variant") {
@@ -902,10 +894,10 @@ pub(crate) fn compatibility_with_trust(
     if let Some(links) = crate::links::claims(&manifest.json, platform) {
         inputs["links"] = links;
     }
-    // Linux has no bundle beside the executable. Its portal picker reads the
-    // same declared file types from the compatibility metadata the binary
-    // already carries (LLP 1030 D2; LLP 1069.010 D2).
-    if platform == "linux" && !target.contains("android") {
+    // Linux and Windows have no bundle beside the executable. Their pickers
+    // read the declared file types from the compatibility metadata the binary
+    // already carries (LLP 1030 D2; LLP 1069.010 D2; LLP 1173 D1).
+    if matches!(platform, "linux" | "windows") && !target.contains("android") {
         if let Some(handlers) = manifest.json.get("file_handlers") {
             if !handlers.as_array().is_some_and(Vec::is_empty) {
                 inputs["fileHandlers"] = handlers.clone();

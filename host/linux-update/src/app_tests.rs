@@ -109,19 +109,17 @@ fn checked_as(
     }
 }
 
-fn selected_config(dir: &Path, baked: &[u8], client: Client) -> Config {
-    selected_config_as(UPDATE_COMPAT, dir, baked, client)
-}
-
-fn selected_config_as(compat: &str, dir: &Path, baked: &[u8], client: Client) -> Config {
-    let mut config = Config {
+fn boot_config(compat: &str, plan: Vec<u8>, assets: PathBuf) -> Config {
+    Config {
         output_rotation: Default::default(),
         services: Default::default(),
+        preferences: None,
+        page: None,
         content_region: None,
         launch: "/".into(),
-        plan: baked.to_vec().into(),
+        plan: plan.into(),
         fallback_plan: None,
-        assets: dir.to_path_buf(),
+        assets,
         scale: 1.0,
         size: (390.0, 844.0),
         agent: false,
@@ -145,7 +143,15 @@ fn selected_config_as(compat: &str, dir: &Path, baked: &[u8], client: Client) ->
         clock_started: None,
         #[cfg(target_os = "macos")]
         painted_boot: None,
-    };
+    }
+}
+
+fn selected_config(dir: &Path, baked: &[u8], client: Client) -> Config {
+    selected_config_as(UPDATE_COMPAT, dir, baked, client)
+}
+
+fn selected_config_as(compat: &str, dir: &Path, baked: &[u8], client: Client) -> Config {
+    let mut config = boot_config(compat, baked.to_vec(), dir.to_path_buf());
     config.use_updates(Box::new(Updates::from_client(client).unwrap()), baked);
     config
 }
@@ -189,36 +195,13 @@ fn a_fetched_plan_refused_at_boot_falls_back_to_baked() {
     foreign.app_id = "com.exact.foreign".into();
     let baked = contract::compile(source).unwrap().encode();
     let mut config = Config {
-        output_rotation: Default::default(),
-        services: Default::default(),
-        content_region: None,
-        launch: "/".into(),
-        plan: foreign.encode().into(),
-        fallback_plan: Some(baked),
-        assets: std::env::current_dir().unwrap(),
-        scale: 1.0,
-        size: (390.0, 844.0),
-        agent: false,
-        smoke: false,
-        shot: None,
-        dev_plan: None,
-        dev_url: None,
-        dev_identity: None,
-        dev_said: None,
-        card: String::new(),
-        vnc: None,
-        compat: r#"{"id":"fixture00000000","inputs":{"store":{"L":"0"}}}"#.into(),
         explicit: true,
-        entry: None,
-        selected_assets: None,
-        selected_dir: None,
-        module: Ok(None),
-        updates: None,
-        hatches: None,
-        packages: Vec::new(),
-        clock_started: None,
-        #[cfg(target_os = "macos")]
-        painted_boot: None,
+        fallback_plan: Some(baked),
+        ..boot_config(
+            r#"{"id":"fixture00000000","inputs":{"store":{"L":"0"}}}"#,
+            foreign.encode(),
+            std::env::current_dir().unwrap(),
+        )
     };
     let size = config.size;
     let (presenter, error) = boot_presenter::<Named>(&mut config, size).unwrap();
@@ -267,36 +250,11 @@ fn a_partial_initial_dev_plan_falls_back_without_counting_the_store() {
     let record = client.dir().join("record.json");
     let updates = Updates::from_client(client).unwrap();
     let mut config = Config {
-        output_rotation: Default::default(),
-        services: Default::default(),
-        content_region: None,
-        launch: "/".into(),
-        plan: b"EXPL".to_vec().into(), // the compiler was interrupted mid-write
-        fallback_plan: Some(baked.clone()),
-        assets: PathBuf::from("."),
-        scale: 1.0,
-        size: (390.0, 844.0),
-        agent: false,
-        smoke: false,
-        shot: None,
-        dev_plan: Some(PathBuf::from("app.plan")),
-        dev_url: None,
-        dev_identity: None,
-        dev_said: None,
-        card: String::new(),
-        vnc: None,
-        compat: compat.into(),
         explicit: true,
-        entry: None,
-        selected_assets: None,
-        selected_dir: None,
-        module: Ok(None),
-        updates: None,
-        hatches: None,
-        packages: Vec::new(),
-        clock_started: None,
-        #[cfg(target_os = "macos")]
-        painted_boot: None,
+        dev_plan: Some(PathBuf::from("app.plan")),
+        fallback_plan: Some(baked.clone()),
+        // The compiler was interrupted mid-write.
+        ..boot_config(compat, b"EXPL".to_vec(), PathBuf::from("."))
     };
     config.use_updates(Box::new(updates), &baked);
     assert_eq!(&*config.plan, b"EXPL");

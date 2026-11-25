@@ -671,6 +671,15 @@ impl<D: DataSource> Bridge<D> {
                         s.space_above.map_or("null".into(), |v| v.to_string())
                     ));
                     json.push_str(",\"rows\":[");
+                    let movable: std::collections::HashMap<_, _> = self
+                        .host
+                        .as_ref()
+                        .unwrap()
+                        .runner()
+                        .grouped_reorder_rows(view, s.card_view)
+                        .into_iter()
+                        .map(|(row, key, grip)| (row, (key, grip)))
+                        .collect();
                     for (j, r) in s.rows.iter().enumerate() {
                         json.push_str(if j == 0 { "{" } else { ",{" });
                         json.push_str(&format!(
@@ -678,6 +687,13 @@ impl<D: DataSource> Bridge<D> {
                             r.view, r.custom
                         ));
                         opt(&r.symbol, &mut json);
+                        if let Some((key, grip)) = movable.get(&r.view) {
+                            json.push_str(",\"reorderKey\":");
+                            quote(key, &mut json);
+                            if let Some(grip) = grip {
+                                json.push_str(&format!(",\"reorderGrip\":{grip}"));
+                            }
+                        }
                         // An svg-only icon's path (LLP 1121 D10, stage 9 A2).
                         crate::icon_path::push_json(r.icon.as_deref(), &mut json);
                         if r.icon_multicolor {

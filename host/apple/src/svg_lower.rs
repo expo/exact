@@ -315,7 +315,7 @@ pub(crate) fn specs_in(
                 Property::Cy => &[(0, "position.y")],
                 Property::Fill => &[(0, "fillColor")],
                 Property::Stroke => &[(0, "strokeColor")],
-                Property::Scale => &[(0, "transform.scale")],
+                Property::Scale => &[(0, "transform.scale.x"), (1, "transform.scale.y")],
                 Property::Rotate => &[(0, "transform.rotation.z")],
                 Property::BackgroundColor => &[(0, "backgroundColor")],
                 _ => &[(0, "r")],
@@ -934,7 +934,7 @@ pub(crate) fn transition_specs(
                 (0, "transform.translation.x"),
                 (1, "transform.translation.y"),
             ],
-            Property::Scale => &[(0, "transform.scale")],
+            Property::Scale => &[(0, "transform.scale.x"), (1, "transform.scale.y")],
             Property::Rotate => &[(0, "transform.rotation.z")],
             Property::Opacity => &[(0, "opacity")],
             _ => &[(0, "backgroundColor")],
@@ -1029,7 +1029,8 @@ fn circle_moves(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
         && s.translate.x == 0.0
         && s.translate.y == 0.0
         && s.rotate == 0.0
-        && s.scale == 1.0
+        && s.scale.x == 1.0
+        && s.scale.y == 1.0
         && exact_kernel::svg::transform::is_identity(s.transform.matrix())
         && s.vector_effect != exact_kernel::VectorEffect::NonScalingStroke
         && s.rare.clip_path.url().is_none()

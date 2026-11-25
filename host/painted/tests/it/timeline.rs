@@ -117,7 +117,7 @@ fn rows(p: &Presenter<()>) -> Vec<(f32, f32, f32)> {
         .map(|n| {
             let card = p.host().presented(id(p, &format!("card-{n}")));
             let label = p.host().presented(id(p, &format!("label-{n}")));
-            (card.translate.0, label.opacity, label.scale)
+            (card.translate.0, label.opacity, label.scale.0)
         })
         .collect()
 }
@@ -325,7 +325,7 @@ component App
 fn dealt(p: &Presenter<()>) -> f32 {
     let x = p.host().presented(id(p, "top")).translate.0;
     let tilt = p.host().presented(id(p, "face")).rotate;
-    let rise = p.host().presented(id(p, "next")).scale;
+    let rise = p.host().presented(id(p, "next")).scale.0;
     let (want_tilt, want_rise) = (
         (x / 20.).clamp(-15., 15.),
         1. - 0.05 * (1. - x.abs().min(300.) / 300.),
@@ -378,7 +378,7 @@ fn a_thrown_card_tilts_its_face_and_raises_the_next_in_every_frame() {
     let face = p.host().presented(id(&p, "face"));
     assert_eq!(
         (face.rotate, p.host().presented(id(&p, "next")).scale),
-        (15., 1.)
+        (15., (1., 1.))
     );
 }
 

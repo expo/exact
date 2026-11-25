@@ -705,6 +705,21 @@ fn press_haptic_is_the_glues_property_and_a_rotation_skips_nothing() {
     assert_eq!(declared(&[(StyleId::PressHaptic, text("none"))]), "");
 }
 
+/// `-exact-symbol-effect` is the custom property navigation/symbol.js plays
+/// for the three effects the web stands in for, and nothing for the rest
+/// (LLP 1077 D12).
+#[test]
+fn a_symbol_effect_is_the_stand_ins_property() {
+    use exact_kernel::StyleId;
+    for effect in ["bounce", "pulse", "scale"] {
+        let css = declared(&[(StyleId::SymbolEffect, text(effect))]);
+        assert_eq!(css, format!("--exact-symbol-effect:{effect};"));
+    }
+    for effect in ["none", "wiggle", "rotate", "replace"] {
+        assert_eq!(declared(&[(StyleId::SymbolEffect, text(effect))]), "");
+    }
+}
+
 /// The pressed paint is three custom properties input-glue.js reads from
 /// the pressed element's own style (LLP 1061 D7); a written 1 is still
 /// the author's, and a clear writes nothing.

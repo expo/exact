@@ -18,6 +18,7 @@
 //! `{"base64": …}`, as bytes cross the seam. Several sessions sharing one
 //! reader is the native registry's (D6), not this.
 
+use super::super::provenance::Cause;
 use super::super::{DataSource, Runner};
 use super::{CallOrigin, Decision, Json, ModulesRow, Waits};
 use serde_json::json;
@@ -41,13 +42,32 @@ struct Claim {
     hold: u64,
     declared: String,
     args: Json,
-    origin: CallOrigin,
+    cause: Cause,
 }
 
 /// A record's type whose `data` Contract writes as a string (Web NFC's
 /// "Data mapping").
 fn textual(record_type: &str) -> bool {
     matches!(record_type, "text" | "url" | "absolute-url")
+}
+
+/// Check a field against the fixture list in a launch or a live drive.
+pub fn check_arrival_field<'a>(
+    extension: &str,
+    word: &str,
+    arrival: &Json,
+    value: &Json,
+    lookup: impl FnOnce(&str) -> Option<&'a Json>,
+) -> Option<String> {
+    if arrival["field"] != word {
+        return None;
+    }
+    let id = value.as_str()?;
+    let from = format!("{extension}.{}", arrival["from"].as_str().unwrap_or("tags"));
+    let found = lookup(&from)
+        .and_then(Json::as_array)
+        .is_some_and(|tags| tags.iter().any(|t| t["id"] == id));
+    (!found).then(|| format!("prefer extension: no tag `{id}` in `{from}`"))
 }
 
 impl<D: DataSource> Runner<D> {
@@ -85,7 +105,7 @@ impl<D: DataSource> Runner<D> {
                         hold: h.hold,
                         declared: name.to_owned(),
                         args: h.args.clone(),
-                        origin: h.origin,
+                        cause: h.cause,
                     }
                 })
             })
@@ -240,17 +260,11 @@ impl<D: DataSource> Runner<D> {
     ) -> Option<String> {
         let (extension, word) = key.split_once('.')?;
         let (_, arrival) = self.arrivals().into_iter().find(|(e, _)| e == extension)?;
-        if arrival["field"] != word || value == "clear" {
-            return None;
-        }
-        let id = value.as_str()?;
-        let from = format!("{extension}.{}", arrival["from"].as_str().unwrap_or("tags"));
-        let fixtures = match group.get(&from) {
-            Some(tags) => tags.as_array().cloned().unwrap_or_default(),
-            None => self.fixtures(extension, &arrival),
-        };
-        (!fixtures.iter().any(|t| t["id"] == id))
-            .then(|| format!("prefer extension: no tag `{id}` in `{from}`"))
+        check_arrival_field(extension, word, &arrival, value, |from| {
+            group
+                .get(from)
+                .or_else(|| self.extensions.preferred.get(from))
+        })
     }
 
     /// The agent set `key` from `before` to `after`: where it is an
@@ -485,7 +499,7 @@ impl<D: DataSource> Runner<D> {
         entry["scans"] = Json::Array(
             (self.claims(extension, &[&name("scan")]).iter())
                 .map(|c| {
-                    json!({ "ticket": c.hold, "origin": c.origin.word(), "once": c.args["once"] == true,
+                    json!({ "ticket": c.hold, "origin": c.cause.origin().word(), "once": c.args["once"] == true,
                         "suspended": suspended.contains(&c.token) })
                 })
                 .collect(),
@@ -495,7 +509,7 @@ impl<D: DataSource> Runner<D> {
             .last())
         .map_or(
             Json::Null,
-            |c| json!({ "ticket": c.hold, "name": c.declared, "origin": c.origin.word() }),
+            |c| json!({ "ticket": c.hold, "name": c.declared, "origin": c.cause.origin().word() }),
         );
         entry["readings"] = Json::Array(
             (self

@@ -201,6 +201,38 @@ fn predictive_back_previews_only_what_back_would_take() {
     assert!(!p.stage_draws_bars());
 }
 
+#[test]
+fn a_batched_sheet_drag_settles_at_the_pace_and_position_of_its_lift() {
+    for (travel, delay, dx, dy, expands) in [
+        (16., 2., 0., 0., true),
+        (16., 2., 0., 0.5, true),
+        (80., 41., 0., 0., false),
+        (80., 45., 0., 0., false),
+        (80., 45., 1., 0., false),
+        (16., 39., 30., 0., false),
+        (16., 160., 0., 0., false),
+        (16., 160., 0., -400., true),
+    ] {
+        let mut p = phone_source(APP);
+        tap(&mut p, "open-info");
+        after(&mut p, 1000.);
+        let (_, frame) = p.top_sheet().unwrap();
+        let y = frame.1 + 10.;
+        let now = p.host().now();
+        p.pointer_down_at(200., y, now, now - 200.).unwrap();
+        p.pointer_move_at(200., y - travel, now, now - 180.)
+            .unwrap();
+        p.pointer_up_at(200. + dx, y - travel + dy, now, now - 180. + delay)
+            .unwrap();
+        after(&mut p, 1000.);
+        let (_, (_, top, _, _)) = p.top_sheet().unwrap();
+        assert!(
+            near(top, if expands { STATUS } else { frame.1 }),
+            "lift {delay} ms, ({dx}, {dy}) dp, after {travel} dp: {top}"
+        );
+    }
+}
+
 /// A driver's contact is the stage's as a finger's is: a press on the scrim
 /// dismisses, and a drag on the handle moves the sheet.
 #[test]

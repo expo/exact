@@ -1,0 +1,14 @@
+```prompt Open a screen in a second window
+Make the Exact app in this folder open one of its screens in a second window. Use https://github.com/expo/exact/blob/main/docs/recipes/second-window.md as the source for each step. The Exact checkout has the same page at docs/recipes/second-window.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say which screen opens in its own window, and the window's name, propose them and ask me before you write code. A second window is the Mac's and the web's: on the web it is the browser window or tab of that name, and other hosts navigate in place.
+3. In app.contract, give the screen a route in `routes`, and open it with a `link` whose `href` is the route and whose `target` names the window. The next press brings that window forward. For a new window on each press, use `_blank`. `_self`, `_parent` and `_top` navigate in place. Any other literal name that starts with `_`, and `window-<n>`, is refused.
+4. On the Mac the window is a session of its own, rooted at the route: that screen alone, with no sidebar. Put all that the window needs in that screen.
+5. Give the state that the windows share `persist`: a `persist` state or a store write in one window reaches the readers in the others. On the web, two tabs cannot open one SQLite database at once.
+6. Every window runs the root's `task`s. Read `exactPage()` as a resource, as the recipe shows, and gate work that the app does once: `task sync when page.name == "main"`. The name is `main` in the app's first window, the `target` in a window that a link opened, and empty in a `_blank` one.
+7. Add a test in app.test.contract that starts at the window's route (`at "/<path>"`), changes the shared state there, and expects the new value with `expect state`.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. On the Mac, also run `bun exact.mjs agent macos "tap <testId>" state` with the link's `testId`, and confirm that it lists the window with its `name` and `location`. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me the window's name and route, what the link does on each target platform, what the tests and checks reported, and what stays untested if this machine is not a Mac.
+```

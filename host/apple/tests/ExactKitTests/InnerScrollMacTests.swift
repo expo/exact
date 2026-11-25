@@ -94,7 +94,7 @@ final class InnerScrollMacTests: XCTestCase {
                 view width="100%" height=600 testId="vertical-child"
               view width=300 height=200 overflow="auto" testId="horizontal"
                 view width=600 height="100%" testId="horizontal-child"
-              view width=300 height=200 overflow="auto" direction="rtl" testId="rtl"
+              view width=300 height=200 overflow="auto" direction="rtl" scroll-padding-left="10%" testId="rtl"
                 view width="100%" height=600 testId="rtl-child"
               view width=300 height=200 overflow="auto" scrollbar-width="none" testId="hidden"
                 view width="100%" height=600 testId="hidden-child"
@@ -115,6 +115,8 @@ final class InnerScrollMacTests: XCTestCase {
                 XCTAssertEqual(scroll.userInterfaceLayoutDirection, name == "rtl" ? .rightToLeft : .leftToRight)
                 if name == "rtl" {
                     let drawn = child.convert(child.bounds, to: parent)
+                    let port = parent.snapport(in: scroll.contentView.bounds)
+                    XCTAssertEqual(port.minX - scroll.contentView.bounds.minX, drawn.width / 10, accuracy: 0.001)
                     XCTAssertEqual(drawn.minX, scroll.contentView.frame.minX, accuracy: 0.001)
                     XCTAssertEqual(drawn.maxX, scroll.contentView.frame.maxX, accuracy: 0.001)
                 }

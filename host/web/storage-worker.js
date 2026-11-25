@@ -1,10 +1,7 @@
 // @ref LLP 1027 D10 — SQLite runs off the presentation thread.
 import sqlite3InitModule from './sqlite3.mjs';
-import { createFileStore, lockPaths } from './storage-fs.js';
+import { createFileStore, lockPaths, normalizePath, holdLock, holdTimed, databaseLock, pathLock, poolLock, mutationLock } from './storage-fs.js';
 
-// No shared memory or isolation headers: keep the database in WASM memory and
-// atomically publish its complete SQLite file after each successful mutation.
-// This costs O(database size) per write; a connection exclusively locks its file.
 const ready = sqlite3InitModule({ locateFile: file => file === 'sqlite3.wasm'
   ? new URL('./sqlite3.wasm', import.meta.url).href : new URL(file, import.meta.url).href });
 const clients = new Map();
@@ -211,9 +208,173 @@ async function close(databases, id) {
   const session = databases.get(id);
   if (!session) return;
   databases.delete(id);
-  try { session.db.close(); } finally { session.files.close(); await session.release(); }
+  await releaseSession(session);
+}
+async function releaseSession(session) {
+  session.reader?.close();
+  try { session.db?.close(); }
+  finally {
+    session.files.close();
+    pausePool(session.pool);
+    await session.releasePool?.();
+    await session.releaseOpen?.();
+    await session.release();
+  }
+}
+
+function pausePool(pool) {
+  try { pool?.pauseVfs(); }
+  catch (error) {
+    // Termination releases this worker's handles and Web Locks together.
+    postMessage({ fatal: 'SQLite worker could not release the OPFS pool' });
+    self.close();
+    throw error;
+  }
+}
+const busy = path => Object.assign(new Error(`SQLite is busy after 10000 ms: ${path}`), { code: 'EBUSY' });
+async function probeOpfs() {
+  if (!globalThis.FileSystemFileHandle?.prototype.createSyncAccessHandle || !navigator.storage?.getDirectory) return false;
+  const name = `.exact-sqlite-probe-${crypto.randomUUID()}`;
+  let root, file;
+  try {
+    root = await navigator.storage.getDirectory();
+    file = await root.getFileHandle(name, { create: true });
+    const closed = (await file.createSyncAccessHandle()).close();
+    await closed;
+    return !closed?.then; // Older WebKit exposed an asynchronous close.
+  } catch (error) {
+    // Private WebKit refuses the root itself with UnknownError. A failure on a real pool never selects IndexedDB.
+    if (!root && error.name === 'UnknownError') return false;
+    if (['NotSupportedError', 'SecurityError', 'NotAllowedError', 'InvalidStateError'].includes(error.name)) return false;
+    throw error;
+  } finally { if (file) await root.removeEntry(name); }
+}
+let capability;
+function hasOpfs() {
+  return capability ??= probeOpfs().catch(error => { capability = undefined; throw error; });
+}
+async function openPool(sqlite, name) {
+  const pool = await sqlite.installOpfsSAHPoolVfs({
+    name: `opfs-sahpool-${name}`, directory: `exact-sqlite-sahpool/${name}`,
+    preserveOnInitFailure: true, forceReinitIfPreviouslyFailed: true,
+  });
+  if (pool.isPaused()) await pool.unpauseVfs();
+  return pool;
+}
+const mainFile = '/main.sqlite';
+function snapshot(sqlite, db, pool, sizeOnly, maxBytes) {
+  if (sizeOnly || Number.isFinite(maxBytes)) {
+    const info = inspectFile(sqlite, db);
+    if (sizeOnly) return info;
+    if (info.size > maxBytes) return info.size;
+  }
+  return pool.exportFile(mainFile).buffer;
+}
+// A reader queues for the pool lock in case the owner closes or its tab goes away.
+// While the owner is live it can export between SQL calls. A newly opened owner
+// announces itself to readers that queued during initialization.
+function serveImages(sqlite, session, id) {
+  const key = poolLock(id), channel = session.reader = new BroadcastChannel(key);
+  channel.onmessage = ({ data }) => {
+    if (typeof data?.read !== 'string') return;
+    const reply = new BroadcastChannel(key + ':' + data.read);
+    try { reply.postMessage({ value: snapshot(sqlite, session.db, session.pool, data.sizeOnly, data.maxBytes) }); }
+    catch (error) { reply.postMessage({ error: String(error.message || error) }); }
+    finally { reply.close(); }
+  };
+  channel.postMessage({ ready: true });
+}
+
+async function readImage(sqlite, appId, path, id, sizeOnly, maxBytes) {
+  const key = poolLock(id), channel = new BroadcastChannel(key), read = crypto.randomUUID();
+  const reply = new BroadcastChannel(key + ':' + read), abort = new AbortController();
+  let timer;
+  try {
+    const request = () => channel.postMessage({ read, sizeOnly, maxBytes });
+    const live = new Promise((resolve, reject) => {
+      channel.onmessage = ({ data }) => { if (data?.ready) request(); };
+      reply.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.value);
+      timer = setTimeout(() => reject(busy(path)), 10000);
+    });
+    const readClosed = async () => {
+      const release = await holdLock(key, { signal: abort.signal });
+      let pool;
+      try {
+        const root = await navigator.storage.getDirectory();
+        await (await root.getDirectoryHandle('exact-sqlite-sahpool')).getDirectoryHandle(id);
+        pool = await openPool(sqlite, id);
+        clearTimeout(timer);
+        const journal = pool.getFileNames().includes(mainFile + '-journal');
+        if (!journal && !sizeOnly && !Number.isFinite(maxBytes)) return pool.exportFile(mainFile).buffer;
+        const db = new pool.OpfsSAHPoolDb(mainFile, 'w');
+        try {
+          if (journal) db.selectValue('PRAGMA schema_version'); // Recover a hot journal before exporting.
+          return snapshot(sqlite, db, pool, sizeOnly, maxBytes);
+        } finally { db.close(); }
+      } finally { pausePool(pool); await release(); }
+    };
+    const closed = readClosed().catch(async error => {
+      // A worker from before filesystem snapshots holds only the path lock.
+      // Let its connection close, then try the same pool under its lock.
+      const { held } = await navigator.locks.query();
+      if (!['NoModificationAllowedError', 'InvalidStateError'].includes(error.name)
+          || !held.some(lock => lock.name === pathLock(appId, path))
+          || held.some(lock => lock.name === databaseLock(appId, path))) throw error;
+      await navigator.locks.request(pathLock(appId, path), { mode: 'shared', signal: abort.signal }, () => {});
+      return readClosed();
+    });
+    request();
+    return await Promise.race([live, closed]);
+  } finally { clearTimeout(timer); abort.abort(); reply.close(); channel.close(); }
+}
+// Read through the remounted VFS. importDb normalizes the two journal-format
+// bytes to DELETE. Every other byte must match, including application payload.
+function inspectFile({ capi: c, wasm: w }, db, source) {
+  const scope = w.scopedAllocPush();
+  try {
+    const out = w.scopedAlloc(8);
+    db.checkRc(c.sqlite3_file_control(db.pointer, 'main', c.SQLITE_FCNTL_FILE_POINTER, out));
+    const file = new c.sqlite3_file(w.peekPtr(out)), methods = new c.sqlite3_io_methods(file.$pMethods);
+    try {
+      db.checkRc(w.functionEntry(methods.$xFileSize)(file.pointer, out));
+      const size = Number(w.peek(out, 'i64'));
+      if (source?.byteLength === size && size) {
+        const chunk = Math.min(65536, size), buffer = w.scopedAlloc(chunk);
+        const read = w.functionEntry(methods.$xRead);
+        for (let at = 0; at < size; at += chunk) {
+          const count = Math.min(chunk, size - at);
+          db.checkRc(read(file.pointer, buffer, count, BigInt(at)));
+          const actual = w.heap8u().subarray(buffer, buffer + count);
+          for (let i = 0; i < count; i++) {
+            const offset = at + i, expected = offset === 18 || offset === 19 ? 1 : source[offset];
+            if (actual[i] !== expected) fail('SQLite import contents mismatch');
+          }
+        }
+      }
+      let counter = 0;
+      if (size >= 100) {
+        db.checkRc(w.functionEntry(methods.$xRead)(file.pointer, out, 4, 24n));
+        counter = new DataView(w.heap8u().buffer).getUint32(out);
+      }
+      return { size, counter };
+    } finally { methods.dispose(); file.dispose(); }
+  } finally { w.scopedAllocPop(scope); }
+}
+
+async function copyDatabase(pool, contents) {
+  const bytes = contents instanceof Blob ? await contents.arrayBuffer() : contents;
+  if (bytes.byteLength) pool.importDb(mainFile, bytes);
+  else {
+    pool.unlink(mainFile);
+    new pool.OpfsSAHPoolDb(mainFile).close();
+  }
+  // Rebuild the VFS's filename map from disk before trusting the destination.
+  pool.pauseVfs();
+  await pool.unpauseVfs();
+  return new Uint8Array(bytes);
 }
 async function persist(sqlite, databases, id, session) {
+  if (session.pool) return;
   try {
     let bytes;
     session.serializing = true;
@@ -225,7 +386,7 @@ async function persist(sqlite, databases, id, session) {
     } finally { session.serializing = false; }
     // The exporter returns a fresh, full-buffer Uint8Array, independent of WASM.
     // This private snapshot has no further owner after the atomic write.
-    await session.files.atomicWriteOwnedFile(session.path, bytes.buffer);
+    await session.files.atomicWriteOwnedFile(session.path, bytes.buffer, true);
   }
   catch (error) {
     // Memory already committed. Invalidate every handle rather than exposing a
@@ -238,28 +399,52 @@ async function persist(sqlite, databases, id, session) {
 async function dispatch(owner, { appId, op, args }) {
   const { databases } = owner;
   const sqlite = await ready;
+  if (op === 'image') return readImage(sqlite, appId, ...args);
   if (op === 'open') {
-    const path = args[0], release = await lockPaths(appId, [path], undefined, undefined, owner.gone.signal);
+    const deadline = performance.now() + 10000;
+    const path = normalizePath(args[0]), release = await lockPaths(appId, [path], undefined, undefined, owner.gone.signal);
     const files = createFileStore(appId);
-    const session = { path, release, files, db: new sqlite.oo1.DB(':memory:'), statements: new Map(), internal: false };
+    const session = { path, release, files, statements: new Map(), internal: false };
     try {
-      let bytes;
-      try { bytes = new Uint8Array(await files.readFile(path)); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (bytes?.length) {
-        const pointer = sqlite.wasm.allocFromTypedArray(bytes);
-        session.db.checkRc(sqlite.capi.sqlite3_deserialize(session.db.pointer, 'main', pointer,
-          BigInt(bytes.length), BigInt(bytes.length), sqlite.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite.capi.SQLITE_DESERIALIZE_RESIZEABLE));
+      session.releaseOpen = await holdTimed(databaseLock(appId, path), path, { timeout: deadline - performance.now(), signal: owner.gone.signal });
+      const useOpfs = await hasOpfs();
+      const { entry, pending } = await files.databaseEntry(path, useOpfs);
+      let imported;
+      if (entry?.pool || pending) {
+        if (!useOpfs) fail(`OPFS is unavailable for ${path}`);
+        const pool = session.poolId = entry?.pool ?? pending;
+        session.releasePool = await holdTimed(poolLock(pool), path, { timeout: deadline - performance.now(), signal: owner.gone.signal });
+        session.pool = await openPool(sqlite, pool);
+        if (pending && entry) {
+          imported = await copyDatabase(session.pool, entry.contents);
+          session.db = new session.pool.OpfsSAHPoolDb(mainFile, 'w');
+        } else {
+          // A failed import may have left a copy of an image the app has since deleted.
+          if (pending && session.pool.getFileCount()) await session.pool.wipeFiles();
+          session.db = new session.pool.OpfsSAHPoolDb(mainFile, pending ? 'c' : 'w');
+        }
+      } else {
+        session.db = new sqlite.oo1.DB(':memory:');
+        const bytes = entry?.contents instanceof Blob ? await entry.contents.arrayBuffer() : entry?.contents;
+        if (bytes?.byteLength) {
+          const pointer = sqlite.wasm.allocFromTypedArray(new Uint8Array(bytes));
+          session.db.checkRc(sqlite.capi.sqlite3_deserialize(session.db.pointer, 'main', pointer,
+            BigInt(bytes.byteLength), BigInt(bytes.byteLength), sqlite.capi.SQLITE_DESERIALIZE_FREEONCLOSE | sqlite.capi.SQLITE_DESERIALIZE_RESIZEABLE));
+        }
       }
       configure(sqlite, session);
+      if (imported !== undefined) {
+        if (inspectFile(sqlite, session.db, imported).size !== imported.byteLength) fail(`SQLite import size mismatch for ${path}`);
+        const rows = session.db.selectValues('PRAGMA integrity_check');
+        if (rows.length !== 1 || rows[0] !== 'ok') fail(`SQLite import integrity check failed for ${path}: ${rows[0]}`);
+      }
+      if (pending) await files.publishDatabase(path, pending, entry);
+      else if (!entry) await files.atomicWriteOwnedFile(path, new ArrayBuffer(0), true);
+      if (session.pool) serveImages(sqlite, session, entry?.pool ?? pending);
       const id = ++owner.nextDatabase;
       databases.set(id, session);
-      if (!bytes) await persist(sqlite, databases, id, session);
       return id;
-    } catch (error) {
-      for (const [id, candidate] of databases) if (candidate === session) databases.delete(id);
-      session.db.close(); files.close(); await release(); throw error;
-    }
+    } catch (error) { await releaseSession(session); throw error; }
   }
   const [id, ...rest] = args;
   if (op === 'close') return close(databases, id);
@@ -272,10 +457,19 @@ async function dispatch(owner, { appId, op, args }) {
     session.statements.set(statement, rest[0]);
     return statement;
   }
+  const mutating = op === 'execute' || op === 'statementExecute' || op === 'transaction';
+  const release = session.pool && mutating && await holdTimed(mutationLock(session.poolId), session.path, { signal: owner.gone.signal });
+  try { return await operate(sqlite, databases, id, session, op, rest); }
+  finally { if (release) await release(); }
+}
+
+async function operate(sqlite, databases, id, session, op, rest) {
   if (op === 'transaction') {
     const [commands, check] = rest;
     if (!Array.isArray(commands) || commands.length > 10000) fail('transaction exceeds 10000 commands or is not an array');
     if (typeof check !== 'boolean') fail('invalid SQLite foreign key mode');
+    // Refuse a failed metadata update before SQLite can commit the caller's changes.
+    if (session.pool) await session.files.touchDatabase(session.path, inspectFile(sqlite, session.db).counter);
     // SQLite ignores a change to enforcement inside a transaction, so it goes
     // off before BEGIN (https://sqlite.org/lang_altertable.html#otheralter).
     if (check) enforcement(sqlite, session, 0);
@@ -296,13 +490,19 @@ async function dispatch(owner, { appId, op, args }) {
         session.checking = false;
         if (check) checkForeignKeys(sqlite, session);
         internal(session, 'COMMIT');
-      } catch (error) { internal(session, 'ROLLBACK'); throw error; }
+      } catch (error) {
+        if (!sqlite.capi.sqlite3_get_autocommit(session.db.pointer)) {
+          try { internal(session, 'ROLLBACK'); }
+          catch { await close(databases, id); }
+        }
+        throw error;
+      }
     } finally {
       session.checking = false;
       // Nothing else reaches this database until enforcement is back: the
       // owner's queue runs one operation at a time, and none awaits before
       // here. One that cannot have it back is closed.
-      if (check && !enforcement(sqlite, session, 1)) {
+      if (check && databases.has(id) && !enforcement(sqlite, session, 1)) {
         await close(databases, id);
         fail('foreign keys could not be turned back on, so the database is closed');
       }
@@ -317,6 +517,7 @@ async function dispatch(owner, { appId, op, args }) {
   }
   const query = op === 'query' || op === 'statementQuery';
   if (query) return run(sqlite, session, sql, values, true);
+  if (session.pool) await session.files.touchDatabase(session.path, inspectFile(sqlite, session.db).counter);
   const c = sqlite.capi, before = c.sqlite3_total_changes(session.db.pointer);
   let result;
   try { result = run(sqlite, session, sql, values, false); }
@@ -359,10 +560,16 @@ onmessage = ({ data }) => {
   owner.queue = owner.queue.then(async () => {
     try {
       await earlierDisposals;
-      postMessage({ client: data.client, id: data.id, value: await dispatch(owner, data) });
+      const value = await dispatch(owner, data);
+      postMessage({ client: data.client, id: data.id, value }, value instanceof ArrayBuffer ? [value] : []);
     } catch (error) {
+      const id = data.args?.[0];
+      if (owner.databases.get(id)?.pool && [10, 13].includes(error.resultCode & 0xff)) {
+        // SQLITE_IOERR or SQLITE_FULL may have rolled back the transaction inside SQLite.
+        await close(owner.databases, id);
+      }
       postMessage({ client: data.client, id: data.id,
-        error: { kind: 'Unavailable', code: error.code ?? sqliteCode(error), message: String(error.message || error) } });
+        error: { kind: 'Unavailable', code: typeof error.code === 'string' ? error.code : sqliteCode(error), message: String(error.message || error) } });
     }
   });
 };

@@ -25,6 +25,7 @@ fn a_test_answers_a_pending_presence_prompt() {
     }
 }
 
+mod drag;
 mod fetch;
 
 #[test]
@@ -66,6 +67,31 @@ fn a_test_block_parses_to_the_eight_operations_and_expects() {
             "\"op\":\"expect-text\",\"target\":\"login-error\",\"value\":\"Wrong password\""
         ),
         "{json}"
+    );
+}
+
+#[test]
+fn a_test_drops_files_text_and_a_link() {
+    let src = "test \"drop\"\n  tap \"zone\" drop text \"Mount Fuji\" url \"https://example.com/fuji\"\n  tap \"zone\" drop file \"a.png\" file \"b.txt\"\n";
+    let tests = contract::tests(src).unwrap();
+    assert!(matches!(
+        &tests[0].steps[0],
+        Step::Tap { form: TapForm::Drop { files, text: Some(t), url: Some(u) }, .. }
+            if files.is_empty() && t == "Mount Fuji" && u == "https://example.com/fuji"
+    ));
+    let json = contract::tests_json(&tests);
+    assert!(
+        json.contains(r#"{"op":"tap","target":"zone","form":"drop","files":[],"text":"Mount Fuji","url":"https://example.com/fuji","line":2}"#),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#""form":"drop","files":["a.png","b.txt"],"line":3"#),
+        "{json}"
+    );
+    let empty = contract::tests("test \"drop\"\n  tap \"zone\" drop\n").unwrap_err();
+    assert!(
+        format!("{empty:?}").contains("`drop` takes what the drag carries"),
+        "{empty:?}"
     );
 }
 
@@ -341,9 +367,6 @@ fn a_test_pinches_holds_a_key_and_indexes_state() {
     );
     // `pinch` is not a leftover word on the line (stocks: syntax-expected-newline).
     let e = contract::tests("test \"t\"\n  tap \"chart\" pinch\n").unwrap_err();
-    assert_eq!(e.id, "syntax-expected-step");
-    let e = contract::tests("test \"t\"\n  tap \"a\" drag 1 0 during \"clock +1\" hold 10\n")
-        .unwrap_err();
     assert_eq!(e.id, "syntax-expected-step");
     let e = contract::tests("test \"t\"\n  tap \"a\" drag 1 0 during \"tap b\"\n").unwrap_err();
     assert_eq!(e.id, "syntax-expected-step");
@@ -1064,7 +1087,7 @@ fn preference_aliases_share_launch_defaults_and_duplicate_detection() {
         ("permission.notifications", "permission.Notifications"),
         ("permission.health.steps", "permission.healthsteps"),
         ("unknown-name", "unknownName"),
-        ("extension", "Extension"),
+        ("theme", "Theme"),
         ("preferSegments", "segments"),
     ] {
         let source =
@@ -1205,15 +1228,17 @@ fn a_perf_block_and_its_counts_parse_to_the_drivers_steps() {
 
 #[test]
 fn a_perf_block_refuses_the_wall_clock_and_counts_need_a_block() {
-    for clock in [
+    for step in [
+        "fold 130",
+        "rotate landscapeLeft",
         "clock +100 real",
         "clock held",
         "clock held board 5s",
         "clock until state ready == true within 500",
     ] {
-        let e = contract::tests(&format!("test \"t\"\n  perf\n    {clock}\n")).unwrap_err();
-        assert!(e.message.contains("wall clock"), "{clock}: {e}");
-        assert_eq!(e.span.line, 3, "{clock}: {e}");
+        let e = contract::tests(&format!("test \"t\"\n  perf\n    {step}\n")).unwrap_err();
+        assert!(e.message.contains("wall clock"), "{step}: {e}");
+        assert_eq!(e.span.line, 3, "{step}: {e}");
     }
     let e = contract::tests("test \"t\"\n  expect perf query a == 1\n").unwrap_err();
     assert!(e.message.contains("`perf` block before it"), "{e}");

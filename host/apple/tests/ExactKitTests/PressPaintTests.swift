@@ -72,7 +72,7 @@ final class PressPaintTests: XCTestCase {
         let (p, v) = try fixture(["press_translate": [4, 6], "press_translate_percent": [10, 20]])
         v.translatePx = CGPoint(x: 30, y: 40)
         v.rotate = 30
-        v.scale = 1.2
+        v.scale = CGPoint(x: 1.2, y: 1.2)
         v.applyTransform()
         let transform = try XCTUnwrap(layer(v)).transform
         let before = try XCTUnwrap(layer(v)).position

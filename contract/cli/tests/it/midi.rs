@@ -3,6 +3,7 @@
 //! compiled and `clock=` refused, and the test steps for the driver.
 
 use crate::scratch::Scratch;
+use crate::source::boxed;
 
 fn app(body: &str, view: &str) -> String {
     format!("component A\n  state out = \"synth\"\n  state ins = [\"keys\"]\n  action go\n    {body}\n  action heard(e: MIDIMessageEvent)\n    out = e.input\n  view\n    {view}\n")
@@ -214,10 +215,10 @@ fn sent_messages_answer_their_own_fields_only() {
     let src = |extra: &str| {
         format!("shape Message\n  output: string\n  data: number[]\n  timeStamp: number\n{extra}shape M\n  state: string\n  sent: Message[]\ncomponent A\n  resource m = exactMIDI() as shape M\n  view\n    text `${{m.sent.length}}`\n")
     };
-    contract::bake(contract::compile(&src("")).unwrap(), NoData).unwrap();
+    contract::bake(contract::compile(&src("")).unwrap(), boxed(NoData)).unwrap();
     match contract::bake(
         contract::compile(&src("  velocity: number\n")).unwrap(),
-        NoData,
+        boxed(NoData),
     ) {
         Err(contract::BakeError::Lint { id, message, .. }) => {
             assert_eq!(id, "bake-midi-field");

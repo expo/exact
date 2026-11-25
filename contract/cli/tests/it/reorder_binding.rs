@@ -1,4 +1,5 @@
 //! Arrange payloads preserve exact string keys; physical admission is Runner-owned.
+use crate::source::boxed;
 use exact_kernel::{Kernel, PropId};
 use exact_plan::{EventKind, Value};
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -21,7 +22,14 @@ fn reorder_prop_event_roundtrip_and_exact_payload_types() {
     ))
     .unwrap();
     let p = exact_plan::Plan::decode(&p.encode()).unwrap();
-    let mut r = Runner::boot(p, Rows, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let mut r = Runner::boot(
+        p,
+        boxed(Rows),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     assert_eq!(PropId::from_name("reorderFor").unwrap() as u16, 77);
     assert_eq!(EventKind::from_name("reorderdrop").unwrap() as u8, 17);
     let list = r
@@ -41,6 +49,19 @@ fn reorder_prop_event_roundtrip_and_exact_payload_types() {
     assert_eq!(r.slot("received"), Some(&Value::str("a,🦀\n")));
     assert_eq!(EventKind::Transformrelease as u8, 16);
     assert_eq!(PropId::TransformDragFor as u16, 76);
+}
+#[test]
+fn cancel_reorder_takes_one_string_list_id() {
+    let app = source(
+        "item: string, before: option<string>",
+        "\"arrange\"",
+        "receive",
+    );
+    for args in ["", "3", "\"arrange\", \"other\""] {
+        let invalid = app.replace("received = item", &format!("cancelReorder({args})"));
+        let error = contract::compile(&invalid).unwrap_err().to_string();
+        assert!(error.contains("type-cancel-reorder"), "{error}");
+    }
 }
 #[test]
 fn reorder_handler_rejects_wrong_option_and_key_types_after_currying() {

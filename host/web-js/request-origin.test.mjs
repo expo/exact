@@ -6,12 +6,13 @@ import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 // that carries no origin is checked as a non-app one.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { webCompiler } from './module.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const PRIVATE = 'http://192.168.1.40/json', PUBLIC = 'https://public.example/json', SOCKET = 'ws://192.168.1.40/socket';
@@ -46,7 +47,7 @@ beforeAll(async () => {
   for (const name of ['http-body.js', 'grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
   for (const name of ['admission.js', 'ts-stream.js']) writeFileSync(resolve(dir, name), fromWeb(name));
   writeFileSync(resolve(dir, 'ts-data.js'), fromWeb('ts-data.js').replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-  for (const name of ['ts-fetch.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-fetch.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   // A TypeScript source that streams: asked by whichever origin `asker` names.
   writeFileSync(resolve(dir, 'source.js'), `import {fetch} from './ts-fetch.js';
 export const answer = (_name, [url]) => fetch(url, { exactStream: e => e.type === 'error' ? e.message : e.type });`);

@@ -2,10 +2,11 @@
 //! `identity` is a member of `@exact/passkeys`' `get` (D10 item 1), held to
 //! the providers' grants and FedCM's rules before any ticket, and answered
 //! through the one `credential` ticket, whose `args` name what
-//! `packages/sign-in/test/idp.mjs` signs over. The tests run on this Mac,
-//! with Google explicitly enabled by `prefer` to exercise ticket handling.
+//! `packages/sign-in/test/idp.mjs` signs over. The macOS ticket tests
+//! enable Google with `prefer` to exercise ticket handling.
 //! Apple and combined requests are likewise enabled only by individual tests.
 
+use crate::source::{boxed, Source};
 #[cfg(target_os = "macos")]
 use exact_runner::HoldAnswer;
 use exact_runner::{
@@ -151,7 +152,7 @@ fn boot_unpreferred(name: &str) -> (App, Host, Data) {
     let data = Data::default();
     let r = Runner::boot(
         plan,
-        data.clone(),
+        boxed(data.clone()),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -178,7 +179,7 @@ fn boot(name: &str) -> (App, Host, Data) {
 
 /// The host: the runner, and the requests whose replies a ticket's answer sends.
 struct Host {
-    r: Runner<Data>,
+    r: Runner<Source>,
     waiting: Vec<(u64, mpsc::Receiver<Outcome>)>,
 }
 
@@ -250,13 +251,10 @@ impl Host {
     }
 
     /// A data-code call of `body`: the receiver of its reply.
-    #[cfg(target_os = "macos")]
     fn call(&mut self, body: &Json) -> mpsc::Receiver<Outcome> {
         let (tx, rx) = mpsc::channel();
-        match self
-            .r
-            .native_work(&Request::native(body.to_string().into_bytes()))
-        {
+        let request = Request::native(body.to_string().into_bytes());
+        match self.r.as_person(|r| r.native_work(&request)) {
             Dispatch::Run(Work::Now(work)) => tx.send(work()).unwrap(),
             Dispatch::Run(Work::Later(work)) => work(Reply::new(move |o| tx.send(o).unwrap())),
             _ => panic!("a module call is work"),
@@ -270,7 +268,6 @@ impl Host {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn json_of(outcome: Outcome) -> Json {
     let Outcome::Response(Response { body, .. }) = outcome else {
         panic!("an answer");
@@ -388,9 +385,17 @@ fn admission_refuses_by_fedcm_s_rules_and_the_grants() {
         );
     }
     assert!(host.tickets().is_empty());
-    // Data code calls the owner, never the member's row.
+}
+
+#[test]
+fn data_code_must_call_identity_through_passkeys_get() {
+    // The runner can answer an unexpected ticket during teardown.
+    let reply;
+    let (_app, mut host, _) = boot("member");
     let direct = json!({ "extension": "sign-in", "send": "identity", "args": {} });
-    assert_eq!(host.answered(&direct)["error"], "NotSupportedError");
+    reply = host.call(&direct);
+    assert!(host.tickets().is_empty(), "{}", host.logs());
+    assert_eq!(json_of(reply.recv().unwrap())["error"], "NotSupportedError");
 }
 
 /// D3, §9: a passive Apple request beside a passkey is one sheet where the

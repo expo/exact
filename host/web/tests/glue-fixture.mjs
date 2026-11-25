@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { bundleHostModule } from '../../web-js/glue.mjs';
+import { HOST_WEB_GLUE, bundleHostModule } from '../../web-js/glue.mjs';
 
 const root = resolve(import.meta.dir, '../../..');
-// As a page with popovers has it (glue.js, or a JS target page with a dialog, a menu or a popover: navigation.js `placePopovers`).
-export const navigationSource = await bundleHostModule(root, 'navigation.js') + 'placePopovers();\n';
+// As a page with popovers has it (glue.js, or a JS target page with a dialog, a menu or a popover: navigation.js
+// `placePopovers`, `stampOpenings`).
+export const navigationSource = await bundleHostModule(root, 'navigation.js') + 'placePopovers();\nstampOpenings();\n';
 export const wasmSource = await bundleHostModule(root, 'glue.js');
 const admissionSource = await bundleHostModule(root, 'grant-admission.js');
 
@@ -19,7 +20,26 @@ export function hostFixtureFile(path, encoding) {
     : encoding ? source : Buffer.from(source);
 }
 
+/** A browser fixture uses the web host's published module names. */
+export function hostFixtureModule(name) {
+  return name === 'navigation.js' || HOST_WEB_GLUE.includes(name)
+    ? hostFixtureFile(resolve(root, 'host/web', name)) : null;
+}
+
 import { parseSync } from 'rolldown/utils';
+
+// Bundle the module graph so the VM evaluates the same input handlers the page loads after paint.
+export async function inputFixtureSource() {
+  const entry = resolve(root, 'host/web/input-glue.js');
+  const imports = parseSync(entry, readFileSync(entry, 'utf8')).program.body.filter(node =>
+    node.type === 'ImportDeclaration' && !node.specifiers.length);
+  for (const file of ['./prompt-glue.js', './alert-message.js']) {
+    if (!imports.some(node => node.source.value === file)) throw new Error(`input glue must retain its ${file} side-effect import`);
+  }
+  const bundle = await Bun.build({ entrypoints: [entry], target: 'browser', format: 'iife' });
+  if (!bundle.success) throw new AggregateError(bundle.logs, 'input fixture build failed');
+  return bundle.outputs[0].text();
+}
 
 // Select declarations, not text between neighbouring functions: a new neighbour
 // must not silently become part of a fixture's scope.
@@ -41,6 +61,28 @@ export function glueDeclarations(source, names) {
     if (!declarations.has(name)) throw new Error(`glue.js fixture: missing declaration ${name}`);
     return declarations.get(name);
   }).join('\n');
+}
+
+// Inert stand-ins for the module bindings of glue.js that `names`' declarations read, for a page that runs them: the
+// page declares its own doubles and the declarations in a block under these, so a binding the glue comes to read is
+// one that does nothing, not a ReferenceError the fixture must be taught. A stand-in is any function or object: called
+// or read it gives itself, iterated nothing, awaited itself. `imported`: what the page imports beside them, at their scope.
+export function glueStandIns(source, names, imported = []) {
+  const top = new Set();
+  for (const entry of parseSync('glue.js', source).program.body) {
+    const statement = entry.type === 'ExportNamedDeclaration' ? entry.declaration : entry;
+    if (statement?.id?.name) top.add(statement.id.name);
+    if (statement?.type === 'VariableDeclaration') for (const d of statement.declarations) if (d.id.type === 'Identifier') top.add(d.id.name);
+    if (entry.type === 'ImportDeclaration') for (const s of entry.specifiers) top.add(s.local.name);
+  }
+  const read = new Set();
+  (function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'Identifier' && top.has(node.name) && !names.includes(node.name) && !imported.includes(node.name)) read.add(node.name);
+    for (const value of Object.values(node)) if (value && typeof value === 'object') visit(value);
+  })(parseSync('glue.js', glueDeclarations(source, names)).program);
+  return "const standIn = new Proxy(function () {}, { get: (_, k) => k === Symbol.iterator ? function* () {} : k === 'then' || typeof k === 'symbol' ? undefined : standIn, apply: () => standIn });\n"
+    + (read.size ? `const ${[...read].map(name => `${name} = standIn`).join(', ')};\n` : '');
 }
 
 export function checkedGlueCall(call) {

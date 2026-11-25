@@ -184,7 +184,45 @@ package enum DisplayPreferences {
         return Preferences(reducedMotion: reducedMotion, reducedTransparency: reducedTransparency,
             contrast: contrast, dark: systemDark, input: input, gamut: displayGamut, highDynamicRange: high,
             displayMode: Preferences.DisplayMode(rawValue: displayMode(view)) ?? .standalone, boldText: boldText,
-            screenReader: screenReader).rawValue
+            screenReader: screenReader).rawValue | orientationBits(view)
+    }
+
+    /// Bits 20–24 carry the screen reading (runner/src/viewport.rs).
+    private static func orientationBits(_ view: PlatformView?) -> UInt32 {
+        #if os(macOS)
+        guard let screen = view?.window?.screen ?? NSScreen.main else { return 0 }
+        let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        let degrees = id.map(CGDisplayRotation) ?? 0
+        let turns = UInt32(truncatingIfNeeded: Int((degrees / 90).rounded())) & 3
+        return desktopOrientationBits(screen.frame.size, turns)
+        #elseif os(iOS)
+        guard let scene = view?.window?.windowScene else { return fixedOrientation(UIScreen.main.bounds) }
+        let kind: UInt32
+        switch OrientationLock.bit(scene.effectiveGeometry.interfaceOrientation) {
+        case 1: kind = 0
+        case 4: kind = 1
+        case 2: kind = 2
+        case 8: kind = 3
+        default: return fixedOrientation(scene.screen.bounds)
+        }
+        // Safari measures from landscape-primary on iPad, portrait-primary on iPhone.
+        let turns = UIDevice.current.userInterfaceIdiom == .pad ? kind ^ 1 : kind
+        return (16 | turns << 2 | kind) << 20
+        #else
+        return fixedOrientation((view?.window?.screen ?? UIScreen.main).bounds)
+        #endif
+    }
+
+    #if os(macOS)
+    static func desktopOrientationBits(_ size: CGSize, _ turns: UInt32) -> UInt32 {
+        let naturalPortrait = turns.isMultiple(of: 2) ? size.height >= size.width : size.width >= size.height
+        let kind = (turns + (naturalPortrait ? 0 : 1)) % 4
+        return (16 | turns << 2 | kind) << 20
+    }
+    #endif
+
+    private static func fixedOrientation(_ bounds: CGRect) -> UInt32 {
+        (bounds.height >= bounds.width ? 16 : 17) << 20
     }
 
     // Same order as runner/src/viewport.rs's DisplayMode (media bits 11–13).

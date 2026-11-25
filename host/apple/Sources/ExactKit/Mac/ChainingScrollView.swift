@@ -46,8 +46,13 @@ package final class ChainingScrollView: NSScrollView {
             alphaValue = 0
         } else { super.removeFromSuperview() }
     }
+    /// What its padding edge cuts away (`clip(toPaddingEdge:inset:)`) is not there to hit: under its node's border
+    /// a point is this view's own, as its empty chrome is, and not a child's scrolled beneath the border.
     package override func hitTest(_ point: NSPoint) -> NSView? {
-        removeAfterMouseUp ? nil : super.hitTest(point)
+        guard !removeAfterMouseUp, let hit = super.hitTest(point) else { return nil }
+        // `point` is in the superview's coordinates, its node's, as the edge is.
+        if let edge = paddingClip?.path, !edge.contains(point) { return self }
+        return hit
     }
     package override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         pointerOwner?.acceptsFirstMouse(for: event) ?? super.acceptsFirstMouse(for: event)
@@ -74,10 +79,48 @@ package final class ChainingScrollView: NSScrollView {
     /// the main thread (`NSScrollingBehaviorSingleThreadedVBL`), behind
     /// whatever else that thread is doing — mounting list rows, above all.
     /// The override below only *routes*: a gesture it keeps goes to `super`
-    /// whole, which is the contract AppKit asks for. Compatible, so a
-    /// contained scroller moves on AppKit's scrolling thread and the main
-    /// thread follows it (LLP 1002 D4; LLP 1044 F3).
+    /// whole, which is the contract AppKit asks for. Compatible, so the
+    /// scroller moves on AppKit's scrolling thread and the main thread
+    /// follows it (LLP 1002 D4; LLP 1044 F3), unless its clip takes every
+    /// event (`EveryEventClipView`).
     package override class var isCompatibleWithResponsiveScrolling: Bool { true }
+
+    /// How far inside this view its node's padding edge lies on each side, while that edge masks it
+    /// (`clip(toPaddingEdge:inset:)`). The scrollers, which the mask would cut where they lie over the border, keep
+    /// inside it (`insetScrollersFromChrome`), between the border and the padding edge, where
+    /// [CSS has a scrollbar](https://drafts.csswg.org/css-overflow-3/#scrollbar-gutter-property).
+    var clipInsets = NSEdgeInsetsZero {
+        didSet { if !NSEdgeInsetsEqual(clipInsets, oldValue) { insetScrollersFromChrome() } }
+    }
+    /// Its node's padding edge, in the node's coordinates, while a border puts that edge inside this view
+    /// (`NodeView.syncScrollCorner`), `inset` from its sides by the border's widths. It masks this view's own layer,
+    /// which stays where its node put it: AppKit scrolls the clip view inside it, on its own thread
+    /// (`isCompatibleWithResponsiveScrolling`), so nothing has to follow the scroll. This view stays its node's
+    /// subview, with its frame, its clip view, its document and its scroll range, and what finds its node from it
+    /// by `superview` (a drag, a snap, a wheel over a smooth scroll) still does.
+    private var paddingClip: CAShapeLayer?
+    func clip(toPaddingEdge edge: CGPath?, inset: NSEdgeInsets) {
+        guard let edge else {
+            if let clip = paddingClip, layer?.mask === clip { layer?.mask = nil }
+            paddingClip = nil
+            return clipInsets = NSEdgeInsetsZero
+        }
+        wantsLayer = true
+        let clip = paddingClip ?? CAShapeLayer()
+        if paddingClip == nil {
+            clip.anchorPoint = .zero
+            clip.fillColor = CGColor(gray: 1, alpha: 1)
+            // A layer no view owns would ease to a new edge.
+            clip.actions = ["position": NSNull(), "path": NSNull()]
+            paddingClip = clip
+        }
+        if clip.path != edge { clip.path = edge }
+        // The node's origin in this view's coordinates, which do not scroll.
+        let origin = CGPoint(x: bounds.minX - frame.minX, y: bounds.minY - frame.minY)
+        if clip.position != origin { clip.position = origin }
+        if layer?.mask !== clip { layer?.mask = clip }
+        clipInsets = inset
+    }
 
     private var styleObserver: NSObjectProtocol?
     package override init(frame: NSRect) {
@@ -89,6 +132,14 @@ package final class ChainingScrollView: NSScrollView {
     }
     required init?(coder: NSCoder) { nil }
     deinit { if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) } }
+
+    /// A scroller that `takesEveryWheelEvent`: its clip says so, and AppKit
+    /// reads the clip when it is set, so it is set here, before it holds
+    /// anything, and kept for the scroll view's life.
+    package convenience init(frame: NSRect, everyWheelEvent: Bool) {
+        self.init(frame: frame)
+        if everyWheelEvent { contentView = EveryEventClipView() }
+    }
 
     private func followScrollerStyle() {
         // Region surfaces own their layout separately; this claim is for
@@ -173,10 +224,10 @@ package final class ChainingScrollView: NSScrollView {
     /// tracks as a person's, marked with this in `kCGEventSourceUserData`.
     /// It is AppKit's to run under the agent too.
     static let driverMark: Int64 = 0x4558_4143_5444
-    /// The driver's events a scroller handed to AppKit, and the last such
-    /// scroller: what the driver reads back to confirm delivery.
+    /// The driver's events a scroller or the page handed to AppKit, and the
+    /// last that did: what the driver reads back to confirm delivery.
     static var driverWheels = 0
-    static weak var driverOwner: ChainingScrollView?
+    static weak var driverOwner: NSScrollView?
     /// Which axes scroll (the node's effective `overflow_x`/`overflow_y`).
     var collectionWillScroll: (() -> Void)?
     /// A zoomable scroller's zoom (`ScrollZoomMac.swift`).
@@ -283,7 +334,7 @@ package final class ChainingScrollView: NSScrollView {
                     at: vertical ? extent.origin.y : extent.origin.x) ? taken : .chain
     }
 
-    private static func handedDriverWheel(_ view: ChainingScrollView) {
+    static func handedDriverWheel(_ view: NSScrollView) {
         driverWheels += 1
         driverOwner = view
     }
@@ -452,7 +503,7 @@ extension NodeView {
 /// content draws that much lower though the box has nothing to scroll. Less
 /// than a device pixel outside the range is that alignment, not an
 /// overscroll, and goes to the range's edge; an elastic overscroll is AppKit's.
-final class RangeClipView: NSClipView {
+class RangeClipView: NSClipView {
     override func scroll(to newOrigin: NSPoint) {
         guard let document = documentView?.frame else { return super.scroll(to: newOrigin) }
         let pixel = 1 / max(1, pixelScale ?? 1), inset = contentInsets, size = bounds.size
@@ -466,6 +517,39 @@ final class RangeClipView: NSClipView {
                                  y: clamp(newOrigin.y, document.minY - inset.top, document.maxY + inset.bottom - size.height)))
     }
 }
+/// A clip whose scroll view AppKit scrolls on the main thread. Responsive
+/// scrolling hands a trackpad gesture to AppKit's scrolling thread after its
+/// first event, and no view or event monitor sees the rest. AppKit keeps it
+/// off a scroll view whose clip view overrides `scrollWheel(with:)` without
+/// declaring itself compatible (AppKit Release Notes for OS X 10.9,
+/// "Responsive Scrolling"). Only the scroll view's own clip counts: the
+/// scrollers inside it keep theirs.
+final class EveryEventClipView: RangeClipView {
+    override func scrollWheel(with event: NSEvent) { super.scrollWheel(with: event) }
+}
+
+extension NSScrollView {
+    /// Whether every event of a gesture comes through `scrollWheel(with:)` on
+    /// the main thread.
+    var takesEveryWheelEvent: Bool { contentView is EveryEventClipView }
+}
+
+extension NodeView {
+    /// What the author wrote on this scroller that reads each event of a
+    /// trackpad gesture: a snap eases from the lift and drops AppKit's
+    /// momentum (`ScrollSnapMac.swift`), and a drag's start, lift and
+    /// release velocity come from its finger phases (`ScrollDragMac.swift`).
+    /// Read when the scroll view is made: the handlers are fixed with the
+    /// node, and a `scroll-snap-type` first set later does not snap a
+    /// trackpad's fling. A `wheel` listener hears a gesture that a scroller
+    /// runs on AppKit's thread only in its first events, unless it
+    /// cancels them, which keeps the gesture from AppKit.
+    var needsEveryWheelEvent: Bool {
+        ScrollSnap.Kind(style["scroll_snap_type"]?.string) != nil
+            || handlers.contains("scrolldragstart") || handlers.contains("scrolldragend")
+    }
+}
+
 extension Presenter {
     /// Every scroller's insets from the window's chrome again, after the
     /// title bar or a scroll view's place in the window changed (a batch's

@@ -256,11 +256,16 @@ pub enum Capability {
     /// A drag out of the app (LLP 1094.000 D3): a node with `draggable`,
     /// whose host lifts it to the system with its data.
     DragOut,
+    /// A drag into the app on UIKit (LLP 1094.001 D4): a node hearing `drop`,
+    /// `dragenter` or `dragleave`, whose host takes drags from other apps.
+    /// The Mac takes them in its core ([`Uses::MAC_CORE`]), the web in its
+    /// documents glue ([`Capability::Documents`]).
+    DragIn,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 62] = [
+    pub const ALL: [Capability; 63] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -323,6 +328,7 @@ impl Capability {
         Capability::ContentIndex,
         Capability::Dialogs,
         Capability::DragOut,
+        Capability::DragIn,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -390,6 +396,7 @@ impl Capability {
             Capability::ContentIndex => "content_index",
             Capability::Dialogs => "dialogs",
             Capability::DragOut => "drag_out",
+            Capability::DragIn => "drag_in",
         }
     }
 
@@ -439,12 +446,26 @@ impl Uses {
         .with(Capability::TextSelection)
         .with(Capability::Widgets)
         .with(Capability::ContentIndex)
-        .with(Capability::Dialogs);
+        .with(Capability::Dialogs)
+        .with(Capability::DragIn);
 
     /// The native roster's entries the Mac's core presents itself, which a
     /// macOS set never names: a `dialog` is an entry of the top-layer stack
-    /// a sheet route presents in too.
-    pub const MAC_CORE: Uses = Uses::NONE.with(Capability::Dialogs);
+    /// a sheet route presents in too, and a drop is the core's
+    /// (`FileDragMac.swift`).
+    pub const MAC_CORE: Uses = Uses::NONE
+        .with(Capability::Dialogs)
+        .with(Capability::DragIn);
+
+    /// What every Android APK ships whatever its plan uses, so a later
+    /// generation may use it: the root's drag adapters, `DragIn.kt` and
+    /// `DragOut.kt`, and the `doc:` table the drop path mints a dropped or
+    /// pasted file's handle in (LLP 1069.010, LLP 1094.001 D5, LLP 1094.000
+    /// D7).
+    pub const ANDROID_CORE: Uses = Uses::NONE
+        .with(Capability::Documents)
+        .with(Capability::DragIn)
+        .with(Capability::DragOut);
 
     /// This set and `capability`.
     pub const fn with(self, capability: Capability) -> Uses {
@@ -520,7 +541,10 @@ impl fmt::Display for Uses {
 
 /// The capabilities `plan` uses (LLP 1047 D2).
 pub fn uses(plan: &Plan) -> Uses {
-    let mut uses = Uses::NONE;
+    plan_uses(plan, code_uses(plan, |_| None))
+}
+
+fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
     if plan.tools.iter().any(|t| {
         serde_json::from_str::<serde_json::Value>(plan.str(t.face)).is_ok_and(|face| {
             face["doors"]
@@ -664,49 +688,22 @@ pub fn uses(plan: &Plan) -> Uses {
             | EventKind::Reordertargetchange => {
                 uses = uses.with(Capability::Motion).with(Capability::Drag);
             }
-            // Dropped and pasted files become `doc:` handles (studio diary
-            // R19); the web's file drag is heard beside its drop (files.js).
-            EventKind::Drop | EventKind::Dragenter | EventKind::Dragleave | EventKind::Paste => {
-                uses = uses.with(Capability::Documents)
+            // Dropped and pasted files become `doc:` handles; the web's drag
+            // is heard beside its drop (files.js), and UIKit's is a module's.
+            EventKind::Drop | EventKind::Dragenter | EventKind::Dragleave => {
+                uses = uses.with(Capability::Documents).with(Capability::DragIn)
             }
+            EventKind::Paste => uses = uses.with(Capability::Documents),
             _ => {}
         }
     }
-    if plan
-        .handlers
-        .iter()
-        .any(|h| matches!(h.event, EventKind::Reachstart | EventKind::Reachend))
-    {
+    if plan.handlers.iter().any(|h| {
+        matches!(
+            h.event,
+            EventKind::Reachstart | EventKind::Reachend | EventKind::Reorderdrop
+        )
+    }) {
         uses = uses.with(Capability::Collections);
-    }
-    let (format, geometry, lowercase) = stdlib_calls(plan);
-    if format {
-        uses = uses.with(Capability::Format);
-    }
-    // `toLowerCase` and `toUpperCase` map through the same case tables (LLP 1088 D2).
-    if lowercase {
-        uses = uses.with(Capability::TextTransform);
-    }
-    if runs_command(plan, &["share"]) {
-        uses = uses.with(Capability::Share);
-    }
-    if runs_command(
-        plan,
-        &[
-            "saveFile",
-            "showOpenFilePicker",
-            "showDirectoryPicker",
-            "showSaveFilePicker",
-            "requestPermission",
-        ],
-    ) {
-        uses = uses.with(Capability::Documents);
-    }
-    if runs_command(plan, &["showPicker"]) {
-        uses = uses.with(Capability::Picker);
-    }
-    if geometry {
-        uses = uses.with(Capability::Geometry);
     }
     if shows_media_picker(plan) {
         uses = uses.with(Capability::MediaPicker);
@@ -806,25 +803,26 @@ pub fn svg_filters(plan: &Plan) -> bool {
         })
 }
 
-/// Whether any code range calls a `format` entry, whether any reads
-/// geometry (`frame`, `measure`, `elementFromPoint`), and whether any calls `toLowerCase` or `toUpperCase`: each
-/// validated body walked whole, so no call a run can reach is missed.
-fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
-    let (mut format, mut geometry, mut lowercase) = (false, false, false);
+// Walk each code range once for the capabilities selected by calls and commands.
+fn code_uses(plan: &Plan, mut command_capability: impl FnMut(&str) -> Option<Capability>) -> Uses {
+    let mut uses = Uses::NONE;
     plan.each_code(&mut |code| {
         for i in crate::vm::instructions(plan.read_code(plan.code(code)).0).flatten() {
             if i.op == Opcode::Call {
                 match Stdlib::from_wire(i.args[0] as u8) {
                     Some(
-                        Stdlib::FormatDate
+                        Stdlib::FormatShortcut
+                        | Stdlib::FormatDate
                         | Stdlib::FormatNumber
                         | Stdlib::ToFixed
                         | Stdlib::FormatDecimal
                         | Stdlib::FormatDay,
-                    ) => format = true,
+                    ) => uses = uses.with(Capability::Format),
                     // The core formats `en-US`; another locale's time is
                     // the capability's (LLP 1054.000.003 D6).
-                    Some(Stdlib::FormatTime) if plan.format.is_some() => format = true,
+                    Some(Stdlib::FormatTime) if plan.format.is_some() => {
+                        uses = uses.with(Capability::Format)
+                    }
                     Some(
                         Stdlib::Frame
                         | Stdlib::RangeFrame
@@ -833,27 +831,50 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
                         | Stdlib::ElementFromPoint
                         | Stdlib::ElementsFromPoint
                         | Stdlib::QuerySelectorAll,
-                    ) => geometry = true,
-                    Some(Stdlib::ToLowerCase | Stdlib::ToUpperCase) => lowercase = true,
+                    ) => uses = uses.with(Capability::Geometry),
+                    Some(Stdlib::ToLowerCase | Stdlib::ToUpperCase) => {
+                        uses = uses.with(Capability::TextTransform)
+                    }
                     _ => {}
+                }
+            } else if let Some(name) = command_name(plan, &i) {
+                match name {
+                    "share" => uses = uses.with(Capability::Share),
+                    "showPicker" => uses = uses.with(Capability::Picker),
+                    "requestPermission" => uses = uses.with(Capability::Documents),
+                    name if DOCUMENT_PICKERS.contains(&name) => {
+                        uses = uses.with(Capability::Documents);
+                    }
+                    _ => {}
+                }
+                if let Some(capability) = command_capability(name) {
+                    uses = uses.with(capability);
                 }
             }
         }
     });
-    (format, geometry, lowercase)
+    uses
 }
 
-/// Whether any code range runs a host command named one of `names`.
+const DOCUMENT_PICKERS: &[&str] = &[
+    "saveFile",
+    "showOpenFilePicker",
+    "showDirectoryPicker",
+    "showSaveFilePicker",
+];
+const PICTURE_IN_PICTURE: &str = "requestPictureInPicture";
+const SOUND_COMMANDS: &[&str] = &["playSound", "playSounds", "stopSounds", "setSounds"];
+const MIDI_COMMANDS: &[&str] = &["sendMIDI", "requestMIDIAccess"];
+
 /// Whether `plan` declares a sound or a sequence, or runs one of the voice
 /// table's commands (LLP 1096; LLP 1125 D3): what links the JS target's
 /// table and its output.
 pub fn runs_sounds(plan: &Plan) -> bool {
-    !plan.sounds.is_empty()
-        || !plan.sequences.is_empty()
-        || runs_command(
-            plan,
-            &["playSound", "playSounds", "stopSounds", "setSounds"],
-        )
+    declares_sounds(plan) || runs_command(plan, SOUND_COMMANDS)
+}
+
+fn declares_sounds(plan: &Plan) -> bool {
+    !plan.sounds.is_empty() || !plan.sequences.is_empty()
 }
 
 /// Whether `plan` asks for MIDI ports or hears an input (LLP 1125 D6–D8):
@@ -862,25 +883,33 @@ pub fn runs_sounds(plan: &Plan) -> bool {
 /// host's MIDI arm (rulings #10); a sequence's notes alone do not, since
 /// without access no note is sent.
 pub fn uses_midi(plan: &Plan) -> bool {
-    plan.resources
-        .iter()
-        .any(|r| plan.str(r.source) == crate::midi::SOURCE)
-        || runs_command(plan, &["sendMIDI", "requestMIDIAccess"])
-        || plan.nodes.iter().any(|n| {
-            n.handlers
-                .iter()
-                .any(|h| plan.handler(h).event == exact_plan::EventKind::Midimessage)
-        })
+    reads_midi(plan)
+        || runs_command(plan, MIDI_COMMANDS)
+        || hears_midi(plan)
         || plan.sequences.iter().any(|q| {
             constant_str(plan, plan.code(q.clock_out)) != Some("")
                 || constant_str(plan, plan.code(q.clock)) != Some("")
         })
 }
 
+fn reads_midi(plan: &Plan) -> bool {
+    plan.resources
+        .iter()
+        .any(|r| plan.str(r.source) == crate::midi::SOURCE)
+}
+
+fn hears_midi(plan: &Plan) -> bool {
+    plan.nodes.iter().any(|n| {
+        n.handlers
+            .iter()
+            .any(|h| plan.handler(h).event == EventKind::Midimessage)
+    })
+}
+
 /// Whether the plan floats an image in picture in picture (LLP 1042 §9),
 /// which the video arm carries on Apple.
 pub fn uses_picture_in_picture(plan: &Plan) -> bool {
-    runs_command(plan, &["requestPictureInPicture"])
+    runs_command(plan, &[PICTURE_IN_PICTURE])
 }
 
 /// A remote or computed image, media source, video poster or iframe URL
@@ -900,7 +929,7 @@ pub fn sources_can_be_remote(plan: &Plan) -> bool {
 /// for a plan that [`uses_midi`] or declares a sequence, whose notes and
 /// clock go on it. The JS target bundles midi.js then.
 pub fn keeps_midi(plan: &Plan) -> bool {
-    uses_midi(plan) || !plan.sequences.is_empty()
+    !plan.sequences.is_empty() || uses_midi(plan)
 }
 
 /// Whether the plan's code runs `setLocale`: only then does a language the
@@ -919,17 +948,18 @@ fn runs_command(plan: &Plan, names: &[&str]) -> bool {
     let mut runs = false;
     plan.each_code(&mut |code| {
         runs = runs
-            || crate::vm::instructions(plan.read_code(plan.code(code)).0).any(|i| {
-                i.is_ok_and(|i| {
-                    i.op == Opcode::Command
-                        && plan
-                            .strings
-                            .get(i.args[0] as usize)
-                            .is_some_and(|_| names.contains(&plan.str(StrId(i.args[0] as u32))))
-                })
-            });
+            || crate::vm::instructions(plan.read_code(plan.code(code)).0)
+                .flatten()
+                .any(|i| command_name(plan, &i).is_some_and(|name| names.contains(&name)));
     });
     runs
+}
+
+fn command_name<'a>(plan: &'a Plan, instruction: &crate::vm::Instruction) -> Option<&'a str> {
+    if instruction.op != Opcode::Command {
+        return None;
+    }
+    plan.strings.get(instruction.args[0] as usize)
 }
 
 /// The boolean a binding always evaluates to, when its code is one constant:

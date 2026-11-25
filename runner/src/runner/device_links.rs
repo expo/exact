@@ -22,8 +22,9 @@ pub struct AuthLinks<D: DataSource> {
 /// A host command's ruling: [`crate::commands::request`]'s arms.
 pub type CommandLink<D> = fn(&mut Runner<D>, &str) -> String;
 
-/// An agent's answer to a held command, for its journal line.
-pub type AnswerLink<D> = fn(&mut Runner<D>, &str);
+/// An answer to a held command, the agent's or the host's, and a host's
+/// refusal, for its journal line.
+pub type AnswerLink<D> = fn(&mut Runner<D>, &str, Option<&str>);
 
 /// An agent's files for a file input's hold, checked.
 pub type PickCheck<D> = fn(&Runner<D>, Option<exact_kernel::ViewId>, &str) -> Result<(), String>;
@@ -66,7 +67,7 @@ impl<D: DataSource> PickerLinks<D> {
 pub struct DeviceLinks<D: DataSource> {
     /// `openAuthSession` (LLP 1069.006).
     pub auth: Option<AuthLinks<D>>,
-    /// `share(…)` (LLP 1069.003): its ruling, and an agent's answer.
+    /// `share(…)` (LLP 1069.003): its ruling, and an answer to its hold.
     pub share: Option<(CommandLink<D>, AnswerLink<D>)>,
     /// `saveFile` (LLP 1069.010 D3) and the file pickers (D2): their rulings.
     pub documents: Option<(CommandLink<D>, CommandLink<D>)>,

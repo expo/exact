@@ -176,3 +176,18 @@ export function scrollDrag(el, listen, began, ended) {
   listen("touchcancel", lift, o);
 }
 // A scroll drag (Charlie, 2026-11-10), the web's nearest to UIKit's `scrollViewWillBeginDragging` and `scrollViewWillEndDragging`: with a touch down on `el`, its offset moving begins one (`began()`, once); the last touch lifting ends it, `ended(vx, vy)`: the finger's velocity over the last 100 ms of its moves, as UIKit's is the pan's, in CSS px per ms, negated so it is positive as scrollLeft and scrollTop grow; 0 on an axis the drag did not scroll, or when the finger rested 100 ms before lifting. The finger's own touch events, one clock: `scroll` events come at frame times, which trail the touches by the page's input latency. A mouse, a wheel or a programmatic scroll is no drag, and the browser never says where a fling will rest. Passive: the browser's scrolling is untouched.
+
+// Computed scroll-padding can still contain percentages, including inside CSS math functions.
+export function scrollPadding(value, basis) {
+  if (value === 'auto') return 0;
+  if (value.endsWith('%')) return parseFloat(value) * basis / 100;
+  if (!value.includes('(')) return parseFloat(value) || 0;
+  const box = document.createElement('div'), measure = document.createElement('div');
+  box.style.cssText = `all:initial;position:fixed;visibility:hidden;contain:strict;width:${basis}px;height:0`;
+  measure.style.cssText = 'all:initial;display:block';
+  measure.style.width = value;
+  box.append(measure); document.documentElement.append(box);
+  const length = parseFloat(getComputedStyle(measure).width);
+  box.remove();
+  return Math.max(0, length || 0);
+}

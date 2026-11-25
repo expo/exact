@@ -84,6 +84,8 @@ ${top}`);
     const sha = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
     globalThis.fetch = async url => { const r = new Response(String(url).endsWith('module-prelude.js') ? prelude : String(url).endsWith('module-binary.js') ? binary : 'never'); Object.defineProperty(r, 'url', { value: 'http://127.0.0.1/x' }); return r; };
     globalThis.location = { href: 'http://127.0.0.1/', origin: 'http://127.0.0.1' };
+    const page = { baseURI: globalThis.location.href };
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: page });
     globalThis.exact = {};
     captured.storageEvents = [];
     captured.storageBarriers = [];
@@ -123,7 +125,8 @@ ${top}`);
       for (const name of ['Promise', 'Error', 'SyntaxError', 'Object', 'Array', 'JSON', 'Symbol', 'Function', 'eval']) win[name] = vm.runInContext(name, win);
       win.document = { createElement: () => ({}), head: { append: el => vm.runInContext(el.textContent, win) } };
       const frame = { contentWindow: win, setAttribute() {}, remove() {} };
-      Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => frame, body: { append() {} } } });
+      page.createElement = () => frame;
+      page.body = { append() {} };
       // The realm's door, kept as module-glue installs it (the prelude takes and deletes it at load).
       Object.defineProperty(win, '__exact_host', { configurable: true, set(door) {
         captured.door = door; Object.defineProperty(win, '__exact_host', { configurable: true, writable: true, value: door });

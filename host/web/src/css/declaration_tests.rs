@@ -430,7 +430,7 @@ fn a_press_scale_keeps_the_authored_scale_and_transitions() {
     }
     assert_eq!(
         css(&[(StyleId::PressScale, n(0.97))], &[]),
-        "scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:0.97;"
+        "scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1)) calc(var(--exact-scale-y,1) * var(--exact-press-factor,1))!important;--exact-press:0.97;"
     );
     assert_eq!(
         css(
@@ -441,7 +441,7 @@ fn a_press_scale_keeps_the_authored_scale_and_transitions() {
             ],
             &[]
         ),
-        "--exact-scale:1.5;transition:all 0.2s ease 0s,scale 0s,--exact-scale 0.2s ease 0s;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:0.994;"
+        "--exact-scale:1.5;--exact-scale-y:1.5;transition:all 0.2s ease 0s,scale 0s,--exact-scale 0.2s ease 0s,--exact-scale-y 0.2s ease 0s;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1)) calc(var(--exact-scale-y,1) * var(--exact-press-factor,1))!important;--exact-press:0.994;--exact-press-timing:{\"scale\":[200.0,0.0,\"ease\"]};"
     );
     assert_eq!(css(&[(StyleId::PressScale, n(1.0))], &[]), "");
     assert_eq!(
@@ -455,6 +455,50 @@ fn a_press_scale_keeps_the_authored_scale_and_transitions() {
         "transition:opacity 1s ease 0s;"
     );
 }
+#[test]
+fn press_timing_uses_the_last_covering_transition_for_each_property() {
+    exact_kernel::style::link_all();
+    let paint = StyleValue::Number(0.5);
+    fn text(s: &str) -> StyleValue<'_> {
+        StyleValue::Text(s.into())
+    }
+    let timing = |transition| {
+        let mut rows = vec![
+            (StyleId::PressOpacity, paint.clone()),
+            (StyleId::PressScale, paint.clone()),
+            (StyleId::PressColor, text("red")),
+            (StyleId::PressBackgroundColor, text("blue")),
+        ];
+        if let Some(transition) = transition {
+            rows.push((StyleId::Transition, text(transition)));
+        }
+        css(&rows, &[])
+            .split_once("--exact-press-timing:")
+            .map(|(_, value)| {
+                serde_json::from_str::<serde_json::Value>(value.trim_end_matches(';')).unwrap()
+            })
+    };
+    assert!(timing(None).is_none());
+    for transition in ["none", "all 0s", "rotate 1s"] {
+        assert_eq!(timing(Some(transition)), Some(serde_json::json!({})));
+    }
+    let items = timing(Some("all 400ms linear -100ms, color 100ms steps(2, end) 40ms, opacity 50ms linear -50ms, scale -exact-spring()")).unwrap();
+    assert_eq!(
+        items["background-color"],
+        serde_json::json!([400.0, -100.0, "linear"])
+    );
+    assert_eq!(
+        items["color"],
+        serde_json::json!([100.0, 40.0, "steps(2,jump-end)"])
+    );
+    assert!(items.get("opacity").is_none());
+    let (duration, easing) = exact_motion::SpringConfig::default().easing();
+    assert_eq!(
+        items["scale"],
+        serde_json::json!([duration * 1000.0, 0.0, easing_css(&easing)])
+    );
+}
+
 /// Only a pressable node's scale animation also animates
 /// `--exact-scale`, under a rule of its own: an animated custom property
 /// keeps Chrome from compositing the animation (a pan/zoom re-rastered
@@ -474,7 +518,11 @@ fn only_a_pressable_node_animates_the_scale_custom_property() {
         keyframes_css(grow, false)
     );
     assert_eq!(keyframes_name(grow, true), "grow-exact-press");
-    assert!(keyframes_css(grow, true).contains("scale:1.6;--exact-scale:1.6;"));
+    assert!(keyframes_css(grow, true).contains("scale:1.6;--exact-scale:1.6;--exact-scale-y:1.6;"));
+    assert_eq!(
+        press_keyframes_css("0%{scale:1 0.5;}100%{scale:2 0;}"),
+        "0%{scale:1 0.5;--exact-scale:1;--exact-scale-y:0.5;}100%{scale:2 0;--exact-scale:2;--exact-scale-y:0;}"
+    );
     // A pressable node's animation that leaves `scale` alone keeps its rule.
     assert_eq!(keyframes_name(fade, true), "fade");
     assert_eq!(animations_css(&list, false), list.css());

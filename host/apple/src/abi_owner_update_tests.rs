@@ -4,7 +4,7 @@
 use super::*;
 use exact_kernel::style::env::{Rect, SegmentGrid};
 use exact_kernel::style::targets::NativeTarget;
-use exact_kernel::{Keyboard, OwnerUpdate};
+use exact_kernel::{Keyboard, KeyboardReport, OwnerUpdate};
 
 /// A page whose route holds two readers: `column` pads by the second column's left edge, 7
 /// where the owner lies on one segment, and `keyboard` by the docked keyboard's reach into it,
@@ -38,7 +38,7 @@ fn update() -> OwnerUpdate {
             rows: 1,
             rects: vec![rect(0.0, 190.0), rect(210.0, 180.0)],
         }),
-        keyboard: Some(Keyboard {
+        keyboard: KeyboardReport::Shown(Keyboard {
             frame: [0.0, 500.0, 390.0, 344.0],
             docked: true,
         }),
@@ -114,7 +114,9 @@ fn a_bad_update_refuses_the_whole_call() {
     assert_eq!(read(&bridge, route, readers), before);
     // One the kernel refuses, a nonfinite keyboard frame, beside another block
     let mut bad = update();
-    bad.keyboard.as_mut().unwrap().frame[1] = f32::NAN;
+    if let KeyboardReport::Shown(k) = &mut bad.keyboard {
+        k.frame[1] = f32::NAN;
+    }
     let bytes = [block(route, 300.0), record(route, &bad.encode())].concat();
     let refused = covers(&mut bridge, &bytes);
     assert!(
@@ -145,7 +147,7 @@ fn an_update_whose_block_is_refused_is_not_applied() {
     );
     let mut moved = update();
     moved.segments.as_mut().unwrap().rects[1].x = 250.0;
-    moved.keyboard = None;
+    moved.keyboard = KeyboardReport::Dismissed;
     let bytes = [block(route, f32::NAN), record(route, &moved.encode())].concat();
     let batch = covers(&mut bridge, &bytes);
     assert!(batch.contains("block: "), "{batch}");
@@ -173,7 +175,9 @@ fn an_owner_update_rides_exact_views_trailer_beside_its_block() {
     );
     // One the kernel refuses changes nothing, the block beside it included
     let mut bad = update();
-    bad.keyboard.as_mut().unwrap().frame[1] = f32::NAN;
+    if let KeyboardReport::Shown(k) = &mut bad.keyboard {
+        k.frame[1] = f32::NAN;
+    }
     let mut wire: Vec<u8> = [64u32]
         .into_iter()
         .chain([0; 9])
@@ -208,7 +212,7 @@ fn an_owner_update_rides_exact_views_trailer_beside_its_block() {
 /// `update()` with its keyboard dismissed.
 fn dismissed() -> OwnerUpdate {
     OwnerUpdate {
-        keyboard: None,
+        keyboard: KeyboardReport::Dismissed,
         ..update()
     }
 }
@@ -292,6 +296,7 @@ fn map(id: u64, generation: u64) -> NativeTarget {
         id,
         generation,
         insets: Some([30.0, 0.0, 0.0, 0.0]),
+        frame: None,
     }
 }
 
@@ -351,4 +356,48 @@ fn a_registration_rides_exact_views_trailer() {
     let batch = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
     assert!(batch.contains("\"error\":null"), "{batch}");
     assert_eq!(top_padding(&bridge, reader), 30.0);
+}
+
+/// `update`'s bytes as kind 29 frames the session's update.
+fn session_record(update: &exact_kernel::SessionUpdate) -> Vec<u8> {
+    let bytes = update.encode();
+    let mut framed: Vec<u8> = [0, 29, bytes.len() as u32]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    framed.extend(bytes);
+    framed
+}
+
+#[test]
+fn the_sessions_update_rides_the_covers_door_whole_or_not_at_all() {
+    // With no block the route is no owner, so the keyboard reader is outside every owner and
+    // reads the session's keyboard; a malformed update, or two in one call, refuses the call
+    let (mut bridge, _, [_, reader]) = page();
+    let update = exact_kernel::SessionUpdate {
+        keyboard: KeyboardReport::Shown(Keyboard {
+            frame: [0.0, 516.0, 390.0, 328.0],
+            docked: true,
+        }),
+        ..Default::default()
+    };
+    let framed = session_record(&update);
+    let truncated = covers(&mut bridge, &framed[..framed.len() - 1]);
+    assert!(!truncated.is_empty(), "a truncated record refuses the call");
+    let twice = covers(&mut bridge, &[framed.clone(), framed.clone()].concat());
+    assert!(twice.contains("session update: two"), "{twice}");
+    assert_eq!(facts(&bridge, reader), None);
+    covers(&mut bridge, &framed);
+    let shown = facts(&bridge, reader);
+    assert!(shown.is_some_and(|f| f.docked), "{shown:?}");
+}
+
+fn facts(bridge: &Bridge<StorageModule>, view: u32) -> Option<exact_kernel::KeyboardFacts> {
+    bridge
+        .host
+        .as_ref()
+        .unwrap()
+        .runner()
+        .kernel()
+        .keyboard_facts(view)
 }

@@ -177,6 +177,7 @@ fn viewport_shape(shape: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<Com
             | "height"
             | "horizontalViewportSegments"
             | "verticalViewportSegments"
+            | "orientationAngle"
             | "keyboardHeight" => "number",
             "prefersReducedMotion" | "prefersReducedTransparency" | "accessibilityTextSize" => {
                 "bool"

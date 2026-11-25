@@ -70,7 +70,14 @@ final class SplitIOSTests: XCTestCase {
     }
 
     private func tap(_ session: ExactSession, _ testId: String) throws {
-        XCTAssertNil(Agent(session: session).tap(["id": Int(try node(session, testId).id)])["error"], "tap \(testId)")
+        let target = try node(session, testId)
+        if let lists = session.presenter.groupedLists as? GroupedListHost, lists.draws(target.id) {
+            until("the row \(testId) is in the window") {
+                if case let .view(cell, _)? = lists.shown(target) { return cell.window != nil }
+                return false
+            }
+        }
+        XCTAssertNil(Agent(session: session).tap(["id": Int(target.id)])["error"], "tap \(testId)")
     }
 
     /// Whether the runner reads `testId`'s node as inactive (the agent's tree).
@@ -79,6 +86,123 @@ final class SplitIOSTests: XCTestCase {
         let tree = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"tree"}"#).utf8)) as? [String: Any])
         let rows = try XCTUnwrap(tree["nodes"] as? [[String: Any]])
         return rows.first { ($0["id"] as? NSNumber)?.uint32Value == id }?["inactive"] as? Bool == true
+    }
+
+    func testAnExplicitIPadStackCanUseACustomPrimary() throws {
+        let session = try boot("SPLIT_CUSTOM", size: CGSize(width: 1100, height: 800), width: .regular)
+        let nav = session.presenter.navigationHost
+        guard UIDevice.current.userInterfaceIdiom == .pad else { XCTAssertNil(nav.split); return }
+        let columns = try split(session)
+        XCTAssertNil(columns.listNode)
+        try tap(session, "custom-open")
+        until("the custom primary opened its detail") { columns.detailRoutes.count == 1 }
+        let detail = columns.detail.topViewController
+        try tap(session, "customize")
+        until("the primary becomes a directory") { columns.listNode != nil }
+        try tap(session, "customize")
+        until("the custom primary keeps its detail") { columns.listNode == nil && columns.detail.topViewController === detail }
+        let platform = UISplitViewController(style: .doubleColumn)
+        XCTAssertEqual(columns.controller.preferredPrimaryColumnWidth, platform.preferredPrimaryColumnWidth)
+        XCTAssertEqual(columns.controller.preferredPrimaryColumnWidthFraction, platform.preferredPrimaryColumnWidthFraction)
+        XCTAssertTrue(nav.split === columns)
+        XCTAssertNotNil(try node(session, "custom-open"))
+    }
+
+    func testAnExplicitIPadTabKeepsItsColumnsAndDetailAcrossSelectionAndCollapse() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit presents a selected tab in its window scene") }
+        let session = try boot("SPLIT_TABS", size: CGSize(width: 1100, height: 800), width: .regular)
+        let nav = session.presenter.navigationHost, agent = Agent(session: session)
+        let tabs = try XCTUnwrap(nav.tabController)
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            XCTAssertNil(nav.split)
+            XCTAssertTrue(tabs.selectedViewController is UINavigationController)
+            return
+        }
+        let columns = try split(session)
+        until("Library has two columns in the selected tab") { !columns.controller.isCollapsed && columns.controller.view.window === window && tabs.selectedViewController === nav.tabStack(0) }
+        try tap(session, "library-North")
+        let row = try node(session, "library-North").id
+        until("North is selected") { columns.sidebarRow == row && columns.shown.count == 2 && !agent.nativeInFlight() }
+        try tap(session, "open-notes")
+        until("Notes has a detail Back") { columns.detailRoutes.count == 2 && !columns.detail.isNavigationBarHidden && columns.detail.topViewController?.navigationItem.hidesBackButton == false && !agent.nativeInFlight() }
+        let notes = columns.detail.topViewController
+        let library = try XCTUnwrap(nav.tabStack(0)), browse = try XCTUnwrap(nav.tabStack(1))
+        try tap(session, "tab-browse")
+        let second = try split(session)
+        XCTAssertFalse(second === columns)
+        XCTAssertEqual(Set([columns.list, columns.detail, second.list, second.detail].map(ObjectIdentifier.init)).count, 4)
+        try tap(session, "browse-South")
+        let south = try node(session, "browse-South").id
+        until("Browse shows South") { second.sidebarRow == south && second.detailRoutes.count == 1 && !agent.nativeInFlight() }
+        let subject = second.detail.topViewController
+        func switchTabs() throws {
+            try tap(session, "tab-library")
+            until("Library kept North's notes") {
+                nav.split === columns && tabs.selectedViewController === library && columns.detail.topViewController === notes
+                    && columns.sidebarRow == row && !agent.nativeInFlight()
+            }
+            try tap(session, "tab-browse")
+            until("Browse kept South") {
+                nav.split === second && tabs.selectedViewController === browse && second.detail.topViewController === subject
+                    && second.sidebarRow == south && !agent.nativeInFlight()
+            }
+        }
+        try switchTabs()
+        window?.traitOverrides.horizontalSizeClass = .compact
+        until("compact Browse shows South") { second.controller.isCollapsed && second.nested && !agent.nativeInFlight() }
+        try switchTabs()
+        XCTAssertTrue(second.controller.isCollapsed && second.nested && second.front.topViewController === subject)
+        try tap(session, "tab-library")
+        until("compact Library shows Notes on top") {
+            columns.controller.isCollapsed && columns.nested && columns.front.topViewController === notes && !agent.nativeInFlight()
+        }
+        try tap(session, "tab-browse")
+        window?.traitOverrides.horizontalSizeClass = .regular
+        until("Browse expands") { !second.controller.isCollapsed && !agent.nativeInFlight() }
+        try switchTabs()
+        try tap(session, "tab-profile")
+        until("Profile is a stack") { nav.split == nil && nav.primaryNavigation != nil }
+        try tap(session, "tab-library")
+        until("Library expanded with Notes") { !columns.controller.isCollapsed && nav.split === columns && !agent.nativeInFlight() }
+        XCTAssertNil(agent.back()["error"])
+        until("Back returns to North") { columns.detailRoutes.count == 1 && columns.sidebarRow == row && !agent.nativeInFlight() }
+    }
+
+    func testUnopenedTabChoosesItsOwnStackAndAnInactiveSplitKeepsItsRow() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("the tab split is iPad only") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit presents a selected tab in its window scene") }
+        let session = try boot("SPLIT_TABS", size: CGSize(width: 1032, height: 1376), width: .regular)
+        let nav = session.presenter.navigationHost, agent = Agent(session: session)
+        func tapControl(_ id: String) throws {
+            let target = try node(session, id)
+            until("the selected tab shows \(id)") { target.window != nil && !agent.nativeInFlight() }
+            try tap(session, id)
+        }
+        let library = try split(session)
+        let row = try node(session, "Second").id
+        try tap(session, "Second")
+        until("Browse shows and Library has the filed book") { nav.routerTab == 1 && library.shown.count == 2 && !agent.nativeInFlight() }
+        try tap(session, "tab-library")
+        let lists = try XCTUnwrap(session.presenter.groupedLists as? GroupedListHost)
+        let list = try XCTUnwrap(lists.lists[try node(session, "list-library").id])
+        until("the row that opened the shared book is selected") {
+            list.collection.indexPathsForSelectedItems?.compactMap { list.source.itemIdentifier(for: $0) } == [row]
+        }
+        try tap(session, "tab-browse")
+        try tapControl("toggle-library")
+        until("an empty panel holds no retired route") { library.shown.isEmpty && library.detailRoutes.isEmpty && !nav.tabsHeld }
+        try tapControl("toggle-library")
+        until("the same columns hold the routes again") { library.shown.count == 2 }
+        try tap(session, "tab-profile")
+        try tapControl("open-account")
+        until("Profile pushed Account") { nav.primaryNavigation?.viewControllers.count == 2 && !agent.nativeInFlight() }
+        try tap(session, "tab-profile")
+        until("reselecting Profile pops Account") { nav.primaryNavigation?.viewControllers.count == 1 && !agent.nativeInFlight() }
+        try tap(session, "tab-library")
+        try tapControl("open-notes")
+        until("Library has two detail routes") { library.detailRoutes.count == 2 && !agent.nativeInFlight() }
+        try tap(session, "tab-library")
+        until("reselecting Library clears the detail") { library.shown.count == 1 && library.detailRoutes.isEmpty && !agent.nativeInFlight() }
     }
 
     /// LLP 1127 D2: the split is the stack's container from the first frame.
@@ -157,25 +281,22 @@ final class SplitIOSTests: XCTestCase {
         until("a row pushes") { navigation.primaryNavigation?.viewControllers.count == 2 && !agent.nativeInFlight() }
     }
 
-    /// Inside a callback the runtime waits on, the runner cannot say whether
-    /// the stack splits (`Runtime.stackSplitAnswer`): a sync there keeps the
-    /// split, and the stack is asked again on the main queue's next turn,
-    /// which `clock settle` waits for.
-    func testASyncTheRunnerCannotAnswerKeepsTheSplit() throws {
+    /// Inside a callback the runtime waits on, no runtime call runs, and a
+    /// sync there keeps the split by the rule the last batch carried
+    /// (`Batch.split`, LLP 1072 T2), asking the runner nothing.
+    func testASyncInsideARunnerCallbackKeepsTheSplitItHeard() throws {
         let session = try boot()
-        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        let navigation = session.presenter.navigationHost
         let split = try split(session)
-        var owed = false
+        var owed = true
         Owner.shared.sync {
             Owner.shared.callMain {
                 navigation.resync()
-                owed = navigation.splitAskOwed && agent.nativeInFlight()
+                owed = navigation.splitAskOwed
             }
         }
         XCTAssertTrue(navigation.split === split, "the split stays")
-        XCTAssertTrue(owed, "the stack is asked again, and settling waits for it")
-        until("asked again") { !navigation.splitAskOwed && !agent.nativeInFlight() }
-        XCTAssertTrue(navigation.split === split, "the stack still splits")
+        XCTAssertFalse(owed, "the rule the last batch carried answers")
     }
 
     /// A runner that cannot say at install whether the stack splits (a call
@@ -212,6 +333,9 @@ final class SplitIOSTests: XCTestCase {
         guard case .success(let (bar, frame))? = navigation.barItem(try node(session, "bar-photo-q")) else { return XCTFail("the photo's bar item") }
         XCTAssertTrue(bar === split.list.navigationBar, "N0's bar, which shows the photo's item")
         XCTAssertFalse(frame.isEmpty)
+        let item = try node(session, "bar-photo-q")
+        guard case .success(let placed)? = agent.barItem(item) else { return XCTFail("the agent finds the detail's button") }
+        XCTAssertEqual(placed.bar.convert(placed.item, to: bar), frame)
     }
 
     /// LLP 1127 D8: beside the detail the list is live with it; while the
@@ -289,6 +413,112 @@ final class SplitIOSTests: XCTestCase {
         }
     }
 
+    /// A detail requested while UIKit moves the columns is revealed when
+    /// the move settles, even though the split already recorded the request.
+    func testAStackShownDuringASplitMoveRevealsItsDetailOnSettlement() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let split = try split(session), navigation = session.presenter.navigationHost
+        showListOverDetail(split)
+        let root = try XCTUnwrap(navigation.container)
+        let list = try XCTUnwrap(split.shown.first)
+        session.presenter.onCovers = nil
+
+        _ = split.splitViewController(split.controller, topColumnForCollapsingToProposedTopColumn: .primary)
+        applyDetail(in: session.presenter, root: root, list: list)
+        XCTAssertTrue(split.moving)
+        XCTAssertEqual(navigation.selectedStack.count, 2)
+        XCTAssertFalse(split.show(navigation.selectedStack, animated: false))
+        XCTAssertTrue(split.detailRoutes.isEmpty)
+        XCTAssertEqual(split.controller.displayMode, .oneOverSecondary)
+
+        // UIKit finishes with the split still expanded, as on a cancelled collapse
+        split.splitViewControllerDidExpand(split.controller)
+        until("the held detail is installed and revealed") {
+            split.detailRoutes.last?.key == "requested-detail" && split.controller.displayMode == .secondaryOnly
+        }
+    }
+
+    /// Neither column can finish the projection while its setter refuses.
+    /// Both recover, and the newer numbered batch credits its row even when
+    /// a lower numbered sync is the last one requested in the same write.
+    func testRefusedSplitColumnWritesRetryAndKeepTheGreatestSequence() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let split = try split(session), navigation = session.presenter.navigationHost
+        showListOverDetail(split)
+        let root = try XCTUnwrap(navigation.container)
+        let list = try XCTUnwrap(split.shown.first)
+        let newerRow = try node(session, "row-a").id, olderRow = try node(session, "row-b").id
+        let obstruction = UIViewController()
+        let listDelegate = split.list.delegate, detailDelegate = split.detail.delegate
+        split.list.delegate = nil
+        split.detail.delegate = nil
+        defer { split.list.delegate = listDelegate; split.detail.delegate = detailDelegate }
+        split.list.setViewControllers([list, obstruction], animated: false)
+        XCTAssertTrue(split.list.topViewController === obstruction)
+        session.presenter.onCovers = nil
+        navigation.lastTransition = "completed"
+        var refuseList = true, refuseDetail = true
+        var listRefusals = 0, detailRefusals = 0
+        try withNavigationStackWrites(shouldRefuse: { nav, routes in
+            if nav === split.list, refuseList {
+                listRefusals += 1
+                return true
+            }
+            guard nav === split.detail, refuseDetail, (routes.last as? RouteController)?.key == "requested-detail" else { return false }
+            if detailRefusals == 0 {
+                XCTAssertTrue(navigation.syncing)
+                split.presses = [.init(row: newerRow, after: 69, through: 70), .init(row: olderRow, after: 19, through: 20)]
+                for sequence: UInt64 in [70, 20, 0] {
+                    var batch = wireBatch([])
+                    batch.sequence = sequence
+                    navigation.sync(batch)
+                }
+            }
+            detailRefusals += 1
+            return true
+        }) {
+            applyDetail(in: session.presenter, root: root, list: list)
+            XCTAssertGreaterThan(listRefusals, 0)
+            XCTAssertEqual(detailRefusals, 0, "a refused list write blocks the detail")
+            XCTAssertTrue(navigation.stackWritesOwed)
+            XCTAssertEqual(navigation.lastTransition, "completed")
+
+            refuseList = false
+            until("the list lands and UIKit refuses the detail") { detailRefusals > 0 }
+            XCTAssertTrue(split.list.topViewController === list)
+            XCTAssertTrue(split.detailRoutes.isEmpty)
+            XCTAssertEqual(split.controller.displayMode, .oneOverSecondary)
+            XCTAssertEqual(navigation.lastTransition, "completed")
+            XCTAssertTrue(navigation.stackWritesOwed)
+            XCTAssertEqual(split.presses.map(\.landed), [true, false])
+
+            refuseDetail = false
+            until("the detail lands and is revealed") {
+                split.detailRoutes.last?.key == "requested-detail" && split.controller.displayMode == .secondaryOnly
+            }
+            XCTAssertEqual(navigation.lastTransition, "idle")
+            XCTAssertFalse(navigation.stackWritesOwed)
+        }
+    }
+
+    private func showListOverDetail(_ split: SplitIOS) {
+        split.controller.preferredSplitBehavior = .overlay
+        split.controller.preferredDisplayMode = .oneOverSecondary
+        until("the expanded list overlays the empty detail") {
+            !split.controller.isCollapsed && split.controller.displayMode == .oneOverSecondary && !split.inTransition
+        }
+        XCTAssertTrue(split.detailRoutes.isEmpty)
+    }
+
+    private func applyDetail(in presenter: Presenter, root: NodeView, list: RouteController) {
+        let detail: UInt32 = 900_001
+        presenter.apply(wireBatch([
+            ["op": "create", "id": detail, "kind": "column", "props": ["navigationKey": "requested-detail"]],
+            ["op": "children", "id": root.id, "ids": [list.node.id, detail]],
+            ["op": "props", "id": root.id, "set": ["navigationKey": "requested-detail"]]
+        ]))
+    }
+
     /// LLP 1127 D7: N1's routes count as pushed, its first included: a base
     /// with no header keeps UIKit's bar, a column whose `navigation` hatch
     /// turned its bar off has none, and neither does one whose top says
@@ -318,6 +548,32 @@ final class SplitIOSTests: XCTestCase {
         split.detail.popViewController(animated: false)
         until("UIKit's Back to the page") { split.shown.count == 2 && !agent.nativeInFlight() }
         XCTAssertFalse(split.list.isNavigationBarHidden, "collapsed, the headerless page shows UIKit's bar with its Back")
+    }
+
+    /// Collapsed, a route pushed in the detail's column shows its title in
+    /// the list's bar, whatever the detail's own bar was: a pressable title's
+    /// menu stands there (LLP 1021 §5.1), after a bare page hid the detail's.
+    func testAPressableTitleInTheCollapsedListsBarHasItsMenu() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        let split = try split(session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        try tap(session, "row-bare")
+        until("the bare page, its column's bar hidden") { split.detail.isNavigationBarHidden && !agent.nativeInFlight() }
+        window?.traitOverrides.horizontalSizeClass = .compact
+        until("collapsed") { split.controller.isCollapsed && split.nested && !agent.nativeInFlight() }
+        split.list.popToRootViewController(animated: false)
+        until("the list again") { split.shown.count == 1 && !agent.nativeInFlight() }
+        try tap(session, "row-titled")
+        let group = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "titled-group" })
+        until("the titled page's title in the list's bar") {
+            navigation.projectedTitle(for: group).map { NavigationHost.barShowing($0) === split.list.navigationBar } == true
+        }
+        let title = try XCTUnwrap(navigation.projectedTitle(for: group)), menus = session.presenter.menus.context
+        let interaction = try XCTUnwrap(title.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let configuration = try XCTUnwrap(menus.contextMenuInteraction(interaction, configurationForMenuAtLocation: CGPoint(x: title.bounds.midX, y: title.bounds.midY)),
+                                          "a long press on the title there opens the group's menu")
+        menus.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
     }
 
     /// LLP 1127 D8: a sheet over the expanded split covers both columns
@@ -929,7 +1185,7 @@ extension SplitIOSTests {
     /// its row again.
     func testTheDetailColumnsTransitionIsItsBases() throws {
         guard #available(iOS 18.0, *) else { throw XCTSkip("the zoom transition is iOS 18's") }
-        let session = try boot(), agent = Agent(session: session)
+        let session = try boot(size: CGSize(width: 1100, height: 800)), agent = Agent(session: session)
         let split = try split(session)
         try tap(session, "row-photo")
         until("the photo is pushed") { split.shown.count == 2 && split.nested && !agent.nativeInFlight() }

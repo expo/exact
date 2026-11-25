@@ -35,6 +35,14 @@ impl<D: DataSource + Default> CanvasHost<D> {
         done
     }
 
+    /// A service chooses the custom press for this target on its owner.
+    pub fn access_custom_action(&mut self, owner: i32, target: u32) -> bool {
+        let now = self.now();
+        let done = self.p.access_custom_action(owner, target, now);
+        self.force |= done;
+        done
+    }
+
     /// No service is on any more: the presenter forgets what it told, and
     /// builds nothing until the reader asks again.
     pub fn access_off(&mut self) {

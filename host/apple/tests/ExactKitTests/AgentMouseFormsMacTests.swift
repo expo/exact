@@ -4,7 +4,7 @@ import XCTest
 @testable import ExactKit
 
 /// The agent's mouse forms reach a view and an app's local monitor as a
-/// hand's do (#107): a middle click, a right click, a triple click, a wheel
+/// hand's do: a middle click, a right click, a triple click, a wheel
 /// at a point and a Shift-held drag, each with its button, click count,
 /// modifiers and the point the driver named.
 @MainActor

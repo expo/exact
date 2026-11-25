@@ -172,10 +172,13 @@ fn confirmation(scheme: &str, width: f32, opener: &str) {
         .find(|node| node.view == dialog)
         .expect("the painted sheet is in the accessibility tree");
     assert_eq!(accessible.rect, [rect.0, rect.1, rect.2, rect.3]);
-    // A named group, as a `group` or `region` is: what a reader announces on entering it.
     assert_eq!(
         accessible.role,
-        exact_painted::presenter::access::role::GROUP
+        exact_painted::presenter::access::role::ALERT_DIALOG
+    );
+    assert_ne!(
+        accessible.flags & exact_painted::presenter::access::flag::MODAL,
+        0
     );
     assert_eq!(accessible.name, "Clear the count?");
     assert_eq!(rect.2, if width == 320. { 282. } else { 416. });
@@ -826,14 +829,17 @@ fn closing_cancels_a_contact_before_its_later_up() {
 const CONTACT_CLOSE_APP: &str = r#"component App
   state count = 0
   state ups = 0
+  state cancels = 0
   state replaced = false
   action act
     count = count + 1
-  action reopen
+  action up
     ups = ups + 1
+  action reopen
+    cancels = cancels + 1
     showModal("confirm")
   action replace
-    ups = ups + 1
+    cancels = cancels + 1
     replaced = true
     showModal("next")
   action ask
@@ -845,13 +851,13 @@ const CONTACT_CLOSE_APP: &str = r#"component App
     column width="100%" height="100%" font-family="DejaVu Sans"
       button press=ask testId="open"
         text "Open"
-      text `Count ${count} ups ${ups}` testId="status"
+      text `Count ${count} ups ${ups} cancels ${cancels}` testId="status"
       if not replaced
         dialog id="confirm" role="alertdialog" aria-label="Proceed?"
           text "Choose one."
-          button press=act pointerup=reopen key=shut destructive=true commandfor="confirm" command="close" testId="same"
+          button press=act pointerup=up pointercancel=reopen key=shut destructive=true commandfor="confirm" command="close" testId="same"
             text "Same"
-          button press=act pointerup=replace key=shut commandfor="confirm" command="close" testId="replacement"
+          button press=act pointerup=up pointercancel=replace key=shut commandfor="confirm" command="close" testId="replacement"
             text "Replacement"
           button commandfor="confirm" command="close" testId="cancel"
             text "Cancel"
@@ -879,11 +885,9 @@ fn programmatic_close_cancels_callbacks_before_same_node_reopen_or_replacement()
     let reply = key(&mut p, "x");
     assert!(reply.get("error").is_none(), "{reply}");
     p.run_commands(|| ());
-    // The agent's key pumps the close, then the cancelled contact's
-    // `pointerup`, whose `showModal` reopens the node it closed.
     assert!(p.rect_of(same).is_some(), "the callback reopened that node");
     assert!(!p.pointer_up(at.0, at.1, p.host().now()).unwrap());
-    assert_eq!(words(&p, "status"), "Count 0 ups 1");
+    assert_eq!(words(&p, "status"), "Count 0 ups 0 cancels 1");
     let reply = key(&mut p, "Escape");
     assert!(reply.get("error").is_none(), "{reply}");
 
@@ -904,7 +908,7 @@ fn programmatic_close_cancels_callbacks_before_same_node_reopen_or_replacement()
         "the replacement opening survives"
     );
     assert!(!p.pointer_up(at.0, at.1, p.host().now()).unwrap());
-    assert_eq!(words(&p, "status"), "Count 0 ups 2");
+    assert_eq!(words(&p, "status"), "Count 0 ups 0 cancels 2");
 }
 
 fn coordinate_and_keyboard_modal_input(closedby: &str) {

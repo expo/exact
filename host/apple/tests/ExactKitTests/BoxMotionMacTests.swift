@@ -89,8 +89,8 @@ final class BoxMotionMacTests: XCTestCase {
         let frame = start + 16
         session.apply(session.runtime.tick(now: frame, frame: frame))
         let layer = try XCTUnwrap(pulse.layer)
-        let animation = try XCTUnwrap(layer.animation(forKey: "pulse#0#transform.scale") as? CAKeyframeAnimation)
-        XCTAssertEqual(animation.keyPath, "transform.scale")
+        let animation = try XCTUnwrap(layer.animation(forKey: "pulse#0#transform.scale.x") as? CAKeyframeAnimation)
+        XCTAssertEqual(animation.keyPath, "transform.scale.x")
         XCTAssertEqual(animation.speed, 1)
         XCTAssertEqual(animation.repeatCount, .infinity)
         XCTAssertEqual(layer.anchorPoint, CGPoint(x: 0.5, y: 0.5))
@@ -102,7 +102,7 @@ final class BoxMotionMacTests: XCTestCase {
         for name in ["transition", "shorthand"] {
             let layer = try XCTUnwrap(view(name).layer)
             let paths = Set((layer.animationKeys() ?? []).compactMap { (layer.animation(forKey: $0) as? CAKeyframeAnimation)?.keyPath })
-            var expected: Set<String> = ["transform.scale", "transform.translation.x", "transform.translation.y", "transform.rotation.z"]
+            var expected: Set<String> = ["transform.scale.x", "transform.scale.y", "transform.translation.x", "transform.translation.y", "transform.rotation.z"]
             if name == "transition" { expected.insert("opacity") }
             XCTAssertEqual(paths, expected, name)
         }
@@ -111,16 +111,17 @@ final class BoxMotionMacTests: XCTestCase {
         session.clock = frame + 500
         session.apply(session.runtime.tick(now: session.now()))
         session.presenter.svg?.seek(clock: session.clock); session.presenter.boxAnimations.seek(clock: session.clock)
-        let held = try XCTUnwrap(layer.animation(forKey: "pulse#0#transform.scale"))
+        let held = try XCTUnwrap(layer.animation(forKey: "pulse#0#transform.scale.x"))
         XCTAssertEqual(held.speed, 0)
         XCTAssertEqual(held.timeOffset, 0.5, accuracy: 0.001)
         let transition = try view("transition")
-        XCTAssertEqual(transition.scale, 1.25, accuracy: 0.001)
+        XCTAssertEqual(transition.scale.x, 1.25, accuracy: 0.001)
+        XCTAssertEqual(transition.scale.y, 1.25, accuracy: 0.001)
         XCTAssertEqual(transition.translate.x, 20, accuracy: 0.001)
         XCTAssertEqual(transition.rotate, 45, accuracy: 0.001)
         XCTAssertFalse((transition.layer?.animationKeys() ?? []).contains { $0.hasPrefix("transition#") })
         session.apply(session.runtime.press(try view("sample").id, now: session.now()))
-        XCTAssertNil(try view("interactive").layer?.animation(forKey: "pulse#0#transform.scale"))
+        XCTAssertNil(try view("interactive").layer?.animation(forKey: "pulse#0#transform.scale.x"))
         XCTAssertTrue(session.frames.motion, "the interactive box stays sampled for hit testing")
         XCTAssertNil(try view("painted-text").layer?.animation(forKey: "paint#0#backgroundColor"), "AppKit draws a paragraph's background into its raster")
         session.apply(session.runtime.press(try view("resize").id, now: session.now()))
@@ -128,7 +129,7 @@ final class BoxMotionMacTests: XCTestCase {
         XCTAssertEqual(layer.anchorPoint, CGPoint(x: 0.5, y: 0.5))
         XCTAssertEqual(layer.position, CGPoint(x: pulse.frame.midX, y: pulse.frame.midY))
         session.apply(session.runtime.press(try view("toggle").id, now: session.now()))
-        XCTAssertNil(layer.animation(forKey: "pulse#0#transform.scale"))
+        XCTAssertNil(layer.animation(forKey: "pulse#0#transform.scale.x"))
         XCTAssertEqual(layer.anchorPoint, .zero)
         XCTAssertEqual(layer.position, pulse.frame.origin)
         XCTAssertEqual(layer.affineTransform(), .identity)

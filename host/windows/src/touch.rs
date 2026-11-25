@@ -24,6 +24,8 @@ pub(crate) struct Touches {
     pinch: Option<Pinch>,
     /// Every finger and pen down, the contact's or not.
     down: Vec<u64>,
+    #[cfg(windows)]
+    ends: std::rc::Rc<std::cell::RefCell<NativeEnds>>,
 }
 
 /// Two fingers on a zoomable scroller: its pinch (LLP 1057.001.000 §5,
@@ -47,11 +49,9 @@ impl Pinch {
 impl Touches {
     /// Pointer `id`'s `phase` at `(x, y)` in logical pixels. `pen` says
     /// whether a new contact is a pen's; it is asked only of a touch down.
-    /// A pen's hover (an update with no contact) does nothing, nor does a
-    /// finger after the first, except that its touch down cancels the
-    /// first's press, as Android's reader does, and over a zoomable
-    /// scroller the two fingers pinch it until either lifts. Answers
-    /// whether a contact went down.
+    /// A second finger joins an eligible transform or starts a scroller pinch.
+    /// A second contact that joins neither cancels the primary gesture.
+    /// Answers whether a primary contact went down.
     pub(crate) fn contact<D: DataSource>(
         &mut self,
         p: &mut Presenter<D>,
@@ -88,12 +88,32 @@ impl Touches {
         now: f64,
         pen: impl FnOnce() -> bool,
     ) -> bool {
+        let action = match phase {
+            Phase::Started => 0,
+            Phase::Ended => 1,
+            Phase::Moved => 2,
+            Phase::Cancelled => 3,
+        };
+        let pen = phase == Phase::Started && pen();
+        if !pen {
+            match p.transform_finger((id, (x, y)), None, action, now, now) {
+                Ok(true) => return false,
+                Err(e) => {
+                    p.host_mut().log(e);
+                    let _ = p.pointer_cancel(now);
+                    return false;
+                }
+                Ok(false) => {}
+            }
+        } else if p.tracking_transform_pinch() {
+            return false;
+        }
         if self.pinched(p, (id, phase), (x, y)) {
             return false;
         }
         let kind = match (phase, self.held) {
             (Phase::Started, None) => {
-                let kind = if pen() {
+                let kind = if pen {
                     PointerKind::Pen
                 } else {
                     PointerKind::Touch
@@ -102,12 +122,23 @@ impl Touches {
                 kind
             }
             (Phase::Started, Some((first, kind, at))) => {
-                self.held = None;
                 p.set_pointer_kind(kind);
-                let _ = p.pointer_cancel(now);
                 let both = [(first, at), (id, (x, y))];
-                let under = |p: &mut Presenter<D>, at: (f32, f32)| p.zoomable_under(at.0, at.1);
-                if kind == PointerKind::Touch {
+                let fingers = kind == PointerKind::Touch && !pen;
+                if fingers {
+                    match p.begin_transform_pinch((first, at), id, (x, y), now) {
+                        Ok(true) => {
+                            self.held = None;
+                            return false;
+                        }
+                        Err(e) => p.host_mut().log(e),
+                        Ok(false) => {}
+                    }
+                }
+                self.held = None;
+                let _ = p.pointer_cancel(now);
+                if fingers {
+                    let under = |p: &mut Presenter<D>, at: (f32, f32)| p.zoomable_under(at.0, at.1);
                     if let Some(container) = under(p, at).filter(|c| under(p, (x, y)) == Some(*c)) {
                         p.zoom_pinch_began(container);
                         self.pinch = Some(Pinch {
@@ -221,7 +252,107 @@ impl Touches {
             (touch.location.x / scale) as f32,
             (touch.location.y / scale) as f32,
         );
+        let phase = if matches!(phase, Phase::Ended | Phase::Cancelled)
+            && self.ends.borrow_mut().take(touch.id) == Some(Phase::Cancelled)
+        {
+            Phase::Cancelled
+        } else {
+            phase
+        };
         self.contact(p, (touch.id, phase), at, now, || pen(touch.id))
+    }
+}
+
+// winit buffers touch frames, drops WM_POINTERCAPTURECHANGED and translates
+// a cancelled up to Ended. Match native endings to those frames in order.
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct NativeEnds {
+    down: std::collections::HashSet<u64>,
+    pending: Vec<(u64, Phase)>,
+}
+#[cfg(any(windows, test))]
+impl NativeEnds {
+    fn record(&mut self, id: u64, phase: Phase) {
+        if phase == Phase::Started {
+            self.down.insert(id);
+        } else if self.down.remove(&id) {
+            self.pending.push((id, phase));
+        }
+    }
+    fn take(&mut self, id: u64) -> Option<Phase> {
+        let i = self
+            .pending
+            .iter()
+            .position(|(pointer, _)| *pointer == id)?;
+        Some(self.pending.remove(i).1)
+    }
+}
+#[cfg(windows)]
+impl Touches {
+    #[allow(unsafe_code)]
+    pub(super) fn observe(&self, window: isize) -> Result<(), String> {
+        use std::rc::Rc;
+        use windows_sys::Win32::UI::Shell::SetWindowSubclass;
+        let data = Rc::into_raw(self.ends.clone());
+        if unsafe { SetWindowSubclass(window as _, Some(pointer_message), 0, data as usize) } == 0 {
+            unsafe { drop(Rc::from_raw(data)) };
+            return Err("could not observe native pointer cancellations".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn drain_cancels<D: DataSource>(&mut self, p: &mut Presenter<D>, now: f64) {
+        // A real capture loss may have no following up.
+        let ends = std::mem::take(&mut self.ends.borrow_mut().pending);
+        for (id, phase) in ends {
+            if phase == Phase::Cancelled && self.down.contains(&id) {
+                let at = self
+                    .held
+                    .filter(|(held, _, _)| *held == id)
+                    .map(|(_, _, at)| at)
+                    .unwrap_or_default();
+                self.contact(p, (id, Phase::Cancelled), at, now, || false);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+unsafe extern "system" fn pointer_message(
+    window: windows_sys::Win32::Foundation::HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    subclass: usize,
+    data: usize,
+) -> isize {
+    use std::{cell::RefCell, rc::Rc};
+    use windows_sys::Win32::UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass},
+        WindowsAndMessaging::{
+            POINTER_MESSAGE_FLAG_CANCELED, WM_NCDESTROY, WM_POINTERCAPTURECHANGED, WM_POINTERDOWN,
+            WM_POINTERUP, WM_POINTERUPDATE,
+        },
+    };
+    let queue = data as *const RefCell<NativeEnds>;
+    let id = u64::from(wparam as u16);
+    unsafe {
+        if message == WM_POINTERDOWN {
+            (*queue).borrow_mut().record(id, Phase::Started);
+        } else if message == WM_POINTERCAPTURECHANGED
+            || matches!(message, WM_POINTERUP | WM_POINTERUPDATE)
+                && (wparam >> 16) as u32 & POINTER_MESSAGE_FLAG_CANCELED != 0
+        {
+            (*queue).borrow_mut().record(id, Phase::Cancelled);
+        } else if message == WM_POINTERUP {
+            (*queue).borrow_mut().record(id, Phase::Ended);
+        } else if message == WM_NCDESTROY {
+            RemoveWindowSubclass(window, Some(pointer_message), subclass);
+            drop(Rc::from_raw(queue));
+        }
+        DefSubclassProc(window, message, wparam, lparam)
     }
 }
 
@@ -267,6 +398,24 @@ pub(crate) fn from_touch_or_pen(extra: isize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_loss_after_up_keeps_the_up_even_when_winit_buffers_two_contacts() {
+        let mut native = NativeEnds::default();
+        for phase in [
+            Phase::Started,
+            Phase::Ended,
+            Phase::Cancelled,
+            Phase::Started,
+            Phase::Cancelled,
+            Phase::Ended,
+        ] {
+            native.record(7, phase);
+        }
+        assert_eq!(native.take(7), Some(Phase::Ended));
+        assert_eq!(native.take(7), Some(Phase::Cancelled));
+        assert_eq!(native.take(7), None);
+    }
 
     #[test]
     fn a_mouse_message_made_from_a_touch_or_a_pen_is_known_by_its_signature() {
@@ -373,6 +522,68 @@ mod tests {
         send(&mut p, &mut t, 14, Phase::Started, (20., 120.), false);
         send(&mut p, &mut t, 14, Phase::Ended, (20., 120.), false);
         assert_eq!(seen(&p), Some(Value::str(" touch pen press press")));
+    }
+
+    #[test]
+    fn photo_fingers_release_once_after_the_survivor_pans_and_a_double_tap_calls_its_handler() {
+        let src = r#"component App
+  state scale = 1
+  state offset = 0
+  state ends = 0
+  state taps = 0
+  action geometry(w: number, h: number, pw: number, ph: number)
+    ends = ends
+  action release(x: number, y: number, s: number, vx: number, vy: number, vs: number)
+    scale = s
+    offset = x
+    ends = ends + 1
+  action doubleTapped
+    taps = taps + 1
+  view
+    box width=300 height=300 overflow="hidden" box-sizing="border-box"
+      box id="image" width="100%" height="100%" box-sizing="border-box" translate="0px 0px" scale=1
+        box transformDragFor="image" transformgeometry=geometry transformrelease=release touch-action="none" dblclick=doubleTapped width=300 height=300
+"#;
+        let plan = contract::compile(src).unwrap().encode();
+        for lift_primary in [true, false] {
+            let (mut p, _) = Presenter::boot_with(
+                &plan,
+                (),
+                (400., 400.),
+                1.,
+                Default::default(),
+                PainterChoice::Cpu,
+            )
+            .unwrap();
+            let mut t = Touches::default();
+            let mut now = 0.;
+            let mut send = |p: &mut Presenter<()>, id, phase, x| {
+                now += 10.;
+                t.contact(p, (id, phase), (x, 150.), now, || false);
+            };
+            let value = |p: &Presenter<()>, key| p.host().runner().slot(key).cloned();
+            send(&mut p, 1, Phase::Started, 100.);
+            send(&mut p, 2, Phase::Started, 200.);
+            send(&mut p, 1, Phase::Moved, 50.);
+            send(&mut p, 2, Phase::Moved, 250.);
+            let (first, second) = if lift_primary {
+                ((1, 50.), (2, 250.))
+            } else {
+                ((2, 250.), (1, 50.))
+            };
+            send(&mut p, first.0, Phase::Ended, first.1);
+            assert_eq!(value(&p, "ends"), Some(Value::Number(0.)));
+            send(&mut p, second.0, Phase::Moved, second.1 + 12.);
+            send(&mut p, second.0, Phase::Ended, second.1 + 12.);
+            assert_eq!(value(&p, "ends"), Some(Value::Number(1.)));
+            assert_eq!(value(&p, "scale"), Some(Value::Number(2.)));
+            assert_eq!(value(&p, "offset"), Some(Value::Number(12.)));
+            for id in [3, 4] {
+                send(&mut p, id, Phase::Started, 150.);
+                send(&mut p, id, Phase::Ended, 150.);
+            }
+            assert_eq!(value(&p, "taps"), Some(Value::Number(1.)));
+        }
     }
 
     #[test]

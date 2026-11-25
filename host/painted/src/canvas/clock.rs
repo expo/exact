@@ -41,7 +41,7 @@ pub(super) fn publish(started: Instant, held: Option<f64>, offset: f64) {
 
 /// The reader can ask while the owner is inside an agent operation.
 /// A capture lease keeps its live origin even when that operation services it.
-pub(super) fn advance(now: f64) {
+pub(crate) fn advance(now: f64) {
     let mut clock = CLOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Clock::Held(at) = &mut *clock {
         *at = now.max(*at);

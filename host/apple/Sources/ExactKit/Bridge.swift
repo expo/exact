@@ -32,8 +32,11 @@ extension Runtime {
             decodeBatch: { Batch.decode($0, resolver: $1) },
             prepareBatch: { runtime, batch in
                 batch.prepare()
+                batch.takeBeneath(runtime)
                 #if os(macOS)
                 batch.takeControls(runtime)
+                #elseif os(iOS)
+                batch.takeSplit(runtime)
                 #endif
             }, symbolMeasure: SymbolMeasure.measure,
             prewarmIslands: SvgLink.prewarm))
@@ -261,6 +264,43 @@ extension Runtime {
         }
     }
 }
+
+extension Batch {
+    /// On the owner as the batch is read: where Back goes from the router's
+    /// new top (`ExactSession.locationBeneath`).
+    mutating func takeBeneath(_ runtime: Runtime) {
+        guard let op = ops.last(where: { $0.op == .router }), let top = (op.payload["top"] as? NSNumber)?.uint64Value else { return }
+        let length = exact_location_beneath(runtime.rt, top)
+        beneath = (top, String(decoding: Data(bytes: exact_out(runtime.rt), count: Int(length)), as: UTF8.self))
+    }
+}
+
+#if os(iOS)
+extension Batch {
+    /// The ops that can change what the split rule reads: the tree, a node's
+    /// props, style or frame (a list's direction reaches the host only as its
+    /// rows' frames), and the router.
+    static let movesSplit: Set<BatchOp.Kind> = [.create, .destroy, .children, .roots, .renew, .reorder, .props, .style, .frame, .router]
+    /// On the owner as the batch is read, with the runtime as it made it: the
+    /// split rule of the stack main last asked about, when the batch can
+    /// change it. Main keeps the last it applied (`NavigationHost.splitRule`),
+    /// so it never waits on the owner to learn it (LLP 1072 T2).
+    mutating func takeSplit(_ runtime: Runtime) {
+        guard let asked = runtime.splitAsked, ops.contains(where: { Self.movesSplit.contains($0.op) }) else { return }
+        split = runtime.readSplit(asked.view, retained: asked.retained, sequence: sequence)
+    }
+}
+
+extension Runtime {
+    /// On the owner: the split rule of the stack whose root route is `view`,
+    /// which each later batch that can change it carries.
+    package func readSplit(_ view: UInt32, retained: UInt32, sequence: UInt64) -> SplitRead {
+        splitAsked = (view, retained)
+        let length = exact_stack_split(rt, view, retained, 0)
+        return SplitRead(view: view, retained: retained, json: Data(bytes: exact_out(rt), count: Int(length)), sequence: sequence)
+    }
+}
+#endif
 
 #if os(macOS)
 extension Batch {

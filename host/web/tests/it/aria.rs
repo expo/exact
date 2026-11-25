@@ -52,7 +52,7 @@ fn form_states_and_haspopup_are_the_html_attributes() {
 #[test]
 fn range_values_are_the_aria_attributes() {
     let plan = contract::compile(
-        "component App\n  view\n    column\n      box role=\"progressbar\" aria-valuenow=3 aria-valuemin=0 aria-valuemax=8 aria-valuetext=\"3 of 8 glasses\" aria-label=\"Water\" testId=\"bar\" width=200 height=8\n",
+        "component App\n  state n = 3\n  action reset\n    n = 0\n  view\n    column\n      button \"Reset\" press=reset id=\"reset\"\n      box aria-actions=\"reset\" role=\"progressbar\" aria-valuenow=3 aria-valuemin=0 aria-valuemax=8 aria-valuetext=\"3 of 8 glasses\" aria-label=\"Water\" testId=\"bar\" width=200 height=8\n",
     )
     .unwrap();
     let (_host, batch) = Host::boot(
@@ -64,6 +64,7 @@ fn range_values_are_the_aria_attributes() {
     .unwrap();
     for attr in [
         "\"role\":\"progressbar\"",
+        "\"aria-actions\":\"reset\"",
         "\"aria-valuenow\":\"3\"",
         "\"aria-valuemin\":\"0\"",
         "\"aria-valuemax\":\"8\"",

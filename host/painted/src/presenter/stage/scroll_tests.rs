@@ -31,6 +31,12 @@ fn a_list_drag_raises_its_sheet_before_the_list_scrolls() {
     let (_, before) = p.top_sheet().unwrap();
     let y = before.1 + SHEET_HANDLE + 60.;
     let rows = id(&p, "rows");
+    let row = p.hit(200., y).unwrap();
+    let probe =
+        serde_json::json!({"id":row,"scrollDrag":[0,-100],"from":[200,y],"ms":200,"probe":true});
+    let reply: serde_json::Value =
+        serde_json::from_str(&p.agent_scroll_drag(&probe).unwrap()).unwrap();
+    assert_eq!(reply["scrollDrag"], "presenter");
     let under = p.scrollers_at(200., y);
     assert!(under.chain.iter().any(|s| s.id == rows && s.axes.1));
     let t = p.host().now();

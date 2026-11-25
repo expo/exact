@@ -7,9 +7,11 @@
 //! list, record. Records carry fields by position; the plan's `types` table
 //! names them. Absence is `Option` and nothing else.
 
-use crate::bytes::{Reader, Writer};
+use crate::bytes::{Reader, Writer, MAX_COUNT};
 use crate::{FieldsRange, HeapStr, InlineStr, Items, Plan, PlanError, Str, TypeKind, TypesId};
 use std::rc::Rc;
+
+const MAX_VALUE_DEPTH: u32 = 64;
 
 /// The pattern for text, whichever variant holds it: match text as
 /// `v @ str_value!()` and read it with [`Value::text`] or
@@ -253,17 +255,31 @@ impl Value {
     /// data seam and the type check on compiled data. A number conforms
     /// only when it is finite.
     pub fn conforms(&self, plan: &Plan, ty: TypesId) -> bool {
-        self.conforms_finite(plan, ty, true)
+        self.conforms_at::<false>(plan, ty, true, 0)
     }
 
     /// Whether the value has type `ty`, its numbers any (infinities and NaN
     /// included): the check on an argument the compiler supplies rather
     /// than the host, a child's captured prop (`@capture:…`).
     pub fn typed(&self, plan: &Plan, ty: TypesId) -> bool {
-        self.conforms_finite(plan, ty, false)
+        self.conforms_at::<false>(plan, ty, false, 0)
     }
 
-    fn conforms_finite(&self, plan: &Plan, ty: TypesId, finite: bool) -> bool {
+    /// Whether the value conforms to `ty` and its canonical bytes fit the codec.
+    pub fn conforms_and_fits_codec(&self, plan: &Plan, ty: TypesId) -> bool {
+        self.conforms_at::<true>(plan, ty, true, 0)
+    }
+
+    fn conforms_at<const CHECK_CODEC: bool>(
+        &self,
+        plan: &Plan,
+        ty: TypesId,
+        finite: bool,
+        depth: u32,
+    ) -> bool {
+        if CHECK_CODEC && !self.fits_codec_node(depth) {
+            return false;
+        }
         let row = plan.type_(ty);
         match (row.kind, self) {
             (TypeKind::Number, Value::Number(n)) => !finite || n.is_finite(),
@@ -277,28 +293,29 @@ impl Value {
             }
             (TypeKind::Unit, Value::Unit) => true,
             (TypeKind::Option, Value::Option(None)) => true,
-            (TypeKind::Option, Value::Option(Some(v))) => {
-                row.elem.is_some_and(|e| v.conforms_finite(plan, e, finite))
-            }
+            (TypeKind::Option, Value::Option(Some(v))) => row
+                .elem
+                .is_some_and(|e| v.conforms_at::<CHECK_CODEC>(plan, e, finite, depth + 1)),
             (TypeKind::List, Value::List(items)) => row.elem.is_some_and(|e| {
                 // A list of scalars (a series' points) checks in one loop.
                 match plan.type_(e).kind {
-                    TypeKind::Number => items
+                    TypeKind::Number if !CHECK_CODEC => items
                         .iter()
                         .all(|v| matches!(v, Value::Number(n) if !finite || n.is_finite())),
-                    TypeKind::String if plan.type_(e).fields.is_empty() => {
+                    TypeKind::String if !CHECK_CODEC && plan.type_(e).fields.is_empty() => {
                         items.iter().all(Value::is_str)
                     }
-                    _ => items.iter().all(|v| v.conforms_finite(plan, e, finite)),
+                    _ => items
+                        .iter()
+                        .all(|v| v.conforms_at::<CHECK_CODEC>(plan, e, finite, depth + 1)),
                 }
             }),
             (TypeKind::Record, Value::Record(values)) => {
                 let fields = row.fields;
                 values.len() == fields.len as usize
-                    && fields
-                        .iter()
-                        .zip(values.iter())
-                        .all(|(f, v)| v.conforms_finite(plan, plan.field(f).ty, finite))
+                    && fields.iter().zip(values.iter()).all(|(f, v)| {
+                        v.conforms_at::<CHECK_CODEC>(plan, plan.field(f).ty, finite, depth + 1)
+                    })
             }
             _ => false,
         }
@@ -349,6 +366,37 @@ impl Value {
         w.into_vec()
     }
 
+    fn fits_codec_node(&self, depth: u32) -> bool {
+        depth <= MAX_VALUE_DEPTH
+            && match self {
+                Value::HeapStr(_) | Value::InlineStr(_) => self.text().len() <= MAX_COUNT,
+                Value::List(items) | Value::Record(items) => items.len() <= MAX_COUNT,
+                Value::Number(_) | Value::Bool(_) | Value::Unit | Value::Option(_) => true,
+            }
+    }
+
+    /// Whether the canonical bytes would be accepted by [`Self::from_bytes`].
+    pub fn fits_codec(&self) -> bool {
+        fn fits(value: &Value, depth: u32) -> bool {
+            if !value.fits_codec_node(depth) {
+                return false;
+            }
+            match value {
+                Value::Number(n) => n.is_finite(),
+                Value::Option(Some(inner)) => fits(inner, depth + 1),
+                Value::List(items) | Value::Record(items) => {
+                    items.iter().all(|v| fits(v, depth + 1))
+                }
+                Value::HeapStr(_)
+                | Value::InlineStr(_)
+                | Value::Bool(_)
+                | Value::Unit
+                | Value::Option(None) => true,
+            }
+        }
+        fits(self, 0)
+    }
+
     /// Decode one value from `r`, bounded in depth so a hostile payload cannot
     /// exhaust the stack.
     pub fn decode(r: &mut Reader<'_>) -> Result<Value, PlanError> {
@@ -366,7 +414,7 @@ impl Value {
     }
 
     fn decode_depth(r: &mut Reader<'_>, depth: u32, pool: &mut Pool) -> Result<Value, PlanError> {
-        if depth > 64 {
+        if depth > MAX_VALUE_DEPTH {
             return Err(PlanError::ValueTooDeep);
         }
         let value = match r.u8()? {
@@ -404,7 +452,7 @@ impl Value {
                 for _ in 0..n {
                     // A number item (a series' points) decodes here: what
                     // `decode_depth` does for one, without the call.
-                    if r.peek() == Some(0) && depth < 64 {
+                    if r.peek() == Some(0) && depth < MAX_VALUE_DEPTH {
                         r.u8()?;
                         let n = r.f64()?;
                         if !n.is_finite() {

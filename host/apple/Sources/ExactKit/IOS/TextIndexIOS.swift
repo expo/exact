@@ -46,6 +46,7 @@ extension PlainView {
     package override func didMoveToSuperview() {
         super.didMoveToSuperview()
         NodeView.textRasterAncestryChanged(self)
+        NodeView.extensionsUnder(self)
         NodeView.textGeometry &+= 1
         ScrollMembership.epoch &+= 1
         NodeView.scrollLayoutEpoch &+= 1

@@ -5,6 +5,22 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
+#if os(iOS)
+extension UIBarButtonItem {
+    /// UIKit can project the button into the tab rail, outside its navigation bar (LLP 1035.003).
+    func projectedControl(in window: UIWindow?) -> UIView? {
+        var control = customView
+        #if EXACT_INSPECT
+        if control == nil, responds(to: NSSelectorFromString("view")) {
+            control = value(forKey: "view") as? UIView
+        }
+        #endif
+        guard !isHidden, let window, control?.window === window else { return nil }
+        return control
+    }
+}
+#endif
+
 extension Agent {
     /// A compact control can occupy only one end of its authored box.
     func nativeControlPoint(_ node: NodeView, box b: CGRect, in window: UIWindow) -> AddressedAim? {
@@ -17,67 +33,36 @@ extension Agent {
         return .at(point, pressReach(node, at: toWindow(middle), in: window) ?? .nothing)
     }
 
-    /// Under `--chrome platform`, the navigation bar a header button's item
-    /// sits in and the item's box in it (r5 weather's Cities, r5 mood
-    /// journal's sheet Save). Nil for any other node; a refusal for an item
-    /// the bar shows no control for. UIKit answers `frame(in:)` for such an
-    /// item too (#738): with its overflow button's frame for an item in the
-    /// overflow menu, and with a box at the bar's leading edge, where a
-    /// finger reaches Back, for a hidden item (iOS 27.0) or one it dropped
-    /// (reported on iOS 26.5). An item in the overflow menu
-    /// ([`overflowPresentationSource`](https://developer.apple.com/documentation/uikit/uinavigationitem/overflowpresentationsource))
-    /// is refused, not pressed there: a tap is one touch on the item's own
-    /// control, and that menu's rows have no identifier and can be scrolled
-    /// out of view. Any other item is placed only where `ownsControl` finds
-    /// its control.
+    /// The view and region to aim at. An item in the overflow menu has More's presentation
+    /// frame, or an empty frame on the Duo. Neither is a touch on the item itself.
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
-        let place = presenter.navigation.barItem(node)
         #if os(iOS)
-        guard case .success(let (_, frame))? = place, let (bar, item, navigationItem) = presenter.navigation.barButtonItem(node) else { return place }
-        let middle = CGPoint(x: frame.midX, y: frame.midY)
-        if navigationItem.overflowPresentationSource?.frame(in: bar)?.contains(middle) == true { return .failure(BarItemMissing(overflowed: true)) }
-        // A readout's view is its item's own
-        if let own = item.customView { return own.window != nil ? place : .failure(BarItemMissing()) }
-        // Only a hit in this bar is judged: what covers the bar is `drawnCovered`'s to name
-        guard let hit = bar.window?.hitTest(bar.convert(middle, to: nil), with: nil), hit.isDescendant(of: bar) else { return place }
-        return ownsControl(item, of: navigationItem, frame: frame, hit: hit, in: bar) ? place : .failure(BarItemMissing())
-        #else
-        return place
-        #endif
-    }
-
-    #if os(iOS)
-    /// Whether `hit`, what a finger at the middle of `frame` reaches in
-    /// `bar`, is in the control UIKit shows for `item`. UIKit has no public
-    /// way from a control to its item, and names a control by its item's
-    /// identifier only once its accessibility is loaded, which a `tap`
-    /// without a real touch does not do. What it does say is the item's
-    /// frame, which is its own control's box: so the item owns a control
-    /// with that box that nothing else claims. Another item reporting the
-    /// same frame claims it, as does UIKit's name for it when that is not
-    /// the item's. Back claims the control with none of the bar's on its
-    /// leading side: no item sits there (`leftItemsSupplementBackButton`).
-    private func ownsControl(_ item: UIBarButtonItem, of navigationItem: UINavigationItem, frame: CGRect, hit: UIView, in bar: UINavigationBar) -> Bool {
-        let same = { (a: CGRect, b: CGRect) in abs(a.minX - b.minX) <= 0.5 && abs(a.minY - b.minY) <= 0.5 && abs(a.maxX - b.maxX) <= 0.5 && abs(a.maxY - b.maxY) <= 0.5 }
-        let box = { (v: UIView) in v.convert(v.bounds, to: bar) }
-        // Every control of the bar, shown or not: while a push settles the bar's views are no guide to what it shows
-        var controls: [UIView] = [], pending = bar.subviews
-        while let v = pending.popLast() {
-            if v is UIControl { controls.append(v) } else { pending.append(contentsOf: v.subviews) }
+        if let bar = presenter.navigation.backButtonBar(node) {
+            guard let control = bar.drawnBackControl() else { return .failure(BarItemMissing()) }
+            return .success((control, control.bounds))
         }
-        // The control reached, or the only one with that box where the hit is in none: a group's shared glass can
-        // leave the line through an item's middle out of its hit shape (iOS 27.0)
-        let reached = sequence(first: hit, next: \.superview).prefix(while: { $0 !== bar }).filter { $0 is UIControl }, boxed = controls.filter { same(box($0), frame) }
-        guard let control = reached.isEmpty && boxed.count == 1 ? boxed[0] : reached.first(where: { same(box($0), frame) }) else { return false }
-        let named = sequence(first: control, next: \.superview).prefix(while: { $0 !== bar }).lazy.compactMap(\.accessibilityIdentifier).first { !$0.isEmpty }
-        if let named, named != item.accessibilityIdentifier { return false }
-        let items = (navigationItem.leftBarButtonItems ?? []) + (navigationItem.rightBarButtonItems ?? [])
-        if items.contains(where: { other in other !== item && other.frame(in: bar).map { same($0, frame) } == true }) { return false }
-        guard bar.backItem != nil, !navigationItem.hidesBackButton else { return true }
-        let rtl = bar.effectiveUserInterfaceLayoutDirection == .rightToLeft, own = box(control)
-        return controls.contains { $0 !== control && (rtl ? box($0).maxX > own.maxX + 0.5 : box($0).minX < own.minX - 0.5) }
+        #if EXACT_INSPECT
+        // UIKit can draw the toolbar button under the tabs. Its control still
+        // identifies the item when the center hit belongs to a tab.
+        if let (item, nav) = presenter.navigation.bottomItem(node.id) {
+            guard let control = item.projectedControl(in: nav.viewIfLoaded?.window) else { return .failure(BarItemMissing()) }
+            return .success((control, control.bounds))
+        }
+        #endif
+        if let (bar, item, owner) = presenter.navigation.barButtonItem(node) {
+            guard !item.isHidden else { return .failure(BarItemMissing()) }
+            if let more = owner.overflowPresentationSource?.frame(in: bar), !more.isEmpty {
+                let frame = item.frame(in: bar) ?? .zero
+                if frame.isEmpty || more.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+                    return .failure(BarItemMissing(overflowed: true))
+                }
+            }
+            guard let control = item.projectedControl(in: bar.window) else { return .failure(BarItemMissing()) }
+            return .success((control, control.bounds))
+        }
+        #endif
+        return presenter.navigation.barItem(node)
     }
-    #endif
 
     /// The control UIKit shows for the item standing for the tab `node` is
     /// (or is in), as VoiceOver and XCUITest find it (a `UITabBarItem` has no
@@ -87,7 +72,7 @@ extension Agent {
     /// when none, or more than one, shows, or the item is outside the window.
     func tabItem(_ node: NodeView) -> Result<UIView, AimRefusal>? {
         #if os(iOS)
-        if let (bar, item) = presenter.segments.barItem(of: node) { return drawnItem(item, in: bar) }
+        if let (bar, item) = presenter.segments.barItem(of: node) { return drawnItem(item, among: Self.elements(under: [bar])) }
         let nav = presenter.navigation
         guard nav.tabBarShows, let tabs = nav.container.flatMap({ NavigationTabs.of($0, presenter) }),
               let index = tabs.tabs.firstIndex(where: { node === $0 || node.isDescendant(of: $0) }),
@@ -101,9 +86,13 @@ extension Agent {
         // iPad, at the top or in the sidebar; by its title only without one.
         let id = item.accessibilityIdentifier ?? "", title = item.title ?? ""
         guard !id.isEmpty || !title.isEmpty else { return .failure(AimRefusal(why: "its tab has neither a test id nor a title UIKit's tab bar shows; give it a testId")) }
-        let found = Self.elements(under: controller.view.subviews).filter { v in
-            let box = v.convert(v.bounds, to: nil)
-            return (id.isEmpty ? v.accessibilityLabel == title : v.accessibilityIdentifier == id) && v.window?.bounds.contains(CGPoint(x: box.midX, y: box.midY)) == true
+        let shown = Self.elements(under: controller.view.subviews).filter { $0.window?.bounds.contains(Self.middle($0)) == true }
+        let found = shown.filter { id.isEmpty ? $0.accessibilityLabel == title : $0.accessibilityIdentifier == id }
+        // A button without one yet is found by its name (`drawnItem`), and by
+        // place, as a vertical bar's buttons are not the bar's subviews.
+        if found.isEmpty, let bar = controller.shownTabBar {
+            let place = bar.convert(bar.bounds, to: nil)
+            return drawnItem(item, among: shown.filter { place.contains(Self.middle($0)) })
         }
         guard found.count == 1 else {
             return .failure(AimRefusal(why: found.isEmpty ? "UIKit's tab bar shows no item for its tab; `clock settle` first waits out a transition"
@@ -120,18 +109,30 @@ extension Agent {
     /// not that place: a header the bar covers whole is laid out as
     /// `display: none`, so its nodes' boxes are no place on the screen (LLP
     /// 1080.000 D4). `region` is in `view`'s space; `barred`, that a bar
-    /// draws it; `inBar`, that it is a bar item, whose hit `barItemTarget`
-    /// judges. Nil for any other node; a refusal for a bar item the bar
-    /// shows no control for.
+    /// draws it. A bar item's hit must belong to its control.
     func drawnPlace(_ node: NodeView) -> Result<(view: UIView, region: CGRect, barred: Bool, inBar: Bool), AimRefusal>? {
         if let (control, segment) = presenter.segments.drawn(node) {
             return .success((control, segment, presenter.navigation.barSegment(node) != nil, false))
         }
-        switch barItem(node) {
-        case .success(let (bar, frame))?: return .success((bar, frame, true, true))
-        case .failure(let missing)?: return .failure(AimRefusal(why: missing.overflowed
-            ? "its bar item is in the navigation bar's overflow menu (UIKit's More button), which the agent does not open; the bar has no room for it"
-            : "its bar item is not placed in the navigation bar; `clock settle` first waits out a push or sheet still moving"))
+        var item = barItem(node)
+        if case .success(let place)? = item, let window = place.bar.window,
+           !place.bar.isHidden, place.bar.alpha > 0.01,
+           sequence(first: place.bar, next: \.superview).dropFirst().contains(where: { $0.alpha == 0 }) {
+            // UIKit attaches an entering item's control before its glass fades in. Let the
+            // transition deliver its frames, then resolve again in case UIKit replaced the item.
+            let deadline = Date(timeIntervalSinceNow: 1.5)
+            while place.bar.window === window, RouteGeometry.shownBar(place.bar) == nil, Date() < deadline {
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.016))
+            }
+            item = barItem(node)
+        }
+        switch item {
+        case .success(let place)? where RouteGeometry.shownBar(place.bar) != nil:
+            return .success((place.bar, place.item, true, true))
+        case .failure(let missing)? where missing.overflowed:
+            return .failure(AimRefusal(why: "its bar item is in the navigation bar's overflow menu (UIKit's More button), which the agent does not open; the bar has no room for it"))
+        case .success?, .failure?:
+            return .failure(AimRefusal(why: "its bar item is not placed in the navigation bar; `clock settle` first waits out a push or sheet still moving"))
         case nil: return nil
         }
     }
@@ -153,16 +154,19 @@ extension Agent {
         return found
     }
 
-    /// The control the tab bar a tablist is drawn as (LLP 1059) shows for
-    /// `item`. That bar centres its items in a pill narrower than its box, so
-    /// the hidden tab's box is not where its item is. By the item's
-    /// identifier, else by its name or title: iOS 27.1's tab button carries
-    /// its item's identifier only once an accessibility client has asked. The
-    /// bar draws each button twice for its glass, so copies at one box count
-    /// once: the copy a finger at its middle reaches.
-    private func drawnItem(_ item: UITabBarItem, in bar: UITabBar) -> Result<UIView, AimRefusal> {
+    private static func middle(_ v: UIView) -> CGPoint { v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil) }
+
+    /// The one of `elements` that a tab bar shows for `item`: UIKit's, or the
+    /// one a tablist is drawn as (LLP 1059), which centres its items in a pill
+    /// narrower than its box, so the hidden tab's box is not where its item
+    /// is. By the item's identifier, else by its name or title: iOS 27.1's
+    /// tab button carries its item's identifier only once an accessibility
+    /// client has asked, and one made since (a tab out of More, as the bar
+    /// widens) has none. The bar draws each button twice for its glass, so
+    /// copies at one box count once: the copy a finger at its middle reaches.
+    private func drawnItem(_ item: UITabBarItem, among elements: [UIView]) -> Result<UIView, AimRefusal> {
         let id = item.accessibilityIdentifier ?? "", names = [item.accessibilityLabel, item.title].compactMap { $0 }.filter { !$0.isEmpty }
-        let controls = Self.elements(under: [bar]).filter { $0 is UIControl }
+        let controls = elements.filter { $0 is UIControl }
         var found = id.isEmpty ? [] : controls.filter { $0.accessibilityIdentifier == id }
         let byName = found.isEmpty
         if byName { found = controls.filter { $0.accessibilityLabel.map(names.contains) == true } }
@@ -175,9 +179,9 @@ extension Agent {
             } else { shown.append((box, v)) }
         }
         guard shown.count == 1 else {
-            return .failure(AimRefusal(why: shown.isEmpty ? "the tab bar its tablist is drawn as shows no item for its tab; `clock settle` first waits out a transition"
-                : byName ? "the tab bar its tablist is drawn as shows \(shown.count) items named \"\(names.first ?? "")\"; give each tab its own name"
-                : "the tab bar its tablist is drawn as shows \(shown.count) items as \(id); give each tab its own testId"))
+            return .failure(AimRefusal(why: shown.isEmpty ? "its tab bar shows no item for its tab; `clock settle` first waits out a transition"
+                : byName ? "its tab bar shows \(shown.count) items named \"\(names.first ?? "")\"; give each tab its own name"
+                : "its tab bar shows \(shown.count) items as \(id); give each tab its own testId"))
         }
         let (box, control) = shown[0]
         guard control.window?.bounds.contains(CGPoint(x: box.midX, y: box.midY)) == true else {
@@ -187,30 +191,26 @@ extension Agent {
     }
     #endif
 
+    /// A second control inside the button intercepts the touch before it reaches the button.
+    /// If an app disables interaction on the backing control of an enabled item, refuse even the glass that fires it,
+    /// because a hit on that ancestor cannot establish which button it belongs to (LLP 1035.003).
+    static func barItemReceives(_ hit: UIView, in button: UIView) -> Bool {
+        sequence(first: hit, next: \.superview).first { $0 === button || $0 is UIControl } === button
+    }
+
     /// Why a finger would not reach the segment or bar item UIKit draws in
     /// `node`'s place (a sheet over it, the keyboard), or nil: the tap that
     /// activates either is refused as a covered node's is.
-    func drawnCovered(_ node: NodeView) -> String? {
-        guard case .success(let drawn)? = drawnPlace(node), let win = drawn.view.window else { return nil }
-        let p = drawn.view.convert(CGPoint(x: drawn.region.midX, y: drawn.region.midY), to: nil)
+    func drawnCovered(_ node: NodeView, request: [String: Any] = [:]) -> String? {
+        guard let place = drawnPlace(node) else { return nil }
+        if case .failure(let refusal) = place { return refusal.why }
+        guard case .success(let drawn) = place, let win = drawn.view.window else { return "the tap point is off the window" }
+        let frame = box(drawn.view, region: drawn.region)
+        guard let point = tapPoint(request, node: node, drawn: frame), frame.contains(point) else { return "the point is outside its control" }
+        let p = windowPoint(point)
         awaitAppOverlay(at: p, in: win)
-        guard let hit = win.hitTest(p, with: nil) else { return "its middle is off the window" }
-        return obscured(drawn.inBar ? barItemTarget(node, bar: drawn.view, hit: hit) : drawn.view, at: p, hit: hit)
-    }
-
-    /// What a hit at a bar item's middle must land in: the item's own button
-    /// when the hit is in it, found by the identifier Exact gives the item
-    /// (its test id) among the views this session shows, since UIKit can host
-    /// a glass item's button outside the bar's views; otherwise the bar. An
-    /// item without a test id has no identifier to find its button by, so
-    /// only the bar counts for it, where `barItem` has found the hit in the
-    /// item's own control.
-    func barItemTarget(_ node: NodeView, bar: UIView, hit: UIView) -> UIView {
-        guard let id = node.props["testId"] else { return bar }
-        let chain = sequence(first: hit, next: { $0.superview })
-        // Fall back to the bar in a nested session's view, which `Agent.shows` counts through this session's view
-        if let nearest = chain.lazy.compactMap({ $0 as? ExactView }).first, nearest.session !== session { return bar }
-        return chain.first { $0.accessibilityIdentifier == id && Agent.shows(session, $0) } ?? bar
+        guard let hit = win.hitTest(p, with: nil) else { return "the tap point is off the window" }
+        return obscured(drawn.view, at: p, hit: hit, barItem: drawn.inBar, request: request)
     }
 
     /// Whether `view` is in what `session` shows: its viewport, its view, or

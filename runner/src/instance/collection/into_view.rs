@@ -158,8 +158,15 @@ impl Collection {
         let Some(resolve) = u.scroll_padding else {
             return [0.0; 2];
         };
+        let port = self
+            .geometry
+            .as_ref()
+            .map_or([0.0; 2], |g| match self.axis {
+                ListAxis::Vertical => [g.port_cross, g.port_main],
+                ListAxis::Horizontal => [g.port_main, g.port_cross],
+            });
         let [top, right, bottom, left] =
-            resolve(self.view).map(|n| if n.is_finite() { n.max(0.0) } else { 0.0 });
+            resolve(self.view, port).map(|n| if n.is_finite() { n.max(0.0) } else { 0.0 });
         match self.axis {
             ListAxis::Vertical => [top, bottom],
             ListAxis::Horizontal => [left, right],

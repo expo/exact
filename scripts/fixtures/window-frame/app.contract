@@ -1,0 +1,43 @@
+// A module's call that animates the window's frame (expo/exact#1412): the
+// page's root clips (`overflow="hidden"`) and fills the window, with a bar
+// across its width and a word at its far corner, so content that does not
+// follow the frame shows as a bar cut short or a word out of place.
+shape Framed
+  steps: number
+  laidOut: number
+  overflowed: number
+  width: number
+  height: number
+
+component WindowFrame
+  mutation framed as shape Framed
+  derive report = match framed { case some(f) => `${f.steps} ${f.laidOut} ${f.overflowed} ${f.width}x${f.height}`, case none => "" }
+  action grow
+    send framed = frame("grow", "call")
+  action shrink
+    send framed = frame("shrink", "call")
+  action growLater
+    send framed = frame("grow", "later")
+  action shrinkLater
+    send framed = frame("shrink", "later")
+  action tally
+    send framed = frame("report", "call")
+  view
+    main width="100%" height="100%" overflow="hidden" testId="root"
+      column width="100%" height="100%" gap=8 padding=16 box-sizing="border-box"
+        row gap=8
+          button press=grow testId="grow"
+            text "Grow"
+          button press=shrink testId="shrink"
+            text "Shrink"
+          button press=growLater testId="grow-later"
+            text "Grow later"
+          button press=shrinkLater testId="shrink-later"
+            text "Shrink later"
+          button press=tally testId="report-steps"
+            text "Report"
+        box width="100%" height=24 background-color="#36c" testId="bar"
+        text report testId="report"
+        view flex=1
+        row justify-content="flex-end"
+          text "corner" testId="corner"

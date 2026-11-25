@@ -5,7 +5,8 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writ
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fragmentPermissions, manifestFragment } from './android-manifest.mjs';
-import { androidImplementations, appleImplementations, packageConfig, webImplementations } from '../js/bake/src/typescript.mjs';
+import { androidImplementations, appleImplementations, webImplementations } from '../js/bake/src/typescript.mjs';
+import { packageConfig } from '../js/bake/src/package-config.mjs';
 
 test('package implementation filters use the supplied identities and ignore unused source text', () => {
   const app = mkdtempSync(resolve(tmpdir(), 'exact-library-views-'));
@@ -78,6 +79,41 @@ test("alarms' fragment is allowed, unexported, and nothing beyond what it names"
   assert.match(xml, /<receiver android:name="exact\.alarms\.AlarmReceiver" android:exported="false" android:directBootAware="true" \/>/);
 });
 
+test("one package can declare its own POI car service and map templates", () => {
+  const name = 'uz.voltai.car.VoltaiCarAppService', permission = 'androidx.car.app.MAP_TEMPLATES';
+  const carAppService = { name, category: 'POI', minCarApiLevel: 1 };
+  const impl = manifest => ({ extension: 'voltai', className: 'uz.voltai.car.CarModule', manifest });
+  const bound = [impl({ carAppService, permissions: [permission] })];
+  const xml = manifestFragment(bound);
+  assert.equal((xml.match(/<service /g) ?? []).length, 1);
+  assert.ok(xml.includes(`<service android:name="${name}" android:exported="true" tools:node="replace">`));
+  assert.match(xml, /<action android:name="androidx\.car\.app\.CarAppService" \/>\s*<category android:name="androidx\.car\.app\.category\.POI" \/>/);
+  assert.match(xml, /com\.google\.android\.gms\.car\.application" android:resource="@xml\/automotive_app_desc"/);
+  assert.match(xml, /androidx\.car\.app\.minCarApiLevel" android:value="1"/);
+  assert.deepEqual(fragmentPermissions(bound), [permission]);
+  assert.throws(() => fragmentPermissions(bound, [permission]), /app.json host\.android\.permissions.*MAP_TEMPLATES.*only the package/i);
+  assert.deepEqual(fragmentPermissions([impl({ carAppService })]), []);
+  assert.throws(() => fragmentPermissions([impl({ permissions: [permission] }), ...bound]), /MAP_TEMPLATES without its own carAppService/);
+  assert.throws(() => manifestFragment([...bound, impl({ carAppService: { ...carAppService, name: name + '2' } })]), /second car service.*VoltaiCarAppService2/);
+  assert.throws(() => manifestFragment([impl({ carAppService, services: [{ name }] })]), /declares .* twice/);
+  const fragment = row => manifestFragment([impl({ carAppService: row })]);
+  assert.match(fragment({ ...carAppService, minCarApiLevel: 8 }), /minCarApiLevel" android:value="8"/);
+  for (const category of ['CHARGING', 'PARKING', 'NAVIGATION']) {
+    assert.throws(() => fragment({ ...carAppService, category }), new RegExp(category));
+  }
+  for (const level of [0, 9, 2.5, '1', null]) assert.throws(() => fragment({ ...carAppService, minCarApiLevel: level }), /minCarApiLevel/);
+  assert.throws(() => fragment([carAppService, { ...carAppService, name: name + '2' }]), /second car service.*VoltaiCarAppService2/);
+  for (const row of [null, [carAppService]]) assert.throws(() => fragment(row), /one service object/);
+  assert.throws(() => fragment({ ...carAppService, name: 'other.Car' }), /other.Car.*uz.voltai.car/);
+  assert.throws(() => fragment({ ...carAppService, validator: 'ALLOW_ALL_HOSTS_VALIDATOR' }), /validator.*ALLOW_ALL_HOSTS_VALIDATOR/);
+});
+
+test('only the translation graph defers ML Kit initialization to its first client', () => {
+  const pkg = name => ({ maven: [`com.google.mlkit:${name}`] });
+  assert.doesNotMatch(manifestFragment([pkg('barcode-scanning:17.3.0')]), /MlKitInitProvider/);
+  assert.match(manifestFragment([pkg('translate:17.0.3')]), /MlKitInitProvider" tools:node="remove"/);
+});
+
 test('an implementation with no fragment adds nothing', () => {
   assert.equal(manifestFragment(impl(undefined)), '');
   assert.equal(manifestFragment([]), '');
@@ -97,6 +133,21 @@ test('speech action queries and package queries share one element and deduplicat
     '        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>',
     '    </queries>',
   ].join('\n'));
+});
+
+test("an app's Kotlin shares the package query allow-list and merged entries", () => {
+  const tts = { action: 'android.intent.action.TTS_SERVICE' };
+  const mail = { action: 'android.intent.action.SENDTO', scheme: 'mailto' };
+  const health = { package: 'com.google.android.apps.healthdata' };
+  const xml = manifestFragment(impl({ queries: [tts, mail] }), { appQueries: [tts, health] });
+  assert.equal(xml, manifestFragment(impl({ queries: [tts, health, mail] })));
+  assert.match(manifestFragment([], { appQueries: [mail] }), /<intent><action android:name="android\.intent\.action\.SENDTO" \/><data android:scheme="mailto" \/><\/intent>/);
+  for (const invalid of [null, {}, [null], [{}], [{ ...health, ...tts }], [{ ...tts, mimeType: '*/*' }],
+    [{ package: 'com.example' }], [{ action: 'android.intent.action.MAIN' }],
+    [{ ...mail, scheme: 'https' }], [{ ...mail, action: 'constructor' }], [{ ...mail, action: [mail.action] }]]) {
+    assert.throws(() => manifestFragment([], { appQueries: invalid }), /app.json host\.android\.queries/);
+    assert.throws(() => manifestFragment(impl({ queries: invalid })), /alarms's Android implementation/);
+  }
 });
 
 test('an unlisted query action is refused with the package and action named', () => {
@@ -178,6 +229,57 @@ test("device's normal permission is declared, and a runtime one refused", () => 
   assert.equal(manifestFragment(bound), '', 'a permission adds no component');
   assert.deepEqual(fragmentPermissions(impl(undefined)), []);
   assert.throws(() => fragmentPermissions(impl({ permissions: ['android.permission.ACCESS_FINE_LOCATION'] })), (e) => e.message.includes('ACCESS_FINE_LOCATION') && e.message.includes('normal permissions only'));
+});
+
+test("an app and its packages declare install-time permissions on one allow-list", () => {
+  const capture = 'android.permission.DETECT_SCREEN_CAPTURE', network = 'android.permission.ACCESS_NETWORK_STATE';
+  const bound = impl({ permissions: [capture, network] });
+  assert.deepEqual(fragmentPermissions(bound, [capture, capture]), [capture, network]);
+  assert.deepEqual(fragmentPermissions([], [capture]), [capture]);
+  assert.deepEqual(fragmentPermissions(bound), [capture, network]);
+  for (const [entry, grant, option] of [
+    ['unlisted', undefined],
+    ['android.permission.RECORD_AUDIO', 'device.microphone'],
+    ['android.permission.ACCESS_COARSE_LOCATION', 'device.geolocation-approximate'],
+    ['android.permission.WRITE_CALENDAR', 'device.calendar-write-only'],
+    ['android.permission.CAMERA', 'device.camera'],
+    ['android.permission.health.READ_HEALTH_DATA_HISTORY', 'device.health-read', 'android.readHealthDataHistory'],
+    ['android.permission.READ_EXTERNAL_STORAGE', 'device.photos'],
+    ['android.permission.SEND_SMS', undefined],
+  ]) {
+    assert.throws(() => fragmentPermissions([], [entry]), error =>
+      [entry, 'app.json host.android.permissions', capture, network, 'grant line'].every(part => error.message.includes(part))
+      && (grant ? error.message.includes(`\`${grant} purpose.<key>\``) : !error.message.includes('Use `'))
+      && (!option || error.message.includes(`using ${option}`)));
+    assert.throws(() => fragmentPermissions(impl({ permissions: [entry] })), {
+      message: `alarms's Android implementation: its manifest fragment asks for "${entry}", which is not on the list (LLP 1133.031 D12 item 1: normal permissions only; a runtime permission comes from a grant line)`,
+    });
+  }
+  assert.throws(() => fragmentPermissions([], ['first-unlisted', 'second-unlisted']), /first-unlisted[\s\S]*second-unlisted/);
+  for (const invalid of [null, capture, {}, [42]]) {
+    assert.throws(() => fragmentPermissions([], invalid), /app.json host\.android\.permissions/);
+  }
+});
+
+test("a permission refusal names the app-local package call and its grant line", () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-permission-grant-'));
+  const pkg = resolve(app, 'node_modules/@fixture/video');
+  const permission = 'android.permission.READ_MEDIA_VIDEO';
+  try {
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: '@fixture/video', exports: './exact.json' }));
+    writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/video', grants: ['device.photos'],
+      names: [{ source: 'videos', derives: { android: [permission] } }] }));
+    assert.throws(() => fragmentPermissions([], [permission], app), /Use `device\.photos purpose\.<key>` with videos from @fixture\/video\.$/);
+    mkdirSync(resolve(pkg, 'android'));
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: '@fixture/video', exports: { '.': './exact.json', './android': './android/exact.json' } }));
+    writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/video' }));
+    writeFileSync(resolve(pkg, 'android/exact.json'), JSON.stringify({ kind: 'implementation', implements: '@fixture/video@^1.0', targets: ['android'], grants: ['device.photos'],
+      names: [{ source: 'clips', derives: { android: [permission] } }] }));
+    assert.throws(() => fragmentPermissions([], [permission], app), /Use `device\.photos purpose\.<key>` with clips from @fixture\/video\.$/);
+    writeFileSync(resolve(pkg, 'exact.json'), '{');
+    assert.throws(() => fragmentPermissions([], [permission], app), /READ_MEDIA_VIDEO.*allow-list.*DETECT_SCREEN_CAPTURE/);
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
 test('a query with a data scheme: SENDTO mailto: and smsto: only (LLP 1133.024 D22 item 6)', () => {
@@ -346,8 +448,13 @@ test('Android registers each custom protocol_handlers scheme on the one activity
   // Never the web's pair; a packaged-only scheme only in a production build; schemes lowercased, as Android matches them.
   assert.deepEqual(androidProtocolHandlers(manifest), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
   assert.deepEqual(androidProtocolHandlers(manifest, true).map((h) => h.protocol), ['sscontrol', 'packaged']);
-  assert.equal(withProtocolHandlers('unchanged', []), 'unchanged');
-  const xml = withProtocolHandlers('', androidProtocolHandlers(manifest));
+  assert.equal(withProtocolHandlers('unchanged', {}), 'unchanged');
+  const xml = withProtocolHandlers('', { ...manifest, host: { android: { urlSchemes: ['Notes', 'notes'] } } });
+  assert.equal((xml.match(/android:scheme="notes"/g) ?? []).length, 1);
+  assert.match(xml, /android:scheme="Notes"/);
+  const direct = withProtocolHandlers('', { host: { android: { urlSchemes: ['notes'] } } });
+  assert.match(direct, /android:scheme="notes"/);
+  assert.doesNotMatch(direct, /dev.exact.protocol_handlers/);
   assert.equal((xml.match(/<activity /g) ?? []).length, 1);
   assert.match(xml, /android:launchMode="singleTask"/);
   assert.match(xml, /<category android:name="android.intent.category.BROWSABLE" \/>\n\s*<data android:scheme="sscontrol" \/>/);
@@ -356,7 +463,7 @@ test('Android registers each custom protocol_handlers scheme on the one activity
   assert.deepEqual(JSON.parse(handlers?.[1].replaceAll('&quot;', '"')), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
   // A share target, a handler and an auth callback of the same scheme: one activity, the scheme filtered once.
   const { androidShareActivity } = await import('./share-target.mjs');
-  const all = withAuthCallbacks(withProtocolHandlers(withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } })), [{ protocol: 'app.test', url: '/open?u=%s' }]), ['app.test:/cb', 'other.test:/cb']);
+  const all = withAuthCallbacks(withProtocolHandlers(withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } })), { protocol_handlers: [{ protocol: 'app.test', url: '/open?u=%s' }] }), ['app.test:/cb', 'other.test:/cb']);
   assert.equal((all.match(/<activity /g) ?? []).length, 1);
   assert.equal((all.match(/android:scheme="app.test"/g) ?? []).length, 1);
   assert.match(all, /android:scheme="other.test"/);

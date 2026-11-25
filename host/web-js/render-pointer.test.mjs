@@ -8,7 +8,7 @@ import { webCompiler } from './module.mjs';
 import { renderer } from './render.mjs';
 
 const root = resolve(import.meta.dir, '../..');
-const kinds = ['pointerdown', 'pointerup', 'pointermove'];
+const kinds = ['pointerdown', 'pointerup', 'pointermove', 'pointercancel'];
 let dir, server, url;
 beforeAll(async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
@@ -65,6 +65,13 @@ for (const kind of kinds) test(`${kind}: a request renders and the adopted butto
     const box = await target.boundingBox();
     await page.mouse.move(box.x + 30, box.y + 30);
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    if (kind === 'pointercancel') {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + 30, y: box.y + 30 }] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+      await page.waitForFunction(() => document.querySelector('[data-testid="result"]').textContent === 'heard=1, pressed=0');
+    }
     await page.mouse.down();
     await page.mouse.up();
     await page.waitForFunction(() => document.querySelector('[data-testid="result"]').textContent === 'heard=1, pressed=1');

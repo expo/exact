@@ -298,6 +298,7 @@ fn a_replaced_still_refreshes_image_and_canvas_handles() {
     let files = Files::new();
     let displays = |red| {
         vec![Display {
+            frame: None,
             screen: Json::Null,
             width: 32,
             height: 32,
@@ -404,6 +405,7 @@ fn a_canvas_whose_still_was_missing_draws_it_once_captured() {
     };
     assert_eq!(pixel(&mut presenter), [0; 4]);
     let red = vec![Display {
+        frame: None,
         screen: Json::Null,
         width: 32,
         height: 32,
@@ -452,6 +454,7 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
     let toggle = |p: &mut Presenter<StillCanvas>| tap(p, "toggle");
     let capture = |p: &mut Presenter<StillCanvas>, red: u8| {
         let display = Display {
+            frame: None,
             screen: Json::Null,
             width: 32,
             height: 32,
@@ -501,6 +504,7 @@ fn a_retained_pattern_keeps_its_image_across_draws() {
     use crate::presenter::{PainterChoice, Presenter};
     let files = Files::new();
     let display = Display {
+        frame: None,
         screen: Json::Null,
         width: 32,
         height: 32,
@@ -559,6 +563,7 @@ impl Package for SyntheticScreen {
             .flat_map(|i| [i as u8, (i >> 4) as u8, (i * 7) as u8, 255])
             .collect();
         let display = Display {
+            frame: None,
             screen: json!({"allocation": pixels.as_ptr() as usize}),
             width: STILL,
             height: STILL,
@@ -772,4 +777,200 @@ fn a_captures_pixels_reach_its_readers_in_the_turn_that_asks() {
         .next()
         .expect("the image has it");
     assert_eq!(image.pixels().data().as_ptr() as usize, original);
+}
+
+/// The reporter's resident freeze (expo/exact#1315): a capture drawn by a
+/// canvas and an image, the page hidden, both unmounted and the files
+/// deleted. Nothing can ask for those pixels again, so the session keeps
+/// none of them: not the capture's handed pixels, and not a canvas's own
+/// decode of a file the app wrote.
+#[test]
+fn a_still_no_view_shows_leaves_the_raster_cache() {
+    use crate::presenter::{PainterChoice, Presenter};
+    let plan = crate::test_plan(
+        r#"component App
+  state path = ""
+  state shown = false
+  state image = false
+  action selectFile(value: string)
+    path = value
+  action show(value: string)
+    shown = true
+  action unmount(value: string)
+    shown = false
+  action withImage(value: string)
+    image = true
+  view
+    column
+      input testId="path" value=path input=selectFile width=96 height=20
+      input testId="show" input=show width=96 height=20
+      input testId="unmount" input=unmount width=96 height=20
+      input testId="image" input=withImage width=96 height=20
+      if shown
+        canvas surface=selected(path) width=32 height=32
+        if image
+          image path width=512 height=512
+"#,
+    );
+    let directory = format!("app:/tmp/exact-released-test-{}", std::process::id());
+    let roots = crate::picker::roots();
+    let _files = Files(roots[2].join(directory.strip_prefix("app:/tmp/").unwrap()));
+    let disk = |path: &str| roots[2].join(path.strip_prefix("app:/tmp/").unwrap());
+    let named = |p: &Presenter<StillCanvas>, id: &str| {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id
+    };
+    // The capture's pixels are handed to both readers; a file the app
+    // wrote is decoded on a worker, for the canvas alone.
+    for written in [false, true] {
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            StillCanvas,
+            (600., 700.),
+            1.,
+            roots[2].clone(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.serve_packages(vec![crate::package::Entry::of::<SyntheticScreen>(
+            "screen-capture",
+        )]);
+        for press in 0..3 {
+            let path = if written {
+                let path = format!("{directory}/written-{press}.png");
+                let pixels = [32, 64, 128, 255].repeat((STILL * STILL) as usize);
+                let png = crate::canvas2d::capture::png(STILL, STILL, &pixels).unwrap();
+                std::fs::create_dir_all(disk(&directory)).unwrap();
+                std::fs::write(disk(&path), png).unwrap();
+                path
+            } else {
+                let handler = p.host().runner().native_slot().handler().unwrap();
+                let (sent, received) = std::sync::mpsc::channel();
+                handler(json!({"extension":"screen-capture", "send":"captureScreens", "args":{"directory":directory}}).to_string().into_bytes(),
+                    exact_runner::Reply::new(move |outcome| sent.send(outcome).unwrap()));
+                p.run_commands(StillCanvas::default);
+                let exact_runner::Outcome::Response(response) = received
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap()
+                else {
+                    panic!("no capture reply")
+                };
+                let answer: Json = serde_json::from_slice(&response.body).unwrap();
+                answer["captures"][0]["path"].as_str().unwrap().to_owned()
+            };
+            p.run_commands(StillCanvas::default);
+            let mut page = p.host().runner().page();
+            page.hidden = false;
+            p.set_page(page);
+            p.type_text(named(&p, "path"), &path).unwrap();
+            if !written {
+                p.type_text(named(&p, "image"), "y").unwrap();
+            }
+            p.type_text(named(&p, "show"), "y").unwrap();
+            let images = usize::from(!written);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while (p.host().cached_canvas_image(&path).is_none()
+                || p.images().bitmaps.len() < images)
+                && std::time::Instant::now() < deadline
+            {
+                p.wait_images(std::time::Duration::from_millis(50));
+            }
+            assert!(
+                p.host().cached_canvas_image(&path).is_some() && p.images().bitmaps.len() == images,
+                "written {written}, press {press}: {:?}",
+                p.images().stats()
+            );
+            // Hidden, then unmounted and deleted, as the reporter's app does.
+            let mut page = p.host().runner().page();
+            page.hidden = true;
+            p.set_page(page);
+            p.type_text(named(&p, "unmount"), "y").unwrap();
+            p.wait_images(std::time::Duration::from_millis(100));
+            std::fs::remove_file(disk(&path)).unwrap();
+            p.wait_images(std::time::Duration::from_millis(100));
+            assert!(p.host().cached_canvas_image(&path).is_none());
+            let stats = p.images().stats();
+            assert_eq!(
+                (stats.resident_bytes, stats.reserved_bytes),
+                (0, 0),
+                "written {written}, press {press}: {stats:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn targeted_fixture_selects_before_quota_and_keeps_local_units() {
+    let screens = fixture_screens(&json!([
+        {"left":-240,"top":0,"width":240,"height":100,"devicePixelRatio":1.25},
+        {"left":0,"top":0,"width":100000,"height":100000,"devicePixelRatio":2},
+    ]));
+    let args = json!({"screen":screens[0],"rect":{"x":100,"y":20,"width":80,"height":48}});
+    let image = fixture_targets(&screens, &args, None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!((image.width, image.height), (100, 60));
+    assert!(image.frame.is_none());
+    let shot = fixture_targets(&screens, &json!({"window":"held"}), Some("held"))
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(shot.frame.unwrap()["x"], -240);
+    assert_eq!(
+        fixture_targets(&screens, &json!({"window":"held"}), None)
+            .err()
+            .unwrap()
+            .0,
+        "NotFoundError"
+    );
+}
+
+#[test]
+fn the_painted_substitute_captures_the_looked_up_window_for_one_session() {
+    let context = Context::new(
+        "screen-capture",
+        true,
+        true,
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Arc::new(|_| {}),
+    );
+    let folder = format!("exact-guide-test-{}", std::process::id());
+    let _files = Files(context.temporary().join(&folder));
+    let mut package = FixtureCapture::new(context);
+    let fixture =
+        json!({"screens":[{"left":-30,"top":0,"width":30,"height":20,"devicePixelRatio":2}]});
+    let call = |package: &mut FixtureCapture, name: &str, args| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        package.later(
+            name,
+            &args,
+            Some(&fixture),
+            Reply::new(exact_runner::Reply::new(move |v| tx.send(v).unwrap())),
+        );
+        let exact_runner::Outcome::Response(response) =
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+        else {
+            panic!("no fixture reply")
+        };
+        serde_json::from_slice::<Json>(&response.body).unwrap()
+    };
+    let window = call(&mut package, "getWindowAtPoint", json!({"x":-12,"y":8}));
+    assert_eq!(window, call(&mut package, "getFrontmostWindow", json!({})));
+    let args = json!({"directory":format!("app:/tmp/{folder}"), "window":window["handle"], "cursor":"always"});
+    let answer = call(&mut package, "captureScreens", args.clone());
+    let still = &answer["captures"][0];
+    assert_eq!(still["frame"], window["frame"]);
+    assert_eq!(
+        (still["width"].as_u64(), still["height"].as_u64()),
+        (Some(60), Some(40))
+    );
+    package.destroy();
+    assert_eq!(
+        call(&mut package, "captureScreens", args)["error"],
+        "NotFoundError"
+    );
 }

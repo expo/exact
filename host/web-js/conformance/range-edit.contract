@@ -1,4 +1,4 @@
-// The issue #275 editor: range replacement updates the controlled value once,
+// A range-edit editor: range replacement updates the controlled value once,
 // preserves selection by default, and adds no undo step (LLP 1069.001).
 component RangeEdit
   state body = "see @a.ts now"

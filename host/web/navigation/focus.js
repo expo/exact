@@ -1,6 +1,16 @@
 import { root, log, liveById } from "./routes.js";
 import { inertAncestor } from "./layers.js";
 import { setFieldSelection, setFieldRangeText } from "./controls.js";
+// A keyboard shortcut or a captured press dispatches exactly one click with its input provenance.
+const inputClicks = new WeakSet();
+export const isInputClick = event => inputClicks.has(event);
+export function clickFromInput(target, trusted) {
+  if (!trusted || target.matches(':disabled')) return target.click();
+  const click = new PointerEvent('click', { bubbles: true, cancelable: true, composed: true, pointerId: -1 });
+  inputClicks.add(click);
+  try { target.dispatchEvent(click); } finally { inputClicks.delete(click); }
+}
+
 export function focusController({ ready, elements, inert, removed = (el) => !el.isConnected }) {
   const processed = new WeakSet(), outgoing = new WeakMap();
   let pointerTarget = null, restarting = false;

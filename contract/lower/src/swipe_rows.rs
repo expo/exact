@@ -26,6 +26,7 @@ use crate::metrics::grouped as metric;
 use crate::LowerError;
 use contract_syntax::{Attr, Expr, Node, Span, StyleDecl, TemplatePart, VisitSpans};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 /// The names the expansion gives the content and the action, where the
 /// row has no `id` of its own. Every row repeats them: a swipe row's names
@@ -668,6 +669,13 @@ struct Walk {
     advise: bool,
 }
 
+/// Sheet defaults and flag ownership observed while walking expanded list rows.
+#[derive(Default)]
+pub(crate) struct DragRow {
+    pub(crate) box_sizing: bool,
+    pub(crate) disabled: Option<Attr>,
+}
+
 /// `lower-delete-row`: a `delete=` on an element that is no list row, which
 /// lowering drops. Read as the expansion reads rows: a grouped list's
 /// section rows, a cell list's children, through `if`, `for` and `match`,
@@ -688,8 +696,18 @@ struct Walk {
 /// hand-written swipe that is no row stacks its actions under the content.
 /// A windowed list's section rows, sticky headers and all, are the
 /// author's (LLP 1083 D5).
-pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
-    fn walk(nodes: &[Node], w: Walk, styles: &[StyleDecl], out: &mut Vec<LowerError>) {
+pub(crate) fn unplaced(
+    view: &[Node],
+    styles: &[StyleDecl],
+    drag_rows: &mut BTreeMap<(Span, u32), DragRow>,
+) -> Vec<LowerError> {
+    fn walk(
+        nodes: &[Node],
+        w: Walk,
+        styles: &[StyleDecl],
+        out: &mut Vec<LowerError>,
+        drag_rows: &mut BTreeMap<(Span, u32), DragRow>,
+    ) {
         for node in nodes {
             match node {
                 Node::Element {
@@ -728,11 +746,23 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                         tag,
                         attrs,
                         children,
+                        instance,
                         ..
                     } = expanded.as_ref()
                     else {
                         unreachable!("row expansion keeps an element")
                     };
+                    // Reuse the expansion's row selection for drag diagnostics,
+                    // including named swipe content inside wrappers and arms.
+                    let (sheet, own) = crate::grouped::split(attrs);
+                    let own = own.as_deref().unwrap_or(attrs);
+                    let facts = drag_rows.entry((*span, *instance)).or_default();
+                    facts.box_sizing |= (at == At::Section && !row)
+                        || sheet
+                            .iter()
+                            .chain(own.iter().filter(|a| a.written == crate::IMPLIED))
+                            .any(|a| a.name == "box-sizing");
+                    facts.disabled = last(&drawn(attrs, styles), "disabled");
                     let list = (tag == "list").then(|| drawn(attrs, styles));
                     if let Some(all) = &list {
                         section_list(all, children, *span, out);
@@ -755,11 +785,11 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                         repeated: false,
                         advise,
                     };
-                    walk(children, w, styles, out);
+                    walk(children, w, styles, out, drag_rows);
                 }
                 Node::Each { body, .. } => {
                     let repeated = w.repeated || matches!(w.at, At::Row | At::Section);
-                    walk(body, Walk { repeated, ..w }, styles, out)
+                    walk(body, Walk { repeated, ..w }, styles, out, drag_rows)
                 }
                 Node::Use { children, .. } => walk(
                     children,
@@ -770,10 +800,11 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                     },
                     styles,
                     out,
+                    drag_rows,
                 ),
                 node => {
                     for list in node.child_lists() {
-                        walk(list, w, styles, out);
+                        walk(list, w, styles, out, drag_rows);
                     }
                 }
             }
@@ -785,7 +816,7 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
         repeated: false,
         advise: false,
     };
-    walk(view, top, styles, &mut out);
+    walk(view, top, styles, &mut out, drag_rows);
     // A component used twice is inlined twice: one warning for its source.
     let mut seen = std::collections::BTreeSet::new();
     out.retain(|e| seen.insert((e.id, e.span)));
@@ -797,7 +828,10 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
 fn section_list(all: &[Attr], children: &[Node], span: Span, out: &mut Vec<LowerError>) {
     let windowed =
         last(all, "virtualized").is_some_and(|a| !matches!(a.value, Expr::Bool(false, _)));
-    if !windowed && crate::cells::sectioned(children) && crate::cells::rows("list", all, &[], false)
+    if !windowed
+        && crate::grouped::style("list", all).ok().flatten().is_none()
+        && crate::cells::sectioned(children)
+        && crate::cells::rows("list", all, &[], false)
     {
         out.push(LowerError {
             id: "lower-list-section",

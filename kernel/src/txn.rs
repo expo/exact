@@ -755,8 +755,9 @@ pub(crate) fn continue_document(
                     arena.mark_export_dirty(slot, NodeFlags::PROPS_DIRTY);
                     view_box_changed(arena, layout, slot, *prop, receipt);
                     // A first `value` makes a `progress` the bar (LLP 1116 D8).
+                    let changed = (*prop, old.as_ref());
                     receipt.layout_invalidated |=
-                        crate::style::top_layer::prop_changed(arena, layout, slot, *prop);
+                        crate::style::top_layer::prop_changed(arena, layout, slot, changed);
                     if matches!(
                         prop,
                         PropId::Type | PropId::AccessibilityRole | PropId::Href
@@ -799,8 +800,9 @@ pub(crate) fn continue_document(
                         }
                         arena.mark_export_dirty(slot, NodeFlags::PROPS_DIRTY);
                         view_box_changed(arena, layout, slot, *prop, receipt);
+                        let changed = (*prop, Some(&old));
                         receipt.layout_invalidated |=
-                            crate::style::top_layer::prop_changed(arena, layout, slot, *prop);
+                            crate::style::top_layer::prop_changed(arena, layout, slot, changed);
                         if matches!(
                             prop,
                             PropId::Type | PropId::AccessibilityRole | PropId::Href | PropId::Value
@@ -1192,7 +1194,7 @@ fn leaving_with(arena: &NodeArena, slot: u32) -> Option<&exact_motion::Animation
 
 /// Push the arena's child list for `parent` into the layout engine. A `Text`
 /// parent's children are inline runs: they are measured with it, not laid out.
-fn sync_children(arena: &NodeArena, layout: &mut dyn LayoutMirror, parent: u32) {
+pub(crate) fn sync_children(arena: &NodeArena, layout: &mut dyn LayoutMirror, parent: u32) {
     let Some(node) = arena.taffy(parent) else {
         return;
     };
@@ -1309,7 +1311,7 @@ fn source_changed(arena: &mut NodeArena, slot: u32, prop: PropId, receipt: &mut 
 }
 
 /// A system symbol's font changed, its own or an inherited size or weight
-fn symbol_font_changed(
+pub(crate) fn symbol_font_changed(
     arena: &mut NodeArena,
     slot: u32,
     rows: StyleMask,

@@ -68,14 +68,34 @@ fn node(host: &Host<NoData>, view: u32) -> u64 {
 }
 
 #[test]
-fn height_requires_explicit_owner_and_rejected_replacement_is_atomic() {
+fn removing_an_ordinary_box_forgets_its_running_height() {
+    let mut host = boot();
+    let panel = node(&host, id(&host, "panel"));
+    assert!(press(&mut host, "tall", 10.0).contains("\"property\":\"height\""));
+    press(&mut host, "remove", 30.0);
+    assert_eq!(
+        host.springs().engine().target(panel, Property::Height),
+        None
+    );
+    assert_eq!(host.springs().playing_count(), 0);
+}
+
+#[test]
+fn height_springs_without_a_drag_but_holding_it_requires_an_owner() {
     let mut host = boot();
     let panel = id(&host, "panel");
     assert!(host
         .begin_hold(panel, Property::Height, MotionValue::scalar(180.0), 0.0)
         .unwrap()
         .is_none());
-    assert!(!press(&mut host, "tall", 10.0).contains("\"property\":\"height\""));
+    let changed = press(&mut host, "tall", 10.0);
+    assert!(changed.contains("\"property\":\"height\""), "{changed}");
+    let curve = host
+        .springs()
+        .engine()
+        .spring_descriptor(node(&host, panel), Property::Height)
+        .unwrap();
+    assert_eq!((curve.from.x, curve.target.x), (180.0, 640.0));
     host.set_height_owner(Some(panel)).unwrap();
     let (held, _) = host
         .begin_hold(panel, Property::Height, MotionValue::scalar(400.0), 20.0)
@@ -212,7 +232,7 @@ fn replacement_unregistration_and_destroy_drop_only_registered_height() {
     assert!(!host.has_hold(old.token.serial()));
     assert_eq!(
         host.springs().engine().value(panel_node, Property::Height),
-        None
+        Some(MotionValue::scalar(180.0))
     );
     assert_eq!(
         host.springs()

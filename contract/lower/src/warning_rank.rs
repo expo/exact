@@ -38,6 +38,7 @@ pub fn rank(id: &str, message: &str) -> u8 {
         | "lower-width-padding"
         | "lower-swipe-wiring"
         | "lower-transform-drag-ineligible"
+        | "lower-height-drag-ineligible"
         | "lower-row-delete-button"
         | "lower-delete-row"
         | "lower-sound-undeclared"

@@ -1,10 +1,13 @@
 // The driver's held key (agent-keys.mjs `typeFor`): it repeats while held, as
-// a keyboard does (#140), each repeat a keydown whose `repeat` is true.
+// a keyboard does, each repeat a keydown whose `repeat` is true.
 import { test, expect } from 'bun:test';
+import { resolve } from 'node:path';
 import { chordKeys } from './agent-playwright.mjs';
-import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, tapArguments, pointerGap, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
+import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, tapArguments, swipeDrag, pointerGap, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
 import { open } from './agent.mjs';
+import { helpText } from './help.mjs';
 import { launchFacts } from './agent-launch.mjs';
+import { dragInWords } from './agent-drag.mjs';
 
 test('a hover wheel accepts its point and modifiers; a plain hover refuses them', () => {
   for (const extra of [{ at: [30, 40] }, { modifiers: 'Control' }]) {
@@ -22,6 +25,61 @@ test('tap midi is a MIDI input\'s message, its bytes two hex digits each; a test
   expect(tapWords(['midi', '"clk"', 'fa'])).toEqual([null, { midi: { input: 'clk', data: [0xfa] } }]);
   expect(() => tapWords(['midi', 'clk', 'clock', '0', '100'])).toThrow('a tempo above 0');
   expect(clockSlices({ bpm: 125, ms: 110 })).toEqual([{ to: 50, ticks: [20, 40] }, { to: 100, ticks: [60, 80, 100] }, { to: 110, ticks: [] }]);
+});
+
+test('a drag in carries its paths, quoted text and link whole, and refuses an empty drag and a file URL as a link', () => {
+  const words = dragInWords(`--text "Mount Fuji" --url https://example.com/fuji '/tmp/a b.txt' notes.txt`);
+  expect(tapWords(['zone', 'drop', ...words])).toEqual(['zone', { drop: ['/tmp/a b.txt', resolve('notes.txt')], text: 'Mount Fuji', url: 'https://example.com/fuji' }]);
+  expect(tapWords(['zone', 'dragenter', ...dragInWords(`--text 'it\\'s here'`)])).toEqual(['zone', { dragenter: [], text: "it's here" }]);
+  expect(() => tapWords(['zone', 'drop'])).toThrow('drop takes one or more paths, --text "…" or --url "…"');
+  expect(() => tapWords(['zone', 'drop', '--text'])).toThrow('drop --text takes a value');
+  expect(() => tapArguments({ drop: [], url: 'file:///tmp/a' })).toThrow('names a file: drop it by its path instead');
+  expect(() => tapArguments({ drop: [], text: '' })).toThrow('drop: a drag carries a path, text or a link');
+  expect(() => tapArguments({ dragenter: [], url: 'https://example.com/' })).not.toThrow();
+});
+
+test('tap <target> swipe names one of four directions and may start at a point (LLP 1057.001 §8.3)', () => {
+  expect(tapWords(['composer-bar', 'swipe', 'down'])).toEqual(['composer-bar', { swipe: 'down' }]);
+  expect(tapWords(['composer-bar', 'swipe', 'left', 'at', '4', '20'])).toEqual(['composer-bar', { swipe: 'left', at: [4, 20] }]);
+  expect(() => tapWords(['composer-bar', 'swipe'])).toThrow(MalformedOperation);
+  expect(() => tapWords(['composer-bar', 'swipe', 'Down'])).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'sideways' })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'up', modifiers: 'Shift' })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'up', mouse: true })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'down', mediaSession: 'pause' })).toThrow('swipe cannot be combined with mediaSession');
+  expect(() => tapArguments({ swipe: 'down', drag: { by: [0, 40] } })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'down', holdState: 'active' })).toThrow('swipe cannot be combined with holdState');
+  expect(() => tapArguments({ swipe: 'down', x: -1, y: -1 })).toThrow('swipe cannot be combined with x');
+  // A real flick: a fast straight drag the platform's recognizer reads
+  expect(swipeDrag({ swipe: 'down' })).toEqual({ dx: 0, dy: 120, over: 100 });
+  expect(swipeDrag({ swipe: 'left', at: [4, 20] })).toEqual({ dx: -120, dy: 0, over: 100, from: [4, 20] });
+});
+
+test('a press point before drag is refused with the drag from a point and the held contact\'s phases (#1332)', () => {
+  expect(() => tapWords(['stage', 'at', '50', '400', 'drag', '300', '0'])).toThrow('`tap stage drag 300 0 from 50 400`');
+  expect(() => tapWords(['stage', 'down', 'at', '55', '430', 'drag', '300', '0'])).toThrow('`tap stage down at 55 430`, then `tap hold <ms>`, `tap move [by] <x> <y> [over <ms>]`, `tap up`');
+  expect(() => tapWords(['stage', 'down', 'drag'])).toThrow('`tap stage drag <dx> <dy> from <x> <y>`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7', '8', 'hold', '500', 'during', "'screenshot", "mid.png'"])).toThrow("`tap stage drag 7 8 from 5 6 hold 500 during 'screenshot mid.png'`");
+  expect(() => tapWords(['stage', 'down', 'at', '5', '6', 'modifiers', 'Shift', 'drag', '7', '8'])).toThrow('`tap stage drag 7 8 from 5 6 modifiers Shift`; a held contact is `tap stage down at 5 6 modifiers Shift`');
+  expect(() => tapWords(['Sky off', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap "Sky off" drag 7 8 from 5 6`');
+  expect(() => tapWords(['drag', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap drag drag 7 8 from 5 6`');
+  expect(() => tapWords(['at', 'down', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap at down at 5 6`');
+  expect(() => tapWords(['stage', 'down', 'drag', '7', '8', 'from', '5', '6'])).toThrow('`tap stage drag 7 8 from 5 6`; a held contact is `tap stage down at 5 6`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7', '8', 'hold', '500', 'during', "'state", 'list', 'from', "2'"])).toThrow("`tap stage drag 7 8 from 5 6 hold 500 during 'state list from 2'`");
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to', '"Sky', 'off"'])).toThrow('`tap stage drag to "Sky off" from 5 6`');
+  expect(() => tapWords(['', 'at', '5', '6', 'drag', '7', '8'])).toThrow('`tap "" drag 7 8 from 5 6`');
+  expect(() => tapWords(['stage', 'down', 'drag', 'to', 'row', 'during', '"state"', 'from', '5', '6'])).toThrow('`tap stage drag to row during "state" from 5 6`; a held contact is `tap stage down at 5 6`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to', 'from'])).toThrow('`tap stage drag to from from 5 6`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7'])).toThrow('`tap stage drag 7 <dy> from 5 6`');
+  // Escaped quotes stay inside their quoted word, as parseDrag reads them.
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', '7', '8', 'hold', '500', 'during', '"state', '\\"items\\"', 'from', '2"'])).toThrow('`tap stage drag 7 8 from 5 6 hold 500 during "state \\"items\\" from 2"`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to', '"say', '\\"', 'hello"', 'over', '300'])).toThrow('`tap stage drag to "say \\" hello" from 5 6 over 300`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'modifiers', 'Shift', 'drag', 'to', 'row', 'modifiers'])).toThrow('`tap stage drag to row from 5 6 modifiers Shift`');
+  expect(() => tapWords(['stage', 'at', '5', '6', 'drag', 'to'])).toThrow('`tap stage drag to <target> from 5 6`');
+  expect(tapWords(['stage', 'at', '50', '400'])).toEqual(['stage', { at: [50, 400] }]);
+  expect(tapWords(['stage', 'down', 'at', '55', '430'])).toEqual(['stage', { down: true, at: [55, 430] }]);
+  expect(tapWords(['move', '220', '430', 'over', '200'], true)).toEqual([null, { phase: 'move', x: 220, y: 430, ms: 200 }]);
+  expect(helpText('agent', { all: true })).toContain('"tap <t> down [at <x> <y>]" "tap hold <ms>" "tap move [by] <x> <y> [over <ms>]" "tap up"');
 });
 
 test('a pad on a world canvas: tap stick and type key Gamepad… reach the world as its pad 0, held across requests (LLP 1127.003 D3)', async () => {
@@ -192,6 +250,16 @@ test('tap <image> pictureinpicture <control> names one control of Exact\'s pictu
   expect(tapWords(['page', 'pictureinpicture', 'hover'])).toEqual(['page', { pictureInPicture: 'hover' }]);
   expect(() => tapWords(['page', 'pictureinpicture'])).toThrow('pictureinpicture <control>');
   expect(() => tapWords(['page', 'pictureinpicture', 'back', 'close'])).toThrow('pictureinpicture <control>');
+});
+
+test('fingers taps two to five fingers together, on iOS alone', () => {
+  expect(tapWords(['root', 'fingers', '4'])).toEqual(['root', { fingers: 4 }]);
+  expect(tapWords(['root', 'fingers', '4', 'at', '10', '20'])).toEqual(['root', { fingers: 4, at: [10, 20] }]);
+  for (const n of [1, 6, 2.5]) expect(() => tapArguments({ fingers: n })).toThrow('2 to 5 fingers');
+  expect(() => tapArguments({ fingers: 4, mouse: true })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ fingers: 4, modifiers: 'Shift' })).toThrow(MalformedOperation);
+  for (const host of ['ios', 'host-ios']) expect(pointerGap(host, undefined, { fingers: 4 })).toBeNull();
+  for (const host of ['macos', 'linux', 'android', 'windows', 'web']) expect(pointerGap(host, undefined, { fingers: 4 })).toContain('tap of 4 fingers');
 });
 
 test('dblclick touch is a finger\'s double tap, carried on iOS, Chrome, Android and Windows (LLP 1057.001.000 §6)', () => {

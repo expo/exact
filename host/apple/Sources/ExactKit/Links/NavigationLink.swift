@@ -83,6 +83,14 @@ package enum RouteGeometry {
     /// clearance `route` turns off (`-exact-safe-area`).
     package static func clearanceOff(_ route: NodeView) -> Int { Int(route.style["safe_area"]?.number ?? 0) & 0xf }
 
+    /// The clearance layout adds after crediting authored padding that reads this edge's inset.
+    package static func clearancePadding(_ route: NodeView, edge: Int, inset: CGFloat) -> CGFloat {
+        let bit = 1 << edge
+        if clearanceOff(route) & bit != 0 { return 0 }
+        if Int(route.style["inset_credit"]?.number ?? 0) & bit == 0 { return inset }
+        return max(0, inset - ((route.kernelPadding?[edge] ?? nil) ?? 0))
+    }
+
     /// Whether a route asks `navigationBar="transparent"`: its bar shows
     /// with a clear scroll-edge appearance and insets no content.
     package static func transparentBar(_ route: NodeView) -> Bool { route.props["navigationBar"] == "transparent" }
@@ -139,10 +147,11 @@ package enum RouteGeometry {
         // A native backend owns layout/footer insets, composed with the
         // refresh control and keyboard; zero is only the plain-scroll baseline.
         if s === node.scroll {
+            let expected = node.bandInset.adding(node.presenter?.navigation.clearanceInset(of: s) ?? .zero)
             #if os(tvOS)
-            if s.contentInset != node.bandInset { out.append("contentInset") }
+            if s.contentInset != expected { out.append("contentInset") }
             #else
-            if s.contentInset != node.bandInset, s.refreshControl?.isRefreshing != true { out.append("contentInset") } // a band's is the host's
+            if s.contentInset != expected, s.refreshControl?.isRefreshing != true { out.append("contentInset") }
             #endif
         }
         if s.contentInsetAdjustmentBehavior != (insetByUIKit ? .automatic : .never) { out.append("contentInsetAdjustmentBehavior") }
@@ -177,6 +186,52 @@ extension UITabBarController {
 
 #if os(iOS)
 extension UITabBarController {
+    /// The navigation beside this route or pane, on the edge it adjoins (LLP 1123 D9).
+    package func barInsets(beside route: UIView) -> UIEdgeInsets {
+        guard #available(iOS 18.0, *), let root = viewIfLoaded, let window = root.window,
+              route.window === window, let selected = selectedViewController?.viewIfLoaded,
+              route === selected || route.isDescendant(of: selected) else { return .zero }
+        func visibleBounds(_ view: UIView) -> CGRect {
+            var rect = root.bounds.intersection(view.convert(view.bounds, to: root))
+            for parent in sequence(first: view, next: \.superview).dropFirst() {
+                if parent.clipsToBounds || parent === window { rect = rect.intersection(parent.convert(parent.bounds, to: root)) }
+                if parent === window { break }
+            }
+            return rect
+        }
+
+        let page = visibleBounds(route)
+        guard !page.isEmpty else { return .zero }
+        let content: CGRect, onLeft: Bool, width: CGFloat
+        if traitCollection.userInterfaceIdiom == .pad, !sidebar.isHidden, mode != .tabBar {
+            onLeft = root.effectiveUserInterfaceLayoutDirection == .leftToRight
+            // UIKit can move the selected view or reserve the sidebar inside its safe area.
+            // The tab controller’s safe area and the selected controller’s own inset also reach that view.
+            let frame = selected.convert(selected.bounds, to: root)
+            let offset = onLeft ? frame.minX - root.bounds.minX : root.bounds.maxX - frame.maxX
+            let inherited = onLeft ? root.safeAreaInsets.left : root.safeAreaInsets.right
+            let extra = selectedViewController?.additionalSafeAreaInsets ?? .zero
+            let safe = onLeft ? selected.safeAreaInsets.left - extra.left : selected.safeAreaInsets.right - extra.right
+            width = max(0, offset) + max(0, safe - max(0, inherited - offset))
+            content = root.bounds.inset(by: UIEdgeInsets(top: 0, left: onLeft ? width : 0, bottom: 0, right: onLeft ? 0 : width))
+        } else if #available(iOS 27.1, *), traitCollection.userInterfaceIdiom == .phone, !isTabBarHidden,
+                  let rail = RouteGeometry.shownBar(tabBar), rail.traitCollection.placesVerticalBar {
+            let frame = rail.convert(rail.bounds, to: root)
+            guard frame.height > frame.width else { return .zero }
+            content = contentLayoutGuide.layoutFrame
+            onLeft = frame.midX < content.midX
+            guard onLeft ? frame.minX < content.minX : frame.maxX > content.maxX else { return .zero }
+            let visible = visibleBounds(rail), adjoining = page.intersection(content)
+            guard !visible.isEmpty, min(visible.maxY, adjoining.maxY) > max(visible.minY, adjoining.minY) else { return .zero }
+            width = visible.width
+        } else { return .zero }
+        guard width > 0, !content.isEmpty, page.intersects(content) else { return .zero }
+        let pixel = 1 / root.traitCollection.displayScale
+        if onLeft, page.minX <= content.minX + pixel { return UIEdgeInsets(top: 0, left: width, bottom: 0, right: 0) }
+        if !onLeft, page.maxX >= content.maxX - pixel { return UIEdgeInsets(top: 0, left: 0, bottom: 0, right: width) }
+        return .zero
+    }
+
     /// iPadOS 18's floating tab bar, in a regular width: no `UITabBar` in the
     /// window (`tabBar` is out of it), but a list of the tabs' items at the
     /// top, a collection view whose first section has a cell per tab, in
@@ -216,6 +271,17 @@ extension UITabBarController {
             pending += v.subviews
         }
         return found.count == 1 ? found[0] : nil
+    }
+}
+#endif
+
+#if EXACT_AGENT
+package struct BarLayoutBox {
+    package let view: UIView, region: CGRect, name: String
+    package init(_ view: UIView, _ region: CGRect? = nil, _ name: String) {
+        self.view = view
+        self.region = region ?? view.bounds
+        self.name = name
     }
 }
 #endif
@@ -310,6 +376,7 @@ package protocol NavigationHosting: AnyObject {
     func reportCovers()
     func fitOwner()
     func insetByUIKit(_ node: NodeView) -> Bool
+    func clearanceInset(of scroll: UIScrollView) -> UIEdgeInsets
 
     // Scrolling.
     var scrollsToTopSelection: UIScrollView? { get set }
@@ -328,6 +395,8 @@ package protocol NavigationHosting: AnyObject {
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>?
     func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)?
     #if os(iOS)
+    /// The bar's title that shows `node`, the pressable group the page hides for it, now
+    func titleSurface(for node: NodeView) -> (any UIView & TitleMenuSurface)?
     /// Whether `dialog`'s sheet would show its header as its bar now: its
     /// sheet is then presented in a navigation controller.
     func wantsDialogBar(_ dialog: NodeView) -> Bool
@@ -362,7 +431,7 @@ package protocol NavigationHosting: AnyObject {
     func inspectNode(in bar: UINavigationBar, at p: CGPoint) -> UInt32?
     #endif
     #if EXACT_AGENT
-    var resyncOwed: Bool { get }
+    var syncScheduled: Bool { get }
     /// Every stack Exact built: the tabs' in tab order (or the one), then the sheets'.
     var allNavigations: [UINavigationController] { get }
     /// Whether UIKit's tab bar draws the tablist (not authored chrome, not `appearance: none`).
@@ -381,8 +450,14 @@ package protocol NavigationHosting: AnyObject {
     /// A list beside its detail as UIKit's split shows it, for `state window.split` (LLP 1127 D11).
     var splitObservation: [String: Any] { get }
     func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]?
+    /// The boxes of the headers UIKit draws and the parts it places, in each view's coordinates.
+    func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox]
+    func backButtonBar(_ node: NodeView) -> UINavigationBar?
     func drawnSearch(_ node: NodeView) -> UITextField?
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)?
+    #if os(iOS)
+    func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)?
+    #endif
     /// The tabs a route's search scope control shows, by segment; nil when
     /// `segments` is no route's scope control.
     func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]?
@@ -416,6 +491,15 @@ package protocol LiftedNodes: AnyObject {
 
 /// A view that holds lifted nodes, which the focus search skips.
 package protocol HoldsLiftedNodes: UIView {}
+
+/// The view that holds a readout the navigation bar hosts (LLP 1141.004 D3).
+package protocol HoldsBarReadout: HoldsLiftedNodes {}
+
+extension NodeView {
+    /// The readout a navigation bar hosts that holds this node, itself
+    /// included; nil outside one.
+    package var barReadout: NodeView? { authoredLine.first { $0.superview is HoldsBarReadout } }
+}
 
 extension Presenter {
     /// The view above `view` in a pass over the layout: a lifted node's
@@ -540,7 +624,7 @@ package final class NoNavigation: NavigationHosting {
         presenter.owners.publish()
     }
 
-    package func rebooting() {}
+    package func rebooting() { told = [] }
     package func retheme() {}
     package func appearanceChanged() {}
     package func replayHatches() {}
@@ -588,12 +672,22 @@ package final class NoNavigation: NavigationHosting {
     package var covers: [UInt32: HostCover] { [:] }
     package var coversAnswerOwed: Bool { false }
     package var wantsWholeView: Bool { false }
-    /// Covers are navigation's; a native arrangement's hidden panes are the
-    /// core's (`ArrangementHost.reportHiddenPanes`).
-    package func coversChanged() {}
-    package func reportCovers() {}
+    /// The panes the kernel was last told a native arrangement hides, covered whole: the only covers without navigation
+    private var told: Set<UInt32> = []
+    package func coversChanged() { reportCovers() }
+    package func reportCovers() {
+        #if os(iOS)
+        guard #available(iOS 27.1, *) else { return }
+        let hidden = presenter.arrangements.covered
+        let changes = hidden.subtracting(told).map { ($0, HostCover.whole as HostCover?) }
+            + told.subtracting(hidden).filter(presenter.uncovers).map { ($0, nil as HostCover?) }
+        told = hidden
+        if !changes.isEmpty { presenter.onCovers?(changes) }
+        #endif
+    }
     /// The document stays in the scrolling viewport: no native container takes the whole view.
     package func fitOwner() { presenter.hostDocument(fixed: false) }
+    package func clearanceInset(of scroll: UIScrollView) -> UIEdgeInsets { .zero }
     /// An arrangement's scroller is inset by UIKit, as with navigation.
     package func insetByUIKit(_ node: NodeView) -> Bool {
         #if os(iOS)
@@ -618,6 +712,7 @@ package final class NoNavigation: NavigationHosting {
     package func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? { nil }
     package func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)? { nil }
     #if os(iOS)
+    package func titleSurface(for node: NodeView) -> (any UIView & TitleMenuSurface)? { nil }
     package func wantsDialogBar(_ dialog: NodeView) -> Bool { false }
     package func projectDialogBar(_ dialog: NodeView, on controller: UIViewController) -> Bool {
         controller.navigationController?.setNavigationBarHidden(true, animated: false)
@@ -644,7 +739,7 @@ package final class NoNavigation: NavigationHosting {
     package func inspectNode(in bar: UINavigationBar, at p: CGPoint) -> UInt32? { nil }
     #endif
     #if EXACT_AGENT
-    package var resyncOwed: Bool { false }
+    package var syncScheduled: Bool { false }
     package var allNavigations: [UINavigationController] { [] }
     package var tabBarShows: Bool { false }
     package var retiringRoots: [NodeView] { [] }
@@ -657,8 +752,13 @@ package final class NoNavigation: NavigationHosting {
     package func agentBack() -> String? { nil }
     package var splitObservation: [String: Any] { ["installed": false] }
     package func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]? { nil }
+    package func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox] { [:] }
+    package func backButtonBar(_ node: NodeView) -> UINavigationBar? { nil }
     package func drawnSearch(_ node: NodeView) -> UITextField? { nil }
     package func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
+    #if os(iOS)
+    package func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)? { nil }
+    #endif
     package func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]? { nil }
     #endif
 }

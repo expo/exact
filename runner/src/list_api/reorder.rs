@@ -18,6 +18,13 @@ pub struct ReorderBinding {
     /// Current measured row generation.
     pub row_epoch: u64,
 }
+
+impl ReorderBinding {
+    /// A settings row is mounted directly in its card. A windowed row has a distinct sizing wrapper.
+    pub fn unwrapped(&self) -> bool {
+        self.wrapper == self.root
+    }
+}
 /// Exact latest accepted scroll facts, not merely a revision number.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReorderGeometry {

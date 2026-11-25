@@ -4,6 +4,7 @@
 //! change, or when their stream was open — and the device's store and clock
 //! apply as ordinary updates.
 
+use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, Checkpoint, DataError, DataSource, Delivery, Event, Outcome, Request, Runner,
@@ -33,7 +34,7 @@ component Blog
 /// Posts answer now (or later), the viewer reads the store; every ask is
 /// recorded, and readiness and the answers' wording are the test's.
 #[derive(Clone, Default)]
-struct Source {
+struct Posts {
     asks: Rc<RefCell<Vec<String>>>,
     not_ready: Rc<Cell<bool>>,
     later: bool,
@@ -45,7 +46,7 @@ fn post(id: &str, title: &str) -> Value {
     Value::record(vec![Value::str(id), Value::str(title)])
 }
 
-impl DataSource for Source {
+impl DataSource for Posts {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))
     }
@@ -118,13 +119,13 @@ fn view_of<D: DataSource>(r: &Runner<D>, test_id: &str) -> u32 {
 
 /// The checkpoint a render of `plan` at `/` writes, answered in `wording`.
 fn rendered(plan: &exact_plan::Plan, wording: &'static str) -> Checkpoint {
-    let source = Source {
+    let source = Posts {
         wording,
-        ..Source::default()
+        ..Posts::default()
     };
     let r = Runner::boot(
         plan.clone(),
-        source,
+        boxed(source),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -135,13 +136,13 @@ fn rendered(plan: &exact_plan::Plan, wording: &'static str) -> Checkpoint {
 
 fn boot(
     plan: &exact_plan::Plan,
-    source: Source,
+    source: Posts,
     checkpoint: &Checkpoint,
     store: &[(&str, &str)],
 ) -> Result<Runner<Source>, RunnerError> {
     Runner::boot_checkpoint(
         plan.clone(),
-        source,
+        boxed(source),
         Kernel::with_monospace(),
         checkpoint,
         store
@@ -171,10 +172,10 @@ fn the_render_records_what_the_document_read() {
     // A source that hadn't answered is pending, not an answer.
     let later = Runner::boot(
         plan.clone(),
-        Source {
+        boxed(Posts {
             later: true,
-            ..Source::default()
-        },
+            ..Posts::default()
+        }),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -189,9 +190,9 @@ fn the_render_records_what_the_document_read() {
 fn a_checkpoint_answer_is_not_asked_again_at_boot_or_at_data_ready() {
     let plan = contract::compile(SRC).unwrap();
     let checkpoint = rendered(&plan, "Rendered");
-    let source = Source {
+    let source = Posts {
         wording: "Asked",
-        ..Source::default()
+        ..Posts::default()
     };
     source.not_ready.set(true);
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
@@ -223,9 +224,9 @@ fn an_open_streams_answer_shows_until_it_is_asked_again() {
         ..rendered(&plan, "Rendered")
     };
     // Before the source is ready: asked at `data_ready`, and nothing else is.
-    let source = Source {
+    let source = Posts {
         wording: "Asked",
-        ..Source::default()
+        ..Posts::default()
     };
     source.not_ready.set(true);
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
@@ -241,9 +242,9 @@ fn an_open_streams_answer_shows_until_it_is_asked_again() {
     assert_eq!(text_of(&r, "title"), "Asked 7");
 
     // A ready source is asked at boot, showing the rendered answer until it answers.
-    let source = Source {
+    let source = Posts {
         later: true,
-        ..Source::default()
+        ..Posts::default()
     };
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
     assert_eq!(*source.asks.borrow(), ["post"]);
@@ -263,10 +264,10 @@ fn an_open_streams_answer_shows_until_it_is_asked_again() {
 fn other_logic_or_an_answer_that_no_longer_fits_is_asked_again() {
     let plan = contract::compile(SRC).unwrap();
     let mut checkpoint = rendered(&plan, "Rendered");
-    let source = Source {
+    let source = Posts {
         wording: "Asked",
         revision: Some("module-b"),
-        ..Source::default()
+        ..Posts::default()
     };
     checkpoint.logic = Some("module-a".into());
     let r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
@@ -276,9 +277,9 @@ fn other_logic_or_an_answer_that_no_longer_fits_is_asked_again() {
 
     let mut checkpoint = rendered(&plan, "Rendered");
     checkpoint.answers[0].3 = Value::str("not a post");
-    let source = Source {
+    let source = Posts {
         wording: "Asked",
-        ..Source::default()
+        ..Posts::default()
     };
     let r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
     assert_eq!(text_of(&r, "title"), "Asked 7");
@@ -290,20 +291,20 @@ fn the_devices_store_applies_to_what_reads_it() {
     // The bake marks `viewer` as reading the store.
     let plan = contract::bake(
         contract::compile(SRC).unwrap(),
-        Source {
+        boxed(Posts {
             wording: "Built",
-            ..Source::default()
-        },
+            ..Posts::default()
+        }),
     )
     .unwrap();
     let checkpoint = rendered(&plan, "Rendered");
     // An empty store is the render's own input: nothing is asked.
-    let source = Source::default();
+    let source = Posts::default();
     let r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
     assert_eq!(text_of(&r, "viewer"), "anonymous");
     assert!(source.asks.borrow().is_empty());
     // Nor once the module loads after the boot: the page answered the reader.
-    let source = Source::default();
+    let source = Posts::default();
     source.not_ready.set(true);
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
     source.not_ready.set(false);
@@ -311,12 +312,12 @@ fn the_devices_store_applies_to_what_reads_it() {
     assert_eq!(text_of(&r, "viewer"), "anonymous");
     assert!(source.asks.borrow().is_empty());
     // A signed-in device asks the reader again, at boot when it can.
-    let source = Source::default();
+    let source = Posts::default();
     let r = boot(&plan, source.clone(), &checkpoint, &[("token", "ada")]).unwrap();
     assert_eq!(text_of(&r, "viewer"), "ada");
     assert_eq!(*source.asks.borrow(), ["viewer"]);
     // Or once the module loads, showing the rendered answer until then.
-    let source = Source::default();
+    let source = Posts::default();
     source.not_ready.set(true);
     let mut r = boot(&plan, source.clone(), &checkpoint, &[("token", "ada")]).unwrap();
     assert_eq!(text_of(&r, "viewer"), "anonymous");
@@ -337,18 +338,18 @@ fn an_answer_that_only_drew_is_asked_again_by_no_store_change() {
         "  action next",
         "  resource visit = visit() as shape string\n  action next",
     );
-    let built = Source {
+    let built = Posts {
         wording: "Built",
-        ..Source::default()
+        ..Posts::default()
     };
-    let plan = contract::bake(contract::compile(&src).unwrap(), built).unwrap();
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(built)).unwrap();
     let checkpoint = rendered(&plan, "Rendered");
     assert_eq!(checkpoint.answers[2].0, "visit");
     assert_eq!(checkpoint.readers, [1], "`viewer`'s answer, not `visit`'s");
-    let source = Source::default();
+    let source = Posts::default();
     let _r = boot(&plan, source.clone(), &checkpoint, &[("token", "ada")]).unwrap();
     assert_eq!(*source.asks.borrow(), ["viewer"]);
-    let source = Source::default();
+    let source = Posts::default();
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
     r.store_changed(vec![("token".into(), b"ada".to_vec())])
         .unwrap();
@@ -368,15 +369,15 @@ component Visits
   view
     text shown testId="shown"
 "#;
-    let built = Source {
+    let built = Posts {
         wording: "Built",
-        ..Source::default()
+        ..Posts::default()
     };
-    let plan = contract::bake(contract::compile(src).unwrap(), built).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(built)).unwrap();
     let checkpoint = rendered(&plan, "Rendered");
     assert_eq!(checkpoint.answers.len(), 3);
     assert!(checkpoint.readers.is_empty());
-    let source = Source::default();
+    let source = Posts::default();
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
     assert_eq!(text_of(&r, "shown"), "drawn a,drawn b");
     r.store_changed(vec![("token".into(), b"ada".to_vec())])
@@ -396,12 +397,12 @@ fn an_answer_that_read_the_store_is_a_store_readers() {
     let checkpoint = rendered(&plan, "Rendered");
     assert_eq!(checkpoint.readers, [1], "`viewer`'s answer");
     // A signed-in device asks it again at boot
-    let source = Source::default();
+    let source = Posts::default();
     let r = boot(&plan, source.clone(), &checkpoint, &[("token", "ada")]).unwrap();
     assert_eq!(text_of(&r, "viewer"), "ada");
     assert_eq!(*source.asks.borrow(), ["viewer"]);
     // A first visit asks nothing, and a later sign-in asks it again
-    let source = Source::default();
+    let source = Posts::default();
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]).unwrap();
     assert_eq!(text_of(&r, "viewer"), "anonymous");
     assert!(source.asks.borrow().is_empty());
@@ -416,11 +417,11 @@ fn the_clock_starts_at_the_render_time() {
     let plan = contract::compile(SRC).unwrap();
     let mut checkpoint = rendered(&plan, "Rendered");
     checkpoint.now_ms = 5_000.0;
-    let r = boot(&plan, Source::default(), &checkpoint, &[]).unwrap();
+    let r = boot(&plan, Posts::default(), &checkpoint, &[]).unwrap();
     assert_eq!(r.now_ms(), 5_000.0);
     checkpoint.now_ms = f64::NAN;
     assert!(matches!(
-        boot(&plan, Source::default(), &checkpoint, &[]),
+        boot(&plan, Posts::default(), &checkpoint, &[]),
         Err(RunnerError::NonFiniteClock)
     ));
 }

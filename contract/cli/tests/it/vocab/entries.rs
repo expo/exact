@@ -4,6 +4,38 @@
 use super::*;
 
 #[test]
+fn viewport_and_container_units_name_the_supported_lengths_and_their_limits() {
+    let mut names = vec![
+        "--json",
+        "viewport-and-container-units",
+        "viewport-units",
+        "cqw",
+    ];
+    names.extend(
+        exact_kernel::ViewportUnit::ALL
+            .into_iter()
+            .map(|unit| unit.name()),
+    );
+    let entries: Value = serde_json::from_str(&stdout(&vocab(&names))).unwrap();
+    for entry in entries.as_array().unwrap() {
+        assert_eq!(entry["concept"]["name"], "viewport-and-container-units");
+        let answer = entry["concept"]["answer"].as_str().unwrap();
+        assert!(answer.contains("calc(100vw - 100%)"));
+        assert!(answer.contains("small, large and dynamic"));
+        assert!(answer.contains("grid tracks"));
+    }
+    for source in entries[0]["concept"]["contract"].as_array().unwrap() {
+        contract::compile(source.as_str().unwrap()).unwrap();
+    }
+    let text = stdout(&vocab(&["vw", "dvh", "cqw"]));
+    assert_eq!(
+        text.matches("viewport-and-container-units (a concept)")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn module_tags_distinguish_app_props_from_package_declarations() {
     let one: Value = serde_json::from_str(&stdout(&vocab(&["--json", "exact-map"]))).unwrap();
     let note = one["note"].as_str().unwrap();

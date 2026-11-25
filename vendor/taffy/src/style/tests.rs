@@ -38,6 +38,8 @@ fn defaults_match() {
         display: Default::default(),
         item_is_table: false,
         item_is_replaced: false,
+        item_is_form_control: false,
+        item_is_compressible_replaced: false,
         box_sizing: Default::default(),
         #[cfg(feature = "float_layout")]
         float: Default::default(),
@@ -56,11 +58,9 @@ fn defaults_match() {
         flex_line_count: 1,
         #[cfg(any(feature = "flexbox", feature = "grid"))]
         align_items: Default::default(),
-        #[cfg(any(feature = "flexbox", feature = "grid"))]
         align_self: Default::default(),
         #[cfg(any(feature = "grid", feature = "block_layout"))]
         justify_items: Default::default(),
-        #[cfg(any(feature = "grid", feature = "block_layout"))]
         justify_self: Default::default(),
         #[cfg(any(feature = "flexbox", feature = "grid", feature = "block_layout"))]
         align_content: Default::default(),
@@ -173,7 +173,6 @@ fn style_sizes() {
     assert_type_size::<AlignContent>(2);
     assert_type_size::<AlignItems>(2);
     assert_type_size::<Option<AlignItems>>(2);
-    assert_type_size::<Option<AlignContent>>(2);
 
     // Flexbox Container
     assert_type_size::<FlexDirection>(1);

@@ -2,25 +2,16 @@
 //! lowered to their rows: each form's words and lengths as the kernel holds them, and the values
 //! each refuses.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Dimension, Kernel, SafeAreaEdges, SafeAreaExtend};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(source: &str) -> Runner<NoData> {
+fn boot(source: &str) -> Runner<Source> {
     let plan = contract::compile(source).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -28,7 +19,7 @@ fn boot(source: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn style(r: &mut Runner<NoData>, test_id: &str) -> exact_kernel::StyleProps {
+fn style(r: &mut Runner<Source>, test_id: &str) -> exact_kernel::StyleProps {
     let k = r.kernel_mut();
     let id = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
     k.node(id).unwrap().style.clone()
@@ -293,7 +284,7 @@ fn a_scrollers_node_reply_carries_its_terms() {
     k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
     k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
         .unwrap();
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(t)[0])
             .unwrap()
@@ -318,7 +309,7 @@ fn an_extending_boxs_node_reply_carries_its_extension() {
     k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
     k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
         .unwrap();
-    let id = |r: &Runner<NoData>, t: &str| {
+    let id = |r: &Runner<Source>, t: &str| {
         r.kernel()
             .node_by_key(r.kernel().find_by_test_id(t)[0])
             .unwrap()
@@ -327,4 +318,112 @@ fn an_extending_boxs_node_reply_carries_its_extension() {
     let hero = exact_runner::agent::node(&r, id(&r, "hero"));
     assert!(hero.contains("\"extension\":[47,0,0,0]"), "{hero}");
     assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("\"extension\""));
+}
+
+#[test]
+fn a_reaching_boxs_node_reply_carries_its_reach() {
+    // @ref LLP 1123 D13 — a box at the inner side of the session's 47-point top band with a plain
+    // background colour reaches the band; one with a radius besides, and one with none, say nothing
+    let source = "component A\n  view\n    column\n      row padding-top=47\n        column testId=\"fill\" width=100 height=100 background-color=\"#336699\"\n        column testId=\"round\" width=100 height=100 background-color=\"#336699\" border-radius=8\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let root = r.roots()[0];
+    let k = r.kernel_mut();
+    k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
+    k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
+        .unwrap();
+    let id = |r: &Runner<Source>, t: &str| {
+        r.kernel()
+            .node_by_key(r.kernel().find_by_test_id(t)[0])
+            .unwrap()
+            .id
+    };
+    let fill = exact_runner::agent::node(&r, id(&r, "fill"));
+    assert!(fill.contains("\"reach\":[47,0,0,0]"), "{fill}");
+    for quiet in ["round", "plain"] {
+        let reply = exact_runner::agent::node(&r, id(&r, quiet));
+        assert!(!reply.contains("\"reach\":"), "{quiet}: {reply}");
+    }
+}
+
+#[test]
+fn an_edge_effect_bars_node_reply_carries_its_registration() {
+    // @ref LLP 1123 D12 — a top bar over a scroller registers with it; a bottom one over a box that
+    // does not scroll registers with none; a box that is no bar says nothing of it
+    let source = "component A\n  view\n    column\n      column height=600\n        column testId=\"bar\" -exact-safe-area-bar=\"top edge-effect\" height=50\n        column testId=\"list\" overflow-y=\"scroll\" flex-grow=1\n          text \"a\"\n      column height=200\n        column testId=\"plain\" flex-grow=1\n        column testId=\"lone\" -exact-safe-area-bar=\"bottom edge-effect\" height=40\n";
+    let mut r = boot(source);
+    let root = r.roots()[0];
+    let k = r.kernel_mut();
+    k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
+    k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
+        .unwrap();
+    let id = |r: &Runner<Source>, t: &str| {
+        r.kernel()
+            .node_by_key(r.kernel().find_by_test_id(t)[0])
+            .unwrap()
+            .id
+    };
+    let bar = exact_runner::agent::node(&r, id(&r, "bar"));
+    let list = id(&r, "list");
+    assert!(
+        bar.contains(&format!(
+            "\"barEdgeEffect\":{{\"edge\":\"top\",\"scroller\":{list}}}"
+        )),
+        "{bar}"
+    );
+    let lone = exact_runner::agent::node(&r, id(&r, "lone"));
+    assert!(
+        lone.contains("\"barEdgeEffect\":{\"edge\":\"bottom\",\"scroller\":null}"),
+        "{lone}"
+    );
+    assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("barEdgeEffect"));
+}
+
+#[test]
+fn the_list_forms_lower_to_their_rows() {
+    // D15's list rows: each inset reference its word, the margins and background insets per edge
+    // as `padding` expands them; a list that says none keeps the initial value, UIKit's choice
+    let source = "component A\n  view\n    column testId=\"list\" -exact-list-insets-reference=\"none\" -exact-list-section-insets-reference=\"layout-margins\" -exact-list-supplementary-insets-reference=\"readable-content\" -exact-list-cell-margins=\"4 6\" -exact-list-background-insets=\"1 2 3 4\"\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let [list, plain] = ["list", "plain"].map(|t| style(&mut r, t));
+    let l = &list.rare;
+    let words = format!(
+        "{:?} {:?} {:?}",
+        l.list_insets_reference,
+        l.list_section_insets_reference,
+        l.list_supplementary_insets_reference
+    );
+    assert_eq!(words, "None LayoutMargins ReadableContent");
+    let margins = [
+        l.list_cell_margins_top.clone(),
+        l.list_cell_margins_right.clone(),
+        l.list_cell_margins_bottom.clone(),
+        l.list_cell_margins_left.clone(),
+    ];
+    assert_eq!(margins, points([4.0, 6.0, 4.0, 6.0]));
+    let background = [
+        l.list_background_insets_top.clone(),
+        l.list_background_insets_right.clone(),
+        l.list_background_insets_bottom.clone(),
+        l.list_background_insets_left.clone(),
+    ];
+    assert_eq!(background, points([1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(
+        format!("{:?}", plain.rare.list_insets_reference),
+        "Automatic"
+    );
+}
+
+#[test]
+fn the_keyboard_dismiss_padding_lowers_to_its_row() {
+    // D7's padding is a length on a scroller, 0 where unsaid; a negative length is kept as said,
+    // and the host uses 0 for it
+    let source = "component A\n  view\n    column\n      column testId=\"said\" overflow-y=\"scroll\" -exact-keyboard-dismiss-padding=56\n      column testId=\"negative\" overflow-y=\"scroll\" -exact-keyboard-dismiss-padding=-4\n      column testId=\"plain\" overflow-y=\"scroll\"\n";
+    let mut r = boot(source);
+    let [said, negative, plain] = ["said", "negative", "plain"].map(|t| style(&mut r, t));
+    assert_eq!(said.rare.keyboard_dismiss_padding, Dimension::Points(56.0));
+    assert_eq!(
+        negative.rare.keyboard_dismiss_padding,
+        Dimension::Points(-4.0)
+    );
+    assert_eq!(plain.rare.keyboard_dismiss_padding, Dimension::Points(0.0));
 }

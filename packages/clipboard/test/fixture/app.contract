@@ -8,18 +8,49 @@ shape Line
   text: string
 
 component Fixture
+  state body = "left right"
+  mutation pasted as shape Line then insertPaste
+  action insertPaste
+    let insert = match pasted { case some(line) => line.text, case none => "" }
+    if insert != ""
+      setRangeText("editor", insert)
+  action atCaret
+    send pasted = pasteText()
+  action edit(value: string)
+    body = value
   mutation wrote as shape Line
   resource supported = supports() as shape Line
+  resource mounted = readOnMount() as shape Line
+  action paste
+    send wrote = copy("read")
+  action openURL
+    send wrote = copy("readText")
+  tool readClipboard writes "Try a clipboard read." = openURL
+  action contractCopy
+    copyText("Contract copy")
   action copy(kind: string)
     send wrote = copy(kind)
   view
     column padding=24 gap=8
+      input id="editor" testId="editor" value=body input=edit
+      button press=atCaret testId="at-caret"
+        text "Paste at caret"
+      button press=paste testId="paste"
+        text "Paste"
+      button press=openURL -exact-menu="view" aria-keyshortcuts="Meta+Shift+V" testId="open-url"
+        text "Open URL from clipboard"
+      button press=copy("pair") testId="read-pair"
+        text "Read twice"
+      button press=contractCopy testId="contract-copy"
+        text "Copy with Contract"
+      input aria-label="Paste with Return" submit=openURL testId="paste-key"
+      text mounted.text testId="mount"
       text supported.text testId="supports"
       match wrote
         case some(w)
           text w.text testId="wrote"
         case none
           text "" testId="wrote"
-      for kind in ["png", "png-bytes", "apng", "text", "both", "bad", "large", "big-bytes", "race", "overflow", "long-text", "refused-first", "empty", "two", "jpeg", "nested"] key=kind
+      for kind in ["png", "png-bytes", "apng", "text", "html", "html-only", "both", "bad", "large", "big-bytes", "race", "overflow", "long-text", "refused-first", "empty", "two", "jpeg", "nested", "expiry"] key=kind
         button press=copy(kind) testId=kind
           text kind

@@ -54,9 +54,15 @@ extension Agent {
     /// Native visibility and clip facts for a view or a viewless region inside it.
     func visibility(of host: NodeView, region: CGRect, box b: CGRect, inside: Bool = false, hidden: Bool = false)
         -> (facts: [String: Any], canvas: NodeView?) {
+        visibility(of: host as UIView, region: region, box: b, inside: inside,
+                   hidden: hidden || !host.accessibilityExposed, placed: host.placement != nil)
+    }
+
+    func visibility(of host: UIView, region: CGRect, box b: CGRect, inside: Bool = false, hidden: Bool = false, placed: Bool = false)
+        -> (facts: [String: Any], canvas: NodeView?) {
         let vp = presenter.viewport
         let describe = { (view: UIView) -> String in (view as? NodeView).map { "#\($0.id)" } ?? String(describing: Swift.type(of: view)) }
-        var hiddenBy: String? = host.isHidden || (host.alpha == 0 && host.placement == nil) ? describe(host) : nil
+        var hiddenBy: String? = host.isHidden || (host.alpha == 0 && !placed) ? describe(host) : nil
         var inertBy: String? = host.isUserInteractionEnabled ? nil : describe(host)
         var clipped = b.isEmpty
         var chain: [[String: Any]] = []
@@ -106,7 +112,7 @@ extension Agent {
         }
         var facts: [String: Any] = ["scroll": scroll, "clip": clip]
         // CSS `visibility: hidden` with nothing of it showing, or a hidden run (e28279b3b keeps the view).
-        if hiddenBy == nil, !host.accessibilityExposed || hidden { hiddenBy = "visibility" }
+        if hiddenBy == nil, hidden { hiddenBy = "visibility" }
         let reach = popoverLayer.map { box($0) } ?? presenter.reach(of: host)
         var visible: [String: Any] = ["hidden": hiddenBy != nil, "inert": inertBy != nil, "inViewport": b.intersects(reach), "clipped": clipped]
         if let hiddenBy { visible["hiddenBy"] = hiddenBy }

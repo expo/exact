@@ -6,7 +6,9 @@ use super::*;
 use exact_runner::{Answer, DataError, Store, Value};
 
 /// The host work these tests hand out (LLP 1047.001 D12).
+#[cfg(unix)]
 struct TestWork;
+#[cfg(unix)]
 impl exact_runner::HostWork for TestWork {}
 
 #[derive(Default)]
@@ -512,7 +514,7 @@ fn store_writes_are_dropped_with_their_commit() {
 fn press_fixture() -> Presenter<Keeps> {
     let source = APP.replace(
         "height=32\n      box opacity",
-        "appearance=\"none\" width=100 height=32 scale=1.5 -exact-press-scale=0.5 transform-origin=\"0 0\"\n      box opacity",
+        "appearance=\"none\" width=100 height=32 scale=1.5 -exact-press-scale=0.5 transform-origin=\"0 0\" transition=\"scale 120ms linear\"\n      box opacity",
     );
     let (mut p, error) = Presenter::boot_with(
         &crate::test_plan(&source),
@@ -543,6 +545,7 @@ fn a_held_press_multiplies_scale_about_the_origin_even_under_reduced_motion() {
         let (x, y) = (before.0 + 20., before.1 + 10.);
         assert!(p.pointer_down(x, y, 0.).unwrap());
         p.clock(120.);
+        p.frame();
         let held = p.rect_of(button).unwrap();
         assert_eq!(held, (before.0, before.1, before.2 * 0.5, before.3 * 0.5));
         // Moving off and back inside the original edge keeps the contact alive.
@@ -551,6 +554,7 @@ fn a_held_press_multiplies_scale_about_the_origin_even_under_reduced_motion() {
         assert_eq!(p.rect_of(button).unwrap(), before);
         p.pointer_move(before.0 + before.2 - 2., y, 240.).unwrap();
         p.clock(360.);
+        p.frame();
         assert_eq!(p.rect_of(button).unwrap(), held);
         p.pointer_up(before.0 + before.2 - 2., y, 360.).unwrap();
         p.clock(480.);
@@ -565,33 +569,52 @@ fn a_held_press_multiplies_scale_about_the_origin_even_under_reduced_motion() {
     }
 }
 
+/// Sliding back reverses a release over the share it has run (CSS
+/// Transitions 1 §3.1). A cancel releases on the press's timing without the
+/// quick tap's hold or activation. A new press during that release keeps
+/// the unpressed hit box (LLP 1061 D7 "Timing").
 #[test]
-fn a_repress_during_release_keeps_the_original_hit_box_and_cancel_never_activates() {
+fn a_press_reverses_on_sliding_back_and_a_cancel_eases_back_without_activating() {
     let mut p = press_fixture();
     let button = id(&p, "other");
     let before = p.rect_of(button).unwrap();
     let (x, y) = (before.0 + 20., before.1 + 10.);
+    let width = |p: &mut Presenter<Keeps>, expected: f32| {
+        let actual = p.rect_of(button).unwrap().2 / before.2;
+        assert!((actual - expected).abs() < 1e-4, "{actual} != {expected}");
+    };
     p.pointer_down(x, y, 0.).unwrap();
     p.clock(120.);
-    p.pointer_cancel(120.).unwrap();
+    p.frame();
+    p.pointer_move(before.0 + before.2 + 5., y, 120.).unwrap();
     p.clock(150.);
     let releasing = p.rect_of(button).unwrap();
-    assert!(releasing.2 > before.2 * 0.5 && releasing.2 < before.2);
-    p.pointer_down(x, y, 150.).unwrap();
-    assert_eq!(p.rect_of(button).unwrap(), releasing, "no jump on re-press");
+    width(&mut p, 0.625);
     p.pointer_move(before.0 + before.2 - 2., y, 150.).unwrap();
-    p.clock(270.);
-    assert_eq!(p.rect_of(button).unwrap().2, before.2 * 0.5);
-    p.pointer_cancel(270.).unwrap();
-    p.clock(390.);
+    assert_eq!(p.rect_of(button).unwrap(), releasing, "no jump on re-press");
+    p.clock(180.);
+    // The reversal takes the 30 ms it undoes.
+    width(&mut p, 0.5);
+    // Cancelled before a picture showed the press again, it still releases.
+    p.pointer_cancel(180.).unwrap();
+    p.clock(210.);
+    width(&mut p, 0.625);
+    let cancelled = p.rect_of(button).unwrap();
+    p.pointer_down(x, y, 210.).unwrap();
+    assert_eq!(p.rect_of(button).unwrap(), cancelled, "no jump on re-press");
+    p.clock(240.);
+    width(&mut p, 0.5);
+    p.pointer_cancel(240.).unwrap();
+    p.clock(360.);
     assert_eq!(p.rect_of(button).unwrap(), before);
     assert!(!p.host.motion(), "the feedback needs no more frames");
     assert!(log(&p).ends_with(" 0"));
 }
 
-/// A native button's press eases nothing, so its release ends it at once,
-/// with no frame after it: a press left standing keeps every picture from
-/// being still, and each scroll step paints instead of moving.
+/// A native button that shows nothing of its own eases nothing, so its
+/// release ends it at once, with no frame after it: a press left standing
+/// keeps every picture from being still, and each scroll step paints
+/// instead of moving.
 #[test]
 fn a_native_buttons_cancelled_press_leaves_nothing_pressed() {
     let mut p = boot();

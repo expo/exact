@@ -59,6 +59,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             rung: None,
             resting: false,
             still: false,
+            poll_input: false,
+            idle_picture: None,
             idle_tick: None,
             samples: None,
             timing: Default::default(),
@@ -714,6 +716,16 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         renderer
             .quads
             .children(&renderer.device, &renderer.queue, &self.placed);
+        let idle_input = self.poll_input && !frame.seekable && sim.world_render_idle();
+        if self.poll_input && H::ENABLED {
+            if idle_input || G::paused(sim.args()) {
+                renderer
+                    .idle_hook_reads
+                    .get_or_insert_with(Default::default);
+            } else {
+                renderer.idle_hook_reads = None;
+            }
+        }
         let direct_frames = renderer.direct_frames;
         let encoded = renderer.encode_hooked(
             encoder,
@@ -820,7 +832,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         retain_primes(&mut self.render, &mut self.placed, false);
         self.dirty = false;
         // At rest once idle at two ticks: this frame drew between idle poses.
-        let rests = if !frame.seekable && sim.render_idle() {
+        let rests = if idle_input || (!self.poll_input && !frame.seekable && sim.render_idle()) {
             let tick = sim.world().tick();
             tick > *self.idle_tick.get_or_insert(tick)
         } else {
@@ -829,7 +841,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         };
         let needs = self.hooks.needs();
         let hooks = needs.contains(crate::Needs::ANIMATE) || preparing(needs, frame.seekable);
-        self.resting = rests && !hooks && !asset_work;
+        self.resting = rests && !hooks && !asset_work && !sim.input_pending();
         if self.resting {
             self.perf.submitted_live = None;
         }
@@ -848,6 +860,61 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return true;
         }
         self.held_back || !self.waiting.is_empty()
+    }
+
+    pub(super) fn tick_resting_input(
+        &mut self,
+        now_ms: f64,
+        period_ms: f64,
+    ) -> std::task::Poll<bool> {
+        use std::task::Poll::{Pending, Ready};
+        if !self.still || self.seekable || self.dirty || self.error.is_some() || !now_ms.is_finite()
+        {
+            return Ready(true);
+        }
+        let Some(sim) = &mut self.sim else {
+            return Ready(true);
+        };
+        if !G::paused(sim.args()) && sim.input_pending() {
+            sim.frame_period(period_ms);
+            if std::mem::take(&mut self.resting) {
+                sim.wake(now_ms);
+            }
+            self.advance_live(now_ms, period_ms);
+        }
+        let sim = self.sim.as_ref().unwrap();
+        let Some((renderer, feed)) = &self.render else {
+            return Ready(true);
+        };
+        let world = sim.world();
+        let needs = self.hooks.needs();
+        let hook_unchanged = !H::ENABLED
+            || renderer
+                .idle_hook_reads
+                .as_ref()
+                .is_some_and(|reads| reads.borrow().iter().all(|read| !read.changed(world)));
+        if (G::paused(sim.args()) || sim.world_render_idle())
+            && self
+                .idle_picture
+                .as_ref()
+                .is_some_and(|drawn| *drawn == feed.idle_picture(world))
+            && hook_unchanged
+            && !needs.contains(crate::Needs::ANIMATE)
+            && !preparing(needs, false)
+            && self.error.is_none()
+            && self.generation == sim.generation()
+            && self.picture.0 == sim.picture_generation()
+            && (!ASSETS || self.models_seen == world.model_revision())
+        {
+            if !G::paused(sim.args()) && sim.input_pending() {
+                return Pending;
+            }
+            self.resting = true;
+            return Ready(false);
+        }
+        self.resting = false;
+        self.idle_tick = None;
+        Ready(true)
     }
 
     /// A display frame the module does not render: run the ticks due by
@@ -880,12 +947,17 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return;
         }
         sim.frame_period(frame.period_ms);
+        self.advance_live(frame.now_ms, frame.period_ms);
+    }
+
+    fn advance_live(&mut self, now_ms: f64, period_ms: f64) {
+        let sim = self.sim.as_mut().unwrap();
         let picture = sim.picture_generation();
         let first = (1..=240)
-            .contains(&sim.ticks_due(frame.now_ms, Clock::Live))
+            .contains(&sim.ticks_due(now_ms, Clock::Live))
             .then(Stamp::now);
         let ticks = sim.advance_observed(
-            frame.now_ms,
+            now_ms,
             Clock::Live,
             observer(
                 &mut self.render,
@@ -899,7 +971,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             ),
         );
         let gap = self.perf.record_gap(sim.take_live_gap(), picture);
-        crate::perf::warn_catch_up(self.perf.record_overload::<G>(frame.period_ms, ticks, gap));
+        crate::perf::warn_catch_up(self.perf.record_overload::<G>(period_ms, ticks, gap));
         self.presentation
             .sync_sim(sim, !G::paused(sim.args()), false);
     }

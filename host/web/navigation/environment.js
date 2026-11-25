@@ -19,6 +19,29 @@ export function environment() {
     ...foldEnv()
   };
 }
+// Values passed to the wasm runner at launch. The render process has no reader.
+export function shortcutKeyboard(nav = globalThis.navigator) {
+  const platform = nav?.userAgentData?.platform || nav?.platform;
+  if (globalThis.__exactRender || platform == null) return 0;
+  if (/^(Mac|iPhone|iPad|iPod|iOS)/i.test(platform)) return 1;
+  if (/^Win/i.test(platform)) return 2;
+  return /^Android/i.test(platform) ? 4 : 3;
+}
+/** Resolve only modifier tokens. A server render has no reader's platform. */
+export function resolveShortcuts(chords, nav = globalThis.navigator) {
+  if (!chords || !/(?:^|[+\s\u0085])Mod(?=$|[+\s\u0085])/.test(chords)) return chords;
+  const keyboard = shortcutKeyboard(nav);
+  if (!keyboard) return null;
+  const primary = keyboard === 1 ? "Meta" : "Control";
+  return chords.split(/[\s\u0085]+/).filter(Boolean).flatMap(chord => {
+    const parts = chord.split("+");
+    if (!parts.includes("Mod")) return [chord];
+    if (parts.at(-1) === "Mod") return [];
+    if (parts.includes("Control") || parts.includes("Meta")) return [];
+    const resolved = parts.map(part => part === "Mod" ? primary : part).join("+");
+    return shortcutParts(resolved) ? [resolved] : [];
+  }).join(" ") || null;
+}
 /** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
 export function keyboardInset(platform = globalThis) {
   const rect = platform.navigator?.virtualKeyboard?.boundingRect;
@@ -31,6 +54,16 @@ export function keyboardInset(platform = globalThis) {
 /** `changed` when the keyboard moves without a resize: the VirtualKeyboard API's `geometrychange`. */
 export function onKeyboard(changed, platform = globalThis) {
   platform.navigator?.virtualKeyboard?.addEventListener?.("geometrychange", changed);
+}
+/** The root's height under `interactive-widget=resizes-content` (`resizes`), which Safari ignores: its keys shrink only the visual viewport. The root then takes the visual viewport's height while the page is at its own scale and does not scroll itself, so what ends at the root's bottom stays above the keys. Each target calls it as the visual viewport resizes (`onVisualViewport`). */
+export function fitVisualViewport(root, resizes) {
+  const vv = globalThis.visualViewport;
+  root.style.height = resizes && vv?.scale === 1 && !document.documentElement.hasAttribute("data-scrolldocument") ? `${Math.min(innerHeight, vv.height)}px` : "";
+}
+/** Calls `fit` as the visual viewport resizes, and as the window does, whose `resize` comes before the visual viewport's: both listeners are made before the route projection's, so a projection measures the root at its new height. */
+export function onVisualViewport(fit) {
+  globalThis.visualViewport?.addEventListener("resize", fit);
+  addEventListener("resize", fit);
 }
 // Read CSS when the JS fold interfaces are absent (LLP 1078 D6). Share agent substitutes with agent-navigation.js; they change facts, not CSS env() resolution (D7).
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -294,7 +327,17 @@ const updates = () => updateQueries ??= ["(update: slow)", "(update: none)"].map
 export const UPDATES = ["fast", "slow", "none"];
 export const updateCode = () => updates()[1]?.matches ? 2 : updates()[0]?.matches ? 1 : 0;
 /** A phone-sized screen (its short side under 600 CSS px): the GPU tier's class when the adapter says nothing it knows, and never `high` (LLP 1139.003 D2). */ export const handheld = (platform = globalThis) => Math.min(platform.screen?.width ?? Infinity, platform.screen?.height ?? Infinity) < 600;
+export function screenOrientation() {
+  const screen = globalThis.screen;
+  return screen?.orientation ?? {type: (screen?.height ?? innerHeight) >= (screen?.width ?? innerWidth) ? "portrait-primary" : "landscape-primary", angle: 0};
+}
+export function orientationCode() {
+  const {type, angle} = screenOrientation();
+  const kind = ["portrait-primary", "landscape-primary", "portrait-secondary", "landscape-secondary"].indexOf(type);
+  return 16 | (angle / 90 << 2) | kind;
+}
 export const onPreferences = (changed) => {
+  globalThis.screen?.orientation?.addEventListener?.("change", changed);
   queries().forEach(([q]) => q.addEventListener("change", changed));
   updates().forEach(q => q?.addEventListener?.("change", changed));
   // A window can move between displays without changing its logical size.
@@ -563,3 +606,41 @@ export const reportTime = (elapsed) => (pageTime ??= timeReporter(launched()))(e
 let pagePlace;
 export const reportPlace = () => (pagePlace ??= placeReporter(launched()))();
 export { launched };
+
+// The same key spellings the web keydown handler accepts.
+function shortcutParts(chord) {
+  const parts = chord.split("+");
+  let key;
+  if (chord === "+") { parts.length = 0; key = "Plus"; }
+  else if (chord.endsWith("++")) { parts.splice(-2); key = "Plus"; }
+  else key = parts.pop();
+  if (!parts.every(m => ["Control", "Alt", "Shift", "Meta"].includes(m))) return null;
+  if ((key.length === 1 && !/[\s\p{Cc}]/u.test(key)) || /^(Arrow(?:Up|Down|Left|Right)|Enter|Escape|Space|Tab|Backspace|Delete|Home|End|PageUp|PageDown|Insert|Plus|F(?:[1-9]|[12]\d|3[0-5]))$/.test(key)) return { key, parts };
+  return null;
+}
+/** The cap for one aria-keyshortcuts chord, in the reader's keyboard notation (LLP 1021 §5.3). */
+export function formatShortcut(chord, nav = globalThis.navigator) {
+  const keyboard = shortcutKeyboard(nav);
+  if (!keyboard || /[\s\p{Cc}]/u.test(chord)) return "";
+  const resolved = resolveShortcuts(chord, nav);
+  if (!resolved) return "";
+  const parsed = shortcutParts(resolved);
+  if (!parsed) return "";
+  let { key, parts } = parsed;
+  const mods = ["Control", "Alt", "Shift", "Meta"];
+  const apple = keyboard === 1, windows = keyboard === 2;
+  const named = {
+    ArrowUp: ["↑", "Up arrow", "Up"], ArrowDown: ["↓", "Down arrow", "Down"],
+    ArrowLeft: ["←", "Left arrow", "Left"], ArrowRight: ["→", "Right arrow", "Right"],
+    Enter: ["↩", "Enter", "Enter"], Escape: ["⎋", "Esc", "Esc"], Space: ["Space", "Spacebar", "Space"],
+    Tab: ["⇥", "Tab", "Tab"], Backspace: ["⌫", "Backspace", "Backspace"], Delete: ["⌦", "Delete", "Delete"],
+    Home: ["↖", "Home", "Home"], End: ["↘", "End", "End"], PageUp: ["⇞", "Page up", "Page Up"],
+    PageDown: ["⇟", "Page down", "Page Down"], Insert: ["Insert", "Insert", "Insert"], Plus: ["+", "Plus sign", "+"],
+    ",": [",", "Comma", ","], ".": [".", "Period", "."], "-": ["-", "Minus sign", "-"]
+  };
+  if (Object.hasOwn(named, key)) key = named[key][apple ? 0 : windows ? 1 : 2];
+  else if (/^[a-z]$/.test(key)) key = key.toUpperCase();
+  const names = apple ? ["⌃", "⌥", "⇧", "⌘"] : ["Ctrl", "Alt", "Shift", windows ? "Windows logo key" : keyboard === 3 ? "Super" : "Meta"];
+  const order = windows ? [3, 0, 1, 2] : [0, 1, 2, 3];
+  return [...order.filter(i => parts.includes(mods[i])).map(i => names[i]), key].join(apple ? "" : "+");
+}

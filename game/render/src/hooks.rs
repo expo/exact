@@ -3,6 +3,7 @@
 use crate::{FrameInput, RenderError};
 use exact_game::{Component, Entity, Mat4, Ref, Resource, Target, Transform, World};
 use exact_gpu::wgpu;
+use std::any::TypeId;
 
 pub(crate) mod budget;
 pub(crate) mod gpu_timing;
@@ -23,20 +24,65 @@ pub mod frame_interface {
     include!(concat!(env!("OUT_DIR"), "/frame_interface.rs"));
 }
 
+/// A hook's last idle frame records how to read each borrowed column's version.
+pub(crate) struct HookRead {
+    key: HookKey,
+    revision: fn(&World) -> Option<(u64, u64)>,
+    drawn: Option<(u64, u64)>,
+}
+
+#[derive(PartialEq)]
+enum HookKey {
+    Component(TypeId),
+    Resource(TypeId),
+    Tick,
+}
+
+impl HookRead {
+    pub(crate) fn changed(&self, world: &World) -> bool {
+        (self.revision)(world) != self.drawn
+    }
+}
+
 /// Restricted borrowing of simulation values. No mutable query or raw World escape.
 /// `&World` itself permits mutation, so it must not cross this boundary.
-pub struct RenderWorld<'a>(pub(crate) &'a World);
+pub struct RenderWorld<'a>(
+    pub(crate) &'a World,
+    pub(crate) Option<&'a std::cell::RefCell<Vec<HookRead>>>,
+);
 impl<'a> RenderWorld<'a> {
+    fn reads(&self, key: HookKey, revision: fn(&World) -> Option<(u64, u64)>) {
+        if let Some(columns) = self.1 {
+            let mut columns = columns.borrow_mut();
+            if !columns.iter().any(|c| c.key == key) {
+                columns.push(HookRead {
+                    key,
+                    revision,
+                    drawn: revision(self.0),
+                });
+            }
+        }
+    }
     /// Read one component by entity or name.
     pub fn get<C: Component>(&self, target: impl Target) -> Option<Ref<'a, C>> {
+        self.reads(HookKey::Component(TypeId::of::<C>()), |w| {
+            Some((w.membership::<C>(), w.revision::<C>()))
+        });
         self.0.get(target)
     }
     /// Read an optional resource.
     pub fn resource<R: Resource>(&self) -> Option<Ref<'a, R>> {
+        self.reads(
+            HookKey::Resource(TypeId::of::<R>()),
+            World::resource_revision::<R>,
+        );
         self.0.try_resource::<R>()
     }
     /// Visit one component column in stable entity order, with immutable values.
     pub fn for_each<C: Component>(&self, mut visit: impl FnMut(Entity, &C)) {
+        self.reads(HookKey::Component(TypeId::of::<C>()), |w| {
+            Some((w.membership::<C>(), w.revision::<C>()))
+        });
         for (entity, value) in self.0.query::<&C>().iter() {
             visit(entity, value);
         }
@@ -53,6 +99,7 @@ impl<'a> RenderWorld<'a> {
     }
     /// Completed simulation tick.
     pub fn tick(&self) -> u64 {
+        self.reads(HookKey::Tick, |w| Some((0, w.tick())));
         self.0.tick()
     }
     /// Simulation ticks per second.

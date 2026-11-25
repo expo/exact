@@ -146,14 +146,14 @@ fn invalid_live_samples_leave_host_and_engine_clocks_and_presentation_unchanged(
     let row = view(&h, "row");
     let start = h.hold_begin(row, Property::Scale, 10.).unwrap().unwrap();
     for (value, time) in [
-        (Value::new(0.5, 1.), 100.),
-        (Value::scalar(0.5), 9.),
-        (Value::scalar(f64::NAN), 100.),
+        (Value::four(0.5, 1., 1., 0.), 100.),
+        (Value::new(0.5, 0.5), 9.),
+        (Value::new(f64::NAN, f64::NAN), 100.),
     ] {
         assert!(h.hold_update(start.token, value, time).is_err());
         assert_eq!(h.now(), 10.);
         assert_eq!(h.engine().now(), 0.01);
-        assert_eq!(h.presented(row).scale, 1.);
+        assert_eq!(h.presented(row).scale.0, 1.);
         assert!(h.has_hold(start.token));
     }
 }
@@ -175,10 +175,10 @@ fn zero_distance_spring_keeps_release_velocity_and_no_transition_snaps() {
     h.tick(10.);
     assert!(h.presented(row).translate.0 > 0.);
     let opacity = h.hold_begin(row, Property::Scale, 10.).unwrap().unwrap();
-    h.hold_update(opacity.token, Value::scalar(0.5), 10.)
+    h.hold_update(opacity.token, Value::new(0.5, 0.5), 10.)
         .unwrap();
     h.hold_end(opacity.token, HoldEnd::Cancel, 10.).unwrap();
-    assert_eq!(h.presented(row).scale, 1.);
+    assert_eq!(h.presented(row).scale.0, 1.);
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn overdue_timers_keep_runner_order_without_rewinding_held_or_unrelated_motion()
     assert!(h.advance(250.).is_none());
     assert!(h.agent("{\"op\":\"state\"}").contains("\"value\":3"));
     assert_eq!(h.presented(held).opacity, 0.8);
-    assert!(h.presented(other).scale > 1. && h.presented(other).scale < 3.);
+    assert!(h.presented(other).scale.0 > 1. && h.presented(other).scale.0 < 3.);
     assert_eq!(h.engine().now(), 0.25);
     h.hold_end(token, HoldEnd::Cancel, 250.).unwrap();
     h.tick(750.);

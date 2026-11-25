@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { resolveApp, buildBake, bakeTarget, pendingBuildInputs } from './app.mjs';
+import { resolveApp, buildBake, bakeTarget, pendingBuildInputs, PINNED_RUST } from './app.mjs';
 import { contractCompiler, snapshotOf, materializeSnapshot, disposeSnapshot } from './deploy.mjs';
 import { binaryInputFile } from './deploy-heads.mjs';
 import { binaryInputChanges } from './publisher.mjs';
@@ -251,7 +251,7 @@ async function fixture(body) {
         if (existsSync(resolve(import.meta.dir, '..', target))) copy(target);
       }
     };
-    for (const path of ['scripts/app.mjs','scripts/variants.mjs','scripts/links.mjs','scripts/help.mjs','scripts/forma-design-path.mjs','scripts/app-icons.mjs','scripts/notification-service.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/tools.mjs','scripts/kept.mjs','scripts/paths.mjs','scripts/file-dependencies.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/document-utis.json','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','host/apple/shader-libraries.mjs','host/apple/svg-filter.mjs','host/apple/toolchain.mjs','host/apple/plist.mjs','scripts/grant-advice.mjs','host/apple/link.mjs','host/apple/Package.swift','host/apple/privacy.mjs','game/app/shells.mjs','game/inputs.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc','js/bake/src/__exact_portable.mjs','js/bake/src/__exact_binding.mjs','js/bake/src/__exact_launch_setting.mjs','js/bake/src/typescript.mjs','host/apple/image.mjs','host/apple/metal.mjs','scripts/deploy-signing.mjs','js/bake/src/__exact_facts.mjs']) copy(path);
+    for (const path of ['scripts/app.mjs','scripts/android-manifest.mjs','scripts/variants.mjs','scripts/links.mjs','scripts/help.mjs','scripts/forma-design-path.mjs','scripts/app-icons.mjs','scripts/notification-service.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/tools.mjs','scripts/kept.mjs','scripts/paths.mjs','scripts/file-dependencies.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/document-utis.json','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','host/apple/shader-libraries.mjs','host/apple/svg-filter.mjs','host/apple/toolchain.mjs','host/apple/plist.mjs','scripts/grant-advice.mjs','host/apple/link.mjs','host/apple/Package.swift','host/apple/privacy.mjs','game/app/shells.mjs','game/inputs.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc','js/bake/src/__exact_portable.mjs','js/bake/src/__exact_binding.mjs','js/bake/src/__exact_launch_setting.mjs','js/bake/src/typescript.mjs','host/apple/image.mjs','host/apple/metal.mjs','scripts/deploy-signing.mjs','js/bake/src/__exact_facts.mjs']) copy(path);
     // The rustc wrapper the scripts' cargo calls run on a Mac (`withHostDeployment`), found beside the copied scripts.
     chmodSync(resolve(root, 'scripts/rustc/exact-rustc'), 0o755);
     const { resolveApp: localResolveApp, cargoReproducibilityFlags: flags } = await import(resolve(root,'scripts/app.mjs'));
@@ -1217,6 +1217,23 @@ test('the host target is the pinned toolchain\'s when rustup has no default', ()
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout.trim(), bakeTarget('linux'));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform === 'win32')('the build says why and how to resume when rustc names no host target', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'exact-rustc-'));
+  const fail = script => {
+    writeFileSync(resolve(directory, 'rustc'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    const code = `const { bakeTarget } = await import(${JSON.stringify(resolve(import.meta.dir, 'app.mjs'))});\nprocess.env.PATH = ${JSON.stringify(directory)};\nbakeTarget('linux');`;
+    const run = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8' });
+    assert.equal(run.status, 1, run.stderr);
+    return run.stderr;
+  };
+  try {
+    const silent = fail('exit 9');
+    assert.match(silent, /`rustc -vV` failed \(exit 9\)/);
+    assert.ok(silent.includes(PINNED_RUST ? `run \`rustup toolchain install ${PINNED_RUST}\`` : 'install a Rust toolchain'), silent);
+    assert.match(fail('echo "rustc 1.0.0"'), /`rustc -vV` printed no `host:` line.*the `rustc` on PATH is rustup's/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 // LLP 1153.003 D1: an app's own crates join the workspace exact2 generates, which keeps writing every host crate.

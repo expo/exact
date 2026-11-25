@@ -602,3 +602,38 @@ fn a_grip_in_an_inset_row_lifts_and_drops() {
     assert!(p.pointer_up(point.0, point.1 + 70., 30.).unwrap());
     assert_eq!(p.host().runner().slot("count"), Some(&Value::Number(1.)));
 }
+
+#[test]
+fn a_settings_row_moves_within_its_section() {
+    let mut p = boot_source(include_str!(
+        "../../../web-js/conformance/grouped-settings.contract"
+    ));
+    let centre = |p: &mut Presenter<Rows>, name| {
+        let (x, y, w, h) = p.rect_of(id(p, name)).unwrap();
+        (x + w * 0.5, y + h * 0.5)
+    };
+    let (x, start) = centre(&mut p, "move-Account");
+    let (_, end) = centre(&mut p, "move-Display");
+    assert!(p.pointer_down(x, start, 0.).unwrap());
+    p.pointer_move(x, start + 12., 20.).unwrap();
+    p.pointer_move(x, end + 3., 100.).unwrap();
+    assert!(p
+        .host()
+        .runner()
+        .reorder_json()
+        .contains("\"before\":\"Sound\""));
+    assert!(p.pointer_up(x, end + 3., 120.).unwrap());
+    assert_eq!(
+        p.host().runner().slot("last"),
+        Some(&Value::str("Account in settings to settings"))
+    );
+    let (x, y) = centre(&mut p, "move-Privacy");
+    p.tick(1500.);
+    assert!(p.pointer_down(x, y, 1510.).unwrap());
+    p.pointer_move(x, y + 70., 1530.).unwrap();
+    p.pointer_cancel(1540.).unwrap();
+    assert_eq!(
+        p.host().runner().slot("last"),
+        Some(&Value::str("Account in settings to settings"))
+    );
+}

@@ -246,7 +246,7 @@ browserCheck('Markdown adoption keeps every document element and later source ch
       const root = document.getElementById('exact-root'), el = root.firstElementChild;
       const before = [...root.querySelectorAll('*')];
       const host = { inputReady: true, page: { adopting: new Map([[1, el]]) } }, views = new Map();
-      const syncMedia = () => {}, syncMarkup = () => {}, noteFit = () => {}, attach = () => {}, listView = () => {};
+      const syncMedia = () => {}, syncMarkup = () => {}, noteFit = () => {}, noteSymbolEffect = () => {}, attach = () => {}, listView = () => {};
       const collectionOp = null;
       ${glueDeclarations(wasmSource, ['applyProps', 'loadAfterPaint'])}
       const create = op => { switch (op.op) { ${glueCase(wasmSource, 'create')} } return views.get(op.id); };

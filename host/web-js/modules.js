@@ -28,11 +28,12 @@
 // is raised by the host (an activation the implementation binds, `isTrusted`
 // only) or emitted (the device's origin), and heard in order, once, each as
 // its own commit (D6).
-import { data, Resources, commit, R, Failed, nextTicket, say, clock, Clocked, After, time, Store, Hosts, navigateRoot, locationOf, inflight, Origin } from "./rt.js";
+import { data, Resources, commit, R, Failed, nextTicket, say, clock, agentMode, order, drive, Clocked, After, time, Store, Hosts, navigateRoot, locationOf, inflight, Origin, viewId } from "./rt.js";
 import { reportTime } from "./navigation.js";
+import { packageContext, packageFiles, packageInstances, packageServices } from "./package-session.js";
 import { packageViews } from "./views.js";
 import { packagePictures } from "./pictures.js";
-import { appGrantSet, coversPath } from "./admission.js";
+import { appGrantSet, coversPath, rawGrantText } from "./admission.js";
 import { samples, groupOf } from "./samples.js";
 import { wakes, REFUSED } from "./wakes.js";
 import { reach } from "./reach.js";
@@ -50,7 +51,7 @@ import { hatchClock } from "./hatches.js";
 // `rows`: source → [extension.name, send, substitute, type, request, options' type, live];
 // `bound`: extension → a loader of its web implementation, where the app binds one
 // (LLP 1133.001 D4), which answers outside the agent;
-// `views`: a package view's tag → [extension, displayed, binding props, agent vocabulary] (views.js);
+// `views`: a package view's tag → [extension, displayed, binding props, agent vocabulary, package] (views.js);
 // `events`: extension.event → [its action, taken when heard; activation | emit | wake; hold; its parameters' types; its
 // name; a wake's budget].
 // Who a call comes from, least privileged first (the runner's `CallOrigin`)
@@ -137,7 +138,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   const valueOf = row => {
     if (row.sub.index === "entries") return rc.value(row);
     if (row.sub.listed) return wk.listed(row.sub.listed, row);
-    let v = preferredOver(row) ?? restricted(row);
+    let v = preferred.has(row.key) ? preferredOver(row) : restricted(row);
     if (row.sub.web) v = { ...(v ?? {}), ...row.sub.web };
     // The browser keeps no presence secrets (LLP 1133.010 D15), whatever the preferred status says.
     if (row.sub.facts && v && typeof v === "object" && !Array.isArray(v)) {
@@ -173,10 +174,12 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   // `prompt` (`admission`, LLP 1133.004 §7).
   // `p` is the permission `permissionOf` selected: none when a permission it requires is not this row's, as in the runner
   const decidePermission = (row, send, p, args = {}) => {
+    if (!send && isStatus(row) && (preferred.has(row.key) || (p && row.sub.admission !== "none"))) {
+      const status = valueOf(row);
+      return { now: errorCode(status) ? status : statusValue(row, status) };
+    }
     if (!p || row.sub.admission === "none") return null;
     const state = stateOf(p.name);
-    // A target that makes the module absent keeps its own answer (`unknown`), as the runner's.
-    if (!send && isStatus(row)) return { now: row.sub.targets?.web?.available === false ? valueOf(row) : statusValue(row, valueOf(row)) };
     // A source that reads a value of its own until the permission is granted (`ungranted`), as the runner's.
     if (!send && "ungranted" in row.sub && state !== "granted") return { now: structuredClone(row.sub.ungranted) };
     // A request that answers the status answers it denied too (`deniedAnswers`: WebKit's `requestPermission` resolves
@@ -406,41 +409,10 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   // the track table (`tracks`), admitted paths' files (`files`), the audio session (`audioSession`), and
   // `clocked(fn)`, which runs `fn` after each move of the session's clock. The web has no session end an
   // implementation could finish in.
-  const loaded = new Map(), chunks = new Map(), live = new Set(), ready = new Map(), constructed = new Map();
+  const live = new Set(), ready = new Map(), constructed = new Map(), notifications = new Map();
   // Under the agent the drive's page fact (`prefer visibility-state`, agent.js) is the foreground; the machine's never is.
   let agentShown = true;
   const shown = () => clock.agent ? agentShown : typeof document !== "object" || document.visibilityState !== "hidden";
-  // The session's track table (LLP 1133.009 D10 item 6): tracks and streams by id, each track with the
-  // implementation that opened it, its `owner`, through which a consuming implementation subscribes.
-  const table = new Map(), holds = new Set();
-  const tracks = {
-    // An exclusive hold on a device for a recognizer that opens it itself (LLP 1133.012 D8, D12 item 4): granted
-    // only while no track of `kind` has a running capture (its owner's `leased(id)`), and while it lasts the owner
-    // opens no capture of that kind. Its release, or a throw `NotReadableError`.
-    hold(kind) {
-      if ([...table.values()].some(e => e.kind === kind && e.owner?.leased?.(e.id))) throw Object.assign(new Error(`a ${kind} capture runs`), { code: "NotReadableError" });
-      const h = { kind };
-      holds.add(h);
-      return () => { holds.delete(h); };
-    },
-    held: kind => [...holds].some(h => h.kind === kind),
-    add: entry => { table.set(entry.id, entry); },
-    lookup: id => table.get(id) ?? null,
-    remove: id => { table.delete(id); },
-    all: () => [...table.values()],
-    /** `consumer` ({live(source), muted(reason), unmuted(), ended()}) joins track `id`; how = {start, origin}. */
-    subscribe(id, consumer, how = {}) {
-      const entry = table.get(id);
-      if (!entry?.owner?.subscribe) throw Object.assign(new Error(`no track ${id}`), { code: "NotFoundError" });
-      return entry.owner.subscribe(id, consumer, how);
-    },
-    /** `observer` hears track `id` as a consumer does and takes no lease (LLP 1133.027 D17 item 1); its leave. */
-    observe(id, observer) {
-      const entry = table.get(id);
-      if (!entry?.owner?.observe) throw Object.assign(new Error(`no track ${id}`), { code: "NotFoundError" });
-      return entry.owner.observe(id, observer);
-    },
-  };
   // An admitted path's file (LLP 1133.009 D10 item 4), in the store `storage.fs` reads: the app's, or the drive's
   // scratch store under the agent; none when the drive names none.
   let store = null;
@@ -449,117 +421,75 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (key == null) throw Object.assign(new Error(env.agentStorageRefusal), { code: "agent" });
     return import(new URL("./storage-fs.js", import.meta.url).href).then(m => m.createFileStore(key));
   });
-  const files = {
-    // A file's first write makes its directory, as a recorder's writer needs it.
-    write: (path, bytes) => fileStore().then(async s => { await s.mkdir(path.slice(0, path.lastIndexOf("/"))); return s.writeFile(path, bytes); }),
-    append: (path, bytes) => fileStore().then(s => s.appendFile(path, bytes)),
-    read: path => fileStore().then(s => s.readFile(path)),
-    // A directory a handle fills (LLP 1133.012 D12 item 7): emptied, made, and listed.
-    remove: path => fileStore().then(s => s.rm(path)),
-    mkdir: path => fileStore().then(s => s.mkdir(path)),
-    // A Blob made the file's entry by reference, as a picked file is (LLP 1133.008.000 D2): the page reads none of it.
-    // `refusal` is asked inside the store's transaction, and what it returns stops the write.
-    put: (path, blob, refusal) => fileStore().then(async s => { await s.mkdir(path.slice(0, path.lastIndexOf("/"))); return s.putBlob(path, blob, refusal); }),
-    putAll: (entries, refusal) => fileStore().then(async s => {
-      await Promise.all([...new Set(entries.map(e => e.path.slice(0, e.path.lastIndexOf("/"))))].map(path => s.mkdir(path)));
-      return s.putBlobs(entries, refusal);
-    }),
-    list: path => fileStore().then(s => s.readdir(path)).catch(() => []),
-  };
-  // The page's Audio Session (W3C Audio Session; LLP 1133.009 D7, LLP 1133.012 D4): `play-and-record` while a
-  // capture's claim is held, else the strongest spoken type claimed (`playback` over `transient-solo` over
-  // `transient`), else what the page had.
-  const claims = new Set(), spoken = ["transient", "transient-solo", "playback"];
-  let before = null;
-  const session = () => typeof navigator === "object" ? navigator.audioSession : undefined;
-  const compose = () => {
-    const s = session();
-    if (!s) return;
-    const types = [...claims].map(c => c.type);
-    const want = types.includes("play-and-record") ? "play-and-record" : spoken.filter(t => types.includes(t)).at(-1);
-    if (want && before == null) before = s.type;
-    if (want) s.type = want;
-    else if (before != null) { s.type = before; before = null; }
-  };
-  const audioSession = {
-    /** A capture's claim, or speech's with `{type}`, one of the spoken types. */
-    claim(how = {}) {
-      const claim = { type: spoken.includes(how.type) ? how.type : "play-and-record", release: () => { claims.delete(claim); compose(); } };
-      claims.add(claim);
-      compose();
-      return claim;
-    },
-    /** The type in force: the page's, or the strongest claimed where the page has no Audio Session. */
-    type() {
-      const types = [...claims].map(c => c.type);
-      return session()?.type ?? (types.includes("play-and-record") ? "play-and-record" : spoken.filter(t => types.includes(t)).at(-1) ?? "auto");
-    },
-  };
+  const { tracks, audioSession } = packageServices();
+  const files = packageFiles(fileStore);
   // The extension's chunk, and the session's one instance of its implementation, which its names and its views share
   // (LLP 1133.008 D8 item 1).
-  const chunk = extension => { if (!chunks.has(extension)) chunks.set(extension, bound[extension]()); return chunks.get(extension); };
-  const instance = extension => {
-    if (!bound[extension]) return null;
-    if (!loaded.has(extension)) loaded.set(extension, chunk(extension).then(async m => {
-      const context = { changed: key => reask([...byKey.values()].filter(r => r.key.split("#")[0] === key && route(r) !== "substitute").map(r => r.key)), agent: clock.agent, config: m.config ?? {}, now: () => { time(); return clock.now; }, clocked: fn => { Clocked.push(fn); }, foreground: shown, log: say, tracks, files, audioSession,
-        after: (ms, body) => hatchClock.after(ms, body),
-        // The app's grant lines, and the host's auth session for an implementation (LLP 1133.014 D10 item 3).
-        grants: data.grants ?? "", get authSession() { return globalThis.exact?.authSession; },
-        revokePicture: source => pictures?.revokePicture(source), pictureChanged: source => pictures?.pictureChanged(source), invoke: invoker(extension),
-        // A package's own raising has the device's origin; a person's is the host's to give (LLP 1133.004 D6).
-        emit: (name, args) => raise(`${extension}.${name}`, args, "device"),
-        // The web's wake is the page's own (LLP 1133.017 D8): an implementation raises a declared wake event, and is
-        // answered the invocation's outcome (`completed`, `expired`, `refused`, `unheard`).
-        wakes: { raise: (name, args, how = {}) => wk.raise(`${extension}.${name}`, args, { hidden: !shown(), ...how }) },
-        // Only an event that is the web's user activation (HTML's activation-triggering input events, and `click`), and
-        // trusted, is a person's; any other type binds nothing.
-        activation: (target, type, name, args, { navigate } = {}) => !ACTIVATING.has(type) ? say(`${extension}.${name}: a ${type} is no person's activation; nothing is bound`) : target.addEventListener(type, e => {
-          if (!e.isTrusted) return say(`${extension}.${name}: an untrusted ${type} raises nothing`);
-          try { globalThis.focus?.(); } catch {}
-          if (navigate) navigateRoot(locationOf(navigate)); else raise(`${extension}.${name}`, args, "app");
-        }),
-        // An implementation that keeps the declared list (LLP 1133.033 D19: the web's call is the module's own state):
-        // `declared(name, args)` is the substitute's answer, after the admission the call already passed; `listed(state,
-        // seen)` tells `seen` the list's entries (`{ref, fields}`) now and at each change.
-        declared: (name, args) => {
-          const row = [...byKey.values()].find(r => extensionOf(r) === extension && declaredOf(r) === name && route(r) !== "substitute");
-          if (!row) return { error: "NotSupportedError" };
-          return row.send ? applyEffect(row, args ?? {}) : valueOf(row);
-        },
-        listed: (state, seen) => {
-          const name = lists.state({ key: `${extension}.` }, state);
-          const tell = () => seen((lists.get(name) ?? []).map(e => ({ ref: e.ref, fields: { ...e.fields } })));
-          watchers.set(name, [...(watchers.get(name) ?? []), tell]);
-          tell();
-        },
-        // A Media Session action (W3C Media Session, `setActionHandler`): the browser calls it only for the person's
-        // press on its own controls, so the handler set here is a person's act. When it fires, `pick()` names the entry
-        // and the declared choice it takes (`[ref, choice]`), applied as `tap @ref <choice>` is. `pick` null clears it.
-        // False where the browser has no such action.
-        mediaAction: (action, pick) => {
-          const ms = typeof navigator === "object" ? navigator.mediaSession : undefined;
-          if (!ms?.setActionHandler) return false;
-          try {
-            ms.setActionHandler(action, pick ? () => {
-              const [ref, choice] = pick() ?? [];
-              const entry = [...lists.values()].flat().find(e => e.ref === ref);
-              if (!entry) return say(`${extension}: media session ${action}: no entry`);
-              const done = up.choose(entry, choice);
-              if (done?.error) say(`${extension}: media session ${action}: ${done.error}`);
-            } : null);
-          } catch { return false; }
-          say(`${extension}: media session ${action} ${pick ? "set" : "cleared"}`);
-          return true;
-        } };
-      const impl = m.implementation?.(context) ?? null;
-      constructed.set(extension, impl);
-      if (clock.agent) await impl?.preferred?.(preferredOf(extension));
-      ready.set(extension, impl);
+  const { chunk, instance, loaded } = packageInstances(bound, async (extension, m) => {
+    const context = { changed: key => reask([...byKey.values()].filter(r => r.key.split("#")[0] === key && route(r) !== "substitute").map(r => r.key)), agent: clock.agent, ...(clock.agent && extension === "clipboard" && { clipboard: clock.clipboard }), config: m.config ?? {}, now: () => { time(); return clock.now; }, clocked: fn => { Clocked.push(fn); }, foreground: shown, log: say, tracks, files, audioSession,
+      after: (ms, body) => hatchClock.after(ms, body),
+      // The app's grant lines, and the host's auth session for an implementation (LLP 1133.014 D10 item 3).
+      grants: data.grants ?? "", get authSession() { return globalThis.exact?.authSession; },
+      revokePicture: source => pictures?.revokePicture(source), pictureChanged: source => pictures?.pictureChanged(source), invoke: invoker(extension),
+      // A package's own raising has the device's origin; a person's is the host's to give (LLP 1133.004 D6).
+      emit: (name, args) => raise(`${extension}.${name}`, args, "device"),
+      // The web's wake is the page's own (LLP 1133.017 D8): an implementation raises a declared wake event, and is
+      // answered the invocation's outcome (`completed`, `expired`, `refused`, `unheard`).
+      wakes: { raise: (name, args, how = {}) => wk.raise(`${extension}.${name}`, args, { hidden: !shown(), ...how }) },
+      // Only an event that is the web's user activation (HTML's activation-triggering input events, and `click`), and
+      // trusted, is a person's; any other type binds nothing.
+      activation: (target, type, name, args, { navigate } = {}) => !ACTIVATING.has(type) ? say(`${extension}.${name}: a ${type} is no person's activation; nothing is bound`) : target.addEventListener(type, e => {
+        if (!e.isTrusted) return say(`${extension}.${name}: an untrusted ${type} raises nothing`);
+        try { globalThis.focus?.(); } catch {}
+        if (navigate) navigateRoot(locationOf(navigate)); else raise(`${extension}.${name}`, args, "app");
+      }),
+      // An implementation that keeps the declared list (LLP 1133.033 D19: the web's call is the module's own state):
+      // `declared(name, args)` is the substitute's answer, after the admission the call already passed; `listed(state,
+      // seen)` tells `seen` the list's entries (`{ref, fields}`) now and at each change.
+      declared: (name, args) => {
+        const row = [...byKey.values()].find(r => extensionOf(r) === extension && declaredOf(r) === name && route(r) !== "substitute");
+        if (!row) return { error: "NotSupportedError" };
+        return row.send ? applyEffect(row, args ?? {}) : valueOf(row);
+      },
+      listed: (state, seen) => {
+        const name = lists.state({ key: `${extension}.` }, state);
+        const tell = () => seen((lists.get(name) ?? []).map(e => ({ ref: e.ref, fields: { ...e.fields } })));
+        watchers.set(name, [...(watchers.get(name) ?? []), tell]);
+        tell();
+      },
+      // A Media Session action (W3C Media Session, `setActionHandler`): the browser calls it only for the person's
+      // press on its own controls, so the handler set here is a person's act. When it fires, `pick()` names the entry
+      // and the declared choice it takes (`[ref, choice]`), applied as `tap @ref <choice>` is. `pick` null clears it.
+      // False where the browser has no such action.
+      mediaAction: (action, pick) => {
+        const ms = typeof navigator === "object" ? navigator.mediaSession : undefined;
+        if (!ms?.setActionHandler) return false;
+        try {
+          ms.setActionHandler(action, pick ? () => {
+            const [ref, choice] = pick() ?? [];
+            const entry = [...lists.values()].flat().find(e => e.ref === ref);
+            if (!entry) return say(`${extension}: media session ${action}: no entry`);
+            const done = up.choose(entry, choice);
+            if (done?.error) say(`${extension}: media session ${action}: ${done.error}`);
+          } : null);
+        } catch { return false; }
+        say(`${extension}: media session ${action} ${pick ? "set" : "cleared"}`);
+        return true;
+      } };
+    const impl = m.implementation?.(packageContext(context, !globalThis.__exactProduction)) ?? null;
+    constructed.set(extension, impl);
+    if (clock.agent) await tellPreferred(extension, true);
+    ready.set(extension, impl);
+    return impl;
+  });
+  const implementation = row => {
+    if (route(row) === "substitute") return null;
+    const extension = extensionOf(row);
+    return instance(extension).then(async impl => {
+      await notifications.get(extension)?.pending;
       return impl;
-    }));
-    return loaded.get(extension);
+    });
   };
-  const implementation = row => route(row) === "substitute" ? null : instance(extensionOf(row));
   // `of`, spans, `played` and `changes` (spans.js).
   const sp = spans({ sibling, valueOf, route, extensionOf, say, raise: (key, args, from) => raise(key, args, from) });
   Clocked.push(sp.due);
@@ -571,7 +501,11 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   // loaded with the page, under the agent too, so the controls follow the list from its first entry.
   const chosen = new Set([...byKey.values()].filter(r => r.sub.list?.tap?.choices && bound[extensionOf(r)]).map(extensionOf));
   if (chosen.size) setTimeout(() => { for (const extension of chosen) instance(extension); });
-  packageViews(views, chunk, instance);
+  if (Object.keys(views).length) {
+    const table = packageViews(views, chunk, instance, { say, viewId, target: "JS" });
+    (globalThis.exact ??= {}).packageViews = table;
+    After.push(table.report);
+  }
   // A package's `img` scheme (LLP 1133.019 D11 item 1): admitted as the runner's `modules/pictures.rs` admits it on
   // target `web` — the app declares one of its grant lines, an implementation is bound, and under the agent its
   // permission is granted and the app declares that permission's lines — then drawn by its implementation (pictures.js).
@@ -602,13 +536,26 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   const tell = () => { sampled.visibility(!shown()); for (const impl of loaded.values()) impl.then(i => i?.foreground?.(shown())); };
   if (typeof addEventListener === "function") addEventListener("visibilitychange", tell);
   (globalThis.exact ??= {}).foreground = visible => { if (agentShown !== visible) { agentShown = visible; tell(); ar.visibility(!visible); } };
-  // Preferences can cancel pending initialization; construction picks up any earlier changes.
-  const tellPreferred = async extension => {
-    if (!constructed.has(extension)) return;
-    inflight.n++;
-    try { await constructed.get(extension)?.preferred?.(preferredOf(extension)); }
-    catch (e) { say(`${extension}: ${e.message}`); }
-    finally { inflight.n--; }
+  // Deliver immediately so a new preference can cancel work in progress. A call waits for
+  // earlier notifications. If an older callback finishes last, restore the current table.
+  const tellPreferred = (extension, opening = false) => {
+    const impl = constructed.get(extension);
+    if (!impl?.preferred) return;
+    let state = notifications.get(extension);
+    if (!state) notifications.set(extension, state = {sent:0, finished:0});
+    const revision = ++state.sent;
+    const notify = async () => {
+      inflight.n++;
+      try {
+        await impl.preferred(preferredOf(extension));
+        if (revision < state.finished) await tellPreferred(extension);
+        else state.finished = revision;
+      } catch (e) { if (opening) throw e; say(`${extension}: ${e.message}`); }
+      finally { inflight.n--; }
+    };
+    const update = notify();
+    state.pending = Promise.all([state.pending, opening ? update.catch(() => {}) : update]).then(() => {});
+    return update;
   };
   // The agent's preferred values for an extension's names, by name.
   const preferredOf = extension => Object.fromEntries([...preferred].filter(([k]) => k.startsWith(`${extension}.`) && (!k.includes("#") || route(byKey.get(k)) === "agent")).map(([k, v]) => [k.slice(extension.length + 1).split("#")[0], v]));
@@ -673,6 +620,24 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   });
   // ---- a send that answers nothing, and its declared substitute (LLP 1133.004 D5, §7)
   const lists = declaredLists({ rows: () => byKey.values() }), setValues = new Map(), effects = [];
+  // One clock entry for the next presentation. Equal deadlines keep posting order.
+  const presentations = [];
+  const presentationTimer = { presentation: true, once: true, i: order(),
+    get due() { return unheard.length ? clock.now : (presentations.at(-1)?.at ?? Infinity) - reportTime(clock.now)[0]; },
+    action() {
+      if (!unheard.length) presentations.pop().present();
+      hearOne();
+      armPresentations();
+      return true;
+    }
+  };
+  function armPresentations() {
+    const registered = clock.timers.indexOf(presentationTimer);
+    if (presentations.length || unheard.length) {
+      if (registered < 0) clock.timers.push(presentationTimer);
+    } else if (registered >= 0) clock.timers.splice(registered, 1);
+    if (!clock.agent) drive();
+  }
   const up = updates({ lists, rows: () => byKey.values(), say, now, changed: state => listedChanged(state),
     raise: (row, event, tap, fields) => raise(`${extensionOf(row)}.${event}`, entryArgs(tap, fields), "app") });
   const rc = reach({ say, announce: keys => reask(keys), preferred: key => preferred.get(key) });
@@ -691,16 +656,43 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
       const entries = lists.get(state) ?? [], value = args[sub.list.key] ?? null, ref = nextTicket(), kind = sub.list.kind;
       const same = e => e.fields[sub.list.key] === value && e.fields.kind === kind, replaced = value == null ? null : entries.find(same)?.ref;
       const kept = value == null ? entries : entries.filter(e => !same(e));
-      kept.push({ ref, row, fields });
+      const entry = { ref, row, fields };
+      if (replaced != null) entries.find(e => e.ref === replaced)?.cancelShow?.();
+      kept.push(entry);
       lists.set(state, kept);
       say(`${name}: listed${typeof value === "string" ? ` (${value})` : ""} @${ref}`);
+      const show = sub.list.show;
+      if (show && onWeb(show)) {
+        const instant = now(), future = fields[sub.list.at] > instant;
+        fields.delivered = !future;
+        const emit = () => raise(`${extensionOf(row)}.${show.event}`, keyedArgs(row, show, fields), "device", true);
+        if (!future) { if (shown()) emit(); }
+        else {
+          const pending = { at: fields[sub.list.at], present() {
+            delete entry.cancelShow;
+            fields.delivered = true;
+            if (shown()) emit();
+          } };
+          const index = presentations.findIndex(other => other.at <= pending.at);
+          presentations.splice(index < 0 ? presentations.length : index, 0, pending);
+          entry.cancelShow = () => { presentations.splice(presentations.indexOf(pending), 1); armPresentations(); };
+          armPresentations();
+        }
+      }
       if (kind) wk.registered(ref, replaced);
       listedChanged(state);
     }
     // `"unlist": key`, or `{key, kind}` for the entries of one kind.
     const unlist = typeof sub.unlist === "object" ? sub.unlist?.key : sub.unlist, unkind = sub.unlist?.kind;
     if (unlist) {
-      for (const state of listOf(row)) { lists.set(state, (lists.get(state) ?? []).filter(e => e.fields[unlist] !== args[unlist] || (unkind != null && e.fields.kind !== unkind))); listedChanged(state); }
+      for (const state of listOf(row)) {
+        lists.set(state, (lists.get(state) ?? []).filter(e => {
+          const keep = e.fields[unlist] !== args[unlist] || (unkind != null && e.fields.kind !== unkind);
+          if (!keep) e.cancelShow?.();
+          return keep;
+        }));
+        listedChanged(state);
+      }
       say(`${name}: unlisted`);
     }
     if (sub.update) return up.update(name, sub.update, args, row);
@@ -780,7 +772,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   };
   for (const row of byKey.values()) if (row.send && row.sub.effect) Hosts[row.source] = Object.assign((from, record) => { effect(row, object(record, row.options) ?? {}, from); }, { origin: true });
   if ([...byKey.values()].some(r => r.sub.list?.due?.into)) clock.listedDue = ms => up.due(reportTime(ms)[0] + ms);
-  const delivered = e => { if (e.row.sub.list.due?.into) return e.fields.delivered !== false; const at = e.row.sub.list.at, t = at ? e.fields[at] : null; return t == null || t <= now(); };
+  const delivered = e => { if (e.row.sub.list.show && typeof e.fields.delivered === "boolean") return e.fields.delivered; if (e.row.sub.list.due?.into) return e.fields.delivered !== false; const at = e.row.sub.list.at, t = at ? e.fields[at] : null; return t == null || t <= now(); };
   // A source declared `"listed"` answers from a list: asked again when it changes.
   const watchers = new Map();
   const listedChanged = state => {
@@ -795,22 +787,27 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   const unheard = [];
   const ar = arrivals({ rows: () => [...byKey.values()], held, preferred, release: (h, json) => { say(`device ${capability(h)} ${h.ticket} retired`); release(h, json); },
     raise: (key, args) => raise(key, args, "device"), say, valueOf });
-  const raise = (key, args, from) => {
+  const raise = (key, args, from, clocked = false) => {
     const declared = events[key];
     if (!declared) return say(`${key}: no handler hears it`);
     const [, raised, bound] = declared;
     if (raised === "wake") return say(`${key}: a wake raises it, at the platform's call`);
-    unheard.push({ key, args: Array.isArray(args) ? args : [], origin: raised === "activation" ? from : "device" });
+    unheard.push({ key, clocked, args: Array.isArray(args) ? args : [], origin: raised === "activation" ? from : "device" });
     // Each event's own bound: past it, its own oldest is dropped.
     while (unheard.filter(q => q.key === key).length > bound) { const old = unheard.splice(unheard.findIndex(q => q.key === key), 1)[0]; say(`${key}: dropped (${typeof old.args[0] === "string" ? old.args[0] : JSON.stringify(old.args[0] ?? null)})`); }
     say(`${key}: raised`);
-    queueMicrotask(hear);
+    if (clocked) armPresentations();
+    else queueMicrotask(hear);
   };
   const hear = () => {
-    while (unheard.length) {
+    while (unheard.length && !unheard[0].clocked) hearOne();
+    if (unheard[0]?.clocked) armPresentations();
+  };
+  const hearOne = () => {
+    if (unheard.length) {
       const { key, args, origin: from } = unheard.shift(), [action, , , types, name] = events[key];
       let values;
-      try { values = types.map((t, i) => value(args[i] ?? null, t, key)); } catch (e) { say(`${key}: refused: ${e.message}`); continue; }
+      try { values = types.map((t, i) => value(args[i] ?? null, t, key)); } catch (e) { say(`${key}: refused: ${e.message}`); return; }
       say(`${key}: heard by ${name}`);
       const before = origin;
       origin = from;
@@ -824,13 +821,16 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   // is no field's name), or a literal.
   const entryArgs = (tap, entry) => (tap.args ?? []).map(a => typeof a === "string" ? entry[a] ?? null
     : a && typeof a === "object" ? Object.fromEntries(Object.entries(a).map(([k, f]) => [k, typeof f === "string" ? entry[f] ?? null : f])) : a);
+  const keyedArgs = (row, event, entry) => {
+    const key = row.sub.list.key;
+    return entryArgs(event, key && entry[key] == null ? { ...entry, [key]: "" } : entry);
+  };
   const activate = (row, entry, ref) => {
     const tap = row.sub.list.tap ?? {}, location = tap.navigate ? entry[tap.navigate] : null;
     if (typeof location === "string") { navigateRoot(locationOf(location)); return { ref, navigate: location, delivery: "substituted" }; }
     if (!tap.event) return { ref, delivery: "substituted" };
     // In every keyed list, an entry posted without its key is tapped with "" for it (the Notifications API's untagged `tag`).
-    const key = row.sub.list.key;
-    raise(`${extensionOf(row)}.${tap.event}`, entryArgs(tap, key && entry[key] == null ? { ...entry, [key]: "" } : entry), "app");
+    raise(`${extensionOf(row)}.${tap.event}`, keyedArgs(row, tap, entry), "app");
     return { ref, event: tap.event, delivery: "substituted" };
   };
   // The handlers a handle's work may call back (LLP 1133.016 D15 item 1): those its call's `handlers` path lists
@@ -929,7 +929,11 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     return null;
   };
   // Admitted, then what answers: `{now}`, `{hold}`, or `{forward}` (the implementation).
-  const admitted = (row, args, origin, send, timeout) => {
+  const admitted = (row, args, origin, send, timeout, startedByInput = false) => {
+    if (row.sub.origin === "input" && (!startedByInput || origin !== "app" || !shown())) {
+      say(`${row.key}: refused, person-required (${origin} origin)`);
+      return { now: { error: "NotAllowedError", message: "person-required" } };
+    }
     if (row.sub.origin === "person" && origin !== "app") {
       say(`${row.key}: refused, person-required (${origin} origin)`);
       return { now: { error: "PERMISSION_DENIED", message: "person-required" } };
@@ -1108,6 +1112,31 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     value(filled(row, v), row.type, row.key);
     return v;
   };
+  // A call from data code (ts-data.js `__exact_module`): JSON, as the native runtime answers it.
+  // `kept`: whether the answer that made the call still wants its reply; a registration it no longer does is disposed of (D11).
+  function callData(body, kept, startedByInput, scope) {
+    const row = byKey.get(ownedKey(`${body.extension}.${body.source ?? body.send}`, body.owner));
+    if (!row || row.send !== !!body.send) return Promise.resolve({ error: "NotSupportedError" });
+    const args = sampled.clamp(row, { ...(body.args ?? {}) }, say);
+    sp.resolveOf(row, args);
+    const timeout = row.send ? timeoutOf(row, args) : null, reader = !row.send && sampled.sampled(row) ? `data ${groupOf(args)}` : null;
+    const origin = dataOrigin(body.origin);
+    if (row.sub.effect) return effect(row, args, origin);
+    let d = admitted(row, args, origin, row.send, timeout, startedByInput);
+    if (d.forward && row.sub.origin === "input" && row.sub.nameGrants?.length) {
+      const grants = rawGrantText(scope).split("\n").map(line => line.trim());
+      if (!row.sub.nameGrants.some(name => grants.includes(name))) return Promise.resolve({ error: "NotAllowedError" });
+    }
+    const spanned = sp.admitted(row, args, origin, d);
+    if (spanned) return spanned.then(json => complete(json, row.type));
+    if (reader) d = sampledAnswer(row, d, args, reader);
+    if (d.forward) return viaImplementation(row, args, null, { origin, kept }).then(json => { if (reader) sampled.answered(row, reader, json); return complete(kept() ? json : ceremonies.dropped(row, json), row.type); });
+    if (d.hold) return hold(row, d.hold, row.key, true, timeout, route(row) === "agent" ? sheet => viaImplementation(row, args, null, { origin, sheet }) : null, args, kept);
+    say(`native ${row.key} (${route(row) === "substitute" ? "substituted" : "refused"})`);
+    if (row.sub.ceremony || row.sub.records) ceremonies.record({ row, args }, errorCode(d.now) ?? "recorded");
+    return Promise.resolve(complete(d.now, row.type));
+  }
+  Origin.callData = callData;
   (globalThis.exact ??= {}).extensions = {
     // A polled source's ask in flight: what a jump waits for (agent.js).
     polling: () => [...asking.keys()].some(key => byKey.get(key).sub.poll),
@@ -1185,26 +1214,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
       say(`launch --${req.launch}`);
       return activate(row, entry ?? {}, 0);
     },
-    // A call from data code (ts-data.js `__exact_module`): JSON, as the native runtime answers it.
-    // `kept`: whether the answer that made the call still wants its reply; a registration it no longer does is disposed of (D11).
-    call(body, kept = () => true) {
-      const row = byKey.get(ownedKey(`${body.extension}.${body.source ?? body.send}`, body.owner));
-      if (!row || row.send !== !!body.send) return Promise.resolve({ error: "NotSupportedError" });
-      const args = sampled.clamp(row, { ...(body.args ?? {}) }, say);
-      sp.resolveOf(row, args);
-      const timeout = row.send ? timeoutOf(row, args) : null, reader = !row.send && sampled.sampled(row) ? `data ${groupOf(args)}` : null;
-      const origin = dataOrigin(body.origin);
-      if (row.sub.effect) return effect(row, args, origin);
-      let d = admitted(row, args, origin, row.send, timeout);
-      const spanned = sp.admitted(row, args, origin, d);
-      if (spanned) return spanned.then(json => complete(json, row.type));
-      if (reader) d = sampledAnswer(row, d, args, reader);
-      if (d.forward) return viaImplementation(row, args, null, { origin, kept }).then(json => { if (reader) sampled.answered(row, reader, json); return complete(kept() ? json : ceremonies.dropped(row, json), row.type); });
-      if (d.hold) return hold(row, d.hold, row.key, true, timeout, route(row) === "agent" ? sheet => viaImplementation(row, args, null, { origin, sheet }) : null, args, kept);
-      say(`native ${row.key} (${route(row) === "substitute" ? "substituted" : "refused"})`);
-      if (row.sub.ceremony || row.sub.records) ceremonies.record({ row, args }, errorCode(d.now) ?? "recorded");
-      return Promise.resolve(complete(d.now, row.type));
-    },
+    call: (body, kept = () => true) => callData(body, kept, false),
     holds: () => [...held.filter(h => !h.queued).map(h => ({ name: h.name, ticket: h.ticket, device: { capability: capability(h),
       args: h.waits === "permission" ? { capability: h.permission, request: declaredOf(h.row), origin: "app" } : h.waits === "ceremony" ? ceremonies.args(h)
         : h.waits === "check" ? { request: declaredOf(h.row), origin: "app" }
@@ -1338,32 +1348,39 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
       return { ticket: req.ticket, capability: cap, answered: "value", delivery: "substituted" };
     },
     // `prefer extension` and `prefer permission` (LLP 1124 D7, LLP 1133.002 §6).
-    prefer(req) {
+    prefer(req, phase) {
+      const launching = phase === "launch" || phase === "restore";
       for (const [name, state] of Object.entries(req.permission ?? {})) {
         if (![...byKey.values()].some(r => permissionNamed(r, name))) return { error: `prefer permission: no module here asks for \`${name}\`` };
         if (!["granted", "denied", "prompt"].includes(state)) return { error: `prefer permission.${name}: granted, denied or prompt` };
       }
       const group = req.extension ?? {};
+      const clearing = v => !launching && !req.literal && v === "clear";
       for (const [key, v] of Object.entries(group)) {
         const word = agentWord(key);
         if (word) {
-          if (v !== "clear" && !wordFits(word, v)) return { error: `prefer extension: \`${key}\` is a ${word}` };
-          const refused = ar.refusal(key, v, group);
+          if (!clearing(v) && !wordFits(word, v)) return { error: `prefer extension: \`${key}\` is a ${word}` };
+          const refused = phase !== "restore" && !clearing(v) && ar.refusal(key, v, group);
           if (refused) return { error: refused };
           continue;
         }
         const row = byKey.get(key);
         const sources = [...byKey.values()].filter(r => !r.send).map(r => r.key);
         if (!row) return { error: `prefer extension: no source \`${key}\` in this app; its module sources are ${sources.join(", ") || "none"}` };
-        if (row.send) return { error: `prefer extension: \`${key}\` is a send, which the module answers` };
-        const p = row.sub.permission, field = p && isStatus(row) ? p.field : null;
-        if (field && v && typeof v === "object" && field in v) return { error: `prefer extension: \`${key}\`'s \`${field}\` is set by \`prefer permission.${p.name}\`` };
+        if (row.send && row.sub.from !== declaredOf(row)) return { error: `prefer extension: \`${key}\` is a send, which the module answers` };
+        const statuses = statusesOf(row);
+        for (const p of statuses) {
+          if (p.field.split(".").reduce((at, part) => at?.[part], v) !== undefined)
+            return { error: `prefer extension: \`${key}\`'s \`${p.field}\` is set by \`prefer permission.${p.name}\`` };
+        }
         // An implementation's own substitute takes a partial overlay (LLP 1133.009 D10 item 11); a declared one, a value.
-        if (v !== "clear" && !errorCode(v)) {
+        if (!clearing(v) && !errorCode(v)) {
           try {
-            if (row.sub.implementation || row.sub.partial) partial(v, row.type, row.key);
+            if (row.sub.network === "browse") networkFixture(v);
+            else if (row.sub.implementation || row.sub.partial) partial(v, row.type, row.key);
             else if (sampled.sampled(row)) sampled.check(row, v, (reading, key) => value(filled(row, reading), row.type, key));
-            else typed(row, JSON.stringify(field ? { ...v, [field]: stateOf(p.name) } : v));
+            else if (!launching && !req.literal && !row.send && typeof v !== "object" && row.type && typeof row.type === "object" && !Array.isArray(row.type)) typed(row, JSON.stringify(v));
+            else value(filled(row, statuses.length && v && typeof v === "object" ? statusValue(row, v) : v), row.type, key);
           } catch (e) { return { error: `prefer extension: ${e.message}` }; }
         }
       }
@@ -1372,21 +1389,22 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
       for (const [key, v] of Object.entries(group)) {
         const row = byKey.get(key), before = row?.sub.changes ? valueOf(row) : undefined;
         moved.push([key, preferred.get(key)]);
-        if (v === "clear") preferred.delete(key); else preferred.set(key, v);
-        if (row) sampled.prefer(row, v);
+        if (clearing(v)) preferred.delete(key); else preferred.set(key, v);
+        if (row) sampled.prefer(row, clearing(v) ? null : v);
+        if (launching) continue;
         dv.preferred(key);
         say(`prefer extension ${key}`);
         if (row?.sub.changes) sp.changed(row, before, valueOf(row));
       }
+      if (launching) return {};
       // An implementation bound under the agent is told its names' preferred values (LLP 1133.008 D8 item 9).
-      const told = Object.keys(group).flatMap(key => {
-        const row = byKey.get(key) ?? rowOf(key), extension = key.slice(0, key.indexOf("."));
-        if (row && route(row) === "agent") return [extensionOf(row)];
-        return clock.agent && agentWord(key) && viewWords.has(extension) ? [extension] : [];
-      });
-      for (const extension of new Set(told)) {
-        tellPreferred(extension);
+      const told = new Set();
+      for (const key of Object.keys(group)) {
+        const row = byKey.get(key), extension = key.slice(0, key.indexOf("."));
+        if (row ? route(row) === "agent" : clock.agent && (viewWords.has(extension) ||
+            [...byKey.values()].some(r => extensionOf(r) === extension && route(r) === "agent"))) told.add(extension);
       }
+      for (const extension of told) tellPreferred(extension);
       // A field word's change is an arrival, once every word is set.
       for (const [key, before] of moved) ar.moved(key, before, preferred.get(key));
       settleValues();
@@ -1395,6 +1413,22 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
       return { extension: Object.fromEntries(preferred), permission: Object.fromEntries(permission) };
     },
   };
+  if (globalThis.__exactLaunchSubstitutes && agentMode()) {
+    const { values, restore } = globalThis.__exactLaunchSubstitutes;
+    const result = globalThis.exact.extensions.prefer({ extension: values }, restore ? "restore" : "launch");
+    if (result.error) throw new Error(result.error);
+  }
+}
+
+// DNS-SD fixtures have the same service type and port bounds as the runner's network_checked.
+function networkFixture(services) {
+  if (!Array.isArray(services)) throw new Error("the network is a list of services");
+  for (const service of services) {
+    const name = /^_([a-zA-Z0-9-]{1,15})\._(?:tcp|udp)$/.exec(service?.type)?.[1];
+    if (!name || !/[a-zA-Z]/.test(name) || /^-|--|-$/.test(name) || typeof service.name !== "string" ||
+        typeof service.host !== "string" || !Number.isInteger(service.port) || service.port < 1 || service.port > 65535)
+      throw new Error("each service needs a name, DNS-SD type, host and port");
+  }
 }
 
 /** Whether `c` is a CSS colour: the browser's own parse, else its common forms. */

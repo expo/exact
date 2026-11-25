@@ -20,6 +20,13 @@ pub(super) struct PreparedHost<D: DataSource> {
 }
 
 impl<D: DataSource> Bridge<D> {
+    pub(super) fn replace_host(&mut self, host: crate::host::Host<D>, batch: String) -> String {
+        self.clear_view_bindings();
+        let batch = crate::host::Host::ending(self.host.replace(host), batch);
+        self.rebind();
+        batch
+    }
+
     /// Prepare with candidate delivery facts, without publishing them globally.
     pub fn prepare_plan_with_delivery(
         &mut self,
@@ -240,7 +247,7 @@ impl<D: DataSource> Bridge<D> {
                 self.wake = hooks.wake.map(|w| (w, hooks.wake_ctx));
                 self.executor = executor;
                 self.restore_window.clear();
-                let batch = Host::ending(self.host.replace(host), batch);
+                let batch = self.replace_host(host, batch);
                 self.launch_layout.insets = None;
                 self.parked.clear();
                 Ok(batch)

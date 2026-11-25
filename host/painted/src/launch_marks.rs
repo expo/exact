@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 #[cfg(unix)]
-fn clock(id: libc::clockid_t) -> f64 {
+pub(crate) fn clock(id: libc::clockid_t) -> f64 {
     let mut t = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

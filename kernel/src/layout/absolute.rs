@@ -29,7 +29,7 @@ pub(super) struct Changes {
 /// box reaches no further.
 pub(super) fn same_reach(a: &taffy::tree::LayoutOutput, b: &taffy::tree::LayoutOutput) -> bool {
     let reach = |o: &taffy::tree::LayoutOutput| {
-        let r = o.scrollable_overflow_rect;
+        let r = o.scrollable_overflow_rect.rect();
         [
             r.left.min(0.0).to_bits(),
             r.right.max(o.size.width).to_bits(),
@@ -37,7 +37,9 @@ pub(super) fn same_reach(a: &taffy::tree::LayoutOutput, b: &taffy::tree::LayoutO
             r.bottom.max(o.size.height).to_bits(),
         ]
     };
-    a.size == b.size && reach(a) == reach(b)
+    a.size == b.size
+        && a.scrollable_overflow_rect.is_reversed() == b.scrollable_overflow_rect.is_reversed()
+        && reach(a) == reach(b)
 }
 
 impl Changes {

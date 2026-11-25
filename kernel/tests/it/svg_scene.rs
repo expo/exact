@@ -1133,7 +1133,7 @@ fn geometry_moves_and_blends_resolve() {
 }
 
 /// LLP 1055.000 D15: a path's `d` under `transition` moves through the
-/// engine and the scene draws the path between (the issue #123 chevron);
+/// engine and the scene draws the path between (a chevron);
 /// a pair with other commands changes at once, as Chrome shows it.
 #[test]
 fn a_transitioning_d_draws_the_path_between() {

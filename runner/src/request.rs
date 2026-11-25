@@ -94,6 +94,9 @@ mod http;
 pub struct Request {
     /// The producing module generation. Kept in process; never part of the wire request.
     pub module: Option<crate::ModuleInstance>,
+    /// Runner ticket for a native call from a mutation. The runner assigns it when the
+    /// request leaves the source so admission can consult the originating action.
+    pub mutation_ticket: Option<u64>,
     /// Native HTTP scheduling; storage and continuations must remain ordered.
     pub http: HttpScheduling,
     /// Executor-local continuation token, not an HTTP request. The browser
@@ -322,6 +325,7 @@ impl Request {
             prefetch: false,
             held: false,
             reach: Default::default(),
+            mutation_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -425,6 +429,7 @@ impl Request {
             prefetch: false,
             held: false,
             reach: Default::default(),
+            mutation_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -472,6 +477,7 @@ impl Request {
             prefetch: false,
             held: false,
             reach: Default::default(),
+            mutation_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -1095,6 +1101,20 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// A native call the host cannot route. Package bindings read its error record
+    /// and a direct `native.later` rejects on its status.
+    pub fn module_refusal(error: &str, message: Option<&str>) -> Self {
+        let mut body = serde_json::json!({ "error": error });
+        if let Some(message) = message {
+            body["message"] = message.into();
+        }
+        Self::Response(Response {
+            status: 500,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: body.to_string().into_bytes(),
+        })
+    }
+
     /// The stream messages it carries, in arrival order: none unless it is
     /// a [`Outcome::Message`] or [`Outcome::Messages`].
     pub fn messages(&self) -> &[Message] {

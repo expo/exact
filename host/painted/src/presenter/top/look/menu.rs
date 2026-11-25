@@ -197,3 +197,95 @@ impl Layout {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_material_item_wraps_between_its_symbol_and_check() {
+        let mut engine = crate::text::fixtures::engine();
+        let row = Row {
+            node: 1,
+            title: "Dice".into(),
+            direction: Direction::Ltr,
+            menu_label: None,
+            subtitle: Some((
+                "Full house, straights and more: thirteen boxes, three rolls a turn".into(),
+                Direction::Ltr,
+            )),
+            symbol: Some("settings".into()),
+            checked: true,
+            enabled: true,
+            destructive: false,
+            cancel: false,
+            opens: None,
+        };
+        let entries = [
+            Entry::Item(row.clone()),
+            Entry::Item(Row {
+                node: 2,
+                symbol: None,
+                subtitle: None,
+                ..row.clone()
+            }),
+            Entry::Item(Row {
+                node: 3,
+                symbol: Some("info".into()),
+                checked: false,
+                ..row
+            }),
+        ];
+        for (direction, font_scale) in [(Direction::Ltr, 1.), (Direction::Rtl, 1.5)] {
+            let inputs = Inputs {
+                direction,
+                dark: false,
+                contrast: None,
+                font_scale,
+                bold_text: false,
+                window: (260., 500.),
+                room: 500.,
+            };
+            let layout = super::super::menu(&mut engine, &entries, &inputs, false);
+            let row = layout.targets[0].rect;
+            let icons: Vec<_> = layout
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Symbol(name, rect, _) => Some((name.as_str(), rect.0)),
+                    _ => None,
+                })
+                .collect();
+            let [("settings", leading), ("checkmark", trailing), ("checkmark", lone), ("info", _)] =
+                icons[..]
+            else {
+                panic!("{icons:?}")
+            };
+            assert_eq!(leading, lone);
+            assert_eq!(leading < trailing, direction == Direction::Ltr);
+            let support = layout
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Text(p, _, _, 1)
+                        if p.layout_runs().any(|r| r.text.ends_with("a turn")) =>
+                    {
+                        Some(p)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(support.layout_runs().any(|r| r
+                .glyphs
+                .iter()
+                .any(|g| g.end as usize == r.text.len() && g.start < g.end)));
+            let texts = layout.texts();
+            let (title, detail) = (texts[0].1, texts[1].1);
+            assert!(detail.3 > title.3 && detail.1 >= title.1 + title.3 - 0.1);
+            assert!(detail.0 >= leading.min(trailing) + MENU_SYMBOL - 0.1);
+            assert!(detail.0 + detail.2 <= leading.max(trailing) + 0.1);
+            assert!(detail.1 + detail.3 <= row.1 + row.3);
+            assert!(row.3 > layout.targets[1].rect.3);
+        }
+    }
+}

@@ -7,17 +7,9 @@
 //! LLP 1115.002 D4/stage 6d: chevrons are paint. The host reads the shared
 //! list/press rule; the compiler must not invent an author opt-out.
 
+use crate::source::{boxed, NoData};
 use exact_kernel::{Display, Kernel, PropId};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::Runner;
 
 /// A stack of two routes; `route` and `inner` are attributes of each route
 /// and of a column inside it beside the route's text.
@@ -31,12 +23,12 @@ fn stack(route: &str, inner: &str) -> String {
 fn the_placeholder_reaches_the_host_and_is_no_box_where_no_split_shows_it() {
     let plan = contract::bake(
         contract::compile(&stack("", "navigationSplit=\"placeholder\" gap=8")).unwrap(),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -48,10 +40,10 @@ fn the_placeholder_reaches_the_host_and_is_no_box_where_no_split_shows_it() {
     assert_eq!(own.style.display, Display::None);
     assert_eq!((own.frame.width, own.frame.height), (0.0, 0.0));
     // An unmarked box keeps its `column`.
-    let plan = contract::bake(contract::compile(&stack("", "")).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(&stack("", "")).unwrap(), boxed(NoData)).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -97,7 +89,7 @@ fn a_button_in_the_placeholder_is_no_zero_size_button_to_the_bake() {
     );
     let plan = contract::compile(&src).unwrap();
     contract::check(&plan).unwrap();
-    contract::bake(plan, NoData).unwrap();
+    contract::bake(plan, boxed(NoData)).unwrap();
 }
 
 /// A stack whose root route holds `rows`, with actions that select and that push.
@@ -112,12 +104,12 @@ fn rows(route: &str, rows: &str) -> String {
 fn split_of(src: &str) -> Option<String> {
     let plan = contract::bake(
         contract::compile(src).unwrap_or_else(|e| panic!("{e}\n{src}")),
-        NoData,
+        boxed(NoData),
     )
     .unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -182,4 +174,34 @@ fn a_row_that_navigates_keeps_the_hosts_split() {
         split_of(&rows("navigationSplit=\"280\"", body)).as_deref(),
         Some("280")
     );
+}
+
+#[test]
+fn a_tab_split_is_literal_and_an_untabbed_stack_can_still_bind_it() {
+    let tab = include_str!("../../../../scripts/fixtures/split-tabs.contract");
+    for value in [
+        "",
+        r#"navigationSplit="none""#,
+        r#"navigationSplit="split""#,
+    ] {
+        contract::compile(&tab.replace(r#"navigationSplit="split""#, value)).unwrap();
+    }
+    for value in [
+        r#"(e.name == "library" ? "split" : "none")"#,
+        "280",
+        r#""280""#,
+    ] {
+        let error = contract::compile(&tab.replace(
+            r#"navigationSplit="split""#,
+            &format!("navigationSplit={value}"),
+        ))
+        .unwrap_err();
+        assert_eq!(error.id, "lower-tab-split", "{error}");
+        assert!(
+            error.message.contains("by construction")
+                && error.message.contains("two tabs or two routes")
+        );
+    }
+    let bound = r#"navigationSplit=(e.name == "home" ? "300" : "none")"#;
+    assert_eq!(split_of(&stack(bound, "")).as_deref(), Some("300"));
 }

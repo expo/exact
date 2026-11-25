@@ -1,5 +1,6 @@
 //! LLP 1070 H1–H4: a virtualized flex row scrolls horizontally, on the same
 //! engine; the compiler refuses what would move its items' starts.
+use crate::source::{boxed, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{CollectionFeedback, DataError, DataSource, ListAxis, RowMeasurement, Runner};
@@ -125,10 +126,10 @@ impl DataSource for Rows {
         ))
     }
 }
-fn boot(list: &str) -> Runner<Rows> {
+fn boot(list: &str) -> Runner<Source> {
     Runner::boot(
         contract::compile(&source(list)).unwrap(),
-        Rows,
+        boxed(Rows),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -137,7 +138,7 @@ fn boot(list: &str) -> Runner<Rows> {
 }
 /// A report at `offset` along the main axis, measuring each mounted row
 /// at `size(index)`.
-fn report(r: &mut Runner<Rows>, offset: f64, size: impl Fn(usize) -> f64) {
+fn report(r: &mut Runner<Source>, offset: f64, size: impl Fn(usize) -> f64) {
     let c = r.collections().pop().unwrap();
     let measurements = c
         .rows
@@ -164,7 +165,7 @@ fn report(r: &mut Runner<Rows>, offset: f64, size: impl Fn(usize) -> f64) {
     .unwrap();
 }
 
-fn report_bare(r: &mut Runner<Rows>, offset: f64) {
+fn report_bare(r: &mut Runner<Source>, offset: f64) {
     let c = r.collections().pop().unwrap();
     r.collection_feedback(CollectionFeedback {
         view: c.view,
@@ -239,7 +240,7 @@ fn a_row_list_is_horizontal_its_wrappers_are_flex_items_and_its_spacers_widths()
 #[test]
 fn a_row_list_anchors_first_measurements_and_lets_a_remeasured_card_move_the_strip() {
     // @ref LLP 1070 Q3 (a).
-    let left_of_view = |r: &Runner<Rows>, offset: f64| {
+    let left_of_view = |r: &Runner<Source>, offset: f64| {
         let c = r.collections().pop().unwrap();
         c.rows
             .iter()

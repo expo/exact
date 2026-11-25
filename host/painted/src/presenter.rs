@@ -31,6 +31,7 @@ use std::time::Duration;
 use tiny_skia::Pixmap;
 
 pub mod access;
+pub mod accesskit;
 mod activities;
 mod addressed_tap;
 mod ahead;
@@ -64,8 +65,10 @@ mod field_scroll;
 #[cfg(test)]
 mod field_tests;
 mod file_drop;
+pub use file_drop::Dropped;
 #[cfg(test)]
 pub(crate) mod frame_target_tests;
+mod frames;
 mod group;
 mod hatch;
 mod history;
@@ -82,6 +85,9 @@ mod pointer;
 mod present;
 mod reader_selection;
 mod replacement;
+#[cfg(target_os = "android")]
+pub(crate) use contact::InputClock;
+pub use frames::with_partitions;
 pub use present::Carried;
 use replacement::Waiting;
 pub use replacement::{ReloadResult, ReplacementOutcome};
@@ -145,9 +151,10 @@ mod scroll_end_tests;
 struct TestWork;
 #[cfg(all(test, not(windows)))]
 impl exact_runner::HostWork for TestWork {}
+mod folding;
 mod shortcuts;
 mod status_bar;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub(crate) mod still;
 mod swipe;
 mod timeline_scroll;
@@ -182,7 +189,7 @@ mod visibility_tests;
 
 pub use clock::{wall_since, Wall};
 pub use device::{touch_only, Device, Pointing};
-pub use exact_runner::ScreenReader;
+pub use exact_runner::{ScreenOrientation, ScreenReader};
 pub use hosted::action as field_action;
 use painter::cpu_info;
 #[cfg(windows)]
@@ -192,11 +199,15 @@ pub use painter::PainterBoot;
 pub use painter::SubmittedAppleFrame;
 pub use painter::{set_custom_painter, PainterChoice, PainterFactory, PainterInfo};
 pub(crate) use palette::reported_accent;
-pub use palette::{material, ContrastPalette, Material, Palette, MATERIAL_ROLES};
+pub use palette::{material, ContrastPalette, Material, Palette, ReaderPalette, MATERIAL_ROLES};
 pub use pointer::PointerKind;
+#[cfg(target_os = "android")]
+#[doc(hidden)]
+pub use requests::android::attach as attach_android_module;
 pub use requests::{AgentTurn, Handed, Haptic, Pick, Request};
 pub use scrollers::{Scroller, Under, PAGE};
 pub use stage::SHEET_HANDLE;
+pub(crate) use stage::{sheet_handle, sheet_span};
 pub use window::{Chrome, Window};
 
 #[derive(PartialEq, Eq)]
@@ -299,7 +310,7 @@ pub struct Presenter<D: DataSource> {
     pub(crate) fields: BTreeMap<ViewId, field::FieldMark>,
     field_history: history::Histories,
     field_drag: Option<field_pointer::Drag>,
-    file_drag: file_drop::FileDrag,
+    drag_in: file_drop::DragIn,
     mouse_selection: reader_selection::MouseSelection,
     #[cfg(any(target_os = "android", test))]
     reader_selection: Option<reader_selection::Selection>,
@@ -399,9 +410,6 @@ pub struct Presenter<D: DataSource> {
     bars: bars::State,
     /// The accessibility tree its shell was last told, where one asks (D13).
     access: access::State,
-    /// The viewport segments the agent set (LLP 1078 D7), for `layout.env`;
-    /// the posture and counts are the runner's.
-    pub(crate) segments: Vec<exact_kernel::Rect>,
     /// A failed painter's blank fallback cannot bless an update generation.
     pub(crate) last_frame_succeeded: bool,
     pub(crate) display: display_frame::State,
@@ -461,6 +469,9 @@ pub struct Presenter<D: DataSource> {
     last_region_scale: Option<u32>,
     /// The app's hatches (LLP 1075.003.000.001; `presenter/hatch.rs`).
     pub(crate) hatches: crate::hatches::Session,
+    /// Whether the platform keeps an iframe's partition, where only the
+    /// platform can say (`exactPage().iframePartition`; `presenter/frames.rs`).
+    pub frame_partitions: Option<fn() -> Option<bool>>,
 }
 /// Two decimals, the agent API's precision.
 fn r2(x: f32) -> f64 {
@@ -521,7 +532,7 @@ impl<D: DataSource> Presenter<D> {
             services,
         )?;
         presenter.compat = compat.to_string();
-        presenter.host.web_mount = crate::app::web_mount(compat);
+        presenter.host.incoming_links = crate::app::IncomingLinks::from_compat(compat);
         presenter.measure();
         Ok((presenter, error))
     }
@@ -663,7 +674,7 @@ impl<D: DataSource> Presenter<D> {
             fields: BTreeMap::new(),
             field_history: Default::default(),
             field_drag: None,
-            file_drag: Default::default(),
+            drag_in: Default::default(),
             mouse_selection: Default::default(),
             #[cfg(any(target_os = "android", test))]
             reader_selection: None,
@@ -731,7 +742,6 @@ impl<D: DataSource> Presenter<D> {
             stage: Default::default(),
             bars: Default::default(),
             access: Default::default(),
-            segments: Vec::new(),
             surfaces: Default::default(),
             module: None,
             painted: false,
@@ -770,6 +780,7 @@ impl<D: DataSource> Presenter<D> {
             last_region_frame: None,
             last_region_scale: None,
             hatches: Default::default(),
+            frame_partitions: None,
         };
         p.read_ranges();
         p.set_system_scheme(false);
@@ -863,6 +874,7 @@ impl<D: DataSource> Presenter<D> {
             || self.picture_dirty
             || !self.surfaces.captures.is_empty()
             || self.host.holds_uncarried()
+            || self.host.press_picture_owed()
             || self.host.runner().canvas_owed(&|_| true)
     }
 
@@ -1157,6 +1169,7 @@ impl<D: DataSource> Presenter<D> {
             self.dirty |= self.scroll.remove(id).is_some();
         }
         self.renew_scroll_anchors(&renewed);
+        self.drag_renewed(&renewed);
         self.hosted_renewed(&renewed);
         self.hatches.renewed.extend(&renewed);
         let reports = self.images.renew(self.host.kernel(), &renewed);
@@ -1187,6 +1200,8 @@ impl<D: DataSource> Presenter<D> {
                                 region,
                                 &n,
                                 collection_limits.get(id).copied(),
+                                &|id| self.host.presented(id),
+                                self.host.scaled_presented(),
                             )
                         })
                         .clamp(*off);
@@ -1249,6 +1264,8 @@ impl<D: DataSource> Presenter<D> {
                 self.host.content_region(),
                 &node,
                 collection_limits.get(&id).copied(),
+                &|id| self.host.presented(id),
+                self.host.scaled_presented(),
             )
         });
         (bounds.max.0.max(0.), bounds.max.1.max(0.))

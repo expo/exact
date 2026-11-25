@@ -12,6 +12,7 @@ use crate::shared_style::SharedStyles;
 use crate::sorted::SlotSet;
 use std::rc::Rc;
 pub(crate) mod alert;
+pub(crate) mod bar_text;
 pub(crate) mod button;
 pub(crate) mod control_text;
 pub(crate) mod defaults;
@@ -46,6 +47,7 @@ pub struct NodeArena {
     pub(crate) layout_dirty: SlotSet,
     // Equal styles are one allocation (`shared_style`).
     styles: Vec<Rc<StyleProps>>,
+    pub(crate) scaled: SlotSet,
     shared: SharedStyles,
     props: Vec<PropList>,
     /// Live nodes per prop id and per node type: a host's scan for a few
@@ -156,6 +158,8 @@ pub struct NodeArena {
     /// to. The host's, not the tree's — a reset keeps it.
     env: Env,
     control_styles: Option<Box<[StyleProps; 10]>>,
+    /// What a navigation bar gives the readouts it hosts (LLP 1141.004 D3).
+    pub(crate) bar_text: bar_text::BarText,
     pub(crate) field_content: IdMap<u32, Frame>,
     pub(crate) button_bases: IdMap<u32, Option<f32>>,
     /// Each node's host-known state looks (LLP 1121 D8, `Op::SetLooks`):
@@ -188,6 +192,7 @@ impl Clone for NodeArena {
             child_indices: self.child_indices.clone(),
             layout_dirty: self.layout_dirty.clone(),
             styles: self.styles.clone(),
+            scaled: self.scaled.clone(),
             shared: self.shared.clone(),
             props: self.props.clone(),
             prop_counts: self.prop_counts.clone(),
@@ -239,6 +244,7 @@ impl Clone for NodeArena {
             live_count: self.live_count,
             env: self.env.clone(),
             control_styles: self.control_styles.clone(),
+            bar_text: self.bar_text.clone(),
             field_content: self.field_content.clone(),
             button_bases: self.button_bases.clone(),
             looks: self.looks.clone(),
@@ -284,6 +290,7 @@ impl NodeArena {
         self.readers.invalidate();
         self.observations.invalidate();
         self.refresh_control_styles();
+        self.refresh_bar_start();
     }
     /// Forget every allocation while retaining each slot's generation.
     ///
@@ -297,6 +304,7 @@ impl NodeArena {
         self.button_bases.clear();
         self.looks.clear();
         self.fit_scales.clear();
+        self.scaled.clear();
         self.flow.clear();
         self.exclusion_slots.clear();
         self.reserving.clear();
@@ -310,6 +318,7 @@ impl NodeArena {
         self.mark_sizes.clear();
         self.mark_reports.clear();
         self.bar_symbols.clear();
+        self.bar_text.flips.clear();
         self.table_column_widths.clear();
         self.sticky_slots.clear();
         self.top_layer_slots.clear();
@@ -984,6 +993,7 @@ impl NodeArena {
         self.button_bases.remove(&slot);
         self.looks.remove(&slot);
         self.fit_scales.remove(&slot);
+        self.scaled.remove(slot);
         self.sticky_slots.remove(slot);
         self.top_layer_slots.remove(slot);
         self.layout_dirty.remove(slot);
@@ -1390,6 +1400,7 @@ mod tests {
             (StyleId::TextBoxEdge, text("cap-alphabetic")),
             (StyleId::TextWrapStyle, text("balance")),
             (StyleId::FontSmoothing, text("antialiased")),
+            (StyleId::ListStyleType, text("decimal")),
         ];
         let mut covered = StyleMask::EMPTY;
         let insets = crate::kernel::owner::OVERRIDES.map(|id| (id, number(8.0)));

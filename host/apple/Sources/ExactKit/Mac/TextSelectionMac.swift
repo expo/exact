@@ -374,7 +374,7 @@ package final class TextSelection {
 
     /// Where the focus goes decides whether the selection survives it. As on
     /// the web, a press on a `button` (or its label) leaves the selection and
-    /// its highlight as they are, so its action reads it (#132); a link is
+    /// its highlight as they are, so its action reads it; a link is
     /// text and clears it. AppKit moves the focus before the button hears
     /// `mouseDown`, so the node that takes it decides. When no node takes it,
     /// the next turn decides: the window or the page keeping it (the pressed

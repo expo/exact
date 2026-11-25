@@ -24,6 +24,11 @@ final class ReorderHost: ReorderHosting {
 
     init(_ presenter: Presenter) { self.presenter = presenter }
 
+    #if os(iOS)
+    func nativeMovement(grip: NodeView, list: UInt32, finished: @escaping () -> Void) -> NativeListReorder? {
+        ReorderGroupHold(grip, point: .zero, ghost: false, nativeList: list, finished: finished)
+    }
+    #endif
     var lifting: Bool { lift != nil }
     func lifts(_ view: UInt32) -> Bool { lift?.lifts(view) == true }
     var groupActive: Bool { group?.active == true }
@@ -34,6 +39,21 @@ final class ReorderHost: ReorderHosting {
         }
         lift?.raiseLifted()
     }
+    func cancel(_ id: String) {
+        guard let presenter else { return }
+        let cancel: () -> Void
+        if let group, group.active, presenter.views[group.state.list]?.props["id"] == id {
+            cancel = group.cancel
+        } else if let lift, lift.phase == .active, presenter.views[lift.state.list]?.props["id"] == id {
+            cancel = lift.cancel
+        } else {
+            return
+        }
+        #if os(macOS)
+        if mouse.engaged { mouse.cancel(); return }
+        #endif
+        cancel()
+    }
     func abandon() {
         lift?.abandon()
         group?.abandon()
@@ -42,15 +62,15 @@ final class ReorderHost: ReorderHosting {
     func key(_ view: NodeView, _ name: String) -> Bool { view.reorderKey(name) }
     #if os(macOS)
     func actions(_ view: NodeView) -> [NSAccessibilityCustomAction]? {
-        guard view.reorderGroupList != nil else { return nil }
-        return ReorderGroupStep.actions.map { name, step in
+        guard let owner = view.reorderGroupList else { return nil }
+        return ReorderGroupStep.actions.filter { !owner.group.isEmpty || $0.1 == .earlier || $0.1 == .later }.map { name, step in
             NSAccessibilityCustomAction(name: name) { [weak view] in view?.reorderAction(step) ?? false }
         }
     }
     #else
     func actions(_ view: NodeView) -> [UIAccessibilityCustomAction]? {
-        guard view.reorderGroupList != nil else { return nil }
-        return ReorderGroupStep.actions.map { name, step in
+        guard let owner = view.reorderGroupList else { return nil }
+        return ReorderGroupStep.actions.filter { !owner.group.isEmpty || $0.1 == .earlier || $0.1 == .later }.map { name, step in
             UIAccessibilityCustomAction(name: name) { [weak view] _ in view?.reorderAction(step) ?? false }
         }
     }

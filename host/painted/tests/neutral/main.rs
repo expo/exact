@@ -98,6 +98,14 @@ fn size(p: &mut Presenter<()>, name: &str) -> (f32, f32) {
     (w, h)
 }
 
+/// Held colours are sampled at their endpoint on the agent's clock (LLP 1061 D7).
+fn drive_button_clock(p: &mut Presenter<()>) {
+    let clock = exact_painted::agent::handle(p, r#"{"op":"clock","to":0}"#);
+    let clock: serde_json::Value = serde_json::from_str(&clock).unwrap();
+    assert!(clock["error"].is_null(), "{clock}");
+    assert_eq!(clock["clock"].as_f64(), Some(0.0), "{clock}");
+}
+
 /// The pixel `(x, y)` into `name`'s box.
 fn pixel(p: &mut Presenter<()>, name: &str, x: f32, y: f32) -> [u8; 3] {
     let (left, top, _, _) = p.rect_of(id(p, name)).unwrap();
@@ -246,6 +254,7 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     assert_eq!(pixel(&mut p, "dark-switch", 10.0, 10.0), white);
     assert_eq!(pixel(&mut p, "dark-switch-on", 26.0, 10.0), white);
 
+    drive_button_clock(&mut p);
     // A state adds one thing: where a pointer hovers, a wash of the label's
     // ink over the outline button; held down, a stronger one.
     let unsaid = id(&p, "unsaid");

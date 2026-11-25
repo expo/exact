@@ -194,6 +194,8 @@ pub enum Operation {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Grant {
     Fetch(Origin),
+    /// The trusted web page's HTTP(S) origin (LLP 1016 D6).
+    FetchSelf,
     /// `net.fetch https://*.<suffix>`: every host strictly under `suffix`, at
     /// the origin's scheme and port (Exact patch 1). The suffix is at least
     /// two labels and not an address.
@@ -229,6 +231,8 @@ pub enum Grant {
 impl Grant {
     fn admits(&self, operation: &Operation) -> bool {
         match (self, operation) {
+            #[cfg(target_arch = "wasm32")]
+            (Grant::FetchSelf, Operation::Fetch { origin }) => page_admits(origin),
             (Grant::Fetch(granted), Operation::Fetch { origin }) => granted == origin,
             (Grant::FetchSubdomains(suffix), Operation::Fetch { origin })
             | (Grant::WebSocketSubdomains(suffix), Operation::WebSocket { origin }) => {
@@ -429,6 +433,7 @@ impl GrantSet {
                 ));
             }
             let grant = match capability {
+                "net.fetch" if target == "self" => Grant::FetchSelf,
                 // The local network, decided from a URL's host as written
                 // (LLP 1133.036 D5). Only a development build's bake writes
                 // the word after it.
@@ -636,6 +641,17 @@ fn subdomains(target: &str) -> Result<Origin, String> {
     origin(&format!("{scheme}://{rest}"), true)
 }
 
+#[cfg(target_arch = "wasm32")]
+fn page_admits(origin: &Origin) -> bool {
+    #[link(wasm_import_module = "exact_grants")]
+    extern "C" {
+        fn page_admits(ptr: *const u8, len: usize) -> u32;
+    }
+    let url = format!("{}://{}:{}", origin.scheme, origin.host, origin.port);
+    // The host compares against its document without returning the page URL to data code.
+    unsafe { page_admits(url.as_ptr(), url.len()) != 0 }
+}
+
 // Native uses url's WHATWG parser; wasm asks its browser executor for the
 // same normalization. ICU tables belong to that executor, not each app.
 #[cfg(not(target_arch = "wasm32"))]
@@ -724,6 +740,17 @@ pub fn valid_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn self_without_a_web_page_grants_no_origin() {
+        let set = GrantSet::parse("net.fetch self").unwrap();
+        assert!(!set.permits(&Operation::Fetch {
+            origin: origin("example.com")
+        }));
+        assert!(GrantSet::parse("net.fetch self extra").is_err());
+        assert!(GrantSet::parse("net.websocket self").is_err());
+    }
 
     fn origin(host: &str) -> Origin {
         Origin::new("https", host, 443)

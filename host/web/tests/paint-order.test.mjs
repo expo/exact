@@ -1,8 +1,17 @@
 // Incremental structural facts on the server DOM use the same executor as
 // the browser. These holders intentionally have no data-exact-box marker.
-import { test, expect } from 'bun:test';
+import { afterAll, test, expect } from 'bun:test';
 import { createDocument } from '../../web-js/dom.js';
-import { paintList, paintFacts, paintFlush, paintWait } from '../../web-js/paint.js';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { bundleHostModule } from '../../web-js/glue.mjs';
+
+const dir = mkdtempSync(resolve(tmpdir(), 'exact-paint-order-'));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+copyFileSync(new URL('../../web-js/paint.js', import.meta.url), resolve(dir, 'paint.js'));
+writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../../..'), 'navigation.js'));
+const { paintList, paintFacts, paintFlush, paintWait } = await import(resolve(dir, 'paint.js'));
 
 function tree() {
   const doc = createDocument();

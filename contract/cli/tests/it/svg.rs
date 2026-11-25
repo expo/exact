@@ -2,26 +2,17 @@
 //! and props on the kernel, the keyframes resolved onto the `animation` row,
 //! the longhands composed, and every refusal by its id.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, NodeType, PropId, StyleId};
 use exact_motion::{Direction, Easing, FillMode, Property};
-use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -857,7 +848,7 @@ fn stage_ten_geometry_and_blend() {
     );
 }
 
-// LLP 1055.000 D15 (issue #123): a path's `d` is a transition property, as
+// LLP 1055.000 D15: a path's `d` is a transition property, as
 // CSS names it; `all` covers it. No keyframe names it yet.
 #[test]
 fn d_transitions_and_all_covers_it() {
@@ -915,14 +906,14 @@ component App
           view testId="foreign" transform="scale(0.8)"
 "#,
     );
-    let rows = |r: &Runner<NoData>, id: &str| {
+    let rows = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         let s = &k.node_by_key(k.find_by_test_id(id)[0]).unwrap().style;
         (
             (s.translate.x, s.translate.y),
             (s.translate_percent.x, s.translate_percent.y),
             s.rotate,
-            s.scale,
+            s.scale.x,
         )
     };
     let none = ((0.0, 0.0), (0.0, 0.0), 0.0, 1.0);
@@ -954,7 +945,7 @@ component App
     let k = r.kernel();
     let svg = k.node_by_key(k.find_by_test_id("svg")[0]).unwrap();
     assert_eq!(svg.style.transform.matrix(), [0.8, 0.0, 0.0, 0.8, 0.0, 0.0]);
-    assert_eq!(svg.style.scale, 1.0);
+    assert_eq!(svg.style.scale, exact_kernel::Vec2 { x: 1., y: 1. });
     r.act("change", vec![]).unwrap();
     for (id, expected) in [
         ("class-choice", shifted),
@@ -982,13 +973,8 @@ fn box_transforms_are_refused_inline_and_through_classes() {
             "`skewX(…)` has no individual property",
         ),
         (
-            "transform=\"scale(2, 1)\"",
-            "`scale(2, 1)` scales the axes differently",
-        ),
-        ("transform=\"scaleX(2)\"", "`scaleX(…)` scales one axis"),
-        (
             "transform=\"scale3d(1, 1, 1)\"",
-            "`scale3d(…)` scales one axis",
+            "`scale3d(…)` is a 3D function",
         ),
         (
             "transform=\"translate3d(1px, 1px, 1px)\"",
@@ -1313,7 +1299,7 @@ component App
         text "HTML text"
 "#,
     );
-    let matrix = |r: &Runner<NoData>, id: &str| {
+    let matrix = |r: &Runner<Source>, id: &str| {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id(id)[0])
             .unwrap()

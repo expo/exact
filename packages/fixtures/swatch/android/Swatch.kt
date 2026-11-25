@@ -1,12 +1,13 @@
 // @fixture/swatch on Android: a box filled with its `tint`, which sends `message` "tap" when tapped, made by the
 // process's one extension for the session it belongs to, which keeps what each session was told of its views and
-// answers it as `swatchReports`.
+// answers it, with what it reads of its configuration, as `swatchReports`.
 package fixture.swatch
 
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.View
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -23,7 +24,13 @@ class SwatchModule(context: ExtensionContext) : ExactExtension(context) {
     override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
         if (name != "swatchReports") return reply(JSONObject().put("error", "NotSupportedError"))
         val lines = heard[context.session].orEmpty()
-        reply(JSONObject().put("text", lines.joinToString("; ")).put("count", lines.size))
+        reply(JSONObject().put("text", lines.joinToString("; ")).put("count", lines.size).put("config", config))
+    }
+
+    /** What it reads of its configuration: the label, and the key by its length and last four characters only. */
+    private val config: String get() {
+        val key = context.config.optString("apiKey")
+        return "label=${context.config.optString("label", "none")} apiKey=${if (key.isEmpty()) "none" else "${key.length} chars ending ${key.takeLast(4)}"} development=${context.development}"
     }
 
     override fun view(tag: String, session: String, id: String, context: Context, props: JSONObject, emit: (String, String) -> Unit): View {
@@ -41,7 +48,7 @@ class SwatchModule(context: ExtensionContext) : ExactExtension(context) {
         (view.background as? GradientDrawable)?.setColor(tint)
     }
 
-    override fun displayed(session: String, id: String, shown: Boolean, origin: String) = say(session, "displayed $id $shown $origin")
+    override fun displayed(session: String, id: String, shown: Boolean, cause: Cause) = say(session, "displayed $id $shown $cause")
 
-    override fun bound(session: String, id: String, prop: String, origin: String) = say(session, "bound $id $prop $origin")
+    override fun bound(session: String, id: String, prop: String, cause: Cause) = say(session, "bound $id $prop $cause")
 }

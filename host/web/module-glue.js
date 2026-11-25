@@ -3,7 +3,7 @@
 // guest builtin is patched. Loaded only after the page's first pixel.
 import { bindAnswerStorage, createStorage, finishLetGo } from './storage.js';
 import { agentSeed, agentStream, keyStore, refuseCodeFromStrings, storageKey } from './storage-environment.js';
-import { admitsNetwork, grantError, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
+import { admittingGrant, grantError, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
 import { faultMatches } from './faults.js';
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
@@ -81,7 +81,8 @@ export function fetchEarly(request, grants) {
   // A GET a driver fault will fail is not started early: the request fails it, counted once (LLP 1103 D1).
   // A GET that does not follow redirects is never sent early, nor one a tool, a wake or the device asked,
   // which `request` checks against the local network's rule first (LLP 1133.036 D6).
-  if ((request.origin ?? 'app') !== 'app' || grantError(grants) || request.method !== 'GET' || (request.redirect ?? 'follow') !== 'follow' || (request.cache ?? 'default') !== 'default' || request.body || request.body_base64 != null || !admitsNetwork(grants, request.url, 'fetch') || faultMatches(request.url)) return null;
+  const scope = scopedGrantSet(grants, request.scope);
+  if ((request.origin ?? 'app') !== 'app' || grantError(grants) || request.method !== 'GET' || (request.redirect ?? 'follow') !== 'follow' || (request.cache ?? 'default') !== 'default' || request.body || request.body_base64 != null || !admittingGrant(scope, request.url, 'fetch', undefined, false) || faultMatches(request.url)) return null;
   const key = earlyKey(request.url, request.headers), controller = new AbortController();
   const entry = { controller, response: fetch(request.url, { method: 'GET', headers: request.headers, redirect: 'follow', cache: 'default', signal: controller.signal }) };
   entry.response.catch(() => {});
@@ -149,6 +150,7 @@ export async function prepare(payload, admitted, id = nextId++) {
     const original = win.console[level].bind(win.console);
     win.console[level] = (...args) => { journal.push(`console: ${args.map(a => typeof a === 'string' ? a : String(a)).join(' ')}`); original(...args); };
   }
+  win.__exact_fetch_base = () => document.baseURI;
   win.__exact_browser_secrets = true;
   win.__exact_host = (op, name, value) => {
     if (op === 13) { journal.push(String(name)); return '1'; }
@@ -513,7 +515,7 @@ async function prepareWorker(payload, admitted, id, before, meta, helpers) {
   worker.onerror = event => { event.preventDefault(); fail(`module worker failed: ${event.message}`); };
   worker.onmessageerror = () => fail('module worker message failed');
   const ready = new Promise((resolve, reject) => waiting.set(0, { resolve, reject }));
-  worker.postMessage({ op: 'init', token: 0, binary: helpers, prelude: before, script: decoder.decode(payload.script), admitted,
+  worker.postMessage({ op: 'init', token: 0, base: document.baseURI, binary: helpers, prelude: before, script: decoder.decode(payload.script), admitted,
     storage: storageKey(admitted.appId), pageDigest: !!globalThis.exact.moduleDigest, seed: agentSeed() });
   let overlayAtLoad;
   try { overlayAtLoad = (await ready).hasOverlay; } catch (error) { worker.terminate(); throw error; }
@@ -530,7 +532,7 @@ async function prepareWorker(payload, admitted, id, before, meta, helpers) {
       turns.set(token, {id, request, run: () => new Promise((resolve, reject) => {
         if (disposed) return reject(new Error('module environment disposed'));
         waiting.set(token, { resolve, reject });
-        worker.postMessage({ op: 'turn', token, request });
+        worker.postMessage({ op: 'turn', token, request, base: document.baseURI });
       })});
       return {continuation: token};
     },

@@ -1,4 +1,5 @@
-//! `lower-menu-row-popover`, a note: a row of a menu (`role="menu"`) whose
+//! Menu row positions and the `lower-menu-row-popover` note.
+//! The note describes a row of a menu (`role="menu"`) whose
 //! `popovertarget` names a popover that is no menu. exact2's menu rule
 //! (LLP 1021; theme2 2026-10-21 19:47, 22:05) opens it as if by the menu's
 //! own invoker, so the menu closing as its row is chosen doesn't take it
@@ -25,6 +26,28 @@ fn literal<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
     {
         Some(Expr::Str(s, _)) => Some(s.as_str()),
         _ => None,
+    }
+}
+
+/// A popover and its immediate sections can each supply native menu rows (LLP 1021 D3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Parent {
+    Popover,
+    Section,
+}
+
+impl Parent {
+    pub(super) fn of_children(parent: Option<Self>, button: bool, attrs: &[Attr]) -> Option<Self> {
+        if has(attrs, "popover") {
+            Some(Self::Popover)
+        } else if parent == Some(Self::Popover)
+            && !button
+            && literal(attrs, "role") == Some("group")
+        {
+            Some(Self::Section)
+        } else {
+            None
+        }
     }
 }
 

@@ -136,6 +136,10 @@ impl<D: DataSource> Runner<D> {
     /// The commit's `setMode`s from `from` on, each applied and taken out:
     /// the runner's alone, set in this commit's update; no host is told.
     pub(super) fn take_set_modes(&mut self, from: usize) {
+        // A call's work leaves it to D4a's filter, which refuses it (`calls.rs`).
+        if self.cause().is_call() {
+            return;
+        }
         let mut i = from;
         while i < self.commands.len() {
             match self.commands[i].name == "setMode" {

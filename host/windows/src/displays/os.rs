@@ -60,9 +60,19 @@ fn tell(watchers: &Watchers) {
 /// thread.
 #[derive(Default)]
 struct Watch {
+    screen_changed: Option<Box<dyn Fn()>>,
     watchers: Watchers,
     /// The monitor the window was on when last compared.
     on: Cell<isize>,
+}
+
+impl Watch {
+    fn display_changed(&self) {
+        tell(&self.watchers);
+        if let Some(changed) = &self.screen_changed {
+            changed();
+        }
+    }
 }
 
 /// The host's display service for the session window `hwnd`.
@@ -81,20 +91,45 @@ struct Displays {
 /// Report the displays to every session on this thread, measured against
 /// the session window `hwnd`, whose client area is at least `minimum` CSS
 /// pixels.
-pub(crate) fn install(hwnd: isize, minimum: (f32, f32)) {
+pub(crate) fn install(hwnd: isize, minimum: (f32, f32), changed: impl Fn() + 'static) {
     let displays = Rc::new(Displays {
         hwnd,
         minimum,
-        watch: Rc::default(),
+        watch: Rc::new(Watch {
+            screen_changed: Some(Box::new(changed)),
+            ..Watch::default()
+        }),
         hears: Cell::new(false),
         settings: OnceCell::new(),
     });
+    displays.hear_window();
     CURRENT.with(|current| *current.borrow_mut() = Some(displays.clone()));
     exact_painted::desktop::install_displays(displays);
 }
 
 thread_local! {
     static CURRENT: RefCell<Option<Rc<Displays>>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn orientation() -> Option<exact_runner::ScreenOrientation> {
+    CURRENT.with(|current| {
+        let current = current.borrow();
+        let on = unsafe { MonitorFromWindow(current.as_ref()?.window(), MONITOR_DEFAULTTONEAREST) };
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if unsafe { GetMonitorInfoW(on, (&mut info as *mut MONITORINFOEXW).cast()) } == 0 {
+            return None;
+        }
+        let rect = info.monitorInfo.rcMonitor;
+        Some(
+            crate::orientation::screen(&info.szDevice).unwrap_or_else(|| {
+                exact_runner::ScreenOrientation::rotated(
+                    rect.bottom - rect.top >= rect.right - rect.left,
+                    0,
+                )
+            }),
+        )
+    })
 }
 
 /// No HWND is needed to enumerate the real desktop. A hidden window's
@@ -267,8 +302,7 @@ impl Displays {
         (read, current)
     }
 
-    /// Hear the window's display changes, and the Text size setting's, from
-    /// the first reader on.
+    /// The first displays resource starts watching the Text size setting.
     fn hear(&self) {
         if self.hears.replace(true) {
             return;
@@ -284,6 +318,9 @@ impl Displays {
                 eprintln!("exact-windows: text-size changes for the displays: {error}");
             }
         }
+    }
+
+    fn hear_window(&self) {
         let on = unsafe { MonitorFromWindow(self.window(), MONITOR_DEFAULTTONEAREST) };
         self.watch.on.set(on as isize);
         let data = Rc::into_raw(self.watch.clone());
@@ -342,12 +379,12 @@ unsafe extern "system" fn heard(
                 RemoveWindowSubclass(window, Some(heard), subclass);
                 drop(Rc::from_raw(watch));
             }
-            WM_DISPLAYCHANGE | WM_DPICHANGED => tell(&(*watch).watchers),
+            WM_DISPLAYCHANGE | WM_DPICHANGED => (*watch).display_changed(),
             WM_SETTINGCHANGE if wparam == SPI_SETWORKAREA as usize => tell(&(*watch).watchers),
             WM_WINDOWPOSCHANGED => {
                 let on = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) as isize;
                 if (*watch).on.replace(on) != on {
-                    tell(&(*watch).watchers);
+                    (*watch).display_changed();
                 }
             }
             _ => {}

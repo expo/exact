@@ -348,28 +348,24 @@ impl LayoutTree {
         self.tables.find(arena, slots);
     }
 
-    /// Where publication places `slot`'s children from, in a tree whose
-    /// handle for `slot` is `node`: a row's or row group's from where `slot`
-    /// was placed (`from`), moved by its [`displacement`]; a table that is
-    /// another box's from its anonymous table; anything else's from its own
-    /// frame's origin, `at`.
-    pub(crate) fn parts_origin(
+    /// A flat row or group places its children from the grid origin that
+    /// placed it, plus its displacement in that grid.
+    pub(crate) fn part_displacement(
         &self,
         arena: &NodeArena,
         slot: u32,
-        node: NodeId,
-        from: (f32, f32),
-        at: (f32, f32),
-    ) -> (f32, f32) {
-        if self.tables.flat(slot) {
-            let (dx, dy) = displacement(arena, self, slot, Some(node));
-            (from.0 + dx, from.1 + dy)
-        } else if let Some(grid) = self.tables.anon(slot) {
-            let l = self.layout(grid);
-            (at.0 + l.location.x, at.1 + l.location.y)
-        } else {
-            at
-        }
+        node: Option<NodeId>,
+    ) -> Option<(f32, f32)> {
+        self.tables
+            .flat(slot)
+            .then(|| displacement(arena, self, slot, node))
+    }
+
+    /// An anonymous grid contributes its location only to the children it places.
+    pub(crate) fn grid_offset(&self, slot: u32, child: u32) -> Option<(f32, f32)> {
+        let grid = self.tables.grid_for(slot, child)?;
+        let at = self.layout(grid).location;
+        Some((at.x, at.y))
     }
 }
 

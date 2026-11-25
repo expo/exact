@@ -9,6 +9,7 @@
 
 use super::{not_booted, Bridge};
 use exact_runner::DataSource;
+use std::ffi::c_void;
 
 impl<D: DataSource> Bridge<D> {
     /// Omit layout-only boxes inside quiet collection rows of subsequent boots (LLP 1171 D4).
@@ -329,11 +330,76 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
+    /// The session's app module (LLP 1067.000): `later(ctx, body, len,
+    /// reply)` takes each long native call on the executor's thread and
+    /// answers it once ([`crate::app_module::reply`]); `call` answers a
+    /// `native.call` before it returns ([`crate::app_module::answer`]).
+    pub fn set_app_module(
+        &mut self,
+        later: Option<crate::app_module::LaterFn>,
+        call: Option<crate::app_module::CallFn>,
+        ctx: *mut c_void,
+    ) {
+        let target = call.map(|call| (call as usize, ctx as usize));
+        let changed = target != self.binding_target;
+        if changed {
+            self.clear_view_bindings();
+            self.binding_target = target;
+            self.binding_observer = call.map(|call| crate::app_module::binding_observer(call, ctx));
+        }
+        self.app_module = later.map(|later| crate::app_module::handler(later, ctx));
+        self.app_call = call.map(|call| crate::app_module::caller(call, ctx));
+        self.adopt_app_module();
+        if changed {
+            self.watch_view_bindings();
+        }
+    }
+
+    fn watches_view_bindings(&self) -> bool {
+        self.bound
+            .as_deref()
+            .is_some_and(|s| s.starts_with("view-bindings "))
+    }
+
+    fn watch_view_bindings(&mut self) {
+        let Some(header) = self
+            .bound
+            .as_deref()
+            .and_then(|s| s.lines().next())
+            .and_then(|s| s.strip_prefix("view-bindings "))
+        else {
+            return;
+        };
+        if let Some(host) = &mut self.host {
+            let props: Vec<_> = header
+                .split_whitespace()
+                .filter_map(|pair| pair.split_once('.'))
+                .collect();
+            host.runner_mut()
+                .observe_view_bindings(&props, self.binding_observer.clone());
+        }
+    }
+
+    pub(super) fn clear_view_bindings(&mut self) {
+        if self.watches_view_bindings() {
+            if let Some(host) = &mut self.host {
+                host.runner_mut().observe_view_bindings(&[], None);
+            }
+            if let Some(observer) = &self.binding_observer {
+                observer("{}");
+            }
+        }
+    }
+
     /// The extensions the app's module composes, a name a line; `agent
     /// <name>` for one bound under the agent.
     pub fn bind_extensions(&mut self, len: usize) {
         let text = std::str::from_utf8(&self.input[..len.min(self.input.len())]).unwrap_or("");
-        self.bound = Some(text.to_owned());
+        let text = text.to_owned();
+        if self.watches_view_bindings() && !text.starts_with("view-bindings ") {
+            self.clear_view_bindings();
+        }
+        self.bound = Some(text);
         self.rebind();
     }
 
@@ -345,7 +411,7 @@ impl<D: DataSource> Bridge<D> {
             return;
         };
         let (agent, real): (Vec<&str>, Vec<&str>) = (text.lines())
-            .filter(|l| !l.is_empty())
+            .filter(|l| !l.is_empty() && !l.starts_with("view-bindings "))
             .partition(|l| l.starts_with("agent "));
         let agent: Vec<&str> = agent.iter().map(|l| &l["agent ".len()..]).collect();
         // Binding tells the module its views' state at once (`retell_views`), which reaches it only through
@@ -354,6 +420,7 @@ impl<D: DataSource> Bridge<D> {
         if let Some(h) = self.host.as_mut() {
             h.runner_mut().bind_extensions(&real, &agent);
         }
+        self.watch_view_bindings();
     }
 
     /// A package picture's admission (`exact_picture`), on this target.

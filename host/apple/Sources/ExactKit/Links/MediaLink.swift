@@ -24,6 +24,10 @@ package protocol WebHosting: AnyObject {
     var status: String { get }
     func create(owner: NodeView) -> ExactWebPlatformView?
     func update(_ owner: NodeView)
+    /// Tell the guest how much of `owner`'s web view lies under its owner's bars and band, in the
+    /// view's own coordinates (LLP 1123 D15): WebKit keeps the page's fixed and sticky content and
+    /// its visible rect clear of it. A host with no web views, and the Mac, do nothing.
+    func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat)
     func reloadDocument(_ owner: NodeView)
     func destroy(id: UInt32)
     func hatched(_ id: UInt32)
@@ -56,6 +60,7 @@ package final class NoWebViews: WebHosting {
     package var status: String { "none" }
     package func create(owner: NodeView) -> ExactWebPlatformView? { nil }
     package func update(_ owner: NodeView) {}
+    package func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {}
     package func reloadDocument(_ owner: NodeView) {}
     package func destroy(id: UInt32) {}
     package func hatched(_ id: UInt32) {}

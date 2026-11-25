@@ -39,6 +39,44 @@ final class ElementScrollTests: XCTestCase {
     }
     #endif
 
+    func testBorderedElementJumpsMatchTheBrowserOnBothAxes() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 400, height: 400)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": [
+                "overflow_x": "scroll", "overflow_y": "scroll",
+                "border_width_top": 8, "border_width_left": 8, "border_width_bottom": 12, "border_width_right": 12,
+                "scroll_padding_top": ["pct": 10], "scroll_padding_left": ["pct": 10],
+                "scroll_padding_bottom": 6, "scroll_padding_right": ["pct": 10]]],
+            ["op": "create", "id": 2, "kind": "view", "props": ["id": "marker"]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 300],
+            ["op": "frame", "id": 2, "x": 396, "y": 396, "w": 80, "h": 80],
+            ["op": "content", "id": 1, "w": 1200, "h": 1200],
+        ]))
+        #if os(macOS)
+        let window = NSWindow(contentRect: p.viewport.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = p.viewport
+        let sv = try XCTUnwrap(p.views[1]?.scroll)
+        sv.scrollerStyle = .overlay
+        sv.tile()
+        let offset = { sv.contentView.bounds.origin }
+        #else
+        let window = UIWindow(frame: p.viewport.frame)
+        window.addSubview(p.viewport)
+        let sv = try XCTUnwrap(p.views[1]?.scrollView)
+        let offset = { sv.contentOffset }
+        #endif
+        defer { withExtendedLifetime(window) {} }
+        p.scrollElementIntoView(["marker", "start", "start", "instant"])
+        XCTAssertEqual(offset(), CGPoint(x: 360, y: 360))
+        p.scrollElementIntoView(["marker", "end", "end", "instant"])
+        XCTAssertEqual(offset(), CGPoint(x: 216, y: 194))
+    }
+
     func testPaddingAndMarginsAlignStartAndNearest() throws {
         #if os(macOS)
         _ = NSApplication.shared

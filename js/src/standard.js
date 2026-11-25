@@ -147,7 +147,7 @@
     return copy;
   });
 
-  // ECMA-402's `Intl.Locale`, which Hermes has not built (issue #118): a
+  // ECMA-402's `Intl.Locale`, which Hermes has not built: a
   // tag parsed and canonicalized as UTS 35 says (case, sorted variants,
   // extensions and `-u-` keywords, a `true` value dropped), the options that
   // replace its parts, their getters, and the Intl Locale Info proposal's

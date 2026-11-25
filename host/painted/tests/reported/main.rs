@@ -19,7 +19,7 @@ const APP: &str = r##"component App
       box testId="grouped" width=40 height=40 background-color="-exact-grouped-background"
       box testId="green" width=40 height=40 background-color="-exact-system-green"
       input type="checkbox" checked=true width=20 height=20 testId="check"
-      input type="checkbox" checked=true width=20 height=20 accent-color="#ff0000" testId="authored"
+      input type="checkbox" checked=true width=20 height=20 accent-color="light-dark(#880000, #ffcccc)" testId="authored"
       input type="checkbox" role="switch" checked=true width=40 height=24 testId="switch"
       button appearance="auto" buttonStyle="filled" width=120 height=40 testId="filled"
         text "Send"
@@ -102,7 +102,7 @@ fn a_reported_palette_is_what_the_roles_and_the_controls_paint_in() {
     assert_eq!(pixel(&mut p, "accent", 20, 20), [0x00, 0x88, 0xff]);
     assert_eq!(pixel(&mut p, "check", 3, 3), [0x00, 0x75, 0xff]);
     assert_eq!(pixel(&mut p, "filled", 6, 20), [0x00, 0x75, 0xff]);
-    assert_eq!(pixel(&mut p, "authored", 3, 3), [0xff, 0x00, 0x00]);
+    assert_eq!(pixel(&mut p, "authored", 3, 3), [0x88, 0x00, 0x00]);
     assert!(!p.dirty(), "painted");
 
     // The device's palette: the page is painted again, and every role is
@@ -127,8 +127,8 @@ fn a_reported_palette_is_what_the_roles_and_the_controls_paint_in() {
     assert_eq!(pixel(&mut p, "check", 3, 3), primary);
     assert_eq!(pixel(&mut p, "switch", 8, 12), primary);
     assert_eq!(pixel(&mut p, "filled", 6, 20), primary);
-    // An authored accent still wins, with white on it as before.
-    assert_eq!(pixel(&mut p, "authored", 3, 3), [0xff, 0x00, 0x00]);
+    // White reads on the authored dark red.
+    assert_eq!(pixel(&mut p, "authored", 3, 3), [0x88, 0x00, 0x00]);
     assert_eq!(pixel(&mut p, "authored", 8, 14), [0xff, 0xff, 0xff]);
     // A system hue D4 leaves alone keeps its pair.
     assert_eq!(pixel(&mut p, "green", 20, 20), [0x34, 0xc7, 0x59]);
@@ -143,7 +143,8 @@ fn a_reported_palette_is_what_the_roles_and_the_controls_paint_in() {
     assert_eq!(pixel(&mut p, "check", 8, 14), on_primary, "the check");
     assert_eq!(pixel(&mut p, "switch", 28, 12), on_primary, "the thumb");
     assert_eq!(pixel(&mut p, "filled", 6, 20), primary);
-    assert_eq!(pixel(&mut p, "authored", 8, 14), [0xff, 0xff, 0xff]);
+    assert_eq!(pixel(&mut p, "authored", 3, 3), [0xff, 0xcc, 0xcc]);
+    assert_eq!(pixel(&mut p, "authored", 8, 14), [0, 0, 0]);
     p.set_system_scheme(false);
 
     // D4's table, row by row.

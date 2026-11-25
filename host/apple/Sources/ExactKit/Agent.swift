@@ -20,6 +20,9 @@ import AppKit
 #endif
 
 public final class Agent {
+    /// While an attached session's tap or text entry runs (LLP 1012.000 D3): whether it may still take effect, asked
+    /// as the click or the text is about to be sent. Main thread.
+    nonisolated(unsafe) static var inputGate: (() -> Bool)?
     package static func installLink() {
         guard AgentLink.hooks == nil else { return }
         AgentLink.hooks = .init(
@@ -596,7 +599,7 @@ public final class Agent {
         return ["back": went.way, "delivery": "platform", "refused": went.refused]
     }
 
-    /// A field's value as a reply shows it (#134): a password's, when not
+    /// A field's value as a reply shows it: a password's, when not
     /// empty, is a fixed mark whatever its length — the runner's
     /// `agent::MASKED`, which its tree already shows.
     static func shownValue(_ value: String, of v: NodeView) -> String {

@@ -79,6 +79,7 @@ test('a link pop is journaled when the URL serializer leaves the link\'s `|` une
     navigation.connect(root, () => false, line => lines.push(line), null, null, () => true, false, canonical);
     const home = { op: 'router', top: 1, url: '/item/a%7Cb', removed: [], visits: [[1, '/item/a%7Cb']] };
     navigation.apply(home);
+    expect(navigation.samePage('/item/a|b')).toBe(true);
     navigation.apply({ op: 'router', top: 2, url: '/item/c', removed: [], visits: [[1, '/item/a%7Cb'], [2, '/item/c']] });
     const link = { href: 'http://app.test/item/a|b#top', target: '', closest: () => link, hasAttribute: () => false };
     for (const capture of clicks) capture({ target: link, button: 0, eventPhase: 1, defaultPrevented: false });
@@ -88,6 +89,34 @@ test('a link pop is journaled when the URL serializer leaves the link\'s `|` une
     navigation.reset();
     names.forEach((n, i) => had[i] ? Object.defineProperty(globalThis, n, had[i]) : delete globalThis[n]);
   }
+});
+
+test('a fragment traversal sees its destination, and a redirect in memory adds an entry', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser();
+  try {
+    for (const memory of [false, true]) {
+      const page = await browser.newPage();
+      await page.goto(server.url.href);
+      await page.locator('body').click({ position: { x: 1, y: 1 } });
+      const result = await page.evaluate(async memory => {
+        const { navigation } = await import('/navigation.js'), root = document.getElementById('exact-root');
+        if (memory) history.pushState = history.replaceState = () => { throw new DOMException('History unavailable', 'SecurityError'); };
+        const apply = url => navigation.apply({ top: 0, url, removed: [], visits: [[0, '/']] });
+        let destination;
+        navigation.connect(root, url => {
+          destination = navigation.entry.url;
+          apply(memory ? '/#redirect' : url);
+          return true;
+        }, () => {});
+        apply('/');
+        apply('/#second');
+        await navigation.travel(null, -1);
+        return [destination, navigation.entry.url, navigation.entry.exact];
+      }, memory);
+      expect(result).toEqual(memory ? ['/', '/#redirect', 2] : ['/', '/', 0]);
+      await page.close();
+    }
+  } finally { await browser.close(); server.stop(true); }
 });
 
 test('a wasm batch held for presence retains its link after click dispatch ends', async () => {
@@ -102,7 +131,7 @@ test('a wasm batch held for presence retains its link after click dispatch ends'
       root.innerHTML = '<a href="/">Home</a>';
       const log = line => lines.push(line), host = {}, agentMode = false;
       const motion = { commit() {} }, arrange = { commit() {} }, clocks = { sync() {} };
-      const letGo = () => {}, refitTexts = () => {}, flowBatch = () => {};
+      const letGo = () => {}, refitTexts = () => {}, playSymbolEffects = () => {}, flowBatch = () => {};
       // Exercise the wasm batch's hold and release with only its router op applied.
       const apply = batch => {
         for (const op of batch.ops) if (op.op === 'router') { navigation.apply(op); applied.push(op.top); }
@@ -111,7 +140,7 @@ test('a wasm batch held for presence retains its link after click dispatch ends'
       let ready;
       const loading = new Promise(resolve => { ready = resolve; });
       const presence = presenceLoader(() => loading, root, batch => applyBatch(batch), log);
-      const bindings = { navigation, host, agentMode, motion, arrange, clocks, letGo, refitTexts, flowBatch, presence, apply };
+      const bindings = { navigation, host, agentMode, motion, arrange, clocks, letGo, refitTexts, playSymbolEffects, flowBatch, presence, apply };
       const applyBatch = new Function(...Object.keys(bindings), `${commit}; return applyBatch;`)(...Object.values(bindings));
       navigation.connect(root, () => false, log, null, null, () => true);
       const boot = { op: 'router', top: 1, url: '/', removed: [], visits: [[1, '/']] };

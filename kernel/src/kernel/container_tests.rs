@@ -314,3 +314,46 @@ fn a_container_unit_crosses_the_wire_and_back() {
         assert_eq!(r.dimension(StyleId::Width, false).unwrap(), d, "{unit:?}");
     }
 }
+
+#[test]
+fn a_relative_row_in_container_units_reads_its_owners_content_root() {
+    // In 2's 300-wide content root, 3's font size of 10cqw is 30 and its letter spacing of 1cqi
+    // 3; a block 200 wide makes them 20 and 2, and with its parent 4 moved out of every owner 3
+    // reads the small viewport, 390 wide; its child 5's `2em` follows each
+    let mut ops = create(3..=5);
+    ops.push(style(5, vec![], &[(StyleId::FontSize, "2em")]));
+    let rows = [
+        (StyleId::FontSize, "10cqw"),
+        (StyleId::LetterSpacing, "1cqi"),
+    ];
+    ops.push(style(3, vec![], &rows));
+    ops.extend([
+        children(1, &[2]),
+        children(2, &[4]),
+        children(4, &[3]),
+        children(3, &[5]),
+    ]);
+    let mut k = owner(300.0, 600.0, ops);
+    let mut env = k.arena.env().clone();
+    (env.viewport_width, env.viewport_height) = (390.0, 844.0);
+    k.set_env(env).unwrap();
+    lay_out(&mut k);
+    let read = |k: &Kernel| {
+        let s = k.arena.computed_style(slot(k, 3), crate::StyleMask::ALL);
+        (s.font_size, s.letter_spacing)
+    };
+    let child = |k: &Kernel| {
+        k.arena
+            .computed_style(slot(k, 5), crate::StyleMask::ALL)
+            .font_size
+    };
+    assert_eq!((read(&k), child(&k)), ((30.0, 3.0), 60.0));
+    k.set_host_block(2, Some(block(BlockAxis::Is(200.0), BlockAxis::Is(600.0))))
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!((read(&k), child(&k)), ((20.0, 2.0), 40.0));
+    k.apply(0, 2, &[children(2, &[]), children(1, &[2, 4])])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!((read(&k), child(&k)), ((39.0, 3.9), 78.0));
+}

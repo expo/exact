@@ -217,10 +217,11 @@ export function builtContract(env = process.env, { preferDebug = false, debug = 
   return path ? launch(path, [], undefined, env) : null;
 }
 
-export function compilerCargo(verb, env = process.env) {
+export function compilerCargo(verb, env = process.env, targetDir) {
   const clean = cargoEnvironment(env), channel = pin();
   delete clean.RUSTUP_TOOLCHAIN;
-  delete clean.CARGO_TARGET_DIR;
+  if (targetDir) clean.CARGO_TARGET_DIR = resolve(ROOT, targetDir);
+  else delete clean.CARGO_TARGET_DIR;
   const args = [`+${channel}`, verb, '-q', '--manifest-path', resolve(ROOT, 'Cargo.toml'), '-p', 'contract'];
   if (verb === 'run') args.push('--');
   return { ...launch('cargo', args, undefined, clean), pin: channel };
@@ -244,14 +245,15 @@ export function sweepCompilerTarget({ pin, env }) {
 
 /** Select a fresh Contract compiler, building with the pinned Cargo when needed (D5).
  * A Rust-less machine receives the diagnostic in the form requested by the caller. */
-export function contractTool({ env = process.env, json = false, file = '', preferDebug = false, debug = CONTRACT } = {}) {
+export function contractTool({ env = process.env, json = false, file = '', preferDebug = false, targetDir,
+  debug = targetDir ? resolve(ROOT, targetDir, 'debug', `contract${EXE}`) : CONTRACT } = {}) {
   const built = builtContract(env, { preferDebug, debug });
   if (built) return built;
   if (rustMissing(env)) { new RustMissing('contract', env).say(json, file); return null; }
   if (!existsSync(debug)) console.error('exact contract: building the Contract compiler once (about a minute on a cold checkout; `exact new` starts it in the background)…');
   // Built before and stale, as after a pull: Cargo runs quietly, so say why the wait (LLP 1156.006.000 D11).
   else console.error('exact contract: rebuilding the Contract compiler, since its sources changed (about a minute)…');
-  return compilerCargo('run', env);
+  return compilerCargo('run', env, targetDir);
 }
 
 /** Cargo's metadata for `webSourceRoots` and the tool set's input directories. The recorded paths are relative to

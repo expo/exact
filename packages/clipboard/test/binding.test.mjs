@@ -10,11 +10,11 @@ import { moduleBinding } from '../../../js/bake/src/__exact_binding.mjs';
 
 const pkg = resolve(import.meta.dir, '..');
 const declaration = JSON.parse(readFileSync(join(pkg, 'exact.json'), 'utf8'));
-const implementations = ['apple', 'web', 'windows'].map((p) => JSON.parse(readFileSync(join(pkg, p, 'exact.json'), 'utf8')));
+const implementations = ['android', 'apple', 'web', 'windows'].map((p) => JSON.parse(readFileSync(join(pkg, p, 'exact.json'), 'utf8')));
 // Each target's binding, written before any is imported (Bun lists a directory once).
 const dir = mkdtempSync(join(tmpdir(), 'exact-clipboard-binding-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-for (const target of ['ios', 'tvos', 'android', 'web', 'windows']) {
+for (const target of [null, 'macos', 'ios', 'tvos', 'android', 'web', 'windows']) {
   writeFileSync(join(dir, `clipboard-${target}.ts`), moduleBinding('@exact/clipboard', declaration, implementations, () => [], {}, target));
 }
 const load = (target) => import(join(dir, `clipboard-${target}.ts`));
@@ -28,8 +28,11 @@ test('supports answers the declared types where an implementation is, and none e
   expect((await load('windows')).ClipboardItem.supports('image/png')).toBe(true);
   expect((await load('ios')).ClipboardItem.supports('image/png')).toBe(true);
   expect((await load('web')).ClipboardItem.supports('text/plain')).toBe(true);
+  for (const target of [null, 'macos', 'ios', 'web', 'windows', 'tvos', 'android']) {
+    expect((await load(target)).ClipboardItem.supports('text/html')).toBe(['macos', 'ios', 'web'].includes(target));
+  }
   expect((await load('tvos')).ClipboardItem.supports('text/plain')).toBe(false);
-  expect((await load('android')).ClipboardItem.supports('image/png')).toBe(false);
+  for (const type of ['text/plain', 'image/png']) expect((await load('android')).ClipboardItem.supports(type)).toBe(false);
 });
 
 test('text over 1 MiB refuses before it is sent, as a key and as writeText', async () => {
@@ -37,6 +40,7 @@ test('text over 1 MiB refuses before it is sent, as a key and as writeText', asy
   expect(await outcome(write([new ClipboardItem({ 'text/plain': 'x'.repeat((1 << 20) + 1) })]))).toBe('DataError');
   expect(await outcome(write([new ClipboardItem({ 'text/plain': Promise.resolve('x'.repeat((1 << 20) + 1)) })]))).toBe('DataError');
   expect(await outcome(writeText('x'.repeat((1 << 20) + 1)))).toBe('DataError');
+  expect(await outcome(write([new ClipboardItem({ 'text/html': Promise.resolve('é'.repeat((1 << 19) + 1)) })]))).toBe('DataError');
   expect(sent).toEqual([]);
 });
 
@@ -71,9 +75,49 @@ test('a call refused at once supersedes no pending call; a later call sent first
   expect(sent.map((b) => b.args.data[0]['text/plain'])).toEqual(['D']);
 });
 
+test('write takes its platform options after the items and snapshots them at the call', async () => {
+  const { write, ClipboardItem } = await load('ios');
+  const apple = { localOnly: true, expirationDate: 1800000000000 };
+  const pending = write([new ClipboardItem({ 'text/plain': Promise.resolve('note') })], { apple });
+  apple.localOnly = false;
+  await pending;
+  expect(sent[0].args).toEqual({ data: [{ 'text/plain': 'note' }], apple: { localOnly: true, expirationDate: 1800000000000 } });
+});
+
 test('Windows sends the path and text as one item through the generated binding', async () => {
   const { write, ClipboardItem } = await load('windows');
   expect(await outcome(write([new ClipboardItem({ 'image/png': 'app:/tmp/capture.png', 'text/plain': 'caption' })]))).toBe('ok');
   expect(sent).toHaveLength(1);
   expect(sent[0].args.data).toEqual([{ 'image/png': 'app:/tmp/capture.png', 'text/plain': 'caption' }]);
+});
+
+test('read returns ClipboardItems, omits absent representations and rejects a missing type', async () => {
+  const { read, ClipboardItem } = await load('web');
+  const before = globalThis.__exact_module;
+  globalThis.__exact_module = () => Promise.resolve([{ 'image/png': null, 'text/plain': 'pasted' }]);
+  try {
+    const [item] = await read();
+    expect(item).toBeInstanceOf(ClipboardItem);
+    expect(item.types).toEqual(['text/plain']);
+    expect(await item.getType('text/plain')).toBe('pasted');
+    expect(await outcome(item.getType('image/png'))).toBe('NotFoundError');
+  } finally { globalThis.__exact_module = before; }
+});
+
+test('native read responses carry a full MiB of escaped plain text', async () => {
+  const { read, readText } = await load('ios');
+  const text = '\u0001'.repeat(1 << 20);
+  const via = globalThis.__exact_module, fetch = globalThis.fetch;
+  delete globalThis.__exact_module;
+  globalThis.fetch = async (_url, init) => {
+    const list = JSON.parse(init.body).send === 'read';
+    const json = JSON.stringify(list ? [{ 'text/plain': text }] : text);
+    expect(json.length).toBeGreaterThan(6 << 20);
+    expect(json.length).toBeLessThanOrEqual(init.exactIndependentHttp.maxResponseBytes);
+    return new Response(json);
+  };
+  try {
+    expect(await readText()).toBe(text);
+    expect(await (await read())[0].getType('text/plain')).toBe(text);
+  } finally { globalThis.fetch = fetch; globalThis.__exact_module = via; }
 });

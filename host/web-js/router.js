@@ -250,7 +250,7 @@ export function router(slot, history) {
     if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || (a.target && a.target !== "_self") || a.hasAttribute("download")) { if (press) ev.stopPropagation(); return; }
     const r = RouterSlot.n?.v, shown = r && validRouter(r) ? top_(r) : null, href = a.getAttribute("href") ?? "";
     const url = new URL(href[0] === "#" && shown ? shown[2] + href : a.href, location.href), to = url.pathname + url.search, m = matchRoute(canonical(to));
-    const here = to === location.pathname + location.search || to === globalThis.history?.state?.url?.split("#")[0] || canonical(to) === shown?.[2];
+    const here = canonical(to) === shown?.[2];
     if (url.origin !== location.origin || !m || Routes[m[0]].notfound) return;
     ev.preventDefault();
     if (press || (here && !url.hash && !shown?.[5])) return;

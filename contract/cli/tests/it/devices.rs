@@ -18,6 +18,7 @@
 //! - on Android an ungranted device's open holds a permission ticket, and
 //!   HID is absent there.
 
+use crate::source::{boxed, Source};
 use exact_runner::{Dispatch, Outcome, Reply, Request, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::PathBuf;
@@ -115,13 +116,13 @@ impl exact_runner::DataSource for Data {
     }
 }
 
-fn boot(name: &str, target: &str) -> (App, Runner<Data>, Vec<(u64, u64)>) {
+fn boot(name: &str, target: &str) -> (App, Runner<Source>, Vec<(u64, u64)>) {
     let app = App::new(name);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Data,
+        boxed(Data),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -133,7 +134,7 @@ fn boot(name: &str, target: &str) -> (App, Runner<Data>, Vec<(u64, u64)>) {
     (app, r, parked)
 }
 
-fn pump(r: &mut Runner<Data>, parked: &mut Vec<(u64, u64)>) {
+fn pump(r: &mut Runner<Source>, parked: &mut Vec<(u64, u64)>) {
     for _ in 0..8 {
         // An answer's `then` runs as a host's advance would run it.
         r.land_then();
@@ -159,7 +160,7 @@ fn pump(r: &mut Runner<Data>, parked: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn run(r: &mut Runner<Data>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     if let Some(outcome) = settle(dispatch) {
         let _ = r.fulfill(ticket, outcome);
     }
@@ -178,22 +179,23 @@ fn settle(dispatch: Dispatch) -> Option<Outcome> {
 }
 
 /// Data code's call of a module name: its answer, or `null` while held.
-fn call(r: &mut Runner<Data>, extension: &str, verb: &str, name: &str, args: Json) -> Json {
+fn call(r: &mut Runner<Source>, extension: &str, verb: &str, name: &str, args: Json) -> Json {
     let body = json!({ "extension": extension, verb: name, "args": args }).to_string();
-    let dispatch = r.native_work(&Request::native(body.into_bytes()));
+    let request = Request::native(body.into_bytes());
+    let dispatch = r.as_person(|r| r.native_work(&request));
     match settle(dispatch) {
         Some(Outcome::Response(reply)) => serde_json::from_slice(&reply.body).unwrap(),
         _ => Json::Null,
     }
 }
 
-fn prefer(r: &mut Runner<Data>, key: &str, value: Json) {
+fn prefer(r: &mut Runner<Source>, key: &str, value: Json) {
     let request = json!({ "op": "prefer", "extension": { key: value } }).to_string();
     let (_, reply) = r.extension_agent(&request).expect("a prefer");
     reply.unwrap();
 }
 
-fn text(r: &Runner<Data>, id: &str) -> String {
+fn text(r: &Runner<Source>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
     let node = r.kernel().node_by_key(key).unwrap();
     (node.props.iter())
@@ -204,7 +206,7 @@ fn text(r: &Runner<Data>, id: &str) -> String {
         .unwrap_or_default()
 }
 
-fn extension(r: &Runner<Data>, name: &str) -> Json {
+fn extension(r: &Runner<Source>, name: &str) -> Json {
     let state: Json =
         serde_json::from_str(&exact_runner::agent::handle(r, r#"{"op":"state"}"#)).unwrap();
     state["extensions"][name].clone()
@@ -288,7 +290,7 @@ fn a_port_streams_every_byte_once_with_its_errors_and_ends_when_unplugged() {
     pump(&mut r, &mut parked);
     assert_eq!(text(&r, "open-error"), "InvalidStateError");
     let handle = extension(&r, "serial")["connections"][0]["handle"].clone();
-    let read = |r: &mut Runner<Data>| {
+    let read = |r: &mut Runner<Source>| {
         call(
             r,
             "serial",

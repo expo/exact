@@ -178,6 +178,8 @@ pub enum Operation {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Grant {
     Fetch(Origin),
+    /// Exact: a web page origin, which never admits a native operation (LLP 1016 D6).
+    FetchSelf,
     /// `net.fetch https://*.<suffix>`: every host strictly under `suffix`, at
     /// the origin's scheme and port (LLP 0067 §2). The suffix is at least
     /// two labels and not an address.
@@ -410,6 +412,7 @@ impl GrantSet {
             };
             let target = quoted.as_deref().unwrap_or(first);
             let grant = match capability {
+                "net.fetch" if target == "self" => Grant::FetchSelf,
                 // Exact patch (exact2 LLP 1133.036 D5): the local network,
                 // decided from a URL's host as written.
                 "net.fetch" | "net.websocket" if target == "local-network" => {

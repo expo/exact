@@ -359,3 +359,49 @@ fn settle_is_a_reasks_time() {
     assert_eq!(host.runner().resource("value"), Some(&Value::Number(1.)));
     assert_eq!(host.agent("{\"op\":\"settle\"}"), "{\"settle\":250}");
 }
+
+/// LLP 1141.004 D3: the rows a readout's bar type changes are sent before
+/// the layout that follows, so its frames go with them and no layout is owed.
+#[test]
+fn a_readouts_bar_type_is_sent_with_its_layout() {
+    let mut host = boot(
+        "component Page\n  view\n    column font-size=30\n      header testId=\"head\"\n        row role=\"status\" testId=\"readout\"\n          text \"Updating\" testId=\"word\"\n",
+    );
+    let k = host.runner.kernel();
+    let id = |test_id: &str| k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
+    let (head, readout, word) = (id("head"), id("readout"), id("word"));
+    let mut env = k.env();
+    env.bar_item_font = Some(exact_kernel::ControlFont {
+        family: "system-ui".into(),
+        family_id: 0,
+        size: 17.0,
+        weight: 500,
+        style: exact_kernel::FontStyle::Normal,
+    });
+    let k = host.runner.kernel_mut();
+    k.set_env(env).unwrap();
+    k.set_host_cover(head, Some(exact_kernel::HostCover::Bar))
+        .unwrap();
+    let block = exact_kernel::HostBlock {
+        tactic: Default::default(),
+        width: exact_kernel::BlockAxis::AtMost(300.0),
+        height: exact_kernel::BlockAxis::AtMost(44.0),
+    };
+    k.set_host_block(readout, Some(block)).unwrap();
+    let mut batch = Batch::new();
+    host.layout(&mut batch).unwrap();
+    host.runner
+        .kernel_mut()
+        .set_bar_item(readout, true)
+        .unwrap();
+    let mut batch = Batch::new();
+    host.layout(&mut batch).unwrap();
+    let batch = host.finish(batch, None);
+    assert!(
+        batch
+            .split("{\"op\"")
+            .any(|op| op.contains(&format!("\"id\":{word},")) && op.contains("\"font_size\":17")),
+        "the word in the bar's size: {batch}"
+    );
+    assert!(host.pending_layout.is_empty(), "nothing waits for a layout");
+}

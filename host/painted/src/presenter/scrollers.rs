@@ -89,9 +89,19 @@ pub struct Under {
 /// revision it knows and where its own moves left the offset.
 #[derive(Default)]
 pub(super) struct Reader {
+    pub(super) lifting_touch: bool,
+    pub(super) pending_height_end: Option<exact_kernel::NodeKey>,
+    pub(super) height_scroll_release: Option<(exact_kernel::NodeKey, f32)>,
     tracked: BTreeMap<ViewId, (u32, (f32, f32))>,
     /// The last statement [`Presenter::reader_scrollers`] returned.
+    #[cfg(any(target_os = "android", test))]
     last: Vec<i32>,
+    #[cfg(any(target_os = "android", test))]
+    last_scale: f32,
+    /// A move since the last statement did not land as the reader sent it
+    /// (dropped, or stopped at an end): the reader draws it as sent until
+    /// a stream acknowledges it.
+    missed: bool,
 }
 
 impl Reader {
@@ -114,6 +124,8 @@ const NODE: i32 = 4;
 const BARLESS: i32 = 8;
 /// Bits 6 and 7: what a drag of it does to the keyboard, its authored
 /// `keyboardDismissMode`; unsaid, Android's: nothing (LLP 1115.001 D12).
+/// Android shows no accessory bar over its keyboard, so UIKit's accessory
+/// modes are the plain ones (LLP 1123 D7).
 const DISMISS_ON_DRAG: i32 = 64;
 const DISMISS_INTERACTIVE: i32 = 128;
 /// Bits 4 and 5: it hears `refresh`, and its `refreshing` is true: the
@@ -125,6 +137,8 @@ const REFRESHING: i32 = 32;
 /// there zooms it (D5).
 const ZOOM: i32 = 256;
 const DOUBLE_TAP: i32 = 512;
+#[cfg(any(target_os = "android", test))]
+const STATEMENT_WORDS: usize = 9;
 
 fn scrolls(o: Overflow) -> bool {
     matches!(o, Overflow::Scroll | Overflow::Auto)
@@ -201,6 +215,8 @@ impl<D: DataSource> Presenter<D> {
                 self.host.content_region(),
                 &node,
                 limits.get(&id).copied(),
+                &|id| self.host.presented(id),
+                self.host.scaled_presented(),
             )
         }))
     }
@@ -320,9 +336,27 @@ impl<D: DataSource> Presenter<D> {
         let mut claims = self.touch_kept(key);
         for candidate in self.candidates(key) {
             let (x, y) = match candidate {
-                Candidate::Arrange(_) | Candidate::Height { .. } => (false, true),
+                // An ordinary grip takes a finger on the platform's long press.
+                // Before then only touch-action keeps the list from scrolling.
+                Candidate::Arrange(_) => (false, false),
+                Candidate::Height { .. } => (false, true),
                 Candidate::Swipe(_) => (true, false),
-                Candidate::Transform(_) | Candidate::Group(_) => (true, true),
+                Candidate::Transform(b) => {
+                    kernel.node_by_key(b.handle).map_or((false, false), |n| {
+                        let action = n.style.touch_action;
+                        if matches!(
+                            action,
+                            exact_kernel::TouchAction::Auto
+                                | exact_kernel::TouchAction::Manipulation
+                        ) {
+                            (true, true)
+                        } else {
+                            let (x, y) = gives(action);
+                            (!x, !y)
+                        }
+                    })
+                }
+                Candidate::Group(_) => (true, true),
                 // A `pan` hears what its `touch-action` does not give to
                 // scrolling, as a browser cancels a pointer it pans with.
                 Candidate::Pan(key) => kernel.node_by_key(key).map_or((false, false), |n| {
@@ -474,6 +508,8 @@ impl<D: DataSource> Presenter<D> {
         rev: u32,
     ) -> Option<((f32, f32), (f32, f32))> {
         self.restore_scroll_anchors();
+        // Missed unless it lands where it was sent.
+        let missed = std::mem::replace(&mut self.reader.missed, true);
         if !self.reader.tracked.contains_key(&id) {
             return None;
         }
@@ -485,12 +521,9 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let from = s.offset;
-        let (to, movement) = self.scroll_to_completion(
-            id,
-            (from.0 + by.0, from.1 + by.1),
-            Completion::Reader,
-            Some(by),
-        )?;
+        let sent = (from.0 + by.0, from.1 + by.1);
+        let (to, movement) = self.scroll_to_completion(id, sent, Completion::Reader, Some(by))?;
+        self.reader.missed = missed || to != sent;
         let moved = (to.0 - from.0, to.1 - from.1);
         // Only a sample that moves counts as the person's scroll: a dropped
         // one must not cancel a fragment scroll or a load's hold.
@@ -502,7 +535,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// An agent's phased wheel supplies one reader sample on the existing clock.
     pub(crate) fn reader_wheel(&mut self, id: ViewId, dx: f32, dy: f32) -> Result<String, String> {
-        if self.host.route_visibility(id).1 || self.box_of(id).is_none() {
+        if id != PAGE && (self.host.route_visibility(id).1 || self.box_of(id).is_none()) {
             return Err(format!("view {id} is hidden or inert"));
         }
         let limits = self.collection_scroll_limits();
@@ -529,6 +562,34 @@ impl<D: DataSource> Presenter<D> {
     /// Whether the reader was told of scroller `id`, and so may drag it.
     pub(super) fn reader_knows(&self, id: ViewId) -> bool {
         self.reader.tracked.contains_key(&id)
+    }
+
+    /// Whether each scroller the reader knows is where its own moves left
+    /// it, each landed as sent: no revision would move on, so a statement
+    /// would tell it only those moves.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_moves_stand(&self) -> bool {
+        !self.reader.missed
+            && self.reader.tracked.iter().all(|(id, (_, at))| {
+                *at == if *id == PAGE {
+                    self.page
+                } else {
+                    self.scroll.get(id).copied().unwrap_or_default()
+                }
+            })
+    }
+
+    /// The reader has the exact starting offset and recording scale its
+    /// pending samples need to place these rows on the painter's pixels.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_places_group(&self, id: ViewId, scale: f32) -> bool {
+        self.reader.last_scale == scale
+            && self.reader_knows(id)
+            && self
+                .reader
+                .last
+                .chunks_exact(STATEMENT_WORDS)
+                .any(|s| s[0] as ViewId == id && s[1] & NODE != 0)
     }
 
     /// The scrollers the clamp leaves alone: each a list kept while its route is hidden (a
@@ -565,9 +626,14 @@ impl<D: DataSource> Presenter<D> {
                 let kernel = self.host.kernel();
                 let node = kernel.node(id).unwrap();
                 let region = self.host.content_region();
-                let bounds =
-                    self.brush
-                        .scroll_bounds(kernel, region, &node, limits.get(&id).copied());
+                let bounds = self.brush.scroll_bounds(
+                    kernel,
+                    region,
+                    &node,
+                    limits.get(&id).copied(),
+                    &|id| self.host.presented(id),
+                    self.host.scaled_presented(),
+                );
                 self.stage_shown(id, key, bounds);
             }
             held.insert(id);
@@ -610,12 +676,26 @@ impl<D: DataSource> Presenter<D> {
             under.chain.len() as i32,
             under.field.unwrap_or(0) as i32,
         ];
-        let tapped =
-            (self.hit(x / scale, y / scale)).and_then(|hit| self.double_tap_container(hit));
+        if self
+            .contact
+            .as_ref()
+            .and_then(|c| c.hold.as_ref())
+            .is_some_and(|h| matches!(h.kind, super::contact::HeldKind::Arrange(_)))
+        {
+            out[0] |= 64;
+        }
+        let hit = self.hit(x / scale, y / scale);
+        let tapped = hit.and_then(|hit| self.double_tap_container(hit));
         for s in &under.chain {
+            let allows_pinch = hit.is_some_and(|hit| self.allows_touch_zoom(hit, Some(s.id)));
             let rev = self.reader_revision(s);
             let tap = if tapped == Some(s.id) { DOUBLE_TAP } else { 0 };
-            out.extend([s.id as i32, self.reader_flags(s) | tap, rev as i32]);
+            let flags = self.reader_flags(s);
+            out.extend([
+                s.id as i32,
+                (if allows_pinch { flags } else { flags & !ZOOM }) | tap,
+                rev as i32,
+            ]);
             let px = [s.offset.0, s.offset.1, s.max.0, s.max.1];
             out.extend(px.iter().chain(&s.port).map(|v| bits(v * scale)));
         }
@@ -627,43 +707,45 @@ impl<D: DataSource> Presenter<D> {
         out
     }
 
-    /// What the reader is told after a frame of the scrollers it knows, when
-    /// that is not what it was last told (`None`): nine words a scroller:
-    /// id, flags (as [`Presenter::reader_under`]'s, for any drag), revision,
-    /// then as float bits where it is (x, y), the offset its rows were last
-    /// painted at (x, y; `drawn` names them for a scroller that has rows)
-    /// and its farthest offset (x, y), in the reader's pixels. A scroller the
-    /// reader knew that is not in a statement is gone (its node went, or a
-    /// driver took it over): the reader forgets it.
+    /// The scrollers the reader knows, sent when they change or a rejected
+    /// move needs acknowledging. Nine words per scroller.
+    /// Id, flags, revision, then pairs of float bits for the current logical
+    /// offset in points, recorded offset in pixels, and logical maximum in
+    /// points. An omitted scroller is gone: the reader forgets it.
+    #[cfg(any(target_os = "android", test))]
     pub fn reader_scrollers(
         &mut self,
         drawn: &[(ViewId, (f32, f32))],
         scale: f32,
     ) -> Option<Vec<i32>> {
+        let missed = std::mem::take(&mut self.reader.missed);
         if self.reader.tracked.is_empty() {
-            // The last scroller it knew went: said once, with nothing in it.
-            return (!std::mem::take(&mut self.reader.last).is_empty()).then(Vec::new);
+            let removed = !std::mem::take(&mut self.reader.last).is_empty();
+            return (removed || missed).then(Vec::new);
         }
         let limits = self.collection_scroll_limits();
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
-        let mut out = Vec::with_capacity(ids.len() * 9);
+        let mut out = Vec::with_capacity(ids.len() * STATEMENT_WORDS);
         for id in ids {
             let Some(mut s) = self.scroller(id, &limits) else {
                 self.reader.tracked.remove(&id);
                 continue;
             };
             let rev = self.reader_revision(&s);
-            let painted = drawn.iter().find(|g| g.0 == id).map(|g| g.1);
+            let painted = drawn.iter().find(|(owner, _)| *owner == id);
             s.node = painted.is_some();
-            let at = painted.unwrap_or(s.offset);
+            let at = painted.map_or((s.offset.0 * scale, s.offset.1 * scale), |(_, at)| {
+                let pixel = |v| crate::paint::grid::device_pixel(v, scale) as f32;
+                (pixel(at.0), pixel(at.1))
+            });
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
-            let px = [s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1];
-            out.extend(px.iter().map(|v| bits(v * scale)));
+            out.extend([s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1].map(bits));
         }
-        if out == self.reader.last {
+        if !missed && out == self.reader.last && scale == self.reader.last_scale {
             return None;
         }
         self.reader.last.clone_from(&out);
+        self.reader.last_scale = scale;
         Some(out)
     }
 
@@ -683,8 +765,8 @@ impl<D: DataSource> Presenter<D> {
             .filter(|_| s.id != PAGE)
             .and_then(|n| n.props.str(exact_kernel::PropId::KeyboardDismissMode))
         {
-            Some("on-drag") => DISMISS_ON_DRAG,
-            Some("interactive") => DISMISS_INTERACTIVE,
+            Some("on-drag" | "on-drag-with-accessory") => DISMISS_ON_DRAG,
+            Some("interactive" | "interactive-with-accessory") => DISMISS_INTERACTIVE,
             _ => 0,
         };
         let refresh = if s.id == PAGE
@@ -738,13 +820,14 @@ impl<D: DataSource> Presenter<D> {
     /// its hit reply (`Native.under` in `host/android/canvas` has the
     /// words): its id, border box, allocation slot and generation, the
     /// long-press count, the painter's session token, the painted origin of
-    /// its content box and the node a long press there would give to.
+    /// its content box and the node a long press there would give to. A
+    /// frame's WebView is offered its contacts as a module's view is.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_module(&mut self, x: f32, y: f32, scale: f32) -> [i32; 13] {
         let module = self.hit(x / scale, y / scale).filter(|id| {
             // A video with `controls` takes its gestures as a module's view does (LLP 1042.001 D4).
             self.host.kernel().node(*id).is_some_and(|node| {
-                (node.node_type == NodeType::NativeView
+                (matches!(node.node_type, NodeType::NativeView | NodeType::WebView)
                     || (node.node_type == NodeType::Video
                         && node.props.bool(PropId::Controls) == Some(true)))
                     && self.host.retained_action_eligible(node.key)
@@ -776,6 +859,10 @@ impl<D: DataSource> Presenter<D> {
             origin(content.1),
             (self.context_menu_at(x / scale, y / scale).map(|v| v.0))
                 .or_else(|| self.lift_source_at(x / scale, y / scale))
+                .or_else(|| {
+                    self.arrange_hold_at(x / scale, y / scale)
+                        .and_then(|b| self.host.kernel().node_by_key(b.handle).map(|n| n.id))
+                })
                 .map_or(0, |id| id as i32),
         ]
     }

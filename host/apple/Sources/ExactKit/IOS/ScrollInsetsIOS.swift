@@ -5,7 +5,8 @@ import UIKit
 /// A native scroll view whose own layout clears some depth of the occupied region on some edges, top right bottom
 /// left, as a grouped list insets its cards from the side safe area its layout uses (LLP 1123 D9: each native scroll
 /// view an owner hosts reports the band it consumes). D14's writer writes the occupied depth less that there, and the
-/// indicators, which the layout does not move, the whole of it.
+/// indicators, which the layout does not move, the whole of it, but for the vertical indicator's sides, which take
+/// none (`ScrollInsetsIOS.insets`).
 package protocol BandConsumer: AnyObject {
     var consumedBand: [CGFloat] { get }
 }
@@ -47,11 +48,17 @@ package struct ScrollInsetsIOS: Equatable {
             let atEnd = (scroll as? ScrollView).flatMap { !free && $0.restsAtEnd ? $0 : nil }
             if scroll.contentInsetAdjustmentBehavior != rows.adjustment { scroll.contentInsetAdjustmentBehavior = rows.adjustment }
             if scroll.automaticallyAdjustsScrollIndicatorInsets { scroll.automaticallyAdjustsScrollIndicatorInsets = false }
+            if let own = scroll as? any SafeIndicators, !own.writtenWhole { own.writtenWhole = true }
             let adjusted = scroll.adjustedContentInset, inset = scroll.contentInset
             let platform = edges(UIEdgeInsets(top: adjusted.top - inset.top, left: adjusted.left - inset.left,
                                               bottom: adjusted.bottom - inset.bottom, right: adjusted.right - inset.right))
             let consumed = (scroll as? BandConsumer)?.consumedBand ?? [0, 0, 0, 0]
-            let next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), platform: platform, consumed: consumed)
+            var next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), platform: platform, consumed: consumed)
+            // The indicators keep inside a padding edge that masks the scroll view (`ScrollView.clip(toPaddingEdge:inset:)`)
+            if let clip = (scroll as? ScrollView)?.paddingInset, clip != .zero {
+                next.verticalIndicator = next.verticalIndicator.adding(clip)
+                next.horizontalIndicator = next.horizontalIndicator.adding(clip)
+            }
             let half = 0.5 / max(scroll.traitCollection.displayScale, 1)
             if !near(inset, next.content, half) { scroll.contentInset = next.content }
             if !near(scroll.verticalScrollIndicatorInsets, next.verticalIndicator, half) {
@@ -84,9 +91,13 @@ package struct ScrollInsetsIOS: Equatable {
             let clamped = terms.container[e] && terms.reserved[e] == nil && reaches && consumed[e] == 0
             content[e] = rows.authored[e] + held[e] + (clamped ? max(0, past) : past)
         }
-        let follow = { (authored: [CGFloat]) in (0..<4).map { authored[$0] + (rows.indicatorsFollow ? occupied[$0] : 0) } }
-        return ScrollInsetsIOS(content: edgeInsets(content), verticalIndicator: edgeInsets(follow(rows.verticalIndicator)),
-                               horizontalIndicator: edgeInsets(follow(rows.horizontalIndicator)))
+        // The vertical indicator takes no side band: it lies at the scroll view's side, as UIKit's own does, never over
+        // content that keeps to the band's inner edge (`SafeIndicatorTerm`)
+        let follow = { (authored: [CGFloat], sides: Bool) in
+            (0..<4).map { e in authored[e] + (rows.indicatorsFollow && (sides || e % 2 == 0) ? occupied[e] : 0) }
+        }
+        return ScrollInsetsIOS(content: edgeInsets(content), verticalIndicator: edgeInsets(follow(rows.verticalIndicator, false)),
+                               horizontalIndicator: edgeInsets(follow(rows.horizontalIndicator, true)))
     }
 
     /// D14's native `band` for `scroll`, top right bottom left: its frame's overlap with the unsafe
@@ -96,7 +107,7 @@ package struct ScrollInsetsIOS: Equatable {
     /// reads less than it overlaps (LLP 1123, the evidence row "Outset scroll view"). It reads the
     /// overlap at the current offsets of the scroll views above, and it holds Exact's own writes to
     /// the owner's controller, which D11's writers are to take out.
-    package static func band(of scroll: UIScrollView, in owner: UIView) -> [CGFloat] {
+    package static func band(of scroll: UIView, in owner: UIView) -> [CGFloat] {
         let frame = scroll.convert(scroll.bounds, to: owner), area = owner.safeAreaInsets
         let safe = owner.bounds.inset(by: area)
         let depth = { (value: CGFloat, most: CGFloat) in min(max(0, value), most) }

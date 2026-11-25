@@ -146,6 +146,34 @@ fn boot(plan: Plan) -> Runner<Source> {
     .unwrap()
 }
 
+#[test]
+fn an_unknown_package_name_or_wrong_verb_rejects_a_data_call() {
+    use crate::{Dispatch, Request, Work};
+    use serde_json::{json, Value as Json};
+    let mut runner = boot(plan("later"));
+    for body in [
+        json!({"extension":"missing", "source":"steps"}),
+        json!({"extension":"test.motion", "source":"missing"}),
+        json!({"extension":"test.motion", "send":"steps"}),
+        json!({"extension":"test.motion", "source":"", "send":"steps"}),
+        json!({"extension":"test.motion", "source":null, "send":"steps"}),
+        json!({"extension":"test.motion", "source":"missing", "send":"steps"}),
+    ] {
+        let call = Request::native(body.to_string().into_bytes());
+        let Some(Dispatch::Run(Work::Now(answer))) = runner.module_call(&call) else {
+            panic!("a missing package, name or verb is refused before dispatch")
+        };
+        let Outcome::Response(response) = answer() else {
+            panic!("a response")
+        };
+        assert_eq!(response.status, 500, "{body}");
+        assert_eq!(
+            serde_json::from_slice::<Json>(&response.body).unwrap(),
+            json!({"error":"NotSupportedError"})
+        );
+    }
+}
+
 /// A scroll report the view handles: the dispatch commits and its handler runs.
 fn scroll(r: &mut Runner<Source>, at: f64) {
     let root = r.roots()[0];
@@ -580,19 +608,56 @@ fn a_background_action_refuses_foreground_calls_even_in_a_visible_session() {
         false,
         "never",
         "",
-        r#"{"origin":"app","foreground":true}"#,
+        r#"{"foreground":true}"#,
     );
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
     let mut r = boot(b.finish().unwrap());
     let row = r.plan.modules[0].clone();
     for hidden in [false, true] {
         r.page.hidden = hidden;
-        assert!(
-            r.admit(&row, &serde_json::json!({}), super::CallOrigin::Action)
-                .is_err(),
+        // The person's commit joined by a background action: the
+        // foreground rule refuses it while the page shows.
+        let action = crate::runner::provenance::Cause::background_action(0);
+        let cause = r.join_causes(crate::runner::provenance::Cause::person(), action);
+        let refused = r.admit(&row, &serde_json::json!({}), cause);
+        assert_eq!(
+            refused,
+            Err("not in the foreground".into()),
             "hidden={hidden}"
         );
     }
+}
+
+/// A model handler that a call joining the device and a background action
+/// granted keeps the action's foreground rule, though `device` is the folded
+/// origin.
+#[test]
+fn a_handler_granted_under_a_background_action_refuses_foreground_calls() {
+    use crate::runner::provenance::Cause;
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("openBrowser", &[], string);
+    b.module(
+        source,
+        ("browser", "@fixture/browser"),
+        "openBrowser",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"foreground":true}"#,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let row = r.plan.modules[0].clone();
+    r.page.hidden = false;
+    let device = Cause::device();
+    let action = Cause::background_action(0);
+    let granted = r.join_causes(device, action);
+    let handler = r.handler_cause(granted);
+    assert_eq!(handler.origin(), super::CallOrigin::Device);
+    let refused = r.admit(&row, &serde_json::json!({}), handler);
+    assert_eq!(refused, Err("not in the foreground".into()));
 }
 
 #[test]
@@ -1099,12 +1164,12 @@ fn a_call_inside_a_persons_activation_window_says_so() {
     r.bind_extensions(&["camera"], &[]);
     // The data-code call, as the app's own or a tool's; whether its
     // implementation heard it as inside the window.
-    let call = |r: &mut Runner<Source>, origin: super::CallOrigin| {
+    let call = |r: &mut Runner<Source>, cause: crate::runner::provenance::Cause| {
         // What the body claims for itself is never forwarded.
         let body =
             json!({"extension": "camera", "send": "capture", "args": {}, "userActivation": true});
         let request = Request::native(body.to_string().into_bytes());
-        match r.as_origin(origin, |r| r.native_work(&request)) {
+        match r.as_cause(cause, |r| r.native_work(&request)) {
             Dispatch::Run(Work::Later(work)) => work(Reply::new(|_| {})),
             Dispatch::Run(Work::Now(work)) => drop(work()),
             _ => panic!("the module request runs"),
@@ -1112,7 +1177,7 @@ fn a_call_inside_a_persons_activation_window_says_so() {
         let heard = heard.lock().unwrap().pop().expect("forwarded");
         heard.get("userActivation").is_some_and(|v| v == true)
     };
-    let app = super::CallOrigin::App;
+    let app = crate::runner::provenance::Cause::person();
     let root = r.roots()[0];
     let at = |r: &mut Runner<Source>, event: Event, ms: f64| {
         let advanced = r.dispatch_at(root, event, ms);
@@ -1128,7 +1193,7 @@ fn a_call_inside_a_persons_activation_window_says_so() {
     assert!(call(&mut r, app), "a press handler's call");
     assert!(call(&mut r, app), "reading the window does not consume it");
     assert!(
-        !call(&mut r, super::CallOrigin::Tool),
+        !call(&mut r, crate::runner::provenance::Cause::model_tool()),
         "a tool's call inside the window is not the person's"
     );
     assert!(r.advance_timed(5_999.).error.is_none());
@@ -1215,7 +1280,8 @@ fn a_host_activation_opens_the_activation_window_and_no_other_origin_does() {
     let activated = |r: &mut Runner<Source>| {
         let body = json!({"extension": "camera", "send": "capture", "args": {}});
         let request = Request::native(body.to_string().into_bytes());
-        match r.native_work(&request) {
+        let app = crate::runner::provenance::Cause::person();
+        match r.as_cause(app, |r| r.native_work(&request)) {
             Dispatch::Run(Work::Later(work)) => work(Reply::new(|_| {})),
             Dispatch::Run(Work::Now(work)) => drop(work()),
             _ => panic!("the module request runs"),

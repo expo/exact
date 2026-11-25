@@ -22,11 +22,45 @@ pub(super) struct State {
     mapping: Mapping,
     scroll: f32,
     phase: Phase,
-    // Last actual pointer point, not an app resource or a destination pin.
-    point: (f32, f32),
+    // Edge scrolling starts with the first drag sample after the row lifts.
+    point: Option<(f32, f32)>,
     edge_clock: Option<f64>,
 }
 impl<D: DataSource> Presenter<D> {
+    pub(super) fn cancel_reorder(&mut self, id: &str) -> Result<(), String> {
+        let token = self.group.as_ref().map(|s| s.token).or_else(|| {
+            self.arrange
+                .as_ref()
+                .filter(|s| s.phase == Phase::Active)
+                .map(|s| s.token)
+        });
+        let Some(token) = token else { return Ok(()) };
+        let source = self.host.kernel().node_by_key(token.list());
+        if source.and_then(|n| n.props.str(PropId::Id)) != Some(id)
+            || self
+                .host
+                .runner()
+                .reorder_frame(token)
+                .is_none_or(|f| f.phase != exact_runner::ReorderPhase::Active)
+        {
+            return Ok(());
+        }
+        let now = self.host.now();
+        if self.group.is_some() {
+            if !self.group_keyed() {
+                self.contact.take();
+            }
+            self.end_group(false, now)?;
+        } else {
+            self.contact.take_if(|c| {
+                c.hold
+                    .as_ref()
+                    .is_some_and(|h| matches!(h.kind, HeldKind::Arrange(t) if t == token))
+            });
+            self.end_arrange(token, None, now)?;
+        }
+        Ok(())
+    }
     pub(super) fn arrange_candidate(&self, hit: NodeKey) -> Option<Candidate> {
         if !self.input_live(hit) {
             return None;
@@ -157,7 +191,7 @@ impl<D: DataSource> Presenter<D> {
             mapping,
             scroll: self.scroll_of(list).1,
             phase: Phase::Active,
-            point: (0., 0.),
+            point: None,
             edge_clock: None,
         });
         self.brush.lift.arrange = Some((binding.list, binding.wrapper));
@@ -173,9 +207,11 @@ impl<D: DataSource> Presenter<D> {
         );
         self.dirty = true;
         Ok(Some(Hold {
-            primary,
+            primary: Some(primary),
             velocity,
             kind: HeldKind::Arrange(token),
+            sampled: None,
+            lifting: false,
         }))
     }
     pub(super) fn move_arrange(
@@ -220,15 +256,15 @@ impl<D: DataSource> Presenter<D> {
         let b = s.binding;
         let list = self.host.kernel().node_by_key(b.list).unwrap().id;
         let value = Value {
-            x: held.primary.value.x,
-            y: held.primary.value.y + dy + (self.scroll_of(list).1 - s.scroll) as f64,
+            x: held.motion().value.x,
+            y: held.motion().value.y + dy + (self.scroll_of(list).1 - s.scroll) as f64,
             ..Value::ZERO
         };
         if !finite(value) {
             return Err("Arrange position outside finite layout range".into());
         }
         self.host.arrange_clock(now)?;
-        if !self.host.hold_update(held.primary.token, value, now)? {
+        if !self.host.hold_update(held.motion().token, value, now)? {
             return Ok(false);
         }
         // A hold seek may advance a concurrent Height curve. Refine actual layout
@@ -249,7 +285,7 @@ impl<D: DataSource> Presenter<D> {
         };
         held.velocity.push(now / 1000., visual);
         let s = self.arrange.as_mut().unwrap();
-        s.point = point;
+        s.point = Some(point);
         let port = s.mapping.port;
         let g = self.host.runner().reorder_geometry(b.list).unwrap();
         let y = point.1 as f64 - port.1 as f64 + g.scroll_top;
@@ -259,16 +295,18 @@ impl<D: DataSource> Presenter<D> {
     }
     pub(super) fn end_arrange(
         &mut self,
-        held: &Hold,
-        drop: bool,
+        token: ReorderToken,
+        drop_velocity: Option<&VelocityTracker>,
         now: f64,
     ) -> Result<bool, String> {
-        let HeldKind::Arrange(token) = held.kind else {
-            unreachable!()
-        };
-        if self.arrange.as_ref().is_none_or(|s| s.token != token) {
+        let Some(hold) = self
+            .arrange
+            .as_ref()
+            .filter(|s| s.token == token && s.phase == Phase::Active)
+            .map(|s| s.hold)
+        else {
             return Ok(false);
-        }
+        };
         let live = self.arrange_live(token);
         // Stale cleanup has no new clock. Accepted receipt paths already sought
         // the latest declaration at receipt time before retire_pointer calls us.
@@ -278,8 +316,8 @@ impl<D: DataSource> Presenter<D> {
         } else {
             self.host.now()
         };
-        let velocity = if drop && live {
-            held.velocity.estimate(now / 1000.)
+        let velocity = if let Some(tracker) = drop_velocity.filter(|_| live) {
+            tracker.estimate(now / 1000.)
         } else {
             Value::ZERO
         };
@@ -313,9 +351,9 @@ impl<D: DataSource> Presenter<D> {
         self.arrange.as_mut().unwrap().phase = Phase::Committing;
         self.arrange.as_mut().unwrap().edge_clock = None;
         let mut error = None;
-        let accepted = if drop && live {
+        let accepted = if drop_velocity.is_some() && live {
             let g = self.host.runner().reorder_geometry(token.list()).unwrap();
-            match self.host.arrange_drop(token, held.primary.token, g) {
+            match self.host.arrange_drop(token, hold, g) {
                 Ok(v) => v,
                 Err(e) => {
                     error = Some(e);
@@ -346,8 +384,8 @@ impl<D: DataSource> Presenter<D> {
                 continue;
             }
             if key == source {
-                if self.host.has_hold(held.primary.token) {
-                    error = error.or(self.host.hold_update(held.primary.token, value, now).err());
+                if self.host.has_hold(hold) {
+                    error = error.or(self.host.hold_update(hold, value, now).err());
                 }
             } else {
                 error = error.or(self.host.arrange_rebase_neighbor(key, value, now).err());
@@ -355,7 +393,7 @@ impl<D: DataSource> Presenter<D> {
         }
         error = error.or(self
             .host
-            .hold_end(held.primary.token, HoldEnd::Release { velocity }, now)
+            .hold_end(hold, HoldEnd::Release { velocity }, now)
             .err());
         self.dirty = true;
         self.arrange.as_mut().unwrap().phase = Phase::Settling;
@@ -420,7 +458,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let id = self.host.kernel().node_by_key(s.binding.list)?.id;
         let g = self.host.runner().reorder_geometry(s.binding.list)?;
-        let offset = s.point.1 as f64 - s.mapping.port.1 as f64;
+        let offset = s.point?.1 as f64 - s.mapping.port.1 as f64;
         let direction = if offset < 32. {
             -1.
         } else if offset > g.port_height - 32. {

@@ -31,6 +31,7 @@ import com.google.android.gms.fitness.LocalRecordingClient
 import com.google.android.gms.fitness.data.LocalDataType
 import com.google.android.gms.fitness.data.LocalField
 import com.google.android.gms.fitness.request.LocalDataReadRequest
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -66,11 +67,13 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         if (context.agent) return reply(JSONObject().put("error", "NotSupportedError"))
         when (name) {
             "pedometerStatus" -> reply(status())
-            "requestPedometerPermission" -> request(reply)
+            "requestPedometerPermission" -> request(cause, reply)
             "pedometer" -> read(args, reply)
             else -> reply(JSONObject().put("error", "NotSupportedError"))
         }
@@ -89,9 +92,9 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
         return out
     }
 
-    private fun request(reply: (JSONObject) -> Unit) {
+    private fun request(cause: Cause, reply: (JSONObject) -> Unit) {
         if (!available || context.permission(PERMISSION).state != "prompt") return reply(status())
-        context.askPermission(PERMISSION) {
+        context.askPermission(cause, PERMISSION) {
             subscribe()
             reply(status())
         }

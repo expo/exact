@@ -44,28 +44,49 @@ enum TitleBarAreaMac {
         return [left - bounds.minX, top, max(0, right - left), band.height]
     }
 
-    /// A second click on the page's ground (`hit`, which no node took as a
-    /// press or a control) in the title bar's band, where the page underlaps
-    /// it: it does what one on the title bar does, as AppKit lets the same
-    /// ground drag the window, unless a `dblclick` listener takes it. True
-    /// when it acted.
-    static func doubleClicked(_ event: NSEvent, on hit: NSView?) -> Bool {
-        guard let window = hit?.window, secondClickInBand(event, window) else { return false }
-        let node = hit.flatMap { sequence(first: $0, next: \.superview).lazy.compactMap { $0 as? NodeView }.first }
-        if node?.dblclickListener != nil { return false }
-        switch action(UserDefaults.standard) {
-        case .zoom: window.performZoom(nil)
-        case .minimize: window.performMiniaturize(nil)
-        case .none: break
+    /// An authored region includes descendants up to the next declaration.
+    /// The page-drawn title bar supplies a drag region on unclaimed ground.
+    private static func region(at hit: NSView?, event: NSEvent, titleGround: Bool) -> (drag: Bool, node: NodeView?)? {
+        var first: NodeView?
+        var view = hit
+        while let current = view {
+            if let node = current as? NodeView {
+                first = first ?? node
+                if let value = node.style["app_region"]?.string { return (value == "drag", first) }
+            }
+            view = first?.presenter?.pointerParent(of: current) ?? current.superview
         }
+        guard titleGround, let window = hit?.window, inTitleBand(event, window) else { return nil }
+        return (true, first)
+    }
+
+    static func press(_ event: NSEvent, on hit: NSView?, titleGround: Bool) -> Bool {
+        guard event.type == .leftMouseDown, !event.modifierFlags.contains(.control), let window = hit?.window,
+              let region = region(at: hit, event: event, titleGround: titleGround) else { return false }
+        if !region.drag { return titleGround && inTitleBand(event, window) }
+        if event.clickCount == 2 {
+            if let node = region.node, let listener = node.dblclickListener {
+                guard !titleGround else { return false }
+                // The first click belonged to AppKit's drag. Track its second click
+                // here so the window does not route the up to that drag's view.
+                if let up = release(in: window, drag: { _ in }),
+                   listener.bounds.contains(listener.convert(up.locationInWindow, from: nil)) {
+                    node.dispatchDblclick(node.dblclickTarget(up))
+                }
+                return true
+            }
+            switch action(UserDefaults.standard) {
+            case .zoom: window.performZoom(nil)
+            case .minimize: window.performMiniaturize(nil)
+            case .none: break
+            }
+        } else { window.performDrag(with: event) }
         return true
     }
 
-    /// The second click's mouse-down, in the title bar's band where the page underlaps it.
-    private static func secondClickInBand(_ event: NSEvent, _ window: NSWindow) -> Bool {
-        event.type == .leftMouseDown && event.clickCount == 2 && window.styleMask.contains(.titled)
-            && window.styleMask.contains(.fullSizeContentView) && !window.styleMask.contains(.fullScreen)
-            && event.locationInWindow.y >= window.contentLayoutRect.maxY
+    private static func inTitleBand(_ event: NSEvent, _ window: NSWindow) -> Bool {
+        window.styleMask.contains(.titled) && window.styleMask.contains(.fullSizeContentView)
+            && !window.styleMask.contains(.fullScreen) && event.locationInWindow.y >= window.contentLayoutRect.maxY
     }
 
     /// The mouse-down whose release a `dblclick` listener in the band takes (`takesRelease`).
@@ -77,20 +98,26 @@ enum TitleBarAreaMac {
     /// title-bar action (zoom, minimize or fill) over the page's handler; a button's click, which
     /// its tracking takes, does nothing there (LLP 1039 D8).
     static func takesRelease(of event: NSEvent, at view: NodeView) -> Bool {
-        guard taken !== event, let window = view.window, secondClickInBand(event, window), view.dblclickListener != nil else { return false }
+        guard taken !== event, let window = view.window, event.type == .leftMouseDown, event.clickCount == 2,
+              inTitleBand(event, window),
+              view.dblclickListener != nil || region(at: view, event: event, titleGround: false)?.drag == false else { return false }
         taken = event
         return true
     }
     /// The button's moves and its release, from the queue to `view`, as the window would send them.
     /// With the button up and no release queued, something else took it, and nothing is waited for.
     static func release(to view: NodeView) {
-        while let next = view.window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp],
-                                                 until: NSEvent.pressedMouseButtons & 1 == 0 ? .distantPast : .distantFuture,
-                                                 inMode: .eventTracking, dequeue: true) {
-            guard next.type == .leftMouseUp else { view.mouseDragged(with: next); continue }
-            view.mouseUp(with: next)
-            return
+        if let window = view.window, let up = release(in: window, drag: view.mouseDragged(with:)) { view.mouseUp(with: up) }
+    }
+
+    private static func release(in window: NSWindow, drag: (NSEvent) -> Void) -> NSEvent? {
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp],
+                                           until: NSEvent.pressedMouseButtons & 1 == 0 ? .distantPast : .distantFuture,
+                                           inMode: .eventTracking, dequeue: true) {
+            if next.type == .leftMouseUp { return next }
+            drag(next)
         }
+        return nil
     }
 
     enum Action: Equatable { case zoom, minimize, none }

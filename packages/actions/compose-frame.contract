@@ -186,7 +186,7 @@ component ComposeFrame
                   fill="none"
                   stroke="param.over"
                   stroke-width=11
-                  stroke-dasharray=`${34.56 * min(count - limit, max(limit, 1)) / max(limit, 1)} 34.56`
+                  stroke-dasharray=`${34.56 * min(max(count - limit, 0), max(limit, 1)) / max(limit, 1)} 34.56`
                   transform="rotate(-90 15 15)"
               else
                 circle cx=15 cy=15 r=14.5 fill="none" stroke="param.track" stroke-width=1

@@ -7,6 +7,11 @@ import XCTest
 /// under the window's empty unified toolbar, and a click on a button in that
 /// row presses the button, as one below the title bar does.
 final class TitleRowTapMacTests: XCTestCase {
+    private final class DragWindow: NSWindow {
+        var drags = 0
+        override func performDrag(with event: NSEvent) { drags += 1 }
+    }
+
     private static let plan: Result<Data, Error> = Result {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -29,10 +34,15 @@ final class TitleRowTapMacTests: XCTestCase {
                   text `left ${top}`
                 box dblclick=double testId="listener" width=120 height=30 align-items="center" justify-content="center"
                   box testId="inside" width=40 height=20
+                box app-region="no-drag" testId="fixed" width=24 height=22
                 button press=pressTop testId="right"
                   text `right ${top}`
               button press=pressBelow testId="below"
                 text `below ${below}`
+              row app-region="drag" height=40
+                box dblclick=double testId="drag-child" width=40 height=40
+                button app-region="no-drag" press=pressBelow testId="no-drag"
+                  text "Press"
 
         """
         try source.write(to: dir.appendingPathComponent("app.contract"), atomically: true, encoding: .utf8)
@@ -49,7 +59,7 @@ final class TitleRowTapMacTests: XCTestCase {
     private func mount() throws -> (NSWindow, ExactSession) {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "title-row-tap")
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 600),
+        let window = DragWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 600),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
@@ -121,6 +131,20 @@ final class TitleRowTapMacTests: XCTestCase {
         XCTAssertEqual(slot("top"), "3", "the application's click pressed")
     }
 
+    func testADragRegionIncludesChildrenAndANoDragButtonKeepsItsPress() throws {
+        let (window, session) = try mount()
+        defer { window.close(); session.destroy() }
+        let dragWindow = try XCTUnwrap(window as? DragWindow)
+        for id in ["drag-child", "no-drag"] {
+            let node = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == id })
+            let point = node.convert(NSPoint(x: node.bounds.midX, y: node.bounds.midY), to: nil)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            XCTAssertEqual(TitleBarAreaMac.press(event, on: node, titleGround: false), id == "drag-child")
+        }
+        XCTAssertEqual(dragWindow.drags, 1)
+    }
+
     /// A double click on the empty part of the title row does what one on
     /// the title bar does by the system setting; one on a button in the row
     /// or on a `dblclick` listener leaves the window as it was.
@@ -157,7 +181,7 @@ final class TitleRowTapMacTests: XCTestCase {
         let content = try XCTUnwrap(window.contentView?.superview)
         func secondClick(at p: NSPoint) throws -> Bool {
             XCTAssertGreaterThan(p.y, window.contentLayoutRect.maxY, "in the title bar's band")
-            return TitleBarAreaMac.doubleClicked(try event(.leftMouseDown, at: p, clicks: 2), on: content.hitTest(p))
+            return TitleBarAreaMac.press(try event(.leftMouseDown, at: p, clicks: 2), on: content.hitTest(p), titleGround: true)
         }
         let inside = try node("inside")
         let l = inside.convert(NSPoint(x: inside.bounds.midX, y: inside.bounds.midY), to: nil)
@@ -173,6 +197,18 @@ final class TitleRowTapMacTests: XCTestCase {
         XCTAssertNil(NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true))
         let state = try JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
         XCTAssertEqual(((state?["slots"] as? [String: Any])?["doubles"]).map { "\($0)" }, "1", "the dblclick ran")
+        XCTAssertEqual(window.frame, frame)
+        XCTAssertFalse(window.isMiniaturized)
+
+        let child = try node("drag-child")
+        let p = child.convert(NSPoint(x: child.bounds.midX, y: child.bounds.midY), to: nil)
+        NSApp.postEvent(try event(.leftMouseUp, at: p, clicks: 2), atStart: true)
+        XCTAssertTrue(TitleBarAreaMac.press(try event(.leftMouseDown, at: p, clicks: 2), on: child, titleGround: false))
+        let after = try JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
+        XCTAssertEqual(((after?["slots"] as? [String: Any])?["doubles"]).map { "\($0)" }, "2")
+        let fixed = try node("fixed")
+        let fixedPoint = fixed.convert(NSPoint(x: fixed.bounds.midX, y: fixed.bounds.midY), to: nil)
+        XCTAssertTrue(TitleBarAreaMac.takesRelease(of: try event(.leftMouseDown, at: fixedPoint, clicks: 2), at: fixed))
         XCTAssertEqual(window.frame, frame)
         XCTAssertFalse(window.isMiniaturized)
 

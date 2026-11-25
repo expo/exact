@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
@@ -1404,13 +1405,21 @@ pub(crate) fn prepare_apple_simulator_link_archives(
     out_dir: &Path,
     archives: &[LinkArchive],
 ) -> Result<Vec<PreparedLinkArchive>, String> {
-    prepare_apple_simulator_link_archives_with_lipo(
-        install,
-        target,
-        out_dir,
-        archives,
-        Path::new("lipo"),
-    )
+    let llvm_bin = apple_simulator_arch(target).and_then(|_| env::var_os("EXACT_APPLE_LLVM_BIN"));
+    let lipo = apple_lipo_for(cfg!(target_os = "macos"), llvm_bin.as_deref());
+    prepare_apple_simulator_link_archives_with_lipo(install, target, out_dir, archives, &lipo)
+}
+
+/// Xcode's `lipo` on a Mac. Elsewhere LLVM's, from `EXACT_APPLE_LLVM_BIN` or
+/// `PATH`, as Exact's Apple toolchain finds it.
+pub(crate) fn apple_lipo_for(is_macos: bool, llvm_bin: Option<&OsStr>) -> PathBuf {
+    if is_macos {
+        return PathBuf::from("lipo");
+    }
+    match llvm_bin.filter(|bin| !bin.is_empty()) {
+        Some(bin) => Path::new(bin).join("llvm-lipo"),
+        None => PathBuf::from("llvm-lipo"),
+    }
 }
 
 pub(crate) fn prepare_apple_simulator_link_archives_with_lipo(
@@ -1569,10 +1578,11 @@ pub(crate) fn prepare_apple_simulator_link_archives_with_lipo(
                 .arg("-output")
                 .arg(&thinned)
                 .output()
-                .map_err(|error| lipo_launch_error(&staged, error))?;
+                .map_err(|error| lipo_launch_error(lipo, &staged, error))?;
             if !output.status.success() {
                 return Err(format!(
-                    "lipo -thin {arch} failed for verified snapshot of {} with {}: {}",
+                    "{} -thin {arch} failed for verified snapshot of {} with {}: {}",
+                    lipo.display(),
                     inspected.snapshot.archive.source.display(),
                     output.status,
                     String::from_utf8_lossy(&output.stderr).trim()
@@ -1888,10 +1898,11 @@ fn lipo_architectures(lipo: &Path, archive: &Path) -> Result<Vec<String>, String
         .arg("-archs")
         .arg(archive)
         .output()
-        .map_err(|error| lipo_launch_error(archive, error))?;
+        .map_err(|error| lipo_launch_error(lipo, archive, error))?;
     if !output.status.success() {
         return Err(format!(
-            "lipo -archs failed for {} with {}: {}",
+            "{} -archs failed for {} with {}: {}",
+            lipo.display(),
             archive.display(),
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
@@ -1910,18 +1921,20 @@ fn lipo_architectures(lipo: &Path, archive: &Path) -> Result<Vec<String>, String
     Ok(architectures)
 }
 
-fn lipo_launch_error(archive: &Path, error: io::Error) -> String {
+fn lipo_launch_error(lipo: &Path, archive: &Path, error: io::Error) -> String {
+    let message = format!(
+        "cannot run `{}` for Apple Simulator archive {}",
+        lipo.display(),
+        archive.display()
+    );
     if error.kind() == io::ErrorKind::NotFound {
-        format!(
-            "cannot run `lipo` for Apple Simulator archive {}; install Xcode command-line tools (run `xcode-select --install`)",
-            archive.display()
-        )
-    } else {
-        format!(
-            "cannot run `lipo` for Apple Simulator archive {}: {error}",
-            archive.display()
-        )
+        match lipo.file_name().and_then(OsStr::to_str) {
+            Some("lipo") => return format!("{message}. Install Xcode command-line tools (run `xcode-select --install`)."),
+            Some("llvm-lipo") => return format!("{message}. Fix `EXACT_APPLE_LLVM_BIN` or unset it and put LLVM's bin directory on `PATH`."),
+            _ => {}
+        }
     }
+    format!("{message}: {error}")
 }
 
 struct DigestWriter<'a>(&'a mut Sha256);

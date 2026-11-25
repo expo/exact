@@ -223,7 +223,9 @@ fn a_pinch_release_sets_the_photo_zoom_within_fit_and_four_times() {
     let handle = r.kernel().node_by_key(key).unwrap().id;
     let zoom = |r: &Runner<Live>| {
         let t = r.kernel().find_by_test_id("viewer-transform")[0];
-        r.kernel().node_by_key(t).unwrap().style.scale
+        let scale = r.kernel().node_by_key(t).unwrap().style.scale;
+        assert_eq!(scale.x, scale.y);
+        scale.x
     };
     for (scale, expected) in [(2.5, 2.5), (9., 4.), (0.4, 1.)] {
         let release = exact_runner::Event::TransformRelease {

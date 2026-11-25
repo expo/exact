@@ -320,9 +320,9 @@ fn what_order_alone_cannot_tell_apart_is_pinned() {
     assert_eq!(correction(&r), Some(32.), "taken for a page");
 }
 
-/// A report at rest at `offset` measuring each mounted row at
-/// `size(its index)`.
-fn sized(r: &mut Runner<NoData>, offset: f64, size: impl Fn(usize) -> f64) {
+/// A report at rest at `offset`, with `leading` px of padding before the
+/// first row, measuring each mounted row at `size(its index)`.
+fn sized(r: &mut Runner<NoData>, offset: f64, leading: f64, size: impl Fn(usize) -> f64) {
     let c = &r.collections()[0];
     let feedback = CollectionFeedback {
         view: c.view,
@@ -332,7 +332,7 @@ fn sized(r: &mut Runner<NoData>, offset: f64, size: impl Fn(usize) -> f64) {
         port_cross: 640.,
         port_main: 320.,
         cross: 640.,
-        padding: [0.0; 2],
+        padding: [leading, 0.],
         measurements: (c.rows.iter())
             .map(|row| exact_runner::RowMeasurement {
                 view: row.view,
@@ -366,11 +366,11 @@ fn a_held_reader_330_px_below_a_page_is_offered_the_next() {
             _ => 32.,
         };
         let page = 32. + 10. * small;
-        sized(&mut r, 352., size);
+        sized(&mut r, 352., 0., size);
         let held = correction(&r).unwrap_or(352.);
         assert!((held - page).abs() < 0.01, "{small}: held at {held}");
-        sized(&mut r, held, size);
-        sized(&mut r, held, size);
+        sized(&mut r, held, 0., size);
+        sized(&mut r, held, 0., size);
         assert_eq!(starts(&r), fires, "{small}");
     }
 }
@@ -393,4 +393,94 @@ fn a_reader_in_the_leading_padding_keeps_the_last_visible_row() {
     r.act("insert", vec![Value::Number(0.)]).unwrap();
     let c = r.collections()[0].correction.expect("a correction");
     assert_eq!((c.offset, c.from), (0., Some(-32.)));
+}
+
+/// A page that lands above a reader in the leading padding leaves the port's
+/// top inside its last row, still at the estimate. Its mounted rows measured
+/// at 26 px, the first old row, which the reader sees, keeps its place 16 px
+/// below the port's top, where an anchor on that estimated row would move it
+/// by the estimate's error.
+#[test]
+fn a_page_measured_above_a_reader_in_the_padding_keeps_the_rows_they_read() {
+    let mut r = boot(PLAIN, "");
+    for _ in 0..3 {
+        let end = correction(&r).unwrap_or(200. * 32. + 16. - 320.);
+        report_padded(&mut r, end, 0., 16.);
+    }
+    report_padded(&mut r, 984., -4000., 16.);
+    report_padded(&mut r, -16., -4000., 16.);
+    report_padded(&mut r, -16., 0., 16.);
+    r.act("prepend", vec![]).unwrap();
+    assert_eq!(correction(&r), Some(20. * 32. - 16.), "on the estimate");
+    let size = |i: usize| if i < 20 { 26. } else { 32. };
+    let measured = r.collections()[0]
+        .rows
+        .iter()
+        .filter(|row| row.index < 20)
+        .count() as f64;
+    sized(&mut r, 624., 16., size);
+    assert_eq!(
+        correction(&r),
+        Some(20. * 32. - 6. * measured - 16.),
+        "the page measured"
+    );
+}
+
+/// A row measured before, with the port's top inside it, keeps the place
+/// when a report finds it taller, as a streaming reply's row grows at its
+/// end: the lines its reader reads stay, and the rows below it move down.
+#[test]
+fn a_row_measured_again_taller_keeps_its_readers_place() {
+    let mut r = read_at(PLAIN, "", 100. * 32. + 10.);
+    sized(&mut r, 100. * 32. + 10., 0., |i| {
+        if i == 100 {
+            52.
+        } else {
+            32.
+        }
+    });
+    assert!(
+        correction(&r).is_none_or(|offset| offset == 100. * 32. + 10.),
+        "{:?}",
+        correction(&r)
+    );
+}
+
+/// A page's row measured for the first time at the estimate yields the place
+/// too, its place having been the estimate's: with 48 px of leading padding
+/// the port's top is in page row 18, measured at 32, and the page's other
+/// mounted rows at 26; the first old row stays 48 px below the port's top.
+#[test]
+fn a_page_row_measured_at_the_estimate_yields_the_place_too() {
+    let mut r = boot(PLAIN, "");
+    for _ in 0..3 {
+        let end = correction(&r).unwrap_or(200. * 32. + 48. - 320.);
+        report_padded(&mut r, end, 0., 48.);
+    }
+    report_padded(&mut r, 1016., -4000., 48.);
+    report_padded(&mut r, -48., -4000., 48.);
+    report_padded(&mut r, -48., 0., 48.);
+    r.act("prepend", vec![]).unwrap();
+    assert_eq!(correction(&r), Some(20. * 32. - 48.), "on the estimate");
+    let rows = r.collections()[0]
+        .rows
+        .iter()
+        .map(|row| row.index)
+        .collect::<Vec<_>>();
+    assert!(
+        rows.contains(&18) && rows.contains(&19),
+        "the page's last rows are mounted: {rows:?}"
+    );
+    let size = |i: usize| match i {
+        18 => 32.,
+        i if i < 20 => 26.,
+        _ => 32.,
+    };
+    let shrunk = rows.iter().filter(|&&i| i < 20 && i != 18).count() as f64;
+    sized(&mut r, 592., 48., size);
+    assert_eq!(
+        correction(&r),
+        Some(20. * 32. - 6. * shrunk - 48.),
+        "the page measured"
+    );
 }

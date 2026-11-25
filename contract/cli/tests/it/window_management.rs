@@ -3,16 +3,21 @@
 //! own implementation, what a Windows app reads with it bound, and what the
 //! declared substitute answers on each target.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const APP: &str = r#"use getScreenDetails, getPointerPosition, windowManagementStatus, ScreenDetails, PointerPosition, WindowManagementStatus from "@exact/window-management"
+const APP: &str = r#"use getWindowBounds, WindowBounds, getScreenDetails, getPointerPosition, windowManagementStatus, ScreenDetails, PointerPosition, WindowManagementStatus from "@exact/window-management"
 
 component App
   resource details = getScreenDetails() as shape ScreenDetails
   resource status = windowManagementStatus() as shape WindowManagementStatus
+  mutation bounds as shape WindowBounds
+  derive rectangle = match bounds { case some(b) => `${b.screenX},${b.screenY} ${b.outerWidth}x${b.outerHeight}`, case none => "" }
+  action readFrame
+    send bounds = getWindowBounds()
   mutation at as shape PointerPosition
   action ask
     send at = getPointerPosition()
@@ -69,12 +74,12 @@ impl exact_runner::DataSource for Grants {
     }
 }
 
-fn boot(app: &App, target: &str) -> Runner<Grants> {
+fn boot(app: &App, target: &str) -> Runner<Source> {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants,
+        boxed(Grants),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -95,7 +100,7 @@ fn settle<D: exact_runner::DataSource>(r: &mut Runner<D>) {
     }
 }
 
-fn show(r: &Runner<Grants>, name: &str) -> String {
+fn show(r: &Runner<Source>, name: &str) -> String {
     format!("{:?}", r.resource(name).or(r.slot(name)))
 }
 
@@ -239,6 +244,32 @@ fn a_windows_app_reads_what_its_build_binds() {
     );
 }
 
+#[test]
+fn a_window_bounds_read_is_supported_on_mac_and_web() {
+    let app = App::new("bounds");
+    for target in [
+        "macos", "web", "ios", "tvos", "watchos", "visionos", "android", "linux", "windows",
+        "terminal",
+    ] {
+        let mut r = boot(&app, target);
+        r.act("readFrame", Vec::new()).unwrap();
+        settle(&mut r);
+        if matches!(target, "macos" | "web") {
+            assert_eq!(
+                r.derive("rectangle").and_then(|v| v.as_str()),
+                Some("0,0 420x860"),
+                "{target}"
+            );
+        } else {
+            let logs = agent::handle(&r, r#"{"op":"logs"}"#);
+            assert!(
+                logs.contains("getWindowBounds: NotSupportedError"),
+                "{target}: {logs}"
+            );
+        }
+    }
+}
+
 /// D6: under the agent, with no implementation bound, the declaration
 /// answers its fixture on a target that has an implementation, and where
 /// none exists the calls fail `NotSupportedError` and the status reads
@@ -353,7 +384,7 @@ component App
     ] {
         let mut runner = Runner::boot(
             plan.clone(),
-            CaptureGrants(grants),
+            boxed(CaptureGrants(grants)),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",

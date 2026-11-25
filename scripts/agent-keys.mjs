@@ -3,7 +3,7 @@
 // `type` and `tap` forms. Split from agent.mjs, which re-exports each.
 import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
-import { dragArguments } from './agent-drag.mjs';
+import { dragArguments, dragWords } from './agent-drag.mjs';
 
 export function refusalMessage(reply) {
   const r = reply?.refused;
@@ -278,7 +278,7 @@ export async function browserKey({id, opts, evaluate, ask, call, frame}) {
   if (f.error || !f.ok) throw new Error(f.error ?? `view ${id} could not take focus`);
   const reply = phase => ({ typed: id, key: opts.key, ...(phase != null ? { phase } : {}), delivery: 'platform' });
   // A key's text goes with its down, as a keyboard's does: a held printable key types, and each
-  // auto-repeat types again (#140); a Control or Meta chord has none (`cdpKey`).
+  // auto-repeat types again; a Control or Meta chord has none (`cdpKey`).
   // The chord's modifiers go down before the key and up after it (`modifierEdges`); a held
   // key's auto-repeat (`opts.repeat`, #140) finds them down already. A key that fails to go
   // down lets its modifiers go again, held or not.
@@ -322,7 +322,7 @@ export async function nativeKey({id, opts, ask}) {
   } catch (error) { if (releaseKey) error.release = release; throw error; }
 }
 
-/** The auto-repeat a held key makes (#140), at macOS's default rate (`NSEvent.keyRepeatDelay` and
+/** The auto-repeat a held key makes, at macOS's default rate (`NSEvent.keyRepeatDelay` and
  * `keyRepeatInterval` with nothing set): the first repeat 500 ms after the down, then one every 83 ms. A
  * modifier alone does not repeat, as AppKit's flags change does not. */
 export const KEY_REPEAT = { delay: 500, interval: 83 };
@@ -403,8 +403,8 @@ export function mouseContact() {
 
 /** The CLI `tap` line's words after `tap` (LLP 1012 §1): `[target, opts]` for `s.tap`, or `[null, opts]` for a
  * held contact's phase when `held` says one is down (`move [by] <x> <y> [over <ms>]`, `hold [<ms>]`, `up`, `cancel`).
- * Strict: a word no form uses, a word twice, or a number that is none is refused by name, never dropped (#107:
- * `tap probe auxclick` was sent as a left click). `drag` and a held request's `tap @N` are the caller's. */
+ * Strict: a word no form uses, a word twice, or a number that is none is refused by name, never dropped (so
+ * `tap probe auxclick` is not sent as a left click). `drag` and a held request's `tap @N` are the caller's. */
 export function tapWords(args, held = false) {
   const [first, form, ...rest] = args;
   const refuse = (why) => { throw new MalformedOperation(`tap${args.length ? ' ' + args.join(' ') : ''}: ${why}`); };
@@ -454,6 +454,25 @@ export function tapWords(args, held = false) {
   if (form === undefined) return [first, {}];
   // A held contact's phases name no target: the contact is the one `tap <target> down` began.
   if (['up', 'cancel', 'hold', 'move'].includes(form)) refuse(held ? `a held contact's phases take no target: \`tap ${[form, ...rest].join(' ')}\`` : `${form} is a phase of a held contact, which none is: \`tap <target> down\`, then \`tap ${form}${form === 'move' ? ' <x> <y>' : form === 'hold' ? ' <ms>' : ''}\``);
+  // A press point before `drag` (#1332): the drag's start point is its own `from`, and a held contact moves by phases.
+  if ((form === 'at' || form === 'down') && rest.includes('drag')) {
+    const words = args.slice(1), split = words.indexOf('drag'), press = words.slice(0, split);
+    // The drag's words as parseDrag reads them. Its head is `to <target>` or a distance `<dx> <dy>`; the first leg's
+    // own options follow it, up to `then`.
+    const after = dragWords(words.slice(split + 1).join(' '));
+    const head = after[0] === 'to' ? ['to', after[1] ?? '<target>'] : [after[0] ?? '<dx>', after[1] ?? '<dy>'], tail = after.slice(2);
+    const own = tail.includes('then') ? tail.slice(0, tail.indexOf('then')) : tail;
+    const point = (list, name) => list.includes(name) ? list.slice(list.indexOf(name) + 1, list.indexOf(name) + 3) : null;
+    const [x = '<x>', y = '<y>'] = point(press, 'at') ?? point(own, 'from') ?? [];
+    const held = press.indexOf('modifiers'), modifiers = held < 0 || press[held + 1] === undefined ? [] : press.slice(held, held + 2);
+    // The drag's own modifiers win; a bare one ending its leg takes the press's.
+    const mine = own.indexOf('modifiers'), fill = mine >= 0 && mine === own.length - 1 && modifiers.length;
+    const rest = fill ? [...tail.slice(0, mine + 1), modifiers[1], ...tail.slice(mine + 1)] : tail;
+    const drag = [...head, ...(own.includes('from') ? [] : ['from', x, y]), ...(mine < 0 ? modifiers : []), ...rest];
+    // A target of several words, or none, goes back in quotes, as the op reads it.
+    const target = first === '' || /[\s"\\]/.test(first) ? JSON.stringify(first) : first;
+    refuse(`a drag starts at a point with from: \`tap ${[target, 'drag', ...drag].join(' ')}\`; a held contact is \`tap ${[target, 'down', 'at', x, y, ...modifiers].join(' ')}\`, then \`tap hold <ms>\`, \`tap move [by] <x> <y> [over <ms>]\`, \`tap up\``);
+  }
   if (form.startsWith('{')) { try { return [first, JSON.parse(args.slice(1).join(' '))]; } catch (e) { refuse(e.message); } }
   switch (form) {
     // A click with modifiers held (gallery F20): `tap <target> modifiers Shift+Meta`.
@@ -475,11 +494,25 @@ export function tapWords(args, held = false) {
       if (rest.length !== 1) refuse('pictureinpicture <control>: minimize, back, close or hover');
       return [first, { pictureInPicture: rest[0] }];
     case 'pinch': return [first, { pinch: number(rest[0], 'pinch'), ...options(rest.slice(1), ['at']) }];
-    // Files dragged in from outside, each a path (studio diary R19).
-    case 'drop': if (!rest.length) refuse('drop takes one or more paths'); return [first, { drop: rest.map((path) => resolve(path)) }];
-    // A drag of those files from outside comes over the target and stays there (`dragenter`), until a `drop` there
-    // or a `dragleave`, which takes it away undropped.
-    case 'dragenter': if (!rest.length) refuse('dragenter takes the dragged paths'); return [first, { dragenter: rest.map((path) => resolve(path)) }];
+    // The platform's discrete swipe, as the real flick it is (`swipeDrag`, LLP 1057.001 §8.3).
+    case 'swipe':
+      if (!['left', 'right', 'up', 'down'].includes(rest[0])) refuse('swipe takes a direction, left, right, up or down, as swipe down');
+      return [first, { swipe: rest[0], ...options(rest.slice(1), ['at']) }];
+    // Several fingers tapped together, as a window's recognizers read them (the iOS dev menu's four).
+    case 'fingers': return [first, { fingers: number(rest[0], 'fingers'), ...options(rest.slice(1), ['at']) }];
+    // A drag from outside dropped on the target (LLP 1094.001 D6): files, each a path, plain text
+    // (`--text "…"`) and a link (`--url "…"`), alone or together. `dragenter` brings the same drag over the target
+    // and holds it there, until a `drop` there or a `dragleave`, which takes it away undropped.
+    case 'drop': case 'dragenter': {
+      const drag = { [form]: [] };
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] !== '--text' && rest[i] !== '--url') { drag[form].push(resolve(rest[i])); continue; }
+        if (rest[i + 1] === undefined) refuse(`${form} ${rest[i]} takes a value`);
+        drag[rest[i].slice(2)] = String(rest[++i]);
+      }
+      if (!drag[form].length && drag.text === undefined && drag.url === undefined) refuse(`${form} takes one or more paths, --text "…" or --url "…"`);
+      return [first, drag];
+    }
     case 'dragleave': if (rest.length) refuse('dragleave takes no more words'); return [first, { dragleave: true }];
     case 'into': {
       // tap <list> into <key> [block <v>] [inline <v>]
@@ -502,7 +535,7 @@ export function tapWords(args, held = false) {
       if (opts.release && (opts.wheel[0] !== 0 || opts.wheel[1] !== 0 || opts.at)) refuse('wheel release is `wheel 0 0 release`: it lifts the held gesture where it is');
       return [first, opts];
     }
-    // The mouse's buttons (#107): the left, a double click, the right (`contextmenu`), the middle (`auxclick`), n clicks.
+    // The mouse's buttons: the left, a double click, the right (`contextmenu`), the middle (`auxclick`), n clicks.
     case 'mouse': case 'contextmenu': case 'auxclick': return [first, { [form]: true, ...options(rest, ['at', 'modifiers']) }];
     // `dblclick touch`: a finger's double tap, which zooms a zoomable scroller (LLP 1057.001.000 §6), not a mouse's.
     case 'dblclick': return [first, { dblclick: true, ...options(rest, ['at', 'modifiers', 'touch']) }];
@@ -512,7 +545,7 @@ export function tapWords(args, held = false) {
       if (!['left', 'right'].includes(rest[0]) || !(rest.length === 3 || (rest.length === 5 && rest[3] === 'for'))) refuse('stick takes left or right, x and y in [-1, 1], and optionally for <ms>');
       return [first, { stick: rest[0], value: [number(rest[1], 'stick'), number(rest[2], 'stick')], ...(rest[3] === 'for' ? { for: number(rest[4], 'for') } : {}) }];
     // Most often a target of several words left unquoted (sb4 farm wave 4, 053: `tap Why are my…`).
-    default: refuse(`unknown word ${JSON.stringify(form)}; a target of several words is quoted inside the op (\`tap "${args.join(' ').replace(/["\\]/g, '\\$&')}"\`), and after a target come only: tap <target> [at <x> <y> [modifiers <M>] | modifiers <M> | down [at <x> <y>] [modifiers <M>] | wheel <dx> <dy> [gesture | fling | hold] [at <x> <y>] [modifiers <M>] | wheel 0 0 release | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers <M>]) | hover | drop <path…> | dragenter <path…> | dragleave | into <key> … | pinch <scale> [at <x> <y>] | history <n> | mediasession <action> [seconds] | pictureinpicture <control> | drag …]`);
+    default: refuse(`unknown word ${JSON.stringify(form)}; a target of several words is quoted inside the op (\`tap "${args.join(' ').replace(/["\\]/g, '\\$&')}"\`), and after a target come only: tap <target> [at <x> <y> [modifiers <M>] | modifiers <M> | down [at <x> <y>] [modifiers <M>] | wheel <dx> <dy> [gesture | fling | hold] [at <x> <y>] [modifiers <M>] | wheel 0 0 release | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers <M>]) | hover | drop [<path…>] [--text "…"] [--url "…"] | dragenter [<path…>] [--text "…"] [--url "…"] | dragleave | into <key> … | pinch <scale> [at <x> <y>] | swipe <left|right|up|down> [at <x> <y>] | fingers <2-5> [at <x> <y>] | history <n> | mediasession <action> [seconds] | pictureinpicture <control> | drag …]`);
   }
 }
 
@@ -531,31 +564,52 @@ export function clockSlices({ bpm, ms }) {
   return out;
 }
 
+/** A swipe as the real flick it is (LLP 1057.001 §8.3): a straight drag of 120 points in its direction over 100 ms,
+ * from `at` in the target or its middle, which UIKit's swipe recognizer reads as one. */
+export function swipeDrag({ swipe, at }) {
+  const [dx, dy] = { left: [-120, 0], right: [120, 0], up: [0, -120], down: [0, 120] }[swipe];
+  return { dx, dy, over: 100, ...(at ? { from: at } : {}) };
+}
+
 /** A `tap`'s options checked before any host is asked: malformed ones are refused by name. Returns the mouse's button forms given. */
 export function tapArguments(opts) {
   if (opts.wheel !== undefined && ![opts.wheel?.[0], opts.wheel?.[1]].every(Number.isFinite)) throw new MalformedOperation('wheel: expected two finite deltas');
   if (opts.drag) dragArguments(opts.drag);
-  if (opts.mouse && ['contextmenu','dblclick','auxclick','clicks','down','drag','wheel','hover','pinch','history','into','gesture'].some(key => opts[key] !== undefined)) throw new MalformedOperation('mouse cannot be combined with another input mode');
+  if (opts.mouse && ['contextmenu','dblclick','auxclick','clicks','down','drag','wheel','hover','pinch','swipe','fingers','history','into','gesture'].some(key => opts[key] !== undefined)) throw new MalformedOperation('mouse cannot be combined with another input mode');
   if (opts.pinch !== undefined) pinchArguments(opts.pinch);
+  if (opts.swipe !== undefined && !['left', 'right', 'up', 'down'].includes(opts.swipe)) throw new MalformedOperation('swipe takes a direction: left, right, up or down');
+  // A swipe is one recognized gesture, a direction and an optional point: anything else with it would act, or be
+  // dropped, before the swipe is accepted or refused
+  const besides = opts.swipe === undefined ? undefined : Object.keys(opts).find(key => opts[key] !== undefined && key !== 'swipe' && key !== 'at');
+  if (besides) throw new MalformedOperation(`swipe cannot be combined with ${besides}`);
+  if (opts.fingers !== undefined && ![2, 3, 4, 5].includes(opts.fingers)) throw new MalformedOperation('tap … fingers: 2 to 5 fingers');
   if (opts.into) intoArguments(opts.into);
+  // A drag in carries something, and a `file:` URL is a file, as each host reads a drop (LLP 1094.001 D1)
+  for (const kind of ['drop', 'dragenter']) {
+    if (opts[kind] === undefined) continue;
+    if (!opts[kind].length && !opts.text && !opts.url) throw new MalformedOperation(`${kind}: a drag carries a path, text or a link`);
+    if (/^file:/i.test(opts.url ?? '')) throw new MalformedOperation(`${kind}: the link ${opts.url} names a file: drop it by its path instead`);
+  }
   if (opts.seconds != null && !Number.isFinite(opts.seconds)) throw new MalformedOperation('mediasession: expected finite seconds');
   if (opts.mediaSession === 'seekto' && !(Number.isFinite(opts.seconds) && opts.seconds >= 0)) throw new MalformedOperation('mediasession: seekto needs finite nonnegative seconds');
-  // The mouse's forms (#107): one button form at a time, each at its middle or `at`, the modifiers held through it.
+  // The mouse's forms: one button form at a time, each at its middle or `at`, the modifiers held through it.
   const button = ['mouse', 'contextmenu', 'auxclick', 'dblclick', 'clicks'].filter((k) => opts[k] !== undefined && opts[k] !== false);
   if (button.length > 1) throw new MalformedOperation(`tap: one of mouse, dblclick, contextmenu, auxclick and clicks at a time, not ${button.join(' and ')}`);
   if (opts.clicks !== undefined && ![1, 2, 3].includes(opts.clicks)) throw new MalformedOperation('tap … clicks: 1, 2 or 3');
-  if (opts.at !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.drop || opts.dragenter || opts.dragleave || opts.into)) throw new MalformedOperation('at is a point on a press, a click (mouse, dblclick, contextmenu, auxclick, clicks), a wheel, a contact, a pinch or a drag');
+  if (opts.at !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.drop || opts.dragenter || opts.dragleave || opts.into)) throw new MalformedOperation('at is a point on a press, a click (mouse, dblclick, contextmenu, auxclick, clicks), a wheel, a contact, a pinch, a swipe, a tap of several fingers or a drag');
   if (opts.at !== undefined && (!Array.isArray(opts.at) || opts.at.length !== 2 || !opts.at.every(Number.isFinite))) throw new MalformedOperation('tap at needs two finite numbers');
   const modifiers = opts.modifiers ?? opts.drag?.modifiers;
   if (modifiers !== undefined && !String(modifiers).split('+').filter(Boolean).every(k => ['Shift', 'Control', 'Alt', 'Meta'].includes(k))) throw new MalformedOperation(`tap … modifiers: ${modifiers} is not Shift, Control, Alt and Meta joined by +`);
-  if (modifiers !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.into || opts.drop || opts.pinch !== undefined)) throw new MalformedOperation('modifiers are held through a press, a click, a wheel, a contact or a drag');
+  if (modifiers !== undefined && ((opts.hover && !opts.wheel) || opts.history !== undefined || opts.into || opts.drop || opts.pinch !== undefined || opts.swipe !== undefined || opts.fingers !== undefined)) throw new MalformedOperation('modifiers are held through a press, a click, a wheel, a contact or a drag');
   return button;
 }
 
-/** A `tap` form this carrier cannot deliver as a hand's (#107), or null.
+/** A `tap` form this carrier cannot deliver as a hand's, or null.
  * Unsupported forms are refused before any input reaches the platform. */
 export function pointerGap(host, browser, opts) {
   if (opts.touch && !['ios', 'host-ios', 'android', 'windows'].includes(host) && !(host === 'web' && (browser ?? 'chrome') === 'chrome')) return `${host === 'web' ? browser ?? 'chrome' : host} does not carry a touch double tap (dblclick touch, LLP 1057.001.000 §6)`;
+  // Only the iOS touch runner puts several fingers down at once (touches.mjs `realFingers`).
+  if (opts.fingers !== undefined && !['ios', 'host-ios'].includes(host)) return `${host === 'web' ? browser ?? 'chrome' : host} does not carry a tap of ${opts.fingers} fingers (iOS --touch platform does)`;
   if (['macos', 'mac', 'host'].includes(host) || (host === 'web' && (browser ?? 'chrome') === 'chrome')) return null;
   const held = opts.modifiers ?? opts.drag?.modifiers;
   const gaps = [

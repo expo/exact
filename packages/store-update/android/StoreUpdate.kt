@@ -31,6 +31,7 @@ import com.google.android.play.core.install.InstallStateUpdatedListener
 import com.google.android.play.core.install.model.AppUpdateType
 import com.google.android.play.core.install.model.InstallStatus
 import com.google.android.play.core.install.model.UpdateAvailability
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -143,14 +144,14 @@ class StoreUpdateModule(
         context.changed(TOPIC)
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, reply)
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
 
-    override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "storeUpdateStatus" -> if (context.agent) reply(agentStatus()) else status(reply)
-            "startStoreUpdate" -> start(args, (preferred as? JSONObject)?.optString("tap")?.takeIf { it.isNotEmpty() }, reply)
-            "completeStoreUpdate" -> complete(reply)
-            "openStorePage" -> open(reply)
+            "startStoreUpdate" -> start(args, (preferred as? JSONObject)?.optString("tap")?.takeIf { it.isNotEmpty() }, cause, reply)
+            "completeStoreUpdate" -> complete(cause, reply)
+            "openStorePage" -> open(cause, reply)
             else -> reply(error("NotSupportedError"))
         }
     }
@@ -194,13 +195,13 @@ class StoreUpdateModule(
         return status(true, availability(info.updateAvailability()), android)
     }
 
-    private fun start(args: JSONObject, tap: String?, reply: (JSONObject) -> Unit) {
+    private fun start(args: JSONObject, tap: String?, cause: Cause, reply: (JSONObject) -> Unit) {
         val type = when (args.optString("appUpdateType")) {
             "flexible" -> AppUpdateType.FLEXIBLE
             IMMEDIATE -> AppUpdateType.IMMEDIATE
             else -> return reply(error("TypeError", "appUpdateType is flexible or immediate"))
         }
-        if (context.agent) return agentStart(type, tap, reply)
+        if (context.agent) return agentStart(type, tap, cause, reply)
         if (!installedByPlay()) return reply(error("NotSupportedError", "this install is not from Google Play"))
         val activity = context.activity ?: return reply(error("InvalidStateError", "no activity in front"))
         val options = AppUpdateOptions.newBuilder(type).setAllowAssetPackDeletion(args.optBoolean("allowAssetPackDeletion", false)).build()
@@ -219,18 +220,18 @@ class StoreUpdateModule(
     }
 
     /** Under the agent: the laid status decides what Play would refuse, and the ticket's choice is the flow's outcome. */
-    private fun agentStart(type: Int, tap: String?, reply: (JSONObject) -> Unit) {
+    private fun agentStart(type: Int, tap: String?, cause: Cause, reply: (JSONObject) -> Unit) {
         val laid = agentStatus()
         val immediate = type == AppUpdateType.IMMEDIATE
         if (laid.optString("updateAvailability") !in setOf("offered", "in-progress")) {
-            context.journal("startStoreUpdate: Google Play offers no newer binary (${context.origin})")
+            context.journal("startStoreUpdate: Google Play offers no newer binary (${cause.origin})")
             return reply(error("NotFoundError", "Google Play offers no newer binary"))
         }
         if (laid.optJSONObject("android")?.optBoolean(if (immediate) "immediateAllowed" else "flexibleAllowed") != true) {
             return reply(error("NotAllowedError", "Google Play does not allow this update type now"))
         }
         val outcome = tap ?: "accepted"
-        context.journal("startStoreUpdate: ${if (immediate) IMMEDIATE else "flexible"} $outcome (${context.origin})")
+        context.journal("startStoreUpdate: ${if (immediate) IMMEDIATE else "flexible"} $outcome (${cause.origin})")
         reply(JSONObject().put("outcome", outcome))
     }
 
@@ -247,12 +248,12 @@ class StoreUpdateModule(
         }
     }
 
-    private fun complete(reply: (JSONObject) -> Unit) {
+    private fun complete(cause: Cause, reply: (JSONObject) -> Unit) {
         if (context.agent) {
             if (agentStatus().optJSONObject("android")?.optString("installStatus") != "downloaded") {
                 return reply(error("InvalidStateError", "no update has downloaded"))
             }
-            context.journal("completeStoreUpdate: Google Play would install and restart the app (${context.origin})")
+            context.journal("completeStoreUpdate: Google Play would install and restart the app (${cause.origin})")
             return reply(JSONObject())
         }
         if (!installedByPlay()) return reply(error("InvalidStateError", "no update has downloaded"))
@@ -268,10 +269,10 @@ class StoreUpdateModule(
     }
 
     /** The app's page in Play's store app, for an install Play made. */
-    private fun open(reply: (JSONObject) -> Unit) {
+    private fun open(cause: Cause, reply: (JSONObject) -> Unit) {
         val pkg = context.application.packageName
         if (context.agent) {
-            context.journal("openStorePage: market://details?id=$pkg (${context.origin})")
+            context.journal("openStorePage: market://details?id=$pkg (${cause.origin})")
             return reply(JSONObject())
         }
         if (!installedByPlay()) return reply(error("NotSupportedError", "this install is not from Google Play"))

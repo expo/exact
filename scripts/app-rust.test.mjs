@@ -1,9 +1,8 @@
-// `exact new --rust` (scripts/app-rust.mjs): a data crate, a member of the generated workspace, named by app.json's
-// rust.data. Compiling and running it is the builds' (bun exact.mjs test web, ios).
+// The Rust data crate named by app.json's rust.data and the hosts generated for it.
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createApp } from '../game/new.mjs';
@@ -14,6 +13,35 @@ import { hostTriple } from './tools.mjs';
 import { refreshCargoRustBindings } from './cargo-dep-info.mjs';
 import { resolveApp } from './app.mjs';
 import { webSourceRoots } from '../host/web/build.mjs';
+
+test('a generated Rust Linux app opens its default update store', () => {
+  const root = resolve(import.meta.dir, '..'), recipe = resolve(root, 'docs/recipes/progressive-tabs');
+  const scratch = mkdtempSync(resolve(tmpdir(), 'exact-linux-store-')), app = resolve(scratch, 'linux-store-fixture');
+  try {
+    mkdirSync(app);
+    for (const name of ['app.contract', 'data']) cpSync(resolve(recipe, name), resolve(app, name), { recursive: true });
+    const manifest = JSON.parse(readFileSync(resolve(recipe, 'app.json'), 'utf8'));
+    delete manifest.deploy.store.linux;
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify(manifest));
+    const store = resolve(app, 'updates');
+    const env = { ...process.env, EXACT_APP_DIR: app, CARGO_TARGET_DIR: resolve(scratch, 'target'),
+      CARGO_BUILD_BUILD_DIR: process.env.CARGO_BUILD_BUILD_DIR ?? process.env.CARGO_TARGET_DIR ?? resolve(root, 'target'),
+      EXACT_UPDATE_TRUST: 'development', EXACT_UPDATE_ORIGIN: '', EXACT_UPDATE_DIR: store, EXACT_JSON_FD: '' };
+    const built = spawnSync(process.execPath, ['scripts/build-linux.mjs', app, '--json'], { cwd: root, env, encoding: 'utf8', timeout: 900_000 });
+    if (process.platform === 'win32') {
+      assert.notEqual(built.status, 0);
+      assert.match(built.stderr, /set deploy\.store\.linux to "0"/);
+      return;
+    }
+    assert.equal(built.status, 0, built.stderr || built.error?.message);
+    const { path } = JSON.parse(built.stdout.trimEnd().split('\n').at(-1));
+    const launch = spawnSync(path, [], { cwd: app, env: { ...env, EXACT_AGENT: '1' }, input: '{"op":"state"}\n',
+      encoding: 'utf8', timeout: 30_000 });
+    assert.equal(launch.status, 0, launch.stderr || launch.error?.message);
+    assert.equal(JSON.parse(launch.stdout.trimEnd().split('\n').at(-1)).delivery.L, 'A');
+    assert.ok(existsSync(resolve(store, 'owner.lock')), 'the delivery adapter opened the store');
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}, 940_000);
 
 test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('Contract presentation edits keep a Rust module; shape edits rebuild it', () => {
   const root = resolve(import.meta.dir, '..');

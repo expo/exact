@@ -835,6 +835,55 @@ final class HeaderMacTests: XCTestCase {
         r.toolbar.detach()
     }
 
+    /// A toolbar menu item's popover hears `toggle` as AppKit opens and
+    /// closes its menu (`NSMenuDelegate`), and `hidePopover` ends the menu.
+    func testAToolbarMenuReportsItsPopoversToggle() throws {
+        let menu = symbolButton(16, "More", "ellipsis.circle", ["popovertarget": "more", "testId": "more"])
+            + [["op": "create", "id": 40, "kind": "view", "props": ["popover": "auto", "id": "more", "accessibilityRole": "menu"], "handlers": ["toggle"]]]
+            + view(41, "button", ["popovertarget": "more", "popovertargetaction": "hide"], press: true) + view(411, "text", ["text": "Rename"]) + [children(41, [411])]
+            + [children(40, [41]), children(10, [11, 12, 13, 14, 16]), children(2, [10, 15, 40])]
+        let p = fixture(extra: menu)
+        var toggles: [String] = []
+        p.onClipboard = { id, kind, text in if id == 40, kind == 50 { toggles.append(text) } }
+        XCTAssertTrue(p.toolbar.attach(to: window))
+        let item = try XCTUnwrap(p.toolbar.items[16] as? NSMenuToolbarItem)
+        let pop = try node(p, 40)
+        func settle(_ count: Int) {
+            let limit = Date().addingTimeInterval(5)
+            while toggles.count < count, Date() < limit { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+        }
+        func track(_ name: Notification.Name) { NotificationCenter.default.post(name: name, object: item.menu) }
+        // An accessibility client's read of the closed menu fills it and sends `menuWillOpen` and `menuDidClose`, and tracks nothing.
+        item.menu.delegate?.menuNeedsUpdate?(item.menu)
+        item.menu.delegate?.menuWillOpen?(item.menu)
+        item.menu.delegate?.menuDidClose?(item.menu)
+        XCTAssertFalse(p.menus.isOpen(pop))
+        // As AppKit opens it and closes it.
+        item.menu.delegate?.menuNeedsUpdate?(item.menu)
+        track(NSMenu.didBeginTrackingNotification)
+        XCTAssertTrue(p.menus.isOpen(pop))
+        settle(1)
+        track(NSMenu.didEndTrackingNotification)
+        XCTAssertFalse(p.menus.isOpen(pop))
+        settle(2)
+        XCTAssertEqual(toggles, ["closed,open", "open,closed"])
+        // A second end of the same tracking reports nothing.
+        track(NSMenu.didEndTrackingNotification)
+        // `hidePopover` while it shows ends AppKit's tracking, whose end reports it; `showPopover` leaves it.
+        item.menu.delegate?.menuNeedsUpdate?(item.menu)
+        track(NSMenu.didBeginTrackingNotification)
+        settle(3) // (changes in one turn coalesce)
+        p.menus.action("showPopover", ["more"])
+        XCTAssertTrue(p.menus.isOpen(pop))
+        XCTAssertFalse(p.menus.entries.contains { $0.popover === pop }, "not opened again as a painted popover")
+        p.menus.action("hidePopover", ["more"])
+        track(NSMenu.didEndTrackingNotification)
+        settle(4)
+        XCTAssertEqual(toggles, ["closed,open", "open,closed", "closed,open", "open,closed"])
+        p.toolbar.detach()
+        window.close()
+    }
+
     /// A header's tablist of text tabs is the bar's centred group: a segment
     /// a tab, pressing its authored tab, showing the tab the app selected.
     func testATablistOfTextTabsIsTheBarsCentredSegmentedGroup() throws {

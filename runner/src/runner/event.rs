@@ -315,9 +315,10 @@ pub enum Event {
     /// A touch or primary button went down on the view (DOM's
     /// `pointerdown`), before any gesture is recognized (LLP 1005 §3).
     Pointerdown(super::PointerEvent),
-    /// That touch or button came up, or the platform cancelled it (DOM's
-    /// `pointerup`; a `pointercancel` is delivered as one).
+    /// That touch or button came up (DOM's `pointerup`).
     Pointerup(super::PointerEvent),
+    /// The held contact was cancelled.
+    Pointercancel(super::PointerEvent),
     /// The pointer moved over the view, or while held after going down on
     /// it: at most one a frame (LLP 1056 §3 stage 3, as built).
     Pointermove(super::PointerEvent),
@@ -325,6 +326,9 @@ pub enum Event {
     Swiperight,
     /// Its mirror, a left swipe (Charlie, 2026-11-10).
     Swipeleft,
+    /// The platform's discrete swipe in the node's `swipe-direction` (LLP
+    /// 1057.001 §8).
+    Swipe,
     /// A pull past the top of a scroll container asked for fresh content
     /// (UIKit's `UIRefreshControl`); the app answers through `refreshing`.
     Refresh,
@@ -592,6 +596,7 @@ impl Event {
             Event::Key(k) | Event::Keycapture(k) | Event::Keyup(k) => Some(k.value()),
             Event::Pointerdown(p)
             | Event::Pointerup(p)
+            | Event::Pointercancel(p)
             | Event::Pointermove(p)
             | Event::ContextmenuAt(p) => Some(p.value()),
             // A menu asked for with no point (a keyboard's menu key): the
@@ -705,6 +710,11 @@ impl Event {
 
     fn invalid_payload(&self) -> Option<&'static str> {
         match *self {
+            Self::Media(kind @ (EventKind::Play | EventKind::Pause), ref how)
+                if !matches!(how.as_str(), "" | "remote") =>
+            {
+                Some(kind.name())
+            }
             Self::Pan(x, y) if !pixel(x) || !pixel(y) => Some("pan"),
             Self::PanRelease(vx, vy) if !vx.is_finite() || !vy.is_finite() => Some("panrelease"),
             Self::HeightRelease { height, velocity } if !valid_height_release(height, velocity) => {
@@ -1011,17 +1021,50 @@ impl<D: DataSource> Runner<D> {
     /// Deliver a host event to `view`: find its handler, evaluate the curried
     /// arguments in the instance's scope now, run the action, update.
     pub fn dispatch(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {
-        // A world's message runs as the origin its mark carries (`world_origin.rs`).
-        if let Event::Message(text) = &event {
-            if let Some((origin, text)) = super::world_origin::unmark(text) {
-                let event = Event::Message(text.to_owned());
-                return self.as_origin(origin, |r| r.arrived(|r| r.dispatch_event(view, event)));
-            }
+        // A world's message carries the origins posted into it
+        // (`world_origin.rs`), which only lower what it runs as. A tool's or
+        // a press's work keeps D4a's command rules (LLP 1133.023 D7a); the
+        // mark cannot tell a press from another action.
+        let mut marked = None;
+        let event = match event {
+            Event::Message(text) => match super::world_origin::unmark(&text) {
+                Some((causes, rest)) => {
+                    marked = Some(super::provenance::Cause::marked(causes));
+                    Event::Message(rest.to_owned())
+                }
+                None => Event::Message(text),
+            },
+            event => event,
+        };
+        // A remote Play or Pause the host carried out for the element (LLP
+        // 1133.023 D7a; no host reports one yet). A `play` or `pause`
+        // carries nothing else (`invalid_payload`).
+        if matches!(&event, Event::Media(EventKind::Play | EventKind::Pause, how) if how == "remote")
+        {
+            let cause = super::provenance::Cause::remote_control();
+            return self.as_cause(cause, |r| r.arrived(|r| r.dispatch_event(view, event)));
         }
-        self.arrived(|r| {
-            r.note_input(&event);
-            r.dispatch_event(view, event)
-        })
+        // The person's act in the app's own UI is an `app` cause. What the
+        // host observes of the page and a package view's message are the
+        // person's while the page shows (`as_shown`).
+        let package = matches!(event, Event::Message(_))
+            && (self.kernel.node(view)).is_some_and(|n| {
+                n.props
+                    .str(exact_kernel::PropId::NativeViewModuleName)
+                    .is_some()
+            });
+        let shown = !(observed(&event) || package) || !self.page.hidden;
+        let dispatched = |r: &mut Self| match marked {
+            Some(marked) => {
+                let cause = r.join_causes(r.cause(), marked);
+                r.as_cause(cause, |r| r.arrived(|r| r.dispatch_event(view, event)))
+            }
+            None => r.arrived(|r| {
+                r.note_input(&event);
+                r.dispatch_event(view, event)
+            }),
+        };
+        self.as_shown(shown, dispatched)
     }
 
     fn dispatch_event(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {
@@ -1065,9 +1108,11 @@ impl<D: DataSource> Runner<D> {
             Event::Dblclick => "dblclick",
             Event::Pointerdown(_) => "pointerdown",
             Event::Pointerup(_) => "pointerup",
+            Event::Pointercancel(_) => "pointercancel",
             Event::Pointermove(_) => "pointermove",
             Event::Swiperight => "swiperight",
             Event::Swipeleft => "swipeleft",
+            Event::Swipe => "swipe",
             Event::Refresh => "refresh",
             Event::Scroll(_) => "scroll",
             Event::Resize(_) => "resize",
@@ -1269,9 +1314,11 @@ impl<D: DataSource> Runner<D> {
             Event::Dblclick => (EventKind::Dblclick, None, "dblclick"),
             Event::Pointerdown(_) => (EventKind::Pointerdown, None, "pointerdown"),
             Event::Pointerup(_) => (EventKind::Pointerup, None, "pointerup"),
+            Event::Pointercancel(_) => (EventKind::Pointercancel, None, "pointercancel"),
             Event::Pointermove(_) => (EventKind::Pointermove, None, "pointermove"),
             Event::Swiperight => (EventKind::Swiperight, None, "swiperight"),
             Event::Swipeleft => (EventKind::Swipeleft, None, "swipeleft"),
+            Event::Swipe => (EventKind::Swipe, None, "swipe"),
             Event::Refresh => (EventKind::Refresh, None, "refresh"),
             Event::Scroll(_) => (EventKind::Scroll, None, "scroll"),
             Event::Resize(_) => (EventKind::Resize, None, "resize"),
@@ -1423,3 +1470,22 @@ impl<D: DataSource> Runner<D> {
 mod retained_binding_tests;
 
 mod projection;
+
+/// Whether `event` is the host's observation of the page rather than the
+/// person's act: a load, a resize, an intersection, a media element's
+/// progress, a frame's navigation, a geometry's report or a MIDI message.
+fn observed(event: &Event) -> bool {
+    match event {
+        // A media session's action is the person's, on the platform's controls.
+        Event::Media(kind, _) => !super::media_session::ACTIONS.contains(kind),
+        Event::Load
+        | Event::Resize(..)
+        | Event::Intersect { .. }
+        | Event::Beforeunload
+        | Event::MidiMessage(..)
+        | Event::FrameNavigation(..)
+        | Event::FrameRecord(..)
+        | Event::TransformGeometry { .. } => true,
+        _ => false,
+    }
+}

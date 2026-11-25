@@ -19,6 +19,7 @@ impl<D: DataSource> Presenter<D> {
         }
         self.window_active = active;
         if !active {
+            self.dirty |= self.host.cancel_presses();
             self.brush.trim(self.host.runner().page().hidden);
             self.window_focus = self
                 .focus
@@ -45,6 +46,37 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// The reader reports preferred content sizes in dp, once per frame and binding.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_module_sizes(&mut self, json: &str) -> bool {
+        type Row = (ViewId, u32, u32, u64, Option<(f32, f32)>);
+        let Ok(rows) = serde_json::from_str::<Vec<Row>>(json) else {
+            return false;
+        };
+        let kernel = self.host.kernel();
+        let mut changed = Vec::new();
+        for (id, index, generation, session, size) in rows {
+            let key = exact_kernel::NodeKey { index, generation };
+            if session == self.brush.native_session
+                && kernel
+                    .node(id)
+                    .is_some_and(|n| n.key == key && n.node_type == NodeType::NativeView)
+                && size.is_none_or(|(w, h)| w.is_finite() && h.is_finite() && w > 0. && h > 0.)
+                && kernel.arena().intrinsic(index) != size
+            {
+                changed.push((id, size));
+            }
+        }
+        if changed.is_empty() {
+            return false;
+        }
+        if let Some(error) = self.host.set_intrinsics(changed) {
+            self.host.log(error);
+        }
+        self.dirty = true;
+        true
+    }
+
     /// A native module may only answer for the session and allocation its painted view represents.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_module_event(
@@ -62,22 +94,51 @@ impl<D: DataSource> Presenter<D> {
                 .kernel()
                 .node(id)
                 .is_some_and(|node| node.node_type == NodeType::NativeView && node.key == key);
-        // A control disabled or hidden since its view was shown (by itself or
-        // an ancestor) takes no action, as a popup it opened before may still send one.
-        let action = matches!(kind, "press" | "change" | "input");
-        let eligible = || {
-            self.host.retained_action_eligible(key)
-                && crate::paint::paints(self.host.kernel(), id, None)
+        if !valid {
+            return false;
+        }
+        let Some(kind) = EventKind::from_name(kind) else {
+            return false;
         };
-        if !valid || (action && !eligible()) {
+        // A control can be hidden or disabled after the reader bound its callback.
+        if matches!(
+            kind,
+            EventKind::Press | EventKind::Change | EventKind::Input | EventKind::Focus
+        ) && (!self.host.retained_action_eligible(key)
+            || !crate::paint::paints(self.host.kernel(), id, None))
+        {
+            return false;
+        }
+        if matches!(kind, EventKind::Focus | EventKind::Blur) {
+            let next = match kind {
+                EventKind::Focus if self.focus_refusal(id).is_none() => Some(id),
+                EventKind::Blur => {
+                    let waiting = self.host.flights.focus == Some(key);
+                    if waiting {
+                        self.host.flights.focus = None;
+                    }
+                    if self.focus != Some(id) {
+                        return waiting;
+                    }
+                    None
+                }
+                _ => return false,
+            };
+            if let Some(error) = self.set_focus(next, now_ms) {
+                eprintln!("exact: native module: {error}");
+            }
+            self.queue_collections();
+            return true;
+        }
+        if !self.host.runner().handlers_of(id).contains(&kind) {
             return false;
         }
         let event = match kind {
-            "press" => Event::Press,
-            "change" => Event::Change(payload.into()),
-            "input" => Event::Input(payload.into()),
-            "load" => Event::Load,
-            "message" => Event::Message(payload),
+            EventKind::Press => Event::Press,
+            EventKind::Change => Event::Change(payload.into()),
+            EventKind::Input => Event::Input(payload.into()),
+            EventKind::Load => Event::Load,
+            EventKind::Message => Event::Message(payload),
             _ => return false,
         };
         if let Some(error) = self.host.dispatch_at(id, event, now_ms) {
@@ -116,6 +177,26 @@ impl<D: DataSource> Presenter<D> {
         if let Some(error) = dispatched.or(committed) {
             self.host.log(error);
         }
+        true
+    }
+
+    /// A record of the iframe for this session and allocation (LLP 1020.002 D2).
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_frame_event(
+        &mut self,
+        id: ViewId,
+        key: exact_kernel::NodeKey,
+        session: u64,
+        event: &str,
+        record: &str,
+    ) -> bool {
+        if session != self.brush.native_session
+            || !(self.host.kernel().node(id))
+                .is_some_and(|node| node.node_type == NodeType::WebView && node.key == key)
+        {
+            return false;
+        }
+        self.frame_event(id, event, record);
         true
     }
 
@@ -185,6 +266,11 @@ impl<D: DataSource> Presenter<D> {
         // (remote_tests.rs), and where its route hid it too: the route's path
         // below keeps it to restore (`route_focus.inert`).
         if !self.remote() && self.focus_fixup(id) && !self.host.route_visibility(id).1 {
+            return self.blur_disabled_focus(id);
+        }
+        // A hidden `portal` mover is live and shown nowhere: its focus goes as
+        // a disabled control's does, `blur` included (LLP 1013.002 D5).
+        if self.in_hidden_mover(id) {
             return self.blur_disabled_focus(id);
         }
         if self.host.kernel().node(id).is_some() && !self.host.route_visibility(id).1 {
@@ -644,7 +730,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The modifiers held, as a `key` event carries them.
-    pub(crate) fn modifiers(&self) -> exact_runner::KeyModifiers {
+    pub fn modifiers(&self) -> exact_runner::KeyModifiers {
         exact_runner::KeyModifiers {
             shift: self.held & 3 != 0,
             ctrl: self.held & 12 != 0,
@@ -692,11 +778,8 @@ impl<D: DataSource> Presenter<D> {
         let mut at = target.and_then(|id| self.handler_target(id, kind));
         while let Some(id) = at {
             path.push(id);
-            at = self
-                .host
-                .kernel()
-                .node(id)
-                .and_then(|n| n.parent)
+            at = (self.host.runner().declared_parent(id))
+                .or_else(|| self.host.kernel().node(id).and_then(|n| n.parent))
                 .and_then(|p| self.handler_target(p, kind));
         }
         let mut capture = Vec::new();
@@ -704,11 +787,8 @@ impl<D: DataSource> Presenter<D> {
             let mut at = target.and_then(|id| self.handler_target(id, EventKind::Keycapture));
             while let Some(id) = at {
                 capture.push(id);
-                at = self
-                    .host
-                    .kernel()
-                    .node(id)
-                    .and_then(|n| n.parent)
+                at = (self.host.runner().declared_parent(id))
+                    .or_else(|| self.host.kernel().node(id).and_then(|n| n.parent))
                     .and_then(|p| self.handler_target(p, EventKind::Keycapture));
             }
             capture.reverse();
@@ -1047,3 +1127,6 @@ mod focus_disabled_tests;
 #[cfg(test)]
 #[path = "focus_rendered_tests.rs"]
 mod focus_rendered_tests;
+#[cfg(test)]
+#[path = "portal_tests.rs"]
+mod portal_tests;

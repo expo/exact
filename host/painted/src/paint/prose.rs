@@ -43,7 +43,9 @@ impl Painter {
                 c.style.display != Display::None
                     && c.layout_position() != exact_kernel::PositionType::Absolute
             })
-            .map_or(rect.1, |child| rect.1 + child.frame.y - item.frame.y);
+            .map_or(rect.1, |child| {
+                rect.1 + self.drawn(&child).y - self.drawn(item).y
+            });
         let color = presented_color(walk, item, self.dark)
             .unwrap_or_else(|| rgba(item.text_color().resolve(self.dark)));
         // An outside marker is drawn beside the item's box, and its lines

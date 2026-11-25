@@ -47,9 +47,14 @@ impl<D: DataSource> Presenter<D> {
                     is_composing: edit.composing,
                 };
                 let bound = self.bound_text(edit.id);
-                if let Some(error) =
-                    self.apply_field_edit(edit.id, edit.value, selection, bound, now, details)
-                {
+                if let Some(error) = self.apply_field_edit(
+                    edit.id,
+                    edit.value,
+                    field::EditSelection::Native(selection),
+                    bound,
+                    now,
+                    details,
+                ) {
                     self.host.log(error);
                 }
             } else {

@@ -55,7 +55,7 @@ import { closeSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdte
 import { armArgs, armKey, armOutput, evictArms, keepRoster, keptRoster, rosterRoutes, snapshotSources, moduleFrameworks, probeDigest } from './arms.mjs';
 import { HOST_MACOS, freeSpace, ROOM_GB } from '../../scripts/filesystem.mjs';
 import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes, browserEntitlements } from './documents.mjs';
-import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, cargoProductClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
+import { appleFrameSources, appleVariantBuildDir, appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, cargoProductClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { copyStaticTreeIfPresent, listAssets } from '../web/serve.mjs';
 import { startSweep } from '../../scripts/sweep.mjs';
 import { thinTextures } from '../../scripts/texture-families.mjs';
@@ -64,14 +64,14 @@ import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.m
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { loadedDylibs, rebuildArgs } from './link.mjs';
 export { rebuildArgs };
-import { composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
+import { appleConfig, composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
 import { associatedDomains, clipEntitlements, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
-import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
-import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
+import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys, withVendorKeys } from './plist.mjs';
+import { compileFixtures, packageViewFixture, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
 import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
-import { keptModules } from './modules.mjs';
+import { dylibArgs, keptModules } from './modules.mjs';
 import { nativeIntentModule, launchIntentModule, pressesTools, swiftPMImports } from './intents.mjs';
 import { appleLinkArgs, embedLibrary, prepareLibrary } from '../../scripts/package-libraries.mjs';
 import { quiet, quietFor } from './quiet.mjs';
@@ -463,7 +463,8 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
   Object.assign(dict, usageKeys(reach), localizationKeys(reach));
   Object.assign(dict, icon);
   Object.assign(dict, distribution, orientationKeys(app.manifest.orientation), interfaceStyle(app), tv || clip ? {} : storeKeys(app, 'ios'));
-  return plistFile(withPackageKeys(dict, reach, { events: !clip }));
+  // The app's own bundle, the tvOS app too, takes its vendor keys; an App Clip and the sample host take none.
+  return plistFile(withVendorKeys(withPackageKeys(dict, reach, { events: !clip }), id === app.id && !clip ? app.manifest : null, 'ios', reach?.packages));
 };
 
 /** What App Store Connect reads from a distributed bundle and Xcode would
@@ -512,7 +513,7 @@ export function designCompatible(app, platform) {
 }
 
 /** The macOS `Info.plist` for a bundled build, from the same manifest. */
-export const macInfoPlist = (app, { development = null, icon = {}, reach = null, distributed = false } = {}) => plistFile(withPackageKeys({
+export const macInfoPlist = (app, { development = null, icon = {}, reach = null, distributed = false, vendor = true } = {}) => plistFile(withVendorKeys(withPackageKeys({
   ...icon, ...(app.manifest.moduleConfig ? { ExactModuleConfig: app.manifest.moduleConfig } : {}),
   CFBundleExecutable: appleExecutableName(app),
   CFBundleIdentifier: app.id,
@@ -538,7 +539,7 @@ export const macInfoPlist = (app, { development = null, icon = {}, reach = null,
   ...updateActivation(app), ...interfaceStyle(app, true), ...layoutDirection(app), ...storeKeys(app, 'macos'),
   ...openingLinks(app, 'macos', development, distributed), ...shortcutKeys(app, 'macos'),
   ...(app.manifest.host?.macos?.oneTimeCodeAutofill === 'marked' ? { NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true } : {}),
-}, reach));
+}, reach), vendor ? app.manifest : null, 'macos', reach?.packages));
 /** The build receipt (LLP 1030 D2): what this binary was actually built from and with — the toolchain, the SDK, the identity and profile, the entitlements as signed — written beside it, never committed, so "what did this binary contain" is answered by a file. */
 export function receipt(app, fields) {
   const version = (cmd, args) => (read(cmd, args).stdout ?? '').trim().split('\n')[0];
@@ -675,7 +676,7 @@ async function main(args, lockHeld = false) {
   const t0 = Date.now(); buildStep('cargo');
   const target = ios ? (tv ? tvTarget : device ? 'aarch64-apple-ios' : iosTarget) : bakeTarget('macos');
   const library = prepareLibrary(app.dir, target); // a package's prebuilt framework (LLP 1154 D3), fetched and checked before Cargo
-  const attach = !ios && !distribution && !ipa && !developmentArchive && !appleEmbedOnly(args) && !args.includes('--host') && (process.env.EXACT_UPDATE_TRUST ?? 'development') === 'development'; // agent attach (LLP 1012.000 D2): a Mac app built here to run, never one packaged or embedded, nor the embedding fixture
+  const attach = !tv && !device && !distribution && !ipa && !developmentArchive && !appleEmbedOnly(args) && !args.includes('--host') && (process.env.EXACT_UPDATE_TRUST ?? 'development') === 'development'; // agent attach (LLP 1012.000 D2): a Mac or iOS simulator app built here to run, never one packaged or embedded, the embedding fixture, a device's or an Apple TV's
   const stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null, purpose: attach ? 'local-development' : null }; // the SDK the link records
   const destination = ios ? (tv ? (device ? 'tvos' : 'tvos-simulator') : device ? 'ios' : 'ios-simulator') : 'macos';
   const sdk = read('xcrun', ['--sdk', sdkName, '--show-sdk-path']).stdout.trim();
@@ -845,8 +846,8 @@ async function main(args, lockHeld = false) {
   // `release` the kernel went through one codegen unit and thin LTO, 27 of
   // the 35 s a touched kernel line cost (LLP 1036.000 §5, §7). Their build
   // directory is their own, since Cargo runs one build at a time in a
-  // directory and they would wait for the whole bake; the kernel is compiled
-  // for both at once. Unstripped: Xcode 27's strip leaves the SVG dylib with
+  // directory and they would wait for the whole bake; what they share is
+  // compiled once. Unstripped: Xcode 27's strip leaves the SVG dylib with
   // a mis-aligned LINKEDIT string pool that dyld refuses (as Cargo.toml says
   // of build scripts) and the iOS canvas module unloadable the same way
   // (2026-09-30); that crate's build.rs omits its local symbols (-Wl,-x).
@@ -865,18 +866,17 @@ async function main(args, lockHeld = false) {
   const moduleEnv = { ...process.env, ...cargoEnv, [`CARGO_PROFILE_${cargoProfile.toUpperCase().replace(/-/g, '_')}_STRIP`]: 'false' };
   const kept = cargoProfile === HOST_DEV ? keptModules({ root, moduleTarget, target, profile: cargoProfile, env: moduleEnv, sdk, metal: metalTools.stdout }) : null;
   const moduleLib = {};
-  // And a target directory that has compiled nothing starts with the registry
-  // crates (and the checkout's, another app of it compiled) this machine has, which
-  // Cargo takes or not by its fingerprints (crates.mjs): a second checkout 78 → 57 s.
+  // A fresh build directory takes registry and checkout crates already compiled on this machine.
+  // Cargo checks each fingerprint before reuse (crates.mjs).
   const keptRegistry = cargoProfile === HOST_DEV ? keptCrates({ root, env: moduleEnv, profile: cargoProfile, app: { dir: app.dir, workspace: app.workspace } }) : null;
-  keptRegistry?.take(app.target, 'app');
+  const crateDir = keptRegistry && app.manifest.variant ? appleVariantBuildDir(app, moduleEnv) : app.target;
+  keptRegistry?.take(crateDir, 'app');
   const buildModules = (crates, log) => {
     const started = Date.now(), compile = crates.filter(crate => !(moduleLib[crate] = kept?.find(crate)));
     for (const crate of compile) moduleLib[crate] = resolve(moduleLibDir, `lib${crate.replaceAll('-', '_')}.dylib`);
     if (compile.length) keptRegistry?.take(moduleTarget, 'modules');
-    const step = compile.length ? startApple('cargo', ['build', '--profile', cargoProfile, ...compile.flatMap(crate => ['-p', crate]), '--lib', '--target', target, '--target-dir', moduleTarget, '--manifest-path', resolve(root, 'Cargo.toml')], resolve(webBuildDir, log), { env: moduleEnv }) : null;
-    if (step) beside.push(step);
-    return { async done() { await step?.done(); for (const crate of compile) kept?.keep(crate, started); if (compile.length) keptRegistry?.keep(moduleTarget, 'modules', resolve(root, 'Cargo.lock')); } };
+    const steps = compile.map(crate => { const step = startApple('cargo', dylibArgs(crate, cargoProfile, target, moduleTarget, resolve(root, 'Cargo.toml')), resolve(webBuildDir, log.replace(/\.log$/, `-${crate}.log`)), { env: moduleEnv }); beside.push(step); return step; });
+    return { async done() { await Promise.all(steps.map(step => step.done())); for (const crate of compile) kept?.keep(crate, started); if (compile.length) keptRegistry?.keep(moduleTarget, 'modules', resolve(root, 'Cargo.lock')); } };
   };
   // A production binary whose plan is its own for good (store level 0) may
   // reach neither module, and then compiles neither: its build waits for the
@@ -1035,7 +1035,7 @@ async function main(args, lockHeld = false) {
   // and the default is macosx — the same MacOSX-sysroot-for-an-iPhone-target the
   // presenter's link step hits above. The module cache stays in this app-owned
   // Swift scratch while the completed dylib remains invocation-private.
-  const frameSources = ['FrameBrowser.swift', 'FrameWindows.swift', 'FrameCapture.swift', 'FramePDF.swift', 'FrameAutomation.swift', 'FrameFiles.swift', 'FrameInspector.swift', 'FramePrint.swift'].map(f => resolve(root, 'host/apple/webarm', f)), ownArgs = (args) => args.filter(value => !frameSources.includes(value)), webArgs = ['--sdk', sdkName, 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'webarm-module-cache'), '-parse-as-library', '-emit-library', '-O', '-module-name', 'ExactWebArm', resolve(root, 'host/apple/webarm/WebArm.swift'), ...frameSources, '-o', webBuilt, '-framework', 'WebKit', '-framework', 'PDFKit']; // its other sources, a partitioned frame's browser, every frame's windows, dialogs and downloads, its pictures, a local PDF's view and its automation, its guest's inspector and its prints (LLP 1020.002), a page's given files (LLP 1020.001 D7), the other arms' arguments drop
+  const frameSources = appleFrameSources.map(f => resolve(root, 'host/apple/webarm', f)), ownArgs = (args) => args.filter(value => !frameSources.includes(value)), webArgs = ['--sdk', sdkName, 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'webarm-module-cache'), '-parse-as-library', '-emit-library', '-O', '-module-name', 'ExactWebArm', resolve(root, 'host/apple/webarm/WebArm.swift'), ...frameSources, '-o', webBuilt, '-framework', 'WebKit', '-framework', 'PDFKit']; // its other sources, a partitioned frame's browser, every frame's windows, dialogs and downloads, its pictures, a local PDF's view and its automation, its guest's inspector and its prints (LLP 1020.002), a page's given files (LLP 1020.001 D7), the other arms' arguments drop
   if (ios) {
     webArgs.push('-target', iosTripleFor(app, device, tv, compiled.ios), '-sdk', sdk);
   } else {
@@ -1104,9 +1104,9 @@ async function main(args, lockHeld = false) {
   // @ref LLP 1075.003 Q2 — the app's `data-*` words as typed keys, written
   // from app.json `data` beside the glue (built, never committed).
   const dataKeys = resolve(linkRoot, `ExactDataKeys-${app.id}.swift`);
-  // @ref LLP 1133.001 D4, D5 — the modules' Swift implementations the app names, each package compiled as a Swift
-  // module of its own and loaded by an adapter at first use (LLP 1067.000.001).
-  const packages = appleImplementations(app.dir, tv ? 'tvos' : ios ? 'ios' : 'macos', buildReceipt.graph.extensions), composing = modules.apple.length > 0 || packages.length > 0;
+  // @ref LLP 1133.001 D4, D5 — the modules' Swift implementations the app names, each package a Swift module of its
+  // own loaded by an adapter at first use (LLP 1067.000.001), and their configuration, refused before one compiles.
+  const packages = appleImplementations(app.dir, tv ? 'tvos' : ios ? 'ios' : 'macos', buildReceipt.graph.extensions), composing = modules.apple.length > 0 || packages.length > 0, configured = appleConfig(app, tv ? 'tvos' : ios ? 'ios' : 'macos', buildReceipt.graph.extensions, production || distribution);
   // A package that asks for AlarmKit's countdown compiles the host's metadata type into its own module, on iOS
   // only, as the extension compiles it (LLP 1133.030 D8 item 1).
   for (const p of packages) if (p.activity === 'alarmkit' && ios && !tv) p.sources = [...p.sources, resolve(root, 'host/apple/widget/AlarmAttributes.swift')];
@@ -1123,7 +1123,7 @@ async function main(args, lockHeld = false) {
     writeFileSync(copy, `#sourceLocation(file: ${JSON.stringify(realpathSync(f))}, line: 1)\n${readFileSync(f, 'utf8')}`);
     return copy;
   })), packageSources = packages.length ? [seam, ...packageCopies.flat()] : [];
-  if (composing) writeFileSync(composed, composedModule(packages, modules.apple.length > 0));
+  if (composing) writeFileSync(composed, composedModule(packages, modules.apple.length > 0, configured));
   if (composing) writeDataKeys(app, dataKeys, ios ? 'ios' : 'macos');
   // @ref LLP 1121 D12 — the token names `contract forma gen swift` writes from the design (never committed).
   if (composing) (await import('../../scripts/forma-names.mjs')).writeFormaNames(app, 'swift'); const formaNames = resolve(app.dir, '.exact/forma/forma.swift');
@@ -1154,7 +1154,7 @@ async function main(args, lockHeld = false) {
   const macTarget = ['-target', moduleTripleFor(app, false)];
   const { place: placePackages, libraries: packageLibraries, resources: packageResources, frameworks: packageFrameworks, imports: packageImports, link: packageLink, products: packageProducts } = packageCompiler({ packages, packageDir, packageTargets,
     packageCopies, seam, packagesRoot, swiftc, production, distribution, ios, tv,
-    app, extensions: buildReceipt.graph.extensions, minimum: { ios: app.manifest.host?.ios?.minimumOS, tvos: app.manifest.host?.ios?.minimumOS,
+    app, extensions: buildReceipt.graph.extensions, swiftInputs: buildReceipt.binary.inventories, minimum: { ios: app.manifest.host?.ios?.minimumOS, tvos: app.manifest.host?.ios?.minimumOS,
       macos: app.manifest.host?.macos?.minimumOS } });
   placePackages(packageDir);
   moduleLibraries.push(...packageFrameworks);
@@ -1315,7 +1315,7 @@ async function main(args, lockHeld = false) {
   // draws), started above: each its own dylib, never linked into the presenter.
   await hostModules?.done();
   await lateModules?.done();
-  keptRegistry?.keep(app.target, 'app', resolve(app.workspace, 'Cargo.lock'));
+  keptRegistry?.keep(crateDir, 'app', resolve(app.workspace, 'Cargo.lock'));
   const svgBuilt = resolve(webBuildDir, svgLoadName);
   if (hasSvg) copyFileSync(moduleLib['exact-svg-raster'], svgBuilt);
   const canvasGpuLoadName = 'libexact_canvas_gpu.dylib';
@@ -1444,10 +1444,10 @@ async function test(args) {
     env[`${named}EXACT_WIDGET_RELOAD_TEST`] = arm('WidgetReloadTest', [resolve(pkg, 'tests/ExactKitTests/WidgetContainerTests.swift'), '-D', 'EXACT_TEST_WIDGET_RELOAD'], ['Foundation']);
     env[`${named}EXACT_VIDEO_DYLIB`] = arm('ExactVideoArm', ['VideoArm.swift', 'NowPlaying.swift', 'PictureInPicture.swift'].map(f => resolve(root, 'host/apple/videoarm', f)), ['AVKit', 'MediaPlayer']);
     if (!ios) env.EXACT_MIDI_DYLIB = arm('ExactMIDIArm', [resolve(root, 'host/apple/midiarm/MIDIArm.swift'), '-import-objc-header', resolve(root, 'host/apple/midiarm/midi_ring.h')], ['CoreMIDI']); // MIDITests' loopback
-    env[`${named}EXACT_TEST_WEB_MODULE`] = arm('ExactWebArm', ['WebArm.swift', 'FrameBrowser.swift', 'FrameWindows.swift', 'FrameCapture.swift', 'FramePDF.swift', 'FrameAutomation.swift', 'FrameFiles.swift', 'FrameInspector.swift', 'FramePrint.swift'].map(f => resolve(root, 'host/apple/webarm', f)).concat(['-D', 'EXACT_DEVELOPMENT']), ['WebKit', 'PDFKit']);
+    env[`${named}EXACT_TEST_WEB_MODULE`] = arm('ExactWebArm', ['WebArm.swift', ...appleFrameSources].map(f => resolve(root, 'host/apple/webarm', f)).concat(['-D', 'EXACT_DEVELOPMENT']), ['WebKit', 'PDFKit']);
     // The GPU module goes to its own tests alone: loaded, every canvas draws on the GPU (xctest.mjs).
     const modules = resolve(process.env.CARGO_TARGET_DIR ?? resolve(root, 'target'), 'apple-modules');
-    run('cargo', ['build', '--profile', HOST_DEV, '-p', 'exact-canvas-vello', '--lib', ...(ios ? ['--target', iosTarget] : []), '--target-dir', modules, '--manifest-path', resolve(root, 'Cargo.toml')],
+    run('cargo', dylibArgs('exact-canvas-vello', HOST_DEV, ios ? iosTarget : null, modules, resolve(root, 'Cargo.toml')),
       { env: { ...cargoEnv, [`CARGO_PROFILE_${HOST_DEV.toUpperCase().replace(/-/g, '_')}_STRIP`]: 'false' } });
     const canvasGpu = resolve(modules, ...(ios ? [iosTarget] : []), HOST_DEV, 'libexact_canvas_vello.dylib');
     run('cargo', ['build', '-q', '-p', 'contract', '--bin', 'contract', '--manifest-path', resolve(root, 'Cargo.toml')]);
@@ -1472,11 +1472,11 @@ async function test(args) {
     env.TEST_RUNNER_EXACT_FIXTURE_PLAN = resolve(fixtureDir, 'app.plan');
     run(env.EXACT_CONTRACT, ['build', resolve(source, 'app.contract'), '-o', env.TEST_RUNNER_EXACT_FIXTURE_PLAN], { env });
     env.TEST_RUNNER_EXACT_FIXTURE_MODULE = resolve(fixtureDir, 'libexact_modules.dylib');
-    // The module composes no packages' extensions (LLP 1133.001 D5): their table, empty.
     writeFileSync(resolve(fixtureDir, 'ExactComposed.swift'), composedModule([], fixture.modules.apple.length > 0));
     runApple('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', 'ExactAppModules',
       '-module-cache-path', resolve(fixtureDir, 'cache'), ...moduleSeam(resolve, root), resolve(fixtureDir, 'ExactComposed.swift'), resolve(fixtureDir, 'ExactDataKeys.swift'),
       ...fixture.modules.apple, '-target', iosTriple, '-o', env.TEST_RUNNER_EXACT_FIXTURE_MODULE]);
+    if (!only || only.includes('PackageScreenIOSTests')) await packageViewFixture(root, fixtureDir, iosTriple, app.id, env, runApple);
     compileFixtures(root, run, env, fixtureDir, 'TEST_RUNNER_EXACT', app.id);
     if (process.env.EXACT_REQUIRED) env.TEST_RUNNER_EXACT_REQUIRED = process.env.EXACT_REQUIRED;
     const pick = args.includes('--sim') ? args[args.indexOf('--sim') + 1] : process.env.EXACT_SIM;

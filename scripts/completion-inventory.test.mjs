@@ -15,7 +15,7 @@ test('every source entry has exactly one ownership inference with evidence', () 
     ['runner', 'Runner::answer_hold'], ['runner', 'Runner::set_shared'],
     ['runner', 'Runner::canvas_image'], ['runner', 'Runner::fire_native_timer'],
     ['runner', 'Runner::append_request#next_ticket:1'],
-    ['runner', 'Runner::module_call#next:1'],
+    ['runner', 'Runner::module_call_linked#next:1'], ['runner', 'Runner::module_call_linked#next:2'],
     ['apple', 'exact_fulfill_surface'], ['web', 'exact_fulfill'],
     ['apple', 'exact_frame_health_record'],
     ['apple', 'exact_widget_reload'],
@@ -252,7 +252,7 @@ test('the generated Markdown wasm exports are enumerated at their template sourc
 test('native send and payment attempt allocators are enumerated', () => {
   const entries = discover();
   for (const [file, symbol] of [
-    ['letgo', 'Runner::number_data_call#requests:1'],
+    ['letgo', 'Runner::number_data_call_linked#requests:1'],
     ['bound', 'Runner::forward_body#requests:1'],
     ['sheet', 'Runner::sheet_opened#calls:1'],
     ['sheet', 'Runner::sheet_call#calls:1'],

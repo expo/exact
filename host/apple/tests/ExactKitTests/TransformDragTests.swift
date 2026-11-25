@@ -5,18 +5,18 @@ import CoreGraphics
 
 final class TransformDragTests: XCTestCase {
     override class func setUp() { super.setUp(); ExactDrag.install() } // LLP 1047.001 D4
-    func testPacketMatchesFrozen120ByteOffsetsAndPreservesHighIdentities() {
+    func testPacketMatches128ByteOffsetsAndPreservesHighIdentities() {
         let packet = TransformDragPacket(op: 13, runtime: UInt64.max - 1,
             handleKey: 9_007_199_254_740_993, targetKey: 0xffff_ffff_0000_0001,
             clipKey: 0xffff_ffff_0000_0002, sequence: 9_007_199_254_740_995,
             translateToken: 0xffff_ffff_0000_0003, scaleToken: 0xffff_ffff_0000_0004,
-            values: [12.25, -7.5, 1.375, 90, -45, -0.25], now: 1234.5)
+            values: [12.25, -7.5, 1.375, 90, -45, -0.25], now: 1234.5, at: 1210.25)
         let bytes = packet.encoded()!
-        XCTAssertEqual(bytes.count, 120)
+        XCTAssertEqual(bytes.count, 128)
         func word(_ at: Int, _ count: Int) -> UInt64 {
             (0..<count).reduce(0) { $0 | UInt64(bytes[at + $1]) << ($1 * 8) }
         }
-        XCTAssertEqual(word(0, 4), 2); XCTAssertEqual(word(4, 4), 13)
+        XCTAssertEqual(word(0, 4), 3); XCTAssertEqual(word(4, 4), 13)
         XCTAssertEqual(word(8, 8), UInt64.max - 1)
         XCTAssertEqual(word(16, 8), 9_007_199_254_740_993)
         XCTAssertEqual(word(24, 8), 0xffff_ffff_0000_0001)
@@ -28,6 +28,7 @@ final class TransformDragTests: XCTestCase {
             XCTAssertEqual(Double(bitPattern: word(64 + index * 8, 8)), value)
         }
         XCTAssertEqual(Double(bitPattern: word(112, 8)), 1234.5)
+        XCTAssertEqual(Double(bitPattern: word(120, 8)), 1210.25)
     }
 
     func testCaughtPairKeepsZeroDisplacementAndDoesNotDividePanByScale() {

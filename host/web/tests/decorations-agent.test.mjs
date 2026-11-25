@@ -42,7 +42,7 @@ async function page(drive, unavailable = false) {
       install(exact);
       // Run the wasm agent's state bridge over the same DOM; its runner has no app state here.
       window.wasmState = new Function('request', `const views = exact.views, ask = () => ({}),
-        presence = {}, forgettable = new Map(), host = {}, navigation = { observation: () => ({}) },
+        presence = {}, replacements = {}, byTicket = new Map(), host = {}, navigation = { observation: () => ({}) },
         root = document.getElementById('exact-root');
         switch (request.op) { ${wasmState} }`);
       window.installDecorations = async () => {

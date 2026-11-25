@@ -52,7 +52,7 @@ export async function fixture(options = {}) {
     const listSelection = null, syncLists = () => {}, collections = {commit() {}, restyled() {}}, motion = {style(id, text) { const el = views.get(id); if (el) el.style.cssText = text; }, destroy() {}}, arrange={destroy() {}}, presence = {live: null};
     const root = {}, log = () => {}, navigation = {project() {}}, inputReady = false, agentKeepsStore = false;
     const prepareContexts = () => {}, runFocusCommands = () => {}, inertAncestor = () => false, refreshSymbols = () => {}, focusAutofocus = () => {}, inputHandlers = null, positionContexts = () => {}, markScrollDocument = () => {};
-    const viewFor = (_, id) => views.get(id), noteFit = () => {};
+    const viewFor = (_, id) => views.get(id), noteFit = () => {}, noteSymbolEffect = () => {};
     const host = { timelinesMoved, listSelection, inputReady, inputHandlers };
     ${operationSource}; return apply;
   `)(exact, views, {exact});
@@ -61,7 +61,7 @@ export async function fixture(options = {}) {
     const navigation = { holdLink() { return null; }, withLink(_link, update) { return update(); } };
     const register = () => {}, seek = () => {}, root = {}, log = () => {};
     const loadAfterPaint = () => { throw new Error('surface fixture: unexpected lazy module load'); };
-    const agentMode = false, frameSampler = null, textflow = null, page = null, clocks = {sync() {}}, presence = {hold: () => false}, letGo = () => {}, motion = {commit() {}, followTimelines() {}}, arrange = {commit() {}}, flowBatch = () => {}, refitTexts = () => {};
+    const agentMode = false, frameSampler = null, textflow = null, page = null, clocks = {sync() {}}, presence = {hold: () => false}, letGo = () => {}, motion = {commit() {}, followTimelines() {}}, arrange = {commit() {}}, flowBatch = () => {}, refitTexts = () => {}, playSymbolEffects = () => {};
     const host = { timelinesMoved, agentClock, followOnSeek, frameSampler, textflow, page };
     ${applySource}
     return (${checkedGlueCall})(applyBatch);

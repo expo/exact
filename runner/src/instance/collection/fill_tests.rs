@@ -533,7 +533,7 @@ fn a_rejected_report_s_padding_changes_nothing() {
     // A request after them aligns within the list's style's scroll padding,
     // which no report carries
     let mut u = Update::new(env(&h.plan, &h.slots), &h.sites, &mut h.ids);
-    let style = |_| [12.0, 0.0, 0.0, 0.0];
+    let style = |_, _| [12.0, 0.0, 0.0, 0.0];
     u.scroll_padding = Some(&style);
     let Child::Node(root) = &mut h.tree.children[0] else {
         panic!()

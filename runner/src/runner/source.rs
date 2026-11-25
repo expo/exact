@@ -8,6 +8,9 @@ use exact_plan::{Plan, Value};
 pub enum ResourceChange<'a> {
     /// Readers watching this topic in their last answer.
     Topic(&'a str),
+    /// Readers watching any of these topics, announced together: each is
+    /// asked once, however many of them it watches.
+    Topics(&'a [String]),
     /// Readers of this source, for every argument list.
     Source(&'a str),
 }
@@ -84,10 +87,16 @@ pub struct Native(std::sync::Arc<NativeSlots>);
 #[derive(Default)]
 pub struct NativeSlots {
     handler: std::sync::Mutex<Option<NativeHandler>>,
-    hosted: std::sync::Mutex<Option<NativeHandler>>,
+    hosted: std::sync::Mutex<Hosted>,
     hosted_call: std::sync::Mutex<Option<NativeCall>>,
     announce: std::sync::Mutex<Option<Announce>>,
     sync: std::sync::Mutex<Option<SyncAnswers>>,
+}
+
+#[derive(Default)]
+struct Hosted {
+    app: Option<NativeHandler>,
+    packages: Option<NativeHandler>,
 }
 
 /// Each module's synchronous form, by `extension.name`: the runner's answer
@@ -131,7 +140,7 @@ impl Native {
         *self.0.handler.lock().unwrap_or_else(|e| e.into_inner()) = handler;
     }
 
-    /// The handler now: the source's own, else the host's app module.
+    /// The source's handler, then the host's app module, then the package shell.
     pub fn handler(&self) -> Option<NativeHandler> {
         let own = self
             .0
@@ -140,11 +149,8 @@ impl Native {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         own.or_else(|| {
-            self.0
-                .hosted
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
+            let hosted = self.0.hosted.lock().unwrap_or_else(|e| e.into_inner());
+            hosted.app.as_ref().or(hosted.packages.as_ref()).cloned()
         })
     }
 
@@ -154,12 +160,10 @@ impl Native {
     /// `native.later` through [`Native::handler`], so it cannot shadow every
     /// package when the app links both.
     pub fn extension_handler(&self) -> Option<NativeHandler> {
-        let hosted = self
-            .0
-            .hosted
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let hosted = {
+            let hosted = self.0.hosted.lock().unwrap_or_else(|e| e.into_inner());
+            hosted.packages.as_ref().or(hosted.app.as_ref()).cloned()
+        };
         hosted.or_else(|| {
             self.0
                 .handler
@@ -174,7 +178,16 @@ impl Native {
     /// source leaves it, and it answers when the source has no handler of
     /// its own. `None` removes it.
     pub fn host(&self, handler: Option<NativeHandler>) {
-        *self.0.hosted.lock().unwrap_or_else(|e| e.into_inner()) = handler;
+        self.0.hosted.lock().unwrap_or_else(|e| e.into_inner()).app = handler;
+    }
+
+    /// A separate package dispatcher, including on a shell with no app data module.
+    pub fn host_packages(&self, handler: Option<NativeHandler>) {
+        self.0
+            .hosted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .packages = handler;
     }
 
     /// The app module's synchronous call, beside [`Native::host`]; `None`
@@ -245,6 +258,7 @@ impl Native {
             .hosted
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .app
             .is_some()
     }
 
@@ -405,6 +419,11 @@ impl Target {
     }
 }
 
+/// A source may combine an unasked queue tail with a newer send to that
+/// same source. Return arguments that preserve the pair's final state and
+/// effects, or `None` to keep both. The merger never reads or writes the store.
+pub type QueuedSendReplacer = fn(&str, &[Value], &[Value]) -> Option<Vec<Value>>;
+
 /// Borrowed bytes of one pinned snapshot cohort (LLP 1126 D8).
 #[derive(Clone, Copy)]
 pub struct SnapshotModule<'a> {
@@ -472,8 +491,8 @@ macro_rules! data_source {
 
         /// A composing or forwarding source handles every data-source method.
         /// Implementations forward, translate, or explicitly refuse each call.
-        /// The request-set methods default to the single-request seam (LLP 1162 D2);
-        /// other defaults are available only to leaves.
+        /// The request-set methods default to the single-request seam (LLP 1162 D2).
+        /// Queue merging is opt-in. The remaining defaults are for leaves.
         ///
         /// ```compile_fail,E0046
         /// use exact_runner::{DataError, DataSourceWrapper, Value};
@@ -1089,6 +1108,17 @@ data_source! {
     }
 
     defaults {
+        /// Optional queue-tail replacement for sources hosted by the embedded
+        /// runner. The browser's queue keeps sends in FIFO order.
+        /// `None` asks for the default rule. Return the same rule for a
+        /// given argument throughout the source instance's lifetime.
+        /// Worker placement reads each rule once per bind and combines
+        /// according to that first read even if the source changes it.
+        fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<QueuedSendReplacer> {
+            let _ = source;
+            None
+        }
+
         /// Requests made by the last `Later` answer for `target`, after its
         /// first request, in order. Taken once per turn (LLP 1162 D2).
         /// A source forwarding request sets forwards this too.
@@ -1172,6 +1202,8 @@ impl std::fmt::Display for DataError {
     }
 }
 
+mod boxed;
+
 #[cfg(test)]
 mod native_tests {
     #[test]
@@ -1212,6 +1244,21 @@ mod native_tests {
             "source",
             "the source's own native.later stays its own"
         );
+        slot.host_packages(Some(tag("packages")));
+        slot.set(None);
+        assert_eq!(run(slot.handler()), "host");
+        assert_eq!(run(slot.extension_handler()), "packages");
+        slot.host(None);
+        assert!(!slot.hosted());
+        assert_eq!(run(slot.handler()), "packages");
+        slot.host(Some(tag("another host")));
+        assert!(slot.hosted());
+        assert_eq!(run(slot.handler()), "another host");
+        assert_eq!(run(slot.extension_handler()), "packages");
+        slot.host_packages(None);
+        assert_eq!(run(slot.extension_handler()), "another host");
+        slot.host(None);
+        assert!(slot.handler().is_none());
     }
 }
 

@@ -38,11 +38,11 @@ const page = `<!doctype html>
   addEventListener('pointerup', e => { if (e.button === 3 || e.button === 4) e.preventDefault(); });
   for (const id of ['mic', 'off', 'outer', 'inner', 'wrap', 'dparent', 'dkid', 'hoverbox', 'tapkid', 'lid', 'mover', 'panbox']) {
     const el = document.getElementById(id);
-    el.exactHandlers = id === 'mover' ? ['pointermove'] : ['pointerdown', 'pointerup', 'press', ...(id === 'mic' || id === 'hoverbox' ? ['pointermove'] : [])];
+    el.exactHandlers = id === 'mover' ? ['pointermove'] : ['pointerdown', 'pointerup', 'pointercancel', 'press', ...(id === 'mic' || id === 'hoverbox' ? ['pointermove'] : [])];
     const on = (type, f) => el.addEventListener(type, f);
     let p;
     const own = () => p ??= h.pointer(el, on, (k, r) => {
-      window.log.push(id + (k === 29 ? ' down' : k === 30 ? ' up' : ' move')); window.records.push(r);
+      window.log.push(id + (k === 29 ? ' down' : k === 30 ? ' up' : k === 65 ? ' cancel' : ' move')); window.records.push(r);
       // A down handler that removes the branch around it (window.detach).
       if (k === 29 && window.detach === id) document.getElementById('outer').remove();
       if (k === 29 && window.disable === id) document.getElementById('outer').setAttribute('disabled', '');
@@ -63,7 +63,10 @@ const page = `<!doctype html>
 check('down before the press, up wherever the button lifts, nothing when disabled', async () => {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/navigation.js' ? 'navigation.js' : 'input-glue.js')));
+    if (!['/input-glue.js', '/navigation.js', '/drag-in.js', '/prompt-glue.js', '/alert-message.js'].includes(req.url)) {
+      res.writeHead(404); res.end(); return;
+    }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, '.' + req.url)));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=600,900'] }), { cdp } = suite;
@@ -179,14 +182,14 @@ check('down before the press, up wherever the button lifts, nothing when disable
     await frame();
     await mouse('mouseReleased', [500, 800]);
     expect(await log()).toEqual(['tapkid down', 'hoverbox down', 'tapkid up', 'hoverbox up']);
-    // The window losing focus ends the hold: every holder's up is at the
+    // The window losing focus ends the hold: every holder's cancel is at the
     // pointer's latest point, the parent's too, though only the child holds
     // the moves.
     await mouse('mousePressed', await centre('tapkid'));
     await mouse('mouseMoved', [500, 800], 'left', 1);
     await records();
     await evaluate("window.dispatchEvent(new Event('blur'))");
-    expect(await log()).toEqual(['tapkid down', 'hoverbox down', 'tapkid up', 'hoverbox up']);
+    expect(await log()).toEqual(['tapkid down', 'hoverbox down', 'tapkid cancel', 'hoverbox cancel']);
     expect((await records()).map(r => [+r[7], +r[8]])).toEqual([[500, 800], [500, 800]]);
     await mouse('mouseReleased', [500, 800]);
     // A pan that takes its contact takes nothing from the pointer events:

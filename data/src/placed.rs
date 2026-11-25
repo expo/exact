@@ -20,7 +20,7 @@ use exact_runner::{
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 fn unavailable(message: impl Into<String>) -> DataError {
     DataError::Unavailable(message.into())
@@ -32,6 +32,7 @@ pub type Obtain<D> = Box<dyn FnOnce() -> Result<D, DataError> + Send + 'static>;
 /// One turn for the owner: a call, or a resumption after a yield. A plan
 /// `Value` is not `Send`, so arguments cross as their canonical bytes.
 enum Job {
+    SendReplacers(Vec<String>, Arc<OnceLock<SendReplacers>>),
     Answer {
         instance: Option<exact_runner::ModuleInstance>,
         target: Option<Target>,
@@ -253,11 +254,33 @@ enum Spawn<D> {
     Build(fn(&D, Arc<AtomicBool>) -> Obtain<D>),
 }
 
+struct SendReplacers {
+    default: Option<exact_runner::QueuedSendReplacer>,
+    named: BTreeMap<String, Option<exact_runner::QueuedSendReplacer>>,
+}
+
+impl SendReplacers {
+    fn read(source: &mut impl DataSource, names: Vec<String>) -> Self {
+        Self {
+            default: source.queued_send_replacer(None),
+            named: names
+                .into_iter()
+                .map(|name| {
+                    let replacer = source.queued_send_replacer(Some(&name));
+                    (name, replacer)
+                })
+                .collect(),
+        }
+    }
+}
+
 /// A source with a placement.
 pub struct Placed<D> {
     /// The source (`Main`), the template (`Worker`, built there), or nothing
     /// once moved to its owner (`Worker`, moved there).
     inner: Option<D>,
+    queued_send_names: Vec<String>,
+    queued_send_replacers: Arc<OnceLock<SendReplacers>>,
     identity: Option<exact_runner::ModuleIdentity>,
     generation: Option<exact_runner::ModuleInstance>,
     placement: Placement,
@@ -337,6 +360,8 @@ impl<D: DataSource + 'static> Placed<D> {
 
     fn with_spawn(source: D, placement: Placement, spawn: Spawn<D>) -> Self {
         Self {
+            queued_send_names: Vec::new(),
+            queued_send_replacers: Arc::default(),
             storage_changed: Default::default(),
             app_id: source.app_id().to_string(),
             grants: source.grants().to_string(),
@@ -418,6 +443,19 @@ impl<D: DataSource + 'static> Placed<D> {
 }
 
 impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
+    fn queued_send_replacer(
+        &mut self,
+        source: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        if self.placement == Placement::Main || self.validation {
+            return self.inner.as_mut()?.queued_send_replacer(source);
+        }
+        let replacers = self.queued_send_replacers.get()?;
+        source
+            .and_then(|name| replacers.named.get(name).copied())
+            .unwrap_or(replacers.default)
+    }
+
     fn prepare_snapshot(
         &mut self,
         module: Option<exact_runner::SnapshotModule<'_>>,
@@ -617,6 +655,15 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         if let Some(inner) = self.inner.as_mut() {
             inner.bind(plan);
         }
+        if self.placement == Placement::Worker {
+            self.queued_send_names = plan
+                .sources
+                .iter()
+                .map(|row| plan.str(row.name).to_owned())
+                .collect();
+            self.queued_send_replacers = Arc::default();
+            self.request_send_replacers();
+        }
     }
 
     /// A source on a worker is not told: a value reaches it only as a copy,
@@ -670,10 +717,20 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
                     self.inner = Some(source);
                     return Err(e);
                 }
+                // The pure mergers stay on the runner's owner when the
+                // data source moves to its own (LLP 1027.002 D2).
+                let _ = self.queued_send_replacers.set(SendReplacers::read(
+                    &mut source,
+                    self.queued_send_names.clone(),
+                ));
                 moved(source)
             }
         };
-        self.spawn_owner(obtain)
+        self.spawn_owner(obtain)?;
+        if self.queued_send_replacers.get().is_none() {
+            self.request_send_replacers();
+        }
+        Ok(())
     }
 
     /// Validation is disposable and runs inline, on this thread: a candidate

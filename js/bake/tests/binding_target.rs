@@ -51,8 +51,9 @@ fn a_bake_told_only_its_target_answers_supports_for_it() {
         String::from_utf8(baked.unwrap().script).unwrap()
     };
     let declared = |s: &str| {
-        s.contains(r#"["text/plain", "image/png"].includes"#)
-            || s.contains(r#"["text/plain","image/png"].includes"#)
+        s.split_whitespace()
+            .collect::<String>()
+            .contains(r#"["text/plain","text/html","image/png"].includes(type)"#)
     };
     let tvos = script("aarch64-apple-tvos");
     assert!(

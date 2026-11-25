@@ -8,13 +8,14 @@ import { bundleHostModule } from './glue.mjs';
 // session's one page reporter, so the agent's `prefer gpu-tier` reaches its
 // `gpuTier`; with no prefer it is the agent's launch value, `high`.
 test('a viewport-only plan reads the tier the agent prefers', async () => {
-  const media = new Map();
+  const media = new Map(), orientation = Object.assign(new EventTarget(), {type: "portrait-primary", angle: 0});
+  const priorScreen = Object.getOwnPropertyDescriptor(globalThis, "screen");
   Object.assign(globalThis, {
     location: { search: '?agent', href: 'http://127.0.0.1/?agent' },
     document: { createElement: () => ({}), addEventListener() {}, documentElement: { style: { setProperty() {} } } },
     addEventListener() {}, matchMedia: query => ({ matches: false,
       addEventListener: (_, f) => media.set(query, f), removeEventListener: () => media.delete(query) }),
-    innerWidth: 390, innerHeight: 844, devicePixelRatio: 2,
+    screen: {orientation}, innerWidth: 390, innerHeight: 844, devicePixelRatio: 2,
   });
   // As the build lays them out: the web host's navigation.js beside facts.js; the runtime stubbed to its data seam.
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-facts-'));
@@ -24,7 +25,14 @@ test('a viewport-only plan reads the tier the agent prefers', async () => {
     writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, Resources = [], commits = []; export const commit = (f, why) => { commits.push(why); f(); }; export function R() {} export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {};`);
     const { viewport, viewportFacts } = await import(resolve(dir, 'facts.js'));
     const { data, commits } = await import(resolve(dir, 'rt.js'));
-    viewport({ v: [['gpuTier']], ratio: [['devicePixelRatio']], geometry: [['safeAreaTop', 'safeAreaBottom', 'segments'], { safeAreaTop: 'n', safeAreaBottom: 'n', segments: ['[]', { height: 'n', x: 'n', width: 'n', y: 'n' }] }] });
+    viewport({ facing: [['orientationType', 'orientationAngle']], v: [['gpuTier']], ratio: [['devicePixelRatio']], geometry: [['safeAreaTop', 'safeAreaBottom', 'segments'], { safeAreaTop: 'n', safeAreaBottom: 'n', segments: ['[]', { height: 'n', x: 'n', width: 'n', y: 'n' }] }] });
+    const facing = () => data.reserved.exactViewport(null, null, 'facing');
+    expect(facing()).toEqual(['portrait-primary', 0]);
+    Object.assign(orientation, {type: 'portrait-secondary', angle: 180});
+    const beforeTurn = commits.length;
+    orientation.dispatchEvent(new Event('change'));
+    expect(commits.slice(beforeTurn)).toEqual(['viewport']);
+    expect(facing()).toEqual(['portrait-secondary', 180]);
     expect(viewportFacts().screenReader).toBe('unknown');
     for (const value of ['on', 'off', 'unknown']) {
       const before = commits.length;
@@ -59,7 +67,11 @@ test('a viewport-only plan reads the tier the agent prefers', async () => {
     globalThis.exact.fold.prefer({ cols: 2, rows: 1, gap: 20 });
     expect(geometry()).toEqual([24, 34, [[844, 0, 185, 0], [844, 205, 185, 0]]]);
     expect(globalThis.exact.page.read()['gpu-tier']).toBe('low');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    if (priorScreen) Object.defineProperty(globalThis, "screen", priorScreen);
+    else delete globalThis.screen;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('canvas performance keeps unsupported metrics unavailable and refuses bad snapshots', async () => {

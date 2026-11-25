@@ -11,7 +11,7 @@
 const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 
 const IDLE_FALLBACK_MS = 200;
-// A keydown or keyup as kind 6's or 43's payload, as glue.js's `keyChord` writes it (#140).
+// A keydown or keyup as kind 6's or 43's payload, as glue.js's `keyChord` writes it.
 const keyChord = e => (e.shiftKey ? "Shift+" : "") + (e.ctrlKey ? "Control+" : "") + (e.altKey ? "Alt+" : "") + (e.metaKey ? "Meta+" : "") + e.key + "\n" + (/^[A-Za-z0-9]*$/.test(e.code ?? "") ? e.code ?? "" : "") + "\n" + !!e.repeat + "\n" + !!(e.isComposing || e.keyCode === 229 || e.key === "Process");
 
 // Twin of navigation.js's inertAncestor: this boot entry must stay import-free.
@@ -127,7 +127,7 @@ function documentBoot(options) {
         }
       }
     } else if (event.type === "keyup") {
-      // A key's release (#140), kind 43, as glue.js's `keyup` sends it.
+      // A key's release, kind 43, as glue.js's `keyup` sends it.
       for (const el of els) if (hears(el, "keyup")) enqueue(el, "keyup", keyChord(event));
     } else if (event.type === "compositionstart") {
       composing.add(event.target); start();

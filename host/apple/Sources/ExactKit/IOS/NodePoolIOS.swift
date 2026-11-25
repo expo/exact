@@ -195,11 +195,15 @@ final class NodePool {
     }
     /// `view`'s node children, through its logical container (its clip box,
     /// a glass's content view); nil when the view holds a platform subview
-    /// other than its glyph, material or clip box, or a live scroll view.
+    /// other than its glyph, material, clip box or extension, which parking
+    /// ends (`recycle`), or a live scroll view.
     private func children(_ view: NodeView) -> [NodeView]? {
         guard view.scroll == nil, view.overlay == nil else { return nil }
         let container = view.container
-        func own(_ sub: UIView) -> Bool { sub === view.symbolView || sub === view.materialView || sub === view.clipBox || sub === view.glassGroupView || sub === view.glassSlot || sub === view.specs?.rasterView }
+        func own(_ sub: UIView) -> Bool {
+            sub === view.symbolView || sub === view.materialView || sub === view.clipBox || sub === view.glassGroupView || sub === view.glassSlot
+                || sub === view.specs?.rasterView || sub === view.boxExtension?.view
+        }
         if container !== view {
             guard view.subviews.allSatisfy({ own($0) || ($0 === container) }) else { return nil }
         }
@@ -532,6 +536,7 @@ extension NodeView {
     /// and its empty text hierarchy or symbol glyph view, which the next row reuses.
     func recycle() {
         layoutHits = nil
+        ControlBars.detach(self)
         trackClipboardHandlers(false)
         trackIntersections(listening: false)
         holdGone() // a held state goes with its node, parked under its row (HeldState.swift)
@@ -555,6 +560,8 @@ extension NodeView {
         buttonRasterView = nil
         raster = nil; imageSource = nil
         if symbolView == nil { image = nil }
+        // Its effect is the last row's: the next row's starts afresh (LLP 1077 D12).
+        if let leaf = symbolView { SymbolEffectState.of(leaf).endEffect(on: leaf) }
         symbolRefusal = nil
         inlinePressed = nil
         // The next node's hatch decides again.
@@ -566,12 +573,17 @@ extension NodeView {
         needsCapture = false; paintedThisTurn = false
         // A parked view keeps no bitmap: its create ops paint it again.
         if layer.contents != nil { layer.contents = nil }
+        // Nor an extension: the next node's is set for it (`setExtension`)
+        setExtension(.zero)
         // Its material goes, its children back in the node (LLP 1068 §4.1):
         // the next row's props make a new one.
         if materialView != nil { props["backgroundMaterial"] = nil; props["defaultSurface"] = nil; updateMaterial() }
         // `glassGroupAuto` with it: a row recycled onto a numeric group must
         // not report the old one's `auto` (LLP 1053.000.000.000).
         if glassGroupView != nil { props["glassGroup"] = nil; props["glassGroupAuto"] = nil; syncGlassGroup() }
+        #if os(iOS)
+        if portalRelay != nil { props["declaredParent"] = nil; syncPortalRelay() }
+        #endif
     }
     /// An inner list parked with its row (LLP 1068 §4.2.1): back to a new
     /// list's scroll, with its delegate detached while it resets.
@@ -606,7 +618,7 @@ extension NodeView {
         // UIKit's setters are not free, even to the same value.
         if isHidden { isHidden = false }
         if alpha != 1 || boxFilter != nil { presentOpacity(1) }
-        translatePx = .zero; translatePercent = .zero; layoutOffset = .zero; zoomFactor = 1; zoomShift = .zero; layoutResize = .zero; endSurface(); scale = 1; rotate = 0; rotationAxis = [0, 0, 0]; stopPressEase(); press = PressFeedback(); dropPressPaint()
+        translatePx = .zero; translatePercent = .zero; layoutOffset = .zero; zoomFactor = 1; zoomShift = .zero; layoutResize = .zero; endSurface(); scale = CGPoint(x: 1, y: 1); rotate = 0; rotationAxis = [0, 0, 0]; stopPressEase(); press = PressFeedback(); dropPressPaint()
         if !transform.isIdentity { transform = .identity }
         if !isUserInteractionEnabled { isUserInteractionEnabled = true }
         // With assistive technology's runtime loaded every accessibility

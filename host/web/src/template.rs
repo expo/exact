@@ -40,7 +40,7 @@ pub fn kernel() -> Kernel {
 
 /// [`Parts`] for `id` in `kernel`, or `None` for a view it does not hold.
 pub fn parts(kernel: &Kernel, plan: &Plan, id: ViewId) -> Option<Parts> {
-    parts_with(kernel, plan, id, false, false, false)
+    parts_with(kernel, plan, id, false, false, Default::default())
 }
 
 /// [`parts`], for a node a build knows has nothing the template leaves out
@@ -54,7 +54,7 @@ pub fn parts_with(
     id: ViewId,
     may_fold: bool,
     child_may_fold: bool,
-    press_translate: bool,
+    bound_press: exact_kernel::StyleMask,
 ) -> Option<Parts> {
     let node = kernel.node(id)?;
     let tag = tag_for(&node, in_button(kernel, &node));
@@ -67,18 +67,18 @@ pub fn parts_with(
         }
     }
     svg_props(kernel, &node, &mut props);
-    let mut style = super::element::css_style_of(
+    let style = super::element::css_style_of(
         &|from, target| kernel.resolve_id(from, target),
         &node.facts(),
     );
-    // A computed offset keeps its animation identity even while unset.
-    if press_translate {
-        style
-            .to_mut()
-            .written
-            .set(exact_kernel::StyleId::PressTranslate);
+    // Mark a node whose class writes `opacity`: one that computes to 1 then reads as the
+    // author's, not the default, which the dim check cannot tell apart. A token's value is
+    // resolved only in the page, so every written row is marked; a value other than 1 fails
+    // the dim's own check anyway.
+    if style.mask.has(exact_kernel::StyleId::Opacity) {
+        props.insert("data-exact-opacity".into(), String::new());
     }
-    let (mut text, skipped) = crate::css::css_text_relative(&style, &font_names(plan));
+    let (mut text, skipped) = crate::css::css_text_in(&style, &font_names(plan), true, bound_press);
     crate::css::text_style::fills(&node.facts(), &mut text);
     let css = super::element::contents(
         host_css(kernel, &node, text, tag),

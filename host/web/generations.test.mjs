@@ -405,13 +405,22 @@ test('a page booted on one build gets that build\'s files after another lands; t
 
 test('a page\'s files all come from one build while 100 builds replace it', async () => {
   const { root, dist, stage } = workspace();
+  let k = 0, done = false, mixed = 0, pages = 0;
   try {
     replaceBuild(stage(0), dist);
-    let k = 0, done = false, mixed = 0, pages = 0;
-    // Each build waits its turn in a stage of its own, made before the swap (as the builds' are).
-    const writer = (async () => { while (k < 100) { const s = stage(++k); replaceBuild(s, dist); await new Promise((ok) => setTimeout(ok, 1)); } done = true; })();
+    // Each build waits its turn in a stage of its own, made before the swap (as the builds' are), at most eight builds to
+    // a page read: a read that meets a swap at every pass of its lookup, as each does on a loaded machine, is busy (503).
+    const writer = (async () => {
+      while (k < 100 && !done) {
+        const s = stage(++k);
+        replaceBuild(s, dist);
+        do { await new Promise((ok) => setTimeout(ok, 1)); } while (!done && pages < k / 8);
+      }
+      done = true;
+    })();
     while (!done) {
       const page = await servedFile(dist, '/', 'text/html');
+      if (page.status === 503) continue;
       const booted = /build (\d+)/.exec(text(page))[1], base = baseOf(text(page));
       const files = await Promise.all(['app.js', `chunk-${booted}.js`, 'app.plan'].map((f) => servedFile(dist, base + f)));
       // A page whose build was reaped meanwhile is told so (410), never served another build's file.
@@ -422,7 +431,7 @@ test('a page\'s files all come from one build while 100 builds replace it', asyn
     await writer;
     expect(pages).toBeGreaterThan(10);
     expect(mixed).toBe(0);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { done = true; rmSync(root, { recursive: true, force: true }); }
 });
 
 test('builds are kept by generation and reaped as the ruling keeps them: the newest 3, the leased, the young, within the cap', async () => {

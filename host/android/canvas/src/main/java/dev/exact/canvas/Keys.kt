@@ -38,9 +38,11 @@ class Keys(private val view: ExactView) {
 
     /** exact2 asks for the keyboard ([Requests]): shown for a newly focused field ([now] 1 an input, 3 a textarea),
      * hidden when none holds the focus (0). */
-    fun show(now: Int) {
+    /** [hide] false: the keyboard is no longer this view's, but another view's (a frame's page) may hold it up. */
+    fun show(now: Int, hide: Boolean = true) {
         if (now == shown) return
         shown = now
+        if (!hide && now == 0) return
         if (now != 0) {
             if (!view.hasFocus()) view.requestFocus()
             imm.restartInput(view)

@@ -50,7 +50,7 @@ a prefix that still collides gains `-app`. The prefix stays in `package.json`'s 
 updates and directory renames. Authored host crates keep their own names.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
 A machine without Rust can check a Contract and TypeScript app and build it for the web with matching prebuilt tools. From the app directory, `bun <exact2>/scripts/exact.mjs setup --check --platform web` reports the tools available for this checkout. Native builds and apps containing Rust need the Rust toolchain.
-Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone. A build for a phone (`share`, `ios --device`) needs more than a simulator's: add `--device`.
+Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone. On a booted iOS simulator, the check also reports accessibility settings that slow [app launches](recipes/porting-and-release.md). A build for a phone (`share`, `ios --device`) needs more than a simulator's: add `--device`.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
 On Linux or Windows through WSL, install the [iOS cross tools](../README.md#building-for-ios-on-linux-and-wsl)
@@ -226,6 +226,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |location, or anything the person must allow|`permissions`|
 |another wide layout, a chart|`web-look`, `responsive-columns`, `content-design`|
 |a mini player above the tab bar (UIKit's tab bar accessory on iOS 26 and later)|`mini-player`|
+|a video that keeps playing from a card into its detail and back (`portal`)|`keep-a-playing-video`|
 |a video, a looping hero clip, a song (the `video` and `audio` elements, with a `poster`)|["Sound, MIDI and media"](contract-for-agents.md#sound-midi-and-media)|
 |a map, the camera (drawing is boxes and SVG, not Swift)|`native-views`|
 |calibration for an open camera track, from a package|[`camera-calibration`](recipes/camera-calibration.md)|
@@ -251,6 +252,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
 |labels in Arabic, Hebrew, Persian or Urdu, laid out right to left; a second language|`rtl`|
 |an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
+|a button outside the app: Control Center, the Lock Screen, a Quick Settings tile; recording from one|`system-controls`|
 |a phone manifest: orientation, appearance, HTTP, a public setting|`phone-manifest`|
 |a section of the long guides, whole, by its heading|`bun exact.mjs docs <heading words>`|
 
@@ -455,6 +457,8 @@ snapshot. The backend’s clock stays its own.
 | A node's text | `expect text "<testId>" == "the whole text"` | `contains`, `!=`. The text is compared whole, and a node with no text of its own reads its descendants' joined: a row's testId reads its buttons' labels too, so put the testId on the text node |
 | State | `expect state lib.notes.0.title == "Milk"` (two list indexes in a row take a space: `grid.0 .1`; a drive's `clock until state` takes the same path), `== []`, `== ["a", "b"]`, `== none`, `== true`, `!= "hint"`; numeric bounds `>= 90`, `<= 110`; literal alternatives `in 0 1 2`. Each also takes `state <path>` on the right: `expect state pinned == state locked`, `expect state mode in state allowedModes` | an arbitrary expression on the right |
 | A failed resource or mutation request | `expect text` on the view's `match failure(x) { case some(f) => f.code, case none => "" }`; `failed(x)` accepts either slot | `failure(x).code` without extracting the option. A thrown refusal is a request failure; an authored `{ok: false}` is a normal result |
+
+On iOS, `layout` measures the navigation bar for a projected `header`, its placed buttons, the search text field, and the title. For system Back in a horizontal bar, use `expect layout "back" width >= 20`. A plain heading reports its visible title label when UIKit provides one identifiable frame. Otherwise the heading keeps its authored box. A tab bar and each tab UIKit can identify report their drawn boxes. When the navigation bar is hidden, the test reads the authored header and buttons. AppKit reports a window toolbar item’s geometry as system-owned.
 
 ## Pitfalls that cost the most
 

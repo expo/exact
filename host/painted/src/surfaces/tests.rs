@@ -229,7 +229,7 @@ uint32_t gpu_placement(uint32_t id, uint32_t index, float *h, size_t len) {
   return 1;
 }
 void gpu_unload(void) {}
-uint32_t gpu_create_headless(void) { return 1; }
+uint32_t gpu_create_painted(void) { return 1; }
 static char bound[4096];
 static uint32_t bind_calls;
 uint32_t test_bind_calls(void) { return bind_calls; }
@@ -270,6 +270,12 @@ const char *test_input(void) { return event; }
 const char *test_previous_input(void) { return previous_event; }
 uint32_t test_input_id(void) { return event_id; }
 uint32_t test_input_count(void) { return event_count; }
+static uint32_t frame_pending;
+void test_frame_pending(uint32_t pending) { frame_pending = pending; }
+uint32_t gpu_frame_pending(uint32_t id) { return frame_pending; }
+static uint32_t frame_dirty = 1;
+void test_frame_dirty(uint32_t dirty) { frame_dirty = dirty; }
+uint32_t gpu_frame_dirty(uint32_t id, double now) { return frame_dirty; }
 uint32_t gpu_input(uint32_t id, const unsigned char *text, size_t len) {
   if(len>=sizeof(event)) return 1; memcpy(previous_event,event,sizeof(event)); memcpy(event,text,len);event[len]=0;
   event_id=id; event_count++;

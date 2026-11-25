@@ -76,6 +76,7 @@ struct ReorderGroupState: Equatable {
     let target: UInt32
     /// The wrapper that holds the dragged row now: where a ghost lands.
     let row: UInt32
+    let anchor: UInt32
     let dispatched: Bool
     init?(_ op: [String: Any]) {
         guard op["group"] as? Bool == true, let raw = op["token"] as? String, let token = UInt64(raw),
@@ -83,6 +84,7 @@ struct ReorderGroupState: Equatable {
         let id = { (name: String) in UInt32(clamping: op[name] as? Int ?? 0) }
         self.token = token; self.phase = phase
         list = id("list"); wrapper = id("wrapper"); target = id("target"); row = id("row")
+        anchor = id("anchor")
         ending = op["ending"] as? String
         dispatched = op["dispatched"] as? Bool ?? false
     }
@@ -94,6 +96,11 @@ struct ReorderGroupState: Equatable {
 extension NodeView {
     /// The grouped list this grip's row is in, and its group (D1).
     package var reorderGroupList: (list: UInt32, group: String)? {
+        #if os(macOS)
+        if let (list, _) = mountedReorderRow { return (list.id, "") }
+        #elseif os(iOS)
+        if let list = presenter?.groupedLists?.reorderList(for: self) { return (list, "") }
+        #endif
         guard !(props["reorderFor"] ?? "").isEmpty, let presenter,
               let list = presenter.collections.owningCollection(id),
               let group = presenter.views[list]?.props["reorderGroup"], !group.isEmpty else { return nil }
@@ -106,7 +113,7 @@ extension NodeView {
     }
 }
 
-package final class ReorderGroupHold {
+package final class ReorderGroupHold: NativeListReorder {
     weak var presenter: Presenter?
     weak var handle: NodeView?
     let calls: ReorderGroupCalls
@@ -122,27 +129,42 @@ package final class ReorderGroupHold {
     private var edgeTime: Double?
     private var landing = false
     private let pointerDriven: Bool
+    private var nativeFinished: (() -> Void)?
+    private var queuedSuccessor: UInt32?
 
     /// Pin the grip, snapshot its row (before the runner hides it), and lift.
-    package init?(_ handle: NodeView, point: CGPoint, ghost drawn: Bool) {
+    package init?(_ handle: NodeView, point: CGPoint, ghost drawn: Bool, nativeList: UInt32? = nil, finished: (() -> Void)? = nil) {
         handle.presenter?.reorderHost?.group?.landNow()
         // Said, as the web says it (LLP 1102 §3.17): a drive's reply reads like a success otherwise.
         if handle.presenter?.reorderHost?.group != nil {
             handle.presenter?.session?.log("reorder: a drag refused: the last drop is held until its move shows (LLP 1094 D8); a person waits for the card to land; a drive waits with `clock settle` before the next drag")
         }
-        guard let presenter = handle.presenter, SwipeInput.allows(handle),
+        #if os(iOS)
+        let projected = !drawn && !handle.inert && !handle.disabled ? handle.presenter?.groupedLists?.reorderList(for: handle) : nil
+        #else
+        let projected: UInt32? = nil
+        #endif
+        guard let presenter = handle.presenter, nativeList != nil || projected != nil || SwipeInput.allows(handle),
               presenter.reorderHost?.group == nil, presenter.reorderHost?.lift == nil,
               presenter.session?.isApplyingPresentation != true,
-              let (list, group) = handle.reorderGroupList,
+              let (list, group) = nativeList.map({ ($0, "") }) ?? handle.reorderGroupList,
               let calls = presenter.reorderHost?.groupCalls ?? presenter.session?.runtime else { return nil }
         self.presenter = presenter; self.handle = handle; self.calls = calls; self.group = group
+        nativeFinished = finished
         pointerDriven = drawn
         generation = presenter.session?.generation
         pin = presenter.collections.holdPointer(handle.id)
-        guard let top = presenter.collections.mainOffset(list) else {
+        var top = nativeList != nil || projected != nil ? 0 : presenter.collections.mainOffset(list)
+        var wrapper = presenter.collections.wrapper(of: handle.id)
+        #if os(macOS)
+        if let (list, row) = handle.mountedReorderRow {
+            top = ReorderPort(list: list, presenter: presenter)?.scrollTop
+            wrapper = row
+        }
+        #endif
+        guard let top else {
             presenter.collections.releaseInteractionLater(ifCurrent: pin); return nil
         }
-        let wrapper = presenter.collections.wrapper(of: handle.id)
         let ghost = drawn ? wrapper.flatMap { ReorderGhost(of: $0) } : nil
         let batch = calls.groupBegin(handle.id, scrollTop: top, ghost: drawn, now: presenter.session?.now() ?? CACurrentMediaTime() * 1000)
         state = ReorderGroupState.last(in: batch) ?? ReorderGroupState(["group": true, "token": "0", "phase": "refused"])!
@@ -198,6 +220,12 @@ package final class ReorderGroupHold {
     /// The grouped list under the contact (D7), with its scroll geometry.
     private func target() -> (list: UInt32, port: ReorderPort)? {
         guard let presenter else { return nil }
+        #if os(macOS)
+        if group.isEmpty, let (list, _) = handle?.mountedReorderRow,
+           let port = ReorderPort(list: list, presenter: presenter) {
+            return port.rect.contains(point) ? (list.id, port) : nil
+        }
+        #endif
         for (id, node) in presenter.views where node.props["reorderGroup"] == group {
             if let port = ReorderPort(list: node, presenter: presenter), port.rect.contains(point) { return (id, port) }
         }
@@ -218,6 +246,9 @@ package final class ReorderGroupHold {
         let batch = calls.groupStep(state.token, step: step, now: now)
         Self.apply(batch, presenter)
         observe(ReorderGroupState.last(in: batch))
+        if active, let row = presenter.views[state.anchor] {
+            presenter.scrollElementIntoView(["#\(row.id)", "nearest", "nearest", "instant"], target: row)
+        }
     }
 
     /// The contact ended (D8): a drop into the current target, or a cancel.
@@ -230,6 +261,29 @@ package final class ReorderGroupHold {
         Self.apply(batch, presenter)
         observe(ReorderGroupState.last(in: batch))
         if active { end() }
+    }
+    /// The drop can apply another snapshot. Let UIKit finish its transaction first.
+    package func queueDrop(before: UInt32?) {
+        guard active, nativeFinished != nil, queuedSuccessor == nil else { return }
+        queuedSuccessor = before ?? 0 // the wire id for the end of the section
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let before = queuedSuccessor else { return }
+            drop(before: before)
+        }
+    }
+
+    private func drop(before: UInt32) {
+        guard let presenter, let runtime = presenter.session?.runtime else { end(); return }
+        guard live, !runtime.held else { abandon(); return }
+        queuedSuccessor = nil
+        guard active else { return }
+        let batch = runtime.on {
+            var successor = before.littleEndian
+            _ = withUnsafeBytes(of: &successor) { runtime.write(Data($0)) }
+            return runtime.read(exact_reorder_group_end(runtime.rt, state.token, 2, now))
+        }
+        Self.apply(batch, presenter)
+        observe(ReorderGroupState.last(in: batch))
     }
     /// Escape, a lost contact, the window resigning: before a drop only.
     package func cancel() { if active { finish(cancel: true) } }
@@ -270,18 +324,23 @@ package final class ReorderGroupHold {
         guard let presenter, state.phase != "finished" else { end(); return }
         let landedHere = state.ending == "landed" || state.ending == "timeout"
         let row = state.row
+        let nativeFocus = nativeFinished != nil
         let batch = calls.groupFinish(state.token, now: now)
         Self.apply(batch, presenter)
         observe(ReorderGroupState.last(in: batch))
         if state.phase != "finished" { end() }
         // Focus follows the moved row's grip when it landed, the source's otherwise (D9).
-        focusAfter(row: landedHere ? row : nil)
+        if !nativeFocus { focusAfter(row: landedHere ? row : nil) }
     }
 
     /// The session restarted: no Rust calls.
-    func abandon() { end() }
+    func abandon() {
+        if queuedSuccessor != nil { presenter?.session?.discardQueuedReorder() }
+        end()
+    }
 
     private func end() {
+        queuedSuccessor = nil
         stopEdge()
         ghost?.remove(); ghost = nil
         if state.phase != "finished" && state.phase != "refused" {
@@ -289,6 +348,9 @@ package final class ReorderGroupHold {
         }
         presenter?.collections.releaseInteractionLater(ifCurrent: pin)
         if presenter?.reorderHost?.group === self { presenter?.reorderHost?.group = nil }
+        let finished = nativeFinished
+        nativeFinished = nil
+        finished?()
     }
 
     private func focusAfter(row: UInt32?) {

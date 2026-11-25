@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Looper
 import android.provider.CalendarContract
 import android.provider.CalendarContract.Instances
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
 import java.time.Instant
@@ -103,7 +104,7 @@ class EventStoreTest {
         val args = JSONObject().put("start", local(start)).put("end", local(end)).put("limit", limit)
         after?.let { args.put("after", it) }
         var answer: JSONObject? = null
-        store.later("calendarEvents", args) { answer = it }
+        store.later("calendarEvents", args, Cause("app")) { answer = it }
         // Drain the store's query thread before delivering its main-thread reply.
         worker.submit {}.get(10, TimeUnit.SECONDS)
         shadowOf(Looper.getMainLooper()).idle()
@@ -221,7 +222,7 @@ class EventStoreTest {
             arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
         shadowOf(app).grantPermissions(Manifest.permission.WRITE_CALENDAR)
         var answer: JSONObject? = null
-        store.later(name, args) { answer = it }
+        store.later(name, args, Cause("app")) { answer = it }
         worker.submit {}.get(10, TimeUnit.SECONDS)
         shadowOf(Looper.getMainLooper()).idle()
         return requireNotNull(answer) { "$name did not reply" }

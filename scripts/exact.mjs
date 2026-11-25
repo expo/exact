@@ -346,7 +346,7 @@ export async function setup({check = false, platform = null, device = false, app
     // The nightly builds the web's wasm: with -Zbuild-std from rust-src for size, and without it (a --wasm dev build) from its own wasm32 std.
     // A game's web bake lints its logic on the same nightly, so it takes clippy too.
     run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'llvm-tools', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
-    webToolchainEnv(process.env); // Fetch the nightly standard library's locked sources too.
+    webToolchainEnv(process.env, { recheck: true }); // Fetch the nightly standard library's locked sources too.
     if (output('wasm-bindgen', ['--version']) !== `wasm-bindgen ${bindgen}`)
       run('cargo', [`+${pin.channel}`, 'install', 'wasm-bindgen-cli', '--version', bindgen, '--locked', '--force']);
     if (binaryenVersion(output('wasm-opt', ['--version'])) !== BINARYEN) {
@@ -415,6 +415,7 @@ export async function setup({check = false, platform = null, device = false, app
   const report = prebuilt ? rows : [...(platform ? await platformReport(platform, rows, { device, hermes }) : rows), cratesRow()];
   if (platform === 'android') report.push(...rows.filter(row => row.name === 'Android JDK JIT'));
   printReport(report);
+  if (check && process.platform === 'darwin' && !device && (!platform || platform === 'ios')) await (await import('../host/apple/touches.mjs')).checkSimulatorAccessibility(appDir, app?.id);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
   if (prebuilt) { console.log('Web tools ready for this app.'); return; }
@@ -709,13 +710,14 @@ export function checkTypes(dir, {capture = false, builder = resolve(ROOT, 'host/
     return {status: r.status ?? 1, report: `${r.stdout ?? ''}${r.stderr ?? ''}`};
   } finally { rmSync(out, { recursive: true, force: true }); }
 }
-/** The type check's report as `build --json` diagnostics: one per tsc `file(line,col): error TSn: message`
- * line, with the indented lines and notes after it; a report with none is one diagnostic on app.ts. */
+/** Compiler and TypeScript diagnostics from the web target's check, as `build --json` reports them. */
 export function typeDiagnostics(report, dir) {
   const found = [], at = (file) => relative(process.cwd(), resolve(dir, file));
   for (const line of report.split(/\r?\n/)) {
     if (line.startsWith('warning: ') || /^.+:\d+:\d+ warning \[[\w-]+\] /.test(line)) continue;
-    // A refusal that is not the check's own (`backend-selection`, `rust-missing`) keeps its id.
+    const located = /^(.+):(\d+):(\d+) \[([\w-]+)\] (.*)$/.exec(line);
+    if (located) { const [, file, n, col, id, message] = located; found.push({id, severity: 'error', message, file: at(file), line: +n, col: +col, end_col: +col, related: []}); continue; }
+    if (/^\s*(?:\d+\s*)?\|/.test(line)) continue; // The source excerpt under a Contract diagnostic.
     const refusal = /^error \[([\w-]+)\]: (.*)$/.exec(line);
     if (refusal) { found.push({id: refusal[1], severity: 'error', message: refusal[2], file: at('app.ts'), line: 0, col: 0, end_col: 0, related: []}); continue; }
     const m = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line);

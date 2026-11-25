@@ -93,6 +93,68 @@ fn frame(k: &Kernel, id: ViewId) -> Frame {
     k.node(id).unwrap().frame
 }
 
+#[test]
+fn a_dialog_returns_its_native_sheet_block_to_the_viewport() {
+    let mut k = page(&[(StyleId::Width, t("100%"))], None);
+    k.apply(
+        1,
+        2,
+        &[
+            Op::ClearProp {
+                id: 3,
+                prop: PropId::Popover,
+            },
+            Op::SetProp {
+                id: 3,
+                prop: PropId::SemanticTag,
+                value: "dialog".into(),
+            },
+        ],
+    )
+    .unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    let slot = k.node(3).unwrap().key.index;
+    assert_eq!(frame(&k, 3).width, 0.);
+    k.compute_layout(
+        1,
+        Offer {
+            width: crate::AxisOffer::Definite(800.),
+            height: crate::AxisOffer::MaxContent,
+        },
+    )
+    .unwrap();
+    assert_eq!(frame(&k, 3).width, 0.);
+    assert!(k.measure_dialog(3, true));
+    k.compute_layout(
+        1,
+        Offer {
+            width: crate::AxisOffer::Definite(800.),
+            height: crate::AxisOffer::MaxContent,
+        },
+    )
+    .unwrap();
+    assert_eq!(frame(&k, 3).width, 800.);
+    k.compute_layout(1, OFFER).unwrap();
+    let viewport = k.host_block(3).unwrap();
+    for given in [Some(viewport), None] {
+        k.set_host_block(3, given).unwrap();
+        k.compute_layout(1, OFFER).unwrap();
+        assert_eq!(frame(&k, 3).width, 800.);
+        assert_eq!(super::block::owns(k.arena(), slot), given.is_some());
+    }
+    k.apply(
+        2,
+        3,
+        &[Op::ClearProp {
+            id: 3,
+            prop: PropId::SemanticTag,
+        }],
+    )
+    .unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(frame(&k, 3).width, 100.);
+}
+
 /// QUEUE's repro: `width: 50%` in a 100-point positioned box is half the
 /// viewport, as on the web, not 50 points; a percentage height likewise.
 #[test]

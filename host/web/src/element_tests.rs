@@ -485,7 +485,10 @@ fn a_dataset_is_one_attribute_per_word() {
     let out = written(
         NodeType::View,
         PropId::Dataset,
-        PropValue::Str(r#"{"large-title":"Inbox","trailing":"compose"}"#.into()),
+        PropValue::Str(
+            r#"{"large-title":"Inbox","datatransferurl":"https://:443/","datatransfer-label":"Card","trailing":"compose"}"#
+                .into(),
+        ),
     );
     assert_eq!(
         out.get("data-large-title").map(String::as_str),
@@ -496,6 +499,12 @@ fn a_dataset_is_one_attribute_per_word() {
         Some("compose")
     );
     assert!(out.get("data-dataset").is_none());
+    // A drag's carrier is the host's, from the admitted prop, even where a baked plan gives the app the word
+    assert!(out.get("data-datatransferurl").is_none());
+    assert_eq!(
+        out.get("data-datatransfer-label").map(String::as_str),
+        Some("Card")
+    );
     assert_eq!(
         crate::document::dataset(r#"{"a":"q\"\\\t\u0001","b":""}"#),
         vec![
@@ -850,6 +859,7 @@ fn every_attribute_props_of_derives_is_one_data_can_give() {
     let body = &source[source.find("pub fn props_of").unwrap()..];
     let listed: std::collections::BTreeSet<&str> = [
         NodeType::View,
+        NodeType::Pressable,
         NodeType::Control,
         NodeType::TextInput,
         NodeType::Image,

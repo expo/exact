@@ -11,7 +11,7 @@ use super::area::{self, Space};
 use super::block::reservation;
 use super::{block, ignore, keyboard};
 use crate::arena::NodeArena;
-use crate::generated::{SafeAreaEdges, SafeAreaExtend, SafeAreaIgnore, SafeAreaReach};
+use crate::generated::{SafeAreaEdges, SafeAreaExtend, SafeAreaIgnore, SafeAreaReach, StyleProps};
 use crate::style::Dimension;
 use crate::{Kernel, NodeKey, Overflow, StyleId};
 
@@ -66,6 +66,32 @@ impl Kernel {
         space.placed().then(|| terms(arena, slot, &space))
     }
 
+    /// How far the box `key`, no scroller, reaches past its laid-out border box on each edge, top
+    /// right bottom left, in points in its layout's space (D13): on each edge
+    /// `-exact-safe-area-reach` names, or under `auto` where it paints a plain colour fill, to the
+    /// outer side of the area that reaches it where its border edge meets or lies inside that area,
+    /// no further than reach's stops; 0 elsewhere, and while the band is unavailable. Its layout,
+    /// its observations and its geometry keep its laid-out box. `None` for a scroller, whose
+    /// terms carry its reach, and for a box not live, not laid out or where the kernel is not told.
+    pub fn box_reach(&self, key: NodeKey) -> Option<[f32; 4]> {
+        let arena = &self.arena;
+        let slot = arena.resolve(key)?;
+        if area::scroll_view(arena, slot) {
+            return None;
+        }
+        self.laid_out_frame(key)?;
+        let space = area::band_at(self, slot);
+        if !space.placed() {
+            return None;
+        }
+        let named = box_reached(arena, slot);
+        let Some(band) = space.band.filter(|_| named.contains(&true)) else {
+            return Some([0.0; 4]);
+        };
+        let sides = sides(arena, slot, &space, band, None).0;
+        Some(reach_on(arena, slot, &space, &sides, named))
+    }
+
     /// How far the box `key`'s picture is mirrored past its laid-out border box on each edge, top
     /// right bottom left (D13's extension), in points in its layout's space. On an edge it extends
     /// on, `auto` is the distance reach would have there were the box to reach that edge, whatever
@@ -86,7 +112,7 @@ impl Kernel {
                 arena,
                 slot,
                 &space,
-                &sides(arena, slot, &space, band).0,
+                &sides(arena, slot, &space, band, None).0,
                 named,
             ),
             None => [0.0; 4],
@@ -111,48 +137,97 @@ impl Kernel {
     }
 }
 
-fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
+pub(super) fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
+    terms_holding(arena, slot, space, None).0
+}
+
+/// [`terms`], with whether the reservation of the bar's slot `bar` lies in `slot`'s area
+/// (`area::area_holding`).
+pub(super) fn terms_holding(
+    arena: &NodeArena,
+    slot: u32,
+    space: &Space,
+    bar: Option<area::BarSlot>,
+) -> (ScrollTerms, bool) {
     let ignored = ignore::edges(arena, slot, SafeAreaIgnore::Container);
     let mut container = ignored.map(|ignores| !ignores);
     let Some(band) = space.band else {
         let keyboard = [0.0, 0.0, keyboard::taken(arena, slot, space, 0.0), 0.0];
-        return ScrollTerms {
+        let terms = ScrollTerms {
             keyboard,
             container,
             ..Default::default()
         };
+        return (terms, false);
     };
     let band_reaches = area::open_edges(arena, slot, space, band);
-    let (sides, reserving, roots) = sides(arena, slot, space, band);
+    let (sides, reserving, roots, held) = sides(arena, slot, space, band, bar);
     for e in (0..4).filter(|&e| roots[e]) {
         container[e] = true;
     }
     let reach = reach_on(arena, slot, space, &sides, reached(arena, slot));
     let edges = space.edges(arena, slot);
+    // Its own bars, in slots on its scrollport, are its inset to the innermost slot's inner side,
+    // past what is reserved outside it where that lies further out (D12); they move no reach
+    let own = own_slots(arena, slot, space);
+    for e in (0..4).filter(|&e| own[e].is_some()) {
+        container[e] = true;
+    }
     let reserved = std::array::from_fn(|e| {
-        reserving[e].then(|| (sides[e][1] - (edges[e] - reach[e])).max(0.0))
+        let inner = match (reserving[e], own[e]) {
+            (true, Some(o)) => Some(sides[e][1].max(o)),
+            (true, None) => Some(sides[e][1]),
+            (false, own) => own,
+        };
+        inner.map(|i| (i - (edges[e] - reach[e])).max(0.0))
     });
     let keyboard = [0.0, 0.0, keyboard::taken(arena, slot, space, reach[2]), 0.0];
-    ScrollTerms {
+    let terms = ScrollTerms {
         reach,
         reserved,
         keyboard,
         band_reaches,
         container,
+    };
+    (terms, held)
+}
+
+/// How far in from the space's edges the inner side of the innermost of the scroller `slot`'s own
+/// bars' slots lies on each edge, where it has a bar there (D12).
+fn own_slots(arena: &NodeArena, slot: u32, space: &Space) -> [Option<f32>; 4] {
+    let mut inner = [None; 4];
+    if !super::bar::has_bars(arena, slot) {
+        return inner;
     }
+    let border = area::border(arena, slot);
+    for &child in arena.children(slot) {
+        let (Some(e), Some(s)) = (
+            super::bar::edge(arena, child),
+            arena.observations.bars.slots.get(&child),
+        ) else {
+            continue;
+        };
+        // A slot with no depth still lies past what the scroller reserves, which its inset clears;
+        // the content starts inside the border, so the inset clears to the slot less the border
+        let side = space.slot_inner(s.rect, e) - border[e];
+        inner[e] = Some(inner[e].map_or(side, |i: f32| i.max(side)));
+    }
+    inner
 }
 
 /// The area that reaches `slot` on each edge, its outer and inner sides from the space's edges,
 /// and whether Exact reserves there; for an owner's root that scrolls and reserves, what its host
 /// clears, as a controller's view lies under its own additional insets, the third value naming
-/// those edges. A root that does not scroll lies clear of its own reservations.
+/// those edges. A root that does not scroll lies clear of its own reservations. The fourth is
+/// whether the reservation of `bar`'s slot lies in the area.
 fn sides(
     arena: &NodeArena,
     slot: u32,
     space: &Space,
     band: [f32; 4],
-) -> ([[f32; 2]; 4], [bool; 4], [bool; 4]) {
-    let (mut sides, mut reserving) = area::area_reserving(arena, slot, space, band);
+    bar: Option<area::BarSlot>,
+) -> ([[f32; 2]; 4], [bool; 4], [bool; 4], bool) {
+    let (mut sides, mut reserving, held) = area::area_holding(arena, slot, space, band, bar);
     let mut roots = [false; 4];
     if space.owner == Some(slot) && area::scroll_view(arena, slot) {
         let clear = block::clearance(arena, slot);
@@ -162,7 +237,7 @@ fn sides(
             }
         }
     }
-    (sides, reserving, roots)
+    (sides, reserving, roots, held)
 }
 
 /// How far `slot` reaches past its border box on each edge `named` names (D13): to the outer side
@@ -244,20 +319,7 @@ fn stops(arena: &NodeArena, slot: u32, space: &Space) -> [f32; 4] {
         .then(|| arena.parent(slot))
         .flatten();
     while let Some(s) = above {
-        let (style, m) = (arena.style(s), &arena.style(s).mask);
-        let whole = (m.has(StyleId::Transform) && !style.transform.0.is_empty())
-            || m.has(StyleId::Translate)
-            || m.has(StyleId::Scale)
-            || m.has(StyleId::Rotate)
-            || (m.has(StyleId::PressScale) && style.press_scale != 1.0)
-            || m.has(StyleId::PressTranslate)
-            || (m.has(StyleId::Perspective) && style.perspective > 0.0)
-            || (m.has(StyleId::Filter) && !style.filter.is_none())
-            || (m.has(StyleId::BackdropFilter) && !style.backdrop_filter.is_none())
-            || (m.has(StyleId::ClipPath)
-                && style.rare.clip_path != crate::clip::ClipPath::default())
-            || (m.has(StyleId::MaskImage)
-                && style.rare.mask_image != crate::gradient::BackgroundImage::default());
+        let whole = drawn_through(arena.style(s));
         let (x, y) = area::overflow(arena, s);
         let (clips_x, clips_y) = (x != Overflow::Visible, y != Overflow::Visible);
         let border = area::border(arena, s);
@@ -273,4 +335,87 @@ fn stops(arena: &NodeArena, slot: u32, space: &Space) -> [f32; 4] {
         above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
     }
     limit
+}
+
+/// Whether `style` draws its box through a transform, a translation, a scale, a rotation, a press
+/// scale or translation, a perspective, a filter, a backdrop filter, a clip path or a mask (D13).
+fn drawn_through(style: &StyleProps) -> bool {
+    let m = &style.mask;
+    (m.has(StyleId::Transform) && !style.transform.0.is_empty())
+        || m.has(StyleId::Translate)
+        || m.has(StyleId::Scale)
+        || m.has(StyleId::Rotate)
+        || (m.has(StyleId::PressScale) && style.press_scale != 1.0)
+        || m.has(StyleId::PressTranslate)
+        || (m.has(StyleId::Perspective) && style.perspective > 0.0)
+        || (m.has(StyleId::Filter) && !style.filter.is_none())
+        || (m.has(StyleId::BackdropFilter) && !style.backdrop_filter.is_none())
+        || (m.has(StyleId::ClipPath) && style.rare.clip_path != crate::clip::ClipPath::default())
+        || (m.has(StyleId::MaskImage)
+            && style.rare.mask_image != crate::gradient::BackgroundImage::default())
+}
+
+/// The edges a non-scrolling box reaches on (D13): those `-exact-safe-area-reach` names, or under
+/// `auto` every edge where it paints a plain fill. None for a box whose edge is its host's drawing
+/// (a text, a replaced box, a control), one that clips its overflow or one drawn through what stops
+/// reach, which show no strip of an extension either.
+fn box_reached(arena: &NodeArena, slot: u32) -> [bool; 4] {
+    let (x, y) = area::overflow(arena, slot);
+    let style = arena.style(slot);
+    if arena.node_type(slot) != crate::NodeType::View
+        || x != Overflow::Visible
+        || y != Overflow::Visible
+        || drawn_through(style)
+    {
+        return [false; 4];
+    }
+    // An edge it extends on has its strip drawn by the extension's mirror (D13)
+    let extended = extended(arena, slot);
+    let named = match style.rare.safe_area_reach == SafeAreaReach::Auto {
+        true => [plain_fill(arena, slot); 4],
+        false => reached(arena, slot),
+    };
+    std::array::from_fn(|e| named[e] && !extended[e])
+}
+
+/// Whether `slot` paints a plain colour fill (D13): a background colour that paints in either
+/// appearance and fills a rectangle undecorated by a background image, a border, a radius, a
+/// shadow or a material, as a SwiftUI colour's background ignores the safe area and a UIKit view's
+/// background colour fills its bounds.
+fn plain_fill(arena: &NodeArena, slot: u32) -> bool {
+    use crate::style::ColorValue;
+    let s = arena.style(slot);
+    // A colour paints in either appearance, which the host picks: `currentColor`, a role and a
+    // platform colour do
+    let coloured = match s.background_color {
+        Some(ColorValue::Fixed(c)) => c.a() > 0,
+        Some(ColorValue::LightDark(a, b)) => a.a() > 0 && b.a() > 0,
+        Some(ColorValue::Wide(id)) => crate::style::wide::wide(id)
+            .is_some_and(|w| w.half(false).alpha > 0.0 && w.half(true).alpha > 0.0),
+        _ => true,
+    };
+    // It fills the border box, which has no border here, unless clipped to the content or text
+    let fills = matches!(
+        s.background_clip,
+        crate::BackgroundClip::BorderBox | crate::BackgroundClip::PaddingBox
+    );
+    let radius = [
+        &s.border_radius_top_left,
+        &s.border_radius_top_right,
+        &s.border_radius_bottom_right,
+        &s.border_radius_bottom_left,
+    ];
+    let material = arena
+        .props(slot)
+        .str(crate::PropId::BackgroundMaterial)
+        .is_some();
+    coloured
+        && fills
+        && !material
+        && s.border_widths().iter().all(|&w| w == 0.0)
+        && radius
+            .iter()
+            .all(|r| matches!(r, Dimension::Points(p) if *p == 0.0))
+        && s.background_image == Default::default()
+        && s.box_shadow.0.is_empty()
 }

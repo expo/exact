@@ -34,37 +34,6 @@ extension MenuHost {
         return nil
     }
 
-    /// A menu row's title and subtitle, as UIKit draws an item's: a native
-    /// button's face; a custom button that holds what a face holds (two
-    /// texts and at most one image) and lays its second text under its
-    /// first, its first text and its second, the grey line under the title.
-    /// A menu draws no box, so a row that is bare in place (a text on an `if`
-    /// arm keeps a button bare) is still its face. Two texts side by side
-    /// (`Inbox` and a count) stay one title.
-    func label(of row: NodeView) -> (title: String, subtitle: String?) {
-        if row.isNativeButton { return (title(of: row), row.face?.subtitle) }
-        let kids = row.container.subviews.compactMap { $0 as? NodeView }.filter { $0.props["accessibilityElementsHidden"] != "true" }
-        let texts = kids.filter { $0.kind == "text" }, images = kids.filter { $0.kind == "image" }
-        guard row.isButton, texts.count == 2, images.count <= 1, texts.count + images.count == kids.count,
-              Self.stacks(row, texts) else { return (title(of: row), nil) }
-        let subtitle = title(of: texts[1])
-        return (title(of: texts[0]), subtitle.isEmpty ? nil : subtitle)
-    }
-
-    /// Whether `row` lays `texts` one under the other, as its style says (a
-    /// closed menu's rows are not laid out): block texts in a block box, or
-    /// the texts of a flex column, whose face places its image at the `top`
-    /// or `bottom` (the kernel's `press_face`). A text positioned out of the
-    /// flow (a count at the row's corner) is in neither.
-    static func stacks(_ row: NodeView, _ texts: [NodeView]) -> Bool {
-        guard texts.allSatisfy({ !["absolute", "fixed"].contains($0.layoutPosition) }) else { return false }
-        switch row.style["display"]?.string ?? "block" {
-        case "block": return texts.allSatisfy { ($0.style["display"]?.string ?? "block") == "block" }
-        case "flex": return ["top", "bottom"].contains(row.face?.placement ?? "")
-        default: return false
-        }
-    }
-
     package func title(of v: NodeView) -> String {
         if v.kind == "text" { return v.paragraphSpec().runs.map(\.text).joined() }
         // A native button's children are its face, not views: its title, else its label.

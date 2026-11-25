@@ -159,6 +159,8 @@ impl<D: DataSource> Presenter<D> {
                     self.host.content_region(),
                     &node,
                     limits.get(&id).copied(),
+                    &|id| self.host.presented(id),
+                    self.host.scaled_presented(),
                 )
             });
             let (ox, oy) = bounds.axes;

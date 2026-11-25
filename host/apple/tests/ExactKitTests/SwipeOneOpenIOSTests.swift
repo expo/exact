@@ -69,9 +69,11 @@ final class SwipeOneOpenIOSTests: XCTestCase {
         let root = UIViewController()
         window.rootViewController = root
         window.makeKeyAndVisible()
-        p.viewport.frame = root.view.bounds
+        // Keep every touch inside the safe area, as a drag from the screen's
+        // bottom edge sends the app Home
+        p.viewport.frame = window.bounds.inset(by: window.safeAreaInsets)
         root.view.addSubview(p.viewport)
-        let w = Double(window.bounds.width)
+        let w = Double(p.viewport.bounds.width)
         func create(_ id: Int, _ kind: String, _ props: [String: String] = [:], _ style: [String: Any] = [:]) -> [String: Any] {
             ["op": "create", "id": id, "kind": kind, "props": props, "handlers": kind == "button" ? ["press"] : [String](), "style": style]
         }
@@ -82,7 +84,7 @@ final class SwipeOneOpenIOSTests: XCTestCase {
         let scrolls: [String: Any] = ["overflow_x": "scroll", "overflow_y": "hidden"]
         var ops: [[String: Any]] = [
             create(100, "view", [:], ["overflow_y": "scroll"]),
-            frame(100, 0, 320, w, 420), ["op": "content", "id": 100, "w": w, "h": 1200.0],
+            frame(100, 0, 220, w, 360), ["op": "content", "id": 100, "w": w, "h": 1200.0],
             create(1, "list", ["listStyle": "inset-grouped"], ["overflow_y": "scroll"]),
             create(2, "view", ["semanticTag": "section"]), create(4, "view"),
             create(21, "view", swipe, scrolls.merging(["padding_right": 16.0]) { a, _ in a }),
@@ -94,13 +96,13 @@ final class SwipeOneOpenIOSTests: XCTestCase {
             create(27, "button", ["id": "delete", "accessibilityLabel": "Delete Listed"], ["appearance": "none", "written": ["appearance"]]),
             ["op": "children", "id": 4, "ids": [21, 30, 24]], ["op": "children", "id": 21, "ids": [22, 23]],
             ["op": "children", "id": 24, "ids": [25]], ["op": "children", "id": 25, "ids": [26, 27]],
-            frame(1, 0, 80, w, 220),
+            frame(1, 0, 0, w, 220),
             frame(21, 16, 0, w - 16, 53), frame(22, 0, 9, w - 32, 34), frame(23, w - 32, 9, 60, 34),
             frame(30, 16, 52, w - 32, 52),
             frame(24, 16, 104, w - 32, 53), frame(25, 0, 0, w + 58, 53), frame(26, 0, 0, w - 32, 53), frame(27, w - 32, 0, 90, 53),
             ["op": "content", "id": 24, "w": w + 58, "h": 53.0],
         ]
-        for (owner, top, label, painted) in [(40, 20.0, "Delete Native", false), (50, 120.0, "Delete Painted", true)] {
+        for (owner, top, label, painted) in [(40, 0.0, "Delete Native", false), (50, 90.0, "Delete Painted", true)] {
             ops += [
                 create(owner, "view", swipe, scrolls), create(owner + 1, "view"),
                 create(owner + 2, "view", ["id": "body"], ["background_color": [255, 255, 255, 255]]),
@@ -111,7 +113,7 @@ final class SwipeOneOpenIOSTests: XCTestCase {
                 ["op": "content", "id": owner, "w": w + 90, "h": 80.0],
             ]
         }
-        ops += [create(60, "button", ["accessibilityLabel": "Elsewhere"]), frame(60, 0, 220, w, 80),
+        ops += [create(60, "button", ["accessibilityLabel": "Elsewhere"]), frame(60, 0, 180, w, 80),
                 ["op": "children", "id": 100, "ids": [40, 50, 60]], ["op": "roots", "ids": [1, 100]]]
         p.apply(wireBatch(ops))
         lists.lists[1]?.collection.layoutIfNeeded()
@@ -193,7 +195,7 @@ final class SwipeOneOpenIOSTests: XCTestCase {
         // the grouped row's view is its list, the projected and painted
         // rows' the page.
         let page = try XCTUnwrap(s.p.views[100]).convert(try XCTUnwrap(s.p.views[100]).bounds, to: s.window)
-        let blank = CGPoint(x: page.midX, y: page.maxY - 60), below = CGPoint(x: page.midX, y: page.maxY + 60)
+        let blank = CGPoint(x: page.midX, y: page.maxY - 50), below = CGPoint(x: page.midX, y: page.maxY + 30)
         let button = try XCTUnwrap(s.p.views[60]).convert(try XCTUnwrap(s.p.views[60]).bounds, to: s.window)
         let elsewhere = CGPoint(x: button.midX, y: button.midY)
         for kind in [Kind.grouped, .native, .painted] {
@@ -218,7 +220,7 @@ final class SwipeOneOpenIOSTests: XCTestCase {
         for kind in [Kind.native, .painted] {
             try swipe(touch, s, kind)
             waitFor("\(kind) opens", cap: 5, facts: { s.facts(kind) }) { s.isOpen(kind) }
-            let at = CGPoint(x: 40, y: try s.start(kind).y)
+            let at = CGPoint(x: page.minX + 40, y: try s.start(kind).y)
             if kind == .native { try tap(touch, s, at) } else { try drag(touch, s, from: at, to: CGPoint(x: at.x + 170, y: at.y)) }
             waitFor("\(kind) closes by itself", cap: 5, facts: { s.facts(kind) }) { !s.isOpen(kind) }
             let presses = s.presses
@@ -232,7 +234,7 @@ final class SwipeOneOpenIOSTests: XCTestCase {
         for (kind, from) in starts {
             try swipe(touch, s, kind)
             waitFor("\(kind) opens", cap: 5, facts: { s.facts(kind) }) { s.isOpen(kind) }
-            let at = try from ?? CGPoint(x: 40, y: s.start(kind).y)
+            let at = try from ?? CGPoint(x: page.minX + 40, y: s.start(kind).y)
             try drag(touch, s, from: at, to: CGPoint(x: at.x, y: at.y - 120))
             waitFor("\(kind) closes as the page scrolls", cap: 5, facts: { s.facts(kind) }) { !s.isOpen(kind) && scroll.contentOffset.y > 0 }
             waitFor("the page comes to rest", cap: 5) { !scroll.isDragging && !scroll.isDecelerating }

@@ -24,6 +24,8 @@ object Native {
      * reader that calls, which has none of the last one's rows, faces or pictures. `dir` is the app's files
      * directory; `store` its no-backup directory, where a library with an update store keeps it (LLP 1030.006 D3). */
     @JvmStatic external fun start(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean): Boolean
+    /** The owning looper has ended. Release its host and session module on this thread. */
+    @JvmStatic external fun endSession()
     /** [start] on a thread of its own; [adopt] takes the host. Where a host already runs in this process nothing
      * boots, and [adopt] adopts that one as [start] does. */
     @JvmStatic external fun startAsync(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean)
@@ -34,16 +36,17 @@ object Native {
     @JvmStatic external fun configure(
         night: Boolean, fontScale: Float, locale: String, rtl: Boolean, hour24: Boolean, noAnimations: Boolean,
         boldText: Boolean, highContrast: Boolean, touch: Boolean, tv: Boolean, touchSlop: Float, dates: String,
-        formatLocale: String, screenReader: Int,
+        formatLocale: String, screenReader: Int, orientation: Int,
     )
     /** The device's colours ([Palette], LLP 1115.001 D4): Material 3's colour roles as the reader resolved them for
-     * this device, twelve under the light scheme and then the same twelve under the dark one, ARGB. Before [start],
+     * this device, light then dark in ARGB, followed by the float bits of the system contrast level. Before [start],
      * from any thread, so the host boots resolving every colour role by them, and again on the host's thread whenever
      * one changes. */
     @JvmStatic external fun colors(roles: IntArray)
     /** The window (LLP 1115.001 D3.3): its size in pixels, the display's pixels a point, and the system's raw insets
      * in pixels, sixteen numbers: top, right, bottom, left for the system bars, then the display cutout, the software
-     * keyboard and the system's gestures. Before [start], from any thread, so the host boots laid out in it, and on
+     * keyboard and the system's gestures. A fold adds its state (flat 1, half-open 2), divider (none 0, vertical 1,
+     * horizontal 2) and its start and end on that axis in window pixels. Before [start], from any thread, so the host boots laid out in it, and on
      * the host's thread again whenever any of it changes. The reader pads nothing: [chrome] says where the page is. */
     @JvmStatic external fun window(width: Int, height: Int, scale: Float, insets: IntArray)
     /** What the reader draws around the page, when that is not what this last returned (else null): where the page is
@@ -58,7 +61,9 @@ object Native {
     @JvmStatic external fun acquired(running: Boolean)
     @JvmStatic external fun timerObservation(scrolling: Boolean, sampling: Boolean, applying: Boolean, idle: Boolean): Boolean
     @JvmStatic external fun timerHeld(): Int
-    @JvmStatic external fun displayFrame()
+    /** A display tick: Choreographer's frame time, when its callback began (`System.nanoTime`), the display's fastest
+     * period in nanoseconds, thermal code, and this tick's scheduled period ([HostFacts.turned]). */
+    @JvmStatic external fun displayFrame(vsync: Long, arrival: Long, fastest: Long, thermal: Int, period: Long)
     /** `perf frames` (LLP 1079.000 §6.2), all on exact2's thread and in `System.nanoTime`: a Choreographer turn at
      * [vsync], its frame's [deadline] and its vsyncs' [period] (0 where Choreographer gave none), when it ran from
      * [arrival] to [finished], and the publication it made (0: none), whose ingest finishes its work. */
@@ -80,6 +85,9 @@ object Native {
     /** Whether a turn is needed. With [vsyncOnly], whether it needs a Choreographer callback. */
     @JvmStatic external fun animating(vsyncOnly: Boolean = false): Boolean
     @JvmStatic external fun owed(): Boolean
+    /** After the reader's [scrolled]: whether a [frame] now would only move grouped rows the reader moved itself, with
+     * nothing to tell it but those moves. The move is then taken, and there is no frame. */
+    @JvmStatic external fun moved(): Boolean
     /** The collection pass a scroll left; `limit` >= 0 slices it (rows past what shows per list), the scrolled list
      * leading toward `velocity` px/s. Bit 0: a paint is wanted; bit 1: rows are left for another slice. */
     @JvmStatic external fun refine(limit: Int, velocity: Float): Int
@@ -98,7 +106,7 @@ object Native {
     /** What is under a point of the view (pixels), for the reader to decide what a drag from there is (LLP 1115.001
      * D7.3) and whose a touch there is (D8): the axes exact2's own gestures there claim (bit 0 sideways, bit 1 up
      * and down; bit 2: the latter is a sheet's drag alone, which a hosted view that disallows interception keeps,
-     * [Contacts]; bits 3 and 4: a nested sheet takes an upward or downward finger drag), a count, the hosted text field the touch is for (0: none; [Fields]), and eleven numbers a scroller,
+     * [Contacts]; bits 3 and 4: a nested sheet takes an upward or downward finger drag; bit 6: a long press lifted a reorder row), a count, the hosted text field the touch is for (0: none; [Fields]), and eleven numbers a scroller,
      * innermost first: its id, flags (bit 0 it takes a sideways drag from here, bit 1 one up or down, bit 2 its
      * rows are a node the reader can move, bit 3 no scrollbar, bit 4 it hears `refresh`, bit 5 its `refreshing`
      * is true, bits 6 and 7 its `keyboardDismissMode`), its revision, then as float bits its offset (x, y), its farthest offset
@@ -150,9 +158,16 @@ object Native {
      * key said it does: 0 Enter with no action, 2 done, 3 go, 4 next, 5 previous, 6 search, 7 send, 16 Tab, 17
      * Shift+Tab. exact2 does that: Enter's `key` handlers, `change` and `submit`, then the move or the leave. */
     @JvmStatic external fun fieldAction(id: Int, generation: Int, action: Int)
+    /** Preferred content sizes from one reader frame, keyed by session and allocation. */
+    @JvmStatic external fun moduleSizes(reports: String)
     /** A module event, checked against the session and allocation carried by its painted view. */
     @JvmStatic external fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String)
     @JvmStatic external fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long)
+    /** An iframe's view took the window's focus (a field in its page did) or lost it; checked as [frameLoaded] is. */
+    @JvmStatic external fun frameFocused(id: Int, slot: Int, generation: Int, session: Long, focused: Boolean)
+    /** An iframe's `FrameNavigation` record (LLP 1020.002 D2): [event] by its name, [record] its JSON; checked as
+     * [frameLoaded] is. */
+    @JvmStatic external fun frameEvent(id: Int, slot: Int, generation: Int, session: Long, event: String, record: String)
     /** A media element's event ([event] by HTML's name, [payload] its value), or with an empty [event] its observed
      * [state] for `state.media` (LLP 1042.001 D7); checked as a module event is. */
     @JvmStatic external fun media(id: Int, slot: Int, generation: Int, session: Long, event: String, payload: String, state: String)
@@ -160,6 +175,21 @@ object Native {
     /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it. exact2 clamps the move to
      * the scroller's travel, and drops one sent under a revision the app's own scroll has moved on from. */
     @JvmStatic external fun scrolled(id: Int, dx: Float, dy: Float, rev: Int)
+    /** A drag is at ([x], [y]) px (LLP 1094.001 D5): exact2 sends the nodes under it their `dragenter` and
+     * `dragleave`. */
+    @JvmStatic external fun dragOver(x: Float, y: Float)
+    /** The drag left the window or was cancelled: the nodes under it hear their leave. */
+    @JvmStatic external fun dragLeft()
+    /** A field took the drop at ([x], [y]) px: the nodes under the drag there hear the enters it waited for, then
+     * their leave. */
+    @JvmStatic external fun dragDropped(x: Float, y: Float)
+    /** The drag was released at ([x], [y]) px before its items arrive: the drop's number, 0 when nothing takes it. */
+    @JvmStatic external fun dropReleased(x: Float, y: Float): Int
+    /** Who takes a drop Android gives field [id]'s view at ([x], [y]) px: -1 not the field (another node is painted
+     * there, or the field takes no touch), else 0 the field, 1 its own node, 2 one above it. */
+    @JvmStatic external fun fieldDrop(id: Int, x: Float, y: Float): Int
+    /** Drop [id]'s items arrived, as JSON (`{"paths": […], "text": "…", "url": "…"}`). */
+    @JvmStatic external fun dropLanded(id: Int, items: String)
     /** A finger began dragging scroller [id] (its `scrolldragstart`), or ([ended]) let go of it (its
      * `scrolldragend`): at ([vx], [vy]) px/s, positive as its offset grows, and, with [rest], to come to rest at
      * ([restX], [restY]) px; [flings] when it threw a fling. From the start until the lift, or the fling's end
@@ -179,8 +209,8 @@ object Native {
     /** A wheel turned [dy] points toward the end with `ctrl` held at ([x], [y]) px: a zoom about the pointer. */
     @JvmStatic external fun zoomWheel(x: Float, y: Float, dy: Float)
     /** What exact2 tells the reader of the scrollers it knows, when that is not what this last returned (else
-     * null): nine numbers each: its id, flags (as [under]'s, for any drag), its revision, then as float bits where
-     * it is (x, y), the offset its rows were last painted at (x, y) and its farthest offset (x, y). The revision
+     * null). The producer's scale as float bits, then nine words each: id, flags, revision, and pairs of float bits
+     * for its current offset in points, recorded offset in pixels, and logical maximum in points. The revision
      * moves on when the app scrolled it (a `scrollTop` write, a reveal): the reader then takes this offset and ends
      * its fling. A scroller the reader knew that is not among them is gone. */
     @JvmStatic external fun scrollers(): IntArray?
@@ -190,12 +220,14 @@ object Native {
      * has been held still for the system's long-press time ([android.view.ViewConfiguration.getLongPressTimeout]).
      * A node with `draggable` nearer than any menu asks for its drag (request kind 23, LLP 1094.000 D7); else what
      * names a context menu there opens it (D10), and a move past the touch slop then lifts the node's drag. That touch
-     * presses nothing when it lifts. */
-    @JvmStatic external fun touch(action: Int, x: Float, y: Float, tool: Int)
+     * presses nothing when it lifts. [at] is the event time in uptime nanoseconds, or -1 for a reader action. A shared list release returns its
+     * id, offset speed in px/s and the x/y coefficients mapping view velocity to list velocity. The last
+     * three words are float bits. Every other touch returns null. */
+    @JvmStatic external fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long): IntArray?
     /** A finger past the touch's first ([Fingers]): 0 down, 1 up, 2 move, 3 cancel, at the view's pixels, by its pointer
      * [id] ([android.view.MotionEvent.getPointerId]). The canvas holding the touch takes it where it lands on that
-     * canvas; where no canvas holds the touch, a second finger cancels it. */
-    @JvmStatic external fun finger(action: Int, id: Int, x: Float, y: Float)
+     * canvas. A transform binding takes both positions from this event while both fingers are down. */
+    @JvmStatic external fun finger(action: Int, id: Int, x: Float, y: Float, tool: Int, at: Long, primaryX: Float, primaryY: Float)
     /** Whether a finger, a pen or a mouse button is down on the view: true at the touch's down, before the reader
      * routes it, and false at its last lift or the system's cancel. A scroll, a field or a hosted view takes a touch
      * that is still down, and exact2 then hears a cancel and no up ([touch]); a replacement waits for the finger
@@ -236,7 +268,7 @@ object Native {
      * (the presenter's own press at the node, as a driver's `tap`), 2 hold (its context menu), 3 scroll a scroller
      * on or step a range up, 4 back or down, 5 set a range to [value], 6 start the node's drag out of the app. Whether
      * anything took it. */
-    @JvmStatic external fun accessAct(id: Int, action: Int, value: Float): Boolean
+    @JvmStatic external fun accessAct(id: Int, action: Int, value: Float, target: Int): Boolean
     /** No accessibility service is on any more: exact2 forgets the tree it told and builds none until [access]. */
     @JvmStatic external fun accessOff()
     /** One slice ([budgetUs] of shaping) of laying out what the touch that is down would open; whether more is left. */
@@ -267,14 +299,15 @@ object Native {
     /** A key, down or up, by the web's `code` and `key` ([Keys.named]): Tab, or a remote's D-pad arrow or Select.
      * [shift]: Shift is held with it, which Android tells with the key rather than as a key of its own. */
     @JvmStatic external fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean, shift: Boolean)
-    /** System Back (LLP 1115.001 D6): whether the app took it. From its navigation root's selected route it goes to
-     * the Back control the root names, else to the root's `navigate` handler, else it is the runner's own `back`;
-     * false when there is nowhere to go back to, and the activity finishes. The reader takes Back only while the
-     * host says it has somewhere to go (a request, [requests]). */
-    @JvmStatic external fun back(): Boolean
+    /** Subscribe to presentation requests, including the layers already open. False means the host has not booted. */
+    @JvmStatic external fun hostedBack(on: Boolean): Boolean
+    @JvmStatic fun requestBack(layers: IntArray) { Exact.backHandoff?.request(layers) }
+    /** Commit the selected callback. A target dismissed during the gesture returns -1.
+     * Kind 0 follows the presenter's order. It returns 1 when taken or 0 when the activity should leave. */
+    @JvmStatic external fun back(kind: Int, id: Int): Int
     /** Predictive Back as it goes (Android 14): `phase` 0 started, 1 moved, 2 cancelled; `progress` 0 to 1 as the
      * system eases it; `edge` 0 the left, 1 the right. Whether exact2 previews it. The commit is [back]. */
-    @JvmStatic external fun backProgress(phase: Int, progress: Float, edge: Int): Boolean
+    @JvmStatic external fun backProgress(kind: Int, id: Int, phase: Int, progress: Float, edge: Int): Boolean
     /** A URL given to the running app: its location goes to the navigation root's `navigate` (LLP 1133.023 D15 item 3). */
     @JvmStatic external fun open(href: String)
     /** A share given to the running app, `{"target", "share"}` as [Shares.request] writes it (LLP 1133.024 D5). */
@@ -292,12 +325,21 @@ object Native {
     /** The answer to request [id] (the share sheet's: `shared` or `dismissed`, or why it could not be shown), or null
      * when it was cancelled. On the host's thread. */
     @JvmStatic external fun answer(id: Int, answer: String?)
+    @JvmStatic external fun refuseModule(id: Int, error: String, message: String?)
     /** A topic an extension announced ([ExtensionContext.changed]): its readers are asked again. On the host's thread. */
     @JvmStatic external fun changed(topic: String)
     /** A person's act on an extension's own platform UI ([Activations]): its event [event] with [args], a JSON array,
      * raised with a person's origin (LLP 1133.004 D6); for a notification's action, only while the plan declares
      * [action], the action's record. On the host's thread. */
     @JvmStatic external fun activate(extension: String, event: String, args: String, action: String?)
+    /** A person's press of control [kind], installed with [digest] ([Controls], LLP 1126.004 D2): `{"call": id}`, or
+     * `{"error"}` for one the runner refuses outright. With [foreground] it is pressed from the app in front, which a
+     * tile opened for it. On the host's thread. */
+    @JvmStatic external fun press(kind: String, digest: String, foreground: Boolean, cold: Boolean, hidden: Boolean): String
+    /** Press [id] ends now: superseded, its app left the front, or the phone locked. On the host's thread. */
+    @JvmStatic external fun cancelPress(id: Long)
+    /** Whether press [id] still runs uncancelled within its bound. On the host's thread. */
+    @JvmStatic external fun pressLive(id: Long): Boolean
     /** A line for the session's journal. On the host's thread. */
     @JvmStatic external fun journal(line: String)
     /** The extensions the APK carries, one a line ([Extensions]); under the agent, told so unless the drive names them
@@ -332,6 +374,7 @@ object Native {
     /** The frame clock, ms, retaining its monotonic origin across host turns ([ExtensionContext.now]). Under the
      * agent, held virtual time; during a capture lease, the display's live time. Any thread. */
     @JvmStatic external fun now(): Double
+    @JvmStatic external fun moduleAfter(timer: Int, due: Double)
 
     /** The file an `app:/data|cache|tmp/…` path names, or null (`ExtensionContext.file`). */
     @JvmStatic external fun appFile(path: String): String?

@@ -2,19 +2,11 @@
 //! the kernel after boot; `provide` is a component section (LLP
 //! 1035.005.000 D9).
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, Kernel, PropValue};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
 use std::path::Path;
-
-#[derive(Default)]
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn corpus(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23,12 +15,12 @@ fn corpus(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn boot(name: &str) -> Runner<NoData> {
+fn boot(name: &str) -> Runner<Source> {
     let plan = contract::compile(&corpus(name)).unwrap();
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -115,7 +107,7 @@ fn a_provided_value_may_be_state_and_follows_it() {
     let plan = contract::compile(src).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -148,7 +140,7 @@ component Child
     for prefix in ["", "component App\n  view\n    Child()\n"] {
         let r = Runner::boot(
             contract::compile(&format!("{prefix}{component}")).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -206,7 +198,7 @@ component Row
     for prefix in ["", "component App\n  view\n    Provider()\n"] {
         let mut r = Runner::boot(
             contract::compile(&format!("{prefix}{source}")).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -628,10 +620,10 @@ fn nested_enum_parameters_keep_membership_and_enum_keys_and_overrides_work() {
             })
         }
     }
-    let baked = contract::bake(plan, Choices).unwrap();
+    let baked = contract::bake(plan, boxed(Choices)).unwrap();
     let runner = Runner::boot(
         baked,
-        Choices,
+        boxed(Choices),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -642,6 +634,107 @@ fn nested_enum_parameters_keep_membership_and_enum_keys_and_overrides_work() {
     let wrapped = "shape Choice\n  value: option<enum<\"a\", \"b\">>[]\ncomponent App\n  resource choice = choice() as shape Choice else empty(value=[some(\"b\"), none])\n  view\n    text \"nested\"\n";
     contract::compile(wrapped).unwrap();
     assert!(contract::compile(&wrapped.replace("some(\"b\")", "some(\"bad\")")).is_err());
+}
+
+#[test]
+fn enum_comparisons_check_literals_in_either_position() {
+    let source = r#"fn testTool(tool: enum<"move", "pen", "text">, tools: enum<"move", "pen", "text">[], label: string): bool = EXPR
+component App
+  view
+    text (testTool("pen", ["text"], "brush") ? "yes" : "no")
+component Other
+  view
+    text "unused"
+"#;
+    for expr in [
+        r#"tool == "text""#,
+        r#""text" == tool"#,
+        r#"tool != "text""#,
+        r#""text" != tool"#,
+        r#"tools.includes("text")"#,
+        r#"some(tool) != some("text")"#,
+        r#"some("text") == some(tool)"#,
+        r#"tools == ["text"]"#,
+        r#"[tool, "pen"] == ["text", "pen"]"#,
+        r#"some(["text", "pen"]) != some([tool, "pen"])"#,
+        r#"["text"] != tools"#,
+        r#"[tool, "pen"].includes("text")"#,
+        r#"["pen", tool].indexOf("text") >= 0"#,
+        r#"tools.indexOf("text") >= 0"#,
+        r#"["pen", "text"].includes(tool)"#,
+        r#"[label, "text"].indexOf(tool) >= 0"#,
+        r#"match some(tool) { case some(value) => value == "text", case none => false }"#,
+    ] {
+        contract::compile(&source.replace("EXPR", expr)).unwrap();
+        let typo = expr.replace(r#""text""#, r#""txet""#);
+        let invalid = source.replace("EXPR", &typo);
+        let error = contract::compile(&invalid).unwrap_err();
+        assert_eq!(error.id, "type-enum-comparison");
+        assert_eq!(
+            error.span.col,
+            invalid.find(r#""txet""#).unwrap() as u32 + 1
+        );
+        assert!(
+            error.message.contains(r#""txet" is not a declared member"#),
+            "{expr}: {error}"
+        );
+        assert!(
+            error.message.contains(r#"enum<"move", "pen", "text">"#),
+            "{error}"
+        );
+        assert!(error.message.contains(r#"did you mean "text"?"#), "{error}");
+    }
+    for expr in [
+        "label == tool",
+        r#"tool == (label == "" ? "txet" : "text")"#,
+        r#"tools.includes(label == "" ? "txet" : "text")"#,
+        r#"tool == match some(label) { case some(v) => "txet", case none => "text" }"#,
+        "some(tool) == some(label)",
+        "tool != (label + label)",
+        "tools.includes(label)",
+        "[label].indexOf(tool) >= 0",
+        r#"tool.includes("ex")"#,
+        r#"tool.indexOf("ex") >= 0"#,
+    ] {
+        contract::compile(&source.replace("EXPR", expr)).unwrap();
+    }
+    let child = r#"component App
+  state tool: enum<"move", "pen"> = "move"
+  view
+    Choice(tool=tool, label="brush", other=tool)
+component Choice
+  props
+    tool: enum<"move", "pen">
+    label: string
+    other: string
+  view
+    text (tool == label or other == "brush" or [label].includes(tool) ? "yes" : "no")
+"#;
+    contract::compile(child).unwrap();
+    let typo = child.replace("tool == label", r#"tool == "pne""#);
+    let error = contract::compile(&typo).unwrap_err();
+    assert!(error.message.contains(r#"did you mean "pen"?"#), "{error}");
+    let alias = child
+        .replace(
+            "  view\n    text",
+            "  derive alias = other\n  view\n    text",
+        )
+        .replace("other ==", "alias ==");
+    contract::compile(&alias).unwrap();
+
+    let action = r#"component App
+  state leaving: enum<"nowhere", "copy", "save"> = "nowhere"
+  action leave
+    if leaving == "cpoy"
+      leaving = "save"
+  view
+    button "Leave" press=leave
+component Other
+  view
+    text "unused"
+"#;
+    let error = contract::compile(action).unwrap_err();
+    assert!(error.message.contains(r#"did you mean "copy"?"#), "{error}");
 }
 
 #[test]

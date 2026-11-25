@@ -19,7 +19,7 @@ extension NavigationHost {
         // A stack that splits is the split's from its first frame (LLP 1127 D2). One the runner cannot say of
         // yet stays deferred, and is asked again on the main queue's next turn (`askSplitNextTurn`), whose sync
         // asks this again (`updateBootOwner`).
-        let splitting = p.tabs == nil ? splits(p.chosen.first) : false
+        let splitting = p.tabs == nil ? splits(p.chosen.first) : tabWantsSplit(p.chosen.first)
         if splitting == nil { askSplitNextTurn() }
         if splitting == true { return false }
         // Offset routes need the native owner's sibling and safe-area projection.

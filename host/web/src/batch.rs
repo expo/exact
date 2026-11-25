@@ -10,6 +10,7 @@ use exact_num::{push_text, text, Piece, Shortest};
 #[derive(Debug, Default)]
 pub struct Batch {
     ops: Vec<String>,
+    package_view_owners: Option<String>,
     collection_accepted: bool,
     seq: Option<(u64, u64)>,
     alerts: Vec<String>,
@@ -274,6 +275,18 @@ impl Batch {
         self.ops.is_empty()
     }
 
+    /// Replace the previous plan’s package view owners before creating elements (LLP 1133.008 D8).
+    pub(crate) fn package_views(&mut self, plan: &exact_plan::Plan) {
+        let owners = plan
+            .views
+            .iter()
+            .map(|view| (plan.str(view.tag), plan.str(view.package).to_owned()))
+            .collect::<Vec<_>>();
+        let mut json = String::new();
+        string_map(&owners, &mut json);
+        self.package_view_owners = Some(json);
+    }
+
     /// `{"op":"create","id":…,"tag":…,"props":{…},"css":…,"handlers":[…]}`,
     /// plus `"ns":"http://www.w3.org/2000/svg"` when `svg`, an SVG node by its
     /// type (LLP 1055 D4). The tag cannot say: a module's custom element may
@@ -404,10 +417,31 @@ impl Batch {
         self.ops.push(s);
     }
 
+    /// `{"op":"hold","movers":[[id,parent],…]}` — `portal` movers to keep in
+    /// the page's holder until a list shows them; `null` for one hidden.
+    pub fn hold(&mut self, movers: &[(u32, Option<u32>)]) {
+        let mut s = String::from("{\"op\":\"hold\",\"movers\":[");
+        for (i, (id, parent)) in movers.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push('[');
+            id.push_to(&mut s);
+            s.push(',');
+            match parent {
+                Some(parent) => parent.push_to(&mut s),
+                None => s.push_str("null"),
+            }
+            s.push(']');
+        }
+        s.push_str("]}");
+        self.ops.push(s);
+    }
+
     /// `{"op":"animate","id":…,"property":…,"delay":ms,"duration":ms,"values":[…]}`
     /// — a spring's frames, evenly spaced; `translate` values are `[x,y]`
     /// pairs, `[x,y,px,py]` with percentages of the box (chess diary #4),
-    /// the rest numbers. No values means stop playing the property.
+    /// scale values are `[x,y]` factors, the rest numbers. No values means stop playing the property.
     pub fn animate(
         &mut self,
         id: u32,
@@ -492,7 +526,7 @@ impl Batch {
             let (x, y) = (Shortest(*x), Shortest(*y));
             if property == "rotate" || pair && (*px != 0.0 || *py != 0.0) {
                 push_text!(&mut s, "[{},{},{},{}]", x, y, Shortest(*px), Shortest(*py));
-            } else if pair {
+            } else if pair || property == "scale" {
                 push_text!(&mut s, "[{},{}]", x, y);
             } else {
                 x.push_to(&mut s);
@@ -1107,6 +1141,10 @@ impl Batch {
             s.push_str(op);
         }
         s.push(']');
+        if let Some(owners) = self.package_view_owners {
+            s.push_str(r#","packageViewOwners":"#);
+            s.push_str(&owners);
+        }
         let timers = timer_due_ms.is_some();
         if !self.alerts.is_empty() {
             s.push_str(",\"alerts\":[");

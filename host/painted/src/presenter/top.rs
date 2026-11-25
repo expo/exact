@@ -356,7 +356,13 @@ impl<D: DataSource> Presenter<D> {
                     return None;
                 }
             }
-            shape::menu(kernel, pop, &pressed)
+            shape::menu(kernel, pop, &pressed, |node| {
+                if self.top.overlay.enabled {
+                    shape::row(kernel, node, false)
+                } else {
+                    self.menu_row(node)
+                }
+            })
         });
         self.with_exit(pop, plan)
     }
@@ -390,7 +396,7 @@ impl<D: DataSource> Presenter<D> {
                 .map_or(exact_kernel::Direction::Ltr, |n| {
                     n.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
                 }),
-            dark: self.dark(),
+            dark: self.dark_at(node),
             contrast: self.colors.contrast.palette,
             bold_text: self.host.kernel().bold_text_weights(0),
             font_scale: if scale.is_finite() && scale > 0.0 {
@@ -550,6 +556,7 @@ impl<D: DataSource> Presenter<D> {
         (invoker, point): (Option<ViewId>, Option<(f32, f32)>),
         now_ms: f64,
     ) {
+        let request = self.request_back_layer(5);
         let restore = self
             .replace_surface(invoker, now_ms)
             .and_then(|key| self.host.kernel().node_by_key(key).map(|n| n.id));
@@ -562,7 +569,7 @@ impl<D: DataSource> Presenter<D> {
                 self.host.log(e);
             }
         }
-        let serial = self.next_surface_serial();
+        let serial = request.unwrap_or_else(|| self.next_surface_serial());
         let inputs = self.surface_inputs(id);
         let layout = self.measure_surface(&plan, id, &inputs);
         self.top.open = Some(Open {
@@ -595,6 +602,7 @@ impl<D: DataSource> Presenter<D> {
             epoch: self.host.kernel().epoch(),
             detached: self.top.status.is_some(),
         });
+        self.resolve_back_layer(request);
         let anchor = self.surface_anchor();
         if let Some(open) = self.top.open.as_mut() {
             open.anchor = anchor;
@@ -625,6 +633,7 @@ impl<D: DataSource> Presenter<D> {
         let Some(open) = self.top.open.take() else {
             return;
         };
+        self.update_hosted_back();
         if open.detached {
             self.top.status = None;
         }

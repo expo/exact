@@ -257,6 +257,7 @@ private struct LiveRoot: View {
             live.onCommand = { command in
                 switch command.name {
                 case "haptic": Self.haptic(command.args.first as? String ?? "")
+                case "panel": log.notice("panel unsupported: route panels are available on macOS only")
                 default: log.notice("command \(command.name, privacy: .public) has no watch arm")
                 }
             }

@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // LLP 1116.005 D8 in a real browser: the form chrome a well-made web form has, as a default build's stylesheet
 // (index.html and the neutral look's sheet after it, look.mjs; both web targets) and the JS target's runtime
 // (rt.js) draw it. focus-timer lost partly on its
@@ -14,11 +14,10 @@ import { cdpBrowser, chromium } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
 import { need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
-import { standIns } from './stand-ins.mjs';
+import { runtimeSource, standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const WEB_JS = resolve(WEB, '../web-js');
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
@@ -63,9 +62,7 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 // rt.js beside the modules it imports: the real ones it binds with, stand-ins for the rest (as js-link-press.test.mjs).
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js'];
 const STUBS = standIns(REAL);
-const module = name => ['navigation.js', 'input-glue.js', 'prompt-glue.js', 'alert-message.js'].includes(name) ? readFileSync(resolve(WEB, name))
-  : REAL.includes(name) ? readFileSync(resolve(WEB_JS, name))
-  : STUBS.get(name) ?? null;
+const module = name => REAL.includes(name) ? runtimeSource(name) : hostFixtureModule(name) ?? STUBS.get(name) ?? null;
 
 /** The page in headless Chrome: `test(evaluate, call)` with its `Runtime.evaluate` and its CDP session. */
 async function inChrome(test) {

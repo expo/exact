@@ -1,27 +1,32 @@
 const opening = [];
 // an open dialog's or popover's `exactOpened` is when it opened, so the greatest is on top (input-glue.js's menu)
-let order = 0;
-// Stamp the inner opening, then its still-dispatching callers, innermost first; an outer target already open keeps its
-// stamp. Only the first copy stamps: the JS target's agent runs a second (agent-navigation.js), its count begun later.
-globalThis.addEventListener?.("beforetoggle", (e) => {
-  for (let i = opening.length - 1; i >= 0; i--) {
-    if (opening[i].eventPhase === Event.NONE) {
-      opening.splice(i, 1);
+let order = 0, stamping = false;
+/** Stamp each dialog and popover as it opens, from now on: a page that opens none installs nothing. The inner opening is
+ * stamped, then its still-dispatching callers, innermost first; an outer target already open keeps its stamp. Where
+ * two bundles each install one, only the first to hear an opening stamps it (`exactStamped`). */
+export function stampOpenings() {
+  if (stamping || !globalThis.addEventListener) return;
+  stamping = true;
+  addEventListener("beforetoggle", (e) => {
+    for (let i = opening.length - 1; i >= 0; i--) {
+      if (opening[i].eventPhase === Event.NONE) {
+        opening.splice(i, 1);
+      }
     }
-  }
-  if (e.exactStamped || e.newState !== "open" || e.target.localName !== "dialog" && !e.target.hasAttribute("popover")) {
-    return;
-  }
-  e.exactStamped = true;
-  e.target.exactOpened = ++order;
-  for (let i = opening.length - 1; i >= 0; i--) {
-    const target = opening[i].target;
-    if (!target.matches("dialog:modal,:popover-open")) {
-      target.exactOpened = ++order;
+    if (e.exactStamped || e.newState !== "open" || e.target.localName !== "dialog" && !e.target.hasAttribute("popover")) {
+      return;
     }
-  }
-  opening.push(e);
-}, true);
+    e.exactStamped = true;
+    e.target.exactOpened = ++order;
+    for (let i = opening.length - 1; i >= 0; i--) {
+      const target = opening[i].target;
+      if (!target.matches("dialog:modal,:popover-open")) {
+        target.exactOpened = ++order;
+      }
+    }
+    opening.push(e);
+  }, true);
+}
 // Structural reads retain the front modal and presentations opened after it.
 export function modalLayers() {
   const top = [...document.querySelectorAll("dialog:modal,:popover-open")];

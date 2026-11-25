@@ -47,8 +47,12 @@ const APP: &str = r#"component App
 "#;
 
 fn boot() -> Presenter<NoData> {
+    boot_source(APP)
+}
+
+fn boot_source(source: &str) -> Presenter<NoData> {
     let (p, error) = Presenter::boot_with(
-        &contract::compile(APP).unwrap().encode(),
+        &contract::compile(source).unwrap().encode(),
         NoData,
         (400., 500.),
         1.,
@@ -348,4 +352,207 @@ fn a_touch_on_a_zoomable_scroller_with_no_travel_names_it_to_the_reader() {
     assert_eq!(words[1], 1);
     assert_eq!(words[3], id as i32);
     assert_eq!(words[4] & (1 | 2 | 256 | 512), 256 | 512);
+}
+
+const PHOTO: &str = r#"component App
+  state zoom = 1
+  state releases = 0
+  state velocity = 0
+  action geometry(w: number, h: number, pw: number, ph: number)
+    zoom = zoom
+  action release(x: number, y: number, s: number, vx: number, vy: number, vs: number)
+    zoom = s
+    velocity = vs
+    releases = releases + 1
+  view
+    box width=300 height=300 overflow="hidden" box-sizing="border-box"
+      box id="image" width="100%" height="100%" box-sizing="border-box" translate="0px 0px" scale=1
+        box transformDragFor="image" transformgeometry=geometry transformrelease=release touch-action="none" width=300 height=300 testId="photo"
+"#;
+
+fn paired_photo() -> Presenter<NoData> {
+    let mut p = boot_source(PHOTO);
+    p.set_pointer_kind(PointerKind::Touch);
+    p.pointer_down(100., 100., 0.).unwrap();
+    assert!(p
+        .begin_transform_pinch((1, (100., 100.)), 2, (200., 100.), 0.)
+        .unwrap());
+    p
+}
+
+#[test]
+fn stationary_fingers_release_nothing_in_either_order() {
+    for up in [[1, 2], [2, 1]] {
+        let mut p = paired_photo();
+        for id in up {
+            p.transform_finger((id, (id as f32 * 100., 100.)), None, 1, 0., 20.)
+                .unwrap();
+        }
+        assert_eq!(number(&p, "releases"), 0.);
+    }
+}
+
+#[test]
+fn a_two_finger_pan_y_leaves_the_vertical_scroller_its_axis() {
+    let src = PHOTO
+        .replace("touch-action=\"none\"", "touch-action=\"pan-y\"")
+        .replace(
+            "  view\n",
+            "  view\n    scroll width=300 height=150 testId=\"port\"\n",
+        )
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("box ") {
+                format!("  {line}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Windows reports one pointer at a time. A planted finger and a moving
+    // finger change the span even when the moving finger travels along the scroll axis.
+    let mut p = boot_source(&src);
+    p.set_pointer_kind(PointerKind::Touch);
+    p.pointer_down(100., 60., 0.).unwrap();
+    assert!(p
+        .begin_transform_pinch((1, (100., 60.)), 2, (100., 100.), 0.)
+        .unwrap());
+    for y in [115., 140.] {
+        p.transform_finger((2, (100., y)), None, 2, y as f64, y as f64)
+            .unwrap();
+    }
+    p.transform_finger((2, (100., 140.)), None, 1, 150., 150.)
+        .unwrap();
+    p.transform_finger((1, (100., 60.)), None, 1, 155., 155.)
+        .unwrap();
+    assert_eq!(number(&p, "releases"), 1.);
+    assert_eq!(number(&p, "zoom"), 2.);
+
+    for ids in [[1, 2], [2, 1]] {
+        let mut p = boot_source(&src);
+        p.set_pointer_kind(PointerKind::Touch);
+        let under = p.scrollers_at(100., 100.);
+        assert!(under.chain.iter().any(|s| s.axes.1));
+        assert!(!under.claims.1);
+        p.pointer_down(100., 100., 0.).unwrap();
+        assert!(p
+            .begin_transform_pinch((1, (100., 100.)), 2, (200., 100.), 0.)
+            .unwrap());
+        p.transform_finger((2, (200., 80.)), Some((1, (100., 80.))), 2, 20., 20.)
+            .unwrap();
+        for id in ids {
+            p.transform_finger((id, (id as f32 * 100., 80.)), None, 1, 30., 30.)
+                .unwrap();
+        }
+        assert_eq!(number(&p, "releases"), 0.);
+        assert!(p.scroll_of(named(&p, "port")).1 > 0.);
+    }
+}
+
+#[test]
+fn spread_delivered_on_pointer_up_counts_as_motion() {
+    let mut p = paired_photo();
+    p.transform_finger((2, (260., 100.)), None, 1, 30., 30.)
+        .unwrap();
+    p.transform_finger((1, (100., 100.)), None, 1, 35., 35.)
+        .unwrap();
+    assert_eq!(number(&p, "releases"), 1.);
+    assert!((number(&p, "zoom") - 1.6).abs() < 0.0001);
+}
+
+#[test]
+fn a_moving_pinch_keeps_its_scale_velocity_across_either_fingers_lift() {
+    for up in [[1, 2], [2, 1]] {
+        let mut p = paired_photo();
+        for i in 1..=10 {
+            p.transform_finger(
+                (2, (200. + i as f32 * 10., 100.)),
+                None,
+                2,
+                0.,
+                i as f64 * 10.,
+            )
+            .unwrap();
+        }
+        for (i, id) in up.into_iter().enumerate() {
+            let x = if id == 1 { 100. } else { 300. };
+            p.transform_finger((id, (x, 100.)), None, 1, 0., 106. + i as f64 * 6.)
+                .unwrap();
+        }
+        assert_eq!(number(&p, "releases"), 1.);
+        assert_eq!(number(&p, "zoom"), 2.);
+        assert!((number(&p, "velocity") - 10.).abs() < 0.001);
+    }
+}
+
+#[test]
+fn cancelling_a_recognized_photo_pinch_drops_both_holds_without_releasing() {
+    let mut p = paired_photo();
+    p.transform_finger((2, (230., 100.)), None, 2, 0., 30.)
+        .unwrap();
+    assert!(p.contact_has_gesture());
+    p.transform_finger((1, (100., 100.)), None, 3, 0., 40.)
+        .unwrap();
+    p.transform_finger((2, (230., 100.)), None, 3, 0., 40.)
+        .unwrap();
+    assert_eq!(number(&p, "releases"), 0.);
+    assert!(p.contact_position().is_none());
+    let id = named(&p, "photo");
+    p.zoom_tap(&serde_json::json!({"id":id, "pinch":2}))
+        .unwrap();
+    assert_eq!(number(&p, "releases"), 1.);
+}
+
+#[test]
+fn driven_touch_pinch_releases_the_photo_at_the_requested_scale() {
+    let mut p = boot_source(PHOTO);
+    let target = named(&p, "photo");
+    let reply = p
+        .zoom_tap(&serde_json::json!({"id":target, "pinch":2}))
+        .unwrap();
+    assert_eq!(number(&p, "zoom"), 2., "{reply}");
+    // UIKit's recognized carrier spreads over eight 60 Hz samples.
+    let velocity = number(&p, "velocity");
+    assert!((velocity - 7.5).abs() < 0.001, "vscale {velocity}");
+}
+
+#[test]
+fn a_touch_double_tap_presses_twice_then_calls_the_handler() {
+    let src = APP
+        .replace(
+            "presses = presses + 1",
+            "presses = presses + 1\n  action doubled\n    presses = presses * 10",
+        )
+        .replace(
+            "margin=5 press=pressed",
+            "margin=5 press=pressed dblclick=doubled",
+        );
+    let mut p = boot_source(&src);
+    let target = named(&p, "child");
+    let reply = p
+        .zoom_tap(&serde_json::json!({"id":target, "touch":true, "dblclick":true}))
+        .unwrap();
+    assert_eq!(number(&p, "presses"), 20., "{reply}");
+    assert_eq!(zoom(&p), 1.);
+}
+
+#[test]
+fn holding_the_second_tap_past_the_timeout_delivers_no_double_click() {
+    let src = PHOTO
+        .replace(
+            "width=300 height=300 testId",
+            "dblclick=doubled width=300 height=300 testId",
+        )
+        .replace(
+            "  view",
+            "  action doubled\n    releases = releases + 1\n  view",
+        );
+    let mut p = boot_source(&src);
+    p.set_pointer_kind(PointerKind::Touch);
+    p.pointer_down(100., 100., 0.).unwrap();
+    p.pointer_up(100., 100., 15.).unwrap();
+    p.pointer_down(100., 100., 130.).unwrap();
+    p.pointer_up(100., 100., 2150.).unwrap();
+    assert_eq!(number(&p, "releases"), 0.);
 }

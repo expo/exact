@@ -103,7 +103,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
             rust,
             target,
             answer,
-            target.is_none() && source.starts_with("tool:"),
+            target.is_none() && exact_runner::is_package_handler(source),
         )
     }
 
@@ -205,7 +205,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                                 rust,
                                 target,
                                 Answer::Later(request),
-                                target.is_none() && source.starts_with("tool:"),
+                                target.is_none() && exact_runner::is_package_handler(source),
                             )?;
                             let stage = if let (Some(child), Answer::Later(request)) =
                                 (worker_turn, &answer)
@@ -292,7 +292,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                     rust,
                     target,
                     a,
-                    target.is_none() && source.starts_with("tool:"),
+                    target.is_none() && exact_runner::is_package_handler(source),
                 )
             })
             .transpose()
@@ -310,9 +310,14 @@ mod tests {
         identity: exact_runner::ModuleIdentity,
         next: u64,
         discarded: Vec<u64>,
+        grants: &'static str,
     }
 
     impl DataSource for Source {
+        fn grants(&self) -> &str {
+            self.grants
+        }
+
         fn module_identity(&self, _: &str) -> Option<exact_runner::ModuleIdentity> {
             Some(self.identity.clone())
         }
@@ -365,6 +370,23 @@ mod tests {
 
         fn discard(&mut self, token: u64) {
             self.discarded.push(token);
+        }
+    }
+
+    #[test]
+    fn script_messages_go_only_to_a_child_with_browser_automation() {
+        for (js, rust, expected) in [
+            ("", "", None),
+            ("browser.automation", "", Some(false)),
+            ("", "browser.automation", Some(true)),
+            ("browser.automation", "browser.automation", Some(false)),
+        ] {
+            let module = |grants| Source {
+                grants,
+                ..Default::default()
+            };
+            let mixed = Mixed::new(module(js), module(rust), &[], &[]).unwrap();
+            assert_eq!(mixed.owner(exact_runner::SCRIPT_MESSAGE).ok(), expected);
         }
     }
 

@@ -337,3 +337,9 @@ test('Contract diagnostics do not generate or validate native game shells', () =
   assert.equal(readFileSync(resolve(dir, 'app.json'), 'utf8'), authored);
   assert.equal(JSON.parse(readFileSync(resolve(dir, '.shells/app.json'), 'utf8')).app.id, 'com.exact.fixture-game');
 }), 600_000);
+
+test('a source diagnostic from the web check keeps its file, id and repair', async () => {
+  const { typeDiagnostics } = await import('./exact.mjs');
+  const report = 'app.contract:3:14 [lower-attr-value] write `width=30`\n 3 |   box width="30"\n   |       ^^^^^';
+  assert.deepEqual(typeDiagnostics(report, process.cwd()), [{id: 'lower-attr-value', severity: 'error', message: 'write `width=30`', file: 'app.contract', line: 3, col: 14, end_col: 14, related: []}]);
+});

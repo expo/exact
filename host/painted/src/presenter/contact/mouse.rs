@@ -15,7 +15,7 @@ impl<D: DataSource> Presenter<D> {
             (node.node_type == NodeType::TextInput)
                 .then(|| (node.key, self.field_text(id), self.field_selection(id)))
         });
-        let result = self.pointer_down_counted(x, y, now_ms, clicks);
+        let result = self.pointer_down_counted(x, y, now_ms, now_ms, clicks);
         if result.is_ok() && !self.contact_is_direct() {
             let target = self
                 .contact

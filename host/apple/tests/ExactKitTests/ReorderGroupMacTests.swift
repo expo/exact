@@ -114,6 +114,10 @@ final class ReorderGroupMacTests: XCTestCase {
         // Escape does nothing while holding: its send is out.
         p.reorders.mouse.cancel()
         XCTAssertFalse(calls.log.contains("cancel"))
+        p.views[1]?.applyProps(set: ["id": "backlog"], clear: [])
+        p.reorders.cancel("backlog")
+        XCTAssertEqual(hold.state.phase, "holding")
+        XCTAssertFalse(calls.log.contains("cancel"))
         // The answer showed the move: the ghost lands on the row, then the session finishes.
         let landed = expectation(description: "the ghost lands, then the session finishes")
         hold.observe(ReorderGroupState(calls.state("settling", target: 5, row: 6, ending: "landed", dispatched: true).ops[0].payload))
@@ -122,6 +126,26 @@ final class ReorderGroupMacTests: XCTestCase {
         XCTAssertEqual(calls.log.last, "finish")
         XCTAssertNil(p.reorderHost!.group)
         XCTAssertNil(ghost.view.superview, "the ghost is gone")
+    }
+
+    func testTheListCanCancelWhileTheMouseIsStillDown() throws {
+        let calls = ReorderGroupRecorder(), (p, grip) = fixture(calls)
+        p.views[1]?.applyProps(set: ["id": "backlog"], clear: [])
+        p.views[5]?.applyProps(set: ["id": "done"], clear: [])
+        let mouse = p.reorders.mouse
+        mouse.arm(grip, event: event(.leftMouseDown, grip, down: 0))
+        XCTAssertTrue(mouse.drag(event(.leftMouseDragged, grip, down: 20)))
+        XCTAssertTrue(mouse.drag(event(.leftMouseDragged, grip, down: 20, right: 220)))
+        XCTAssertEqual(calls.log.last, "into 5")
+        p.reorders.cancel("done")
+        XCTAssertTrue(mouse.engaged)
+        p.reorders.cancel("backlog")
+        XCTAssertFalse(mouse.engaged)
+        XCTAssertFalse(p.reorders.groupActive)
+        XCTAssertFalse(mouse.drag(event(.leftMouseDragged, grip, down: 40)))
+        XCTAssertFalse(mouse.up(event(.leftMouseUp, grip, down: 40)))
+        XCTAssertTrue(calls.log.contains("cancel"))
+        XCTAssertFalse(calls.log.contains("drop"))
     }
 
     func testADropReleasesThePointerWhileTheReorderHolds() throws {

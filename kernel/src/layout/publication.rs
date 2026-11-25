@@ -3,6 +3,37 @@
 use super::*;
 use std::collections::BTreeSet;
 
+/// Natural scrollable overflow extent `(width, height)` from Taffy's layout.
+/// On a normal axis this is the physical end edge from the client start; on a
+/// reversed scroll-container axis (RTL or `row-reverse`/`column-reverse`),
+/// overflow extends into negative coordinates past the client start, so the
+/// reachable extent is `client_size - start`.
+pub(crate) fn overflow_extent(l: &taffy::tree::Layout) -> (f32, f32) {
+    let o = l.scrollable_overflow_rect;
+    let rev = o.is_reversed();
+    let w = if rev.x {
+        let client = (l.size.width
+            - l.border.left
+            - l.border.right
+            - l.scrollbar_size.width.min(l.size.width))
+        .max(0.0);
+        client - o.left()
+    } else {
+        o.right()
+    };
+    let h = if rev.y {
+        let client = (l.size.height
+            - l.border.top
+            - l.border.bottom
+            - l.scrollbar_size.height.min(l.size.height))
+        .max(0.0);
+        client - o.top()
+    } else {
+        o.bottom()
+    };
+    (w, h)
+}
+
 pub(super) fn publish(
     arena: &mut NodeArena,
     tree: &mut LayoutTree,
@@ -140,6 +171,7 @@ pub(super) fn publish(
         }
         let inset_changed = arena.inset(slot) != inset;
         arena.set_inset(slot, inset);
+        let mut reversed = taffy::geometry::Point { x: false, y: false };
         let frame = if hidden {
             arena.set_content(slot, (0.0, 0.0));
             arena.field_content.remove(&slot);
@@ -162,13 +194,14 @@ pub(super) fn publish(
             }
             // A multi-column container's overflow is its columns' (D7), which
             // a multi-column `text`, a leaf to the engine, never reports.
-            let o = arena
-                .frag
-                .multicol
-                .get(&slot)
-                .and_then(|m| m.overflow)
-                .unwrap_or(l.scrollable_overflow_rect);
-            arena.set_content(slot, (o.right, o.bottom));
+            let content = match arena.frag.multicol.get(&slot).and_then(|m| m.overflow) {
+                Some(o) => (o.right, o.bottom),
+                None => {
+                    reversed = l.scrollable_overflow_rect.is_reversed();
+                    overflow_extent(&l)
+                }
+            };
+            arena.set_content(slot, content);
             let (width, height) = placement
                 .and_then(|p| p.size)
                 .unwrap_or((l.size.width, l.size.height));
@@ -192,7 +225,7 @@ pub(super) fn publish(
             true => {
                 let placed = arena.content(slot);
                 let (frame, (x, y), content) =
-                    crate::kernel::ignore::place(arena, slot, frame, placed);
+                    crate::kernel::ignore::place(arena, slot, frame, placed, reversed);
                 arena.set_content(slot, content);
                 (frame, fx + x, fy + y)
             }
@@ -224,10 +257,7 @@ pub(super) fn publish(
         // change with its frame unchanged: it publishes them all again when
         // that changed or what places it moved, not when it is only on the
         // way to a dirty cell.
-        let displacement = tree
-            .tables
-            .flat(slot)
-            .then(|| super::table::displacement(arena, tree, slot, arena.taffy(slot)));
+        let displacement = tree.part_displacement(arena, slot, arena.taffy(slot));
         let displaced = displacement
             .is_some_and(|d| tree.displacements.insert(slot, d) != Some(d) || parent_moved);
         let descend_all = full
@@ -237,11 +267,25 @@ pub(super) fn publish(
             || tree.tables.anon(slot).is_some();
         arena.set_frame(slot, frame);
         // A bar's slot depth is what it reserves of its parent (LLP 1123 D12), and one that
-        // took no slot reserves none
+        // took no slot reserves none; its rectangle, in the layout's space as its frame is, is
+        // where the scrollers beneath it are read from
         if arena.observations.bars.styled.contains(slot) {
-            match arena.taffy(slot).and_then(|n| tree.bar_depth(n)) {
-                Some(depth) => arena.observations.bars.depths.insert(slot, depth),
-                None => arena.observations.bars.depths.remove(&slot),
+            let node = arena.taffy(slot);
+            let held = node
+                .and_then(|n| Some((tree.bar_depth(n)?, tree.bar_slot(n)?)))
+                .map(|(depth, r)| crate::kernel::bar::Slot {
+                    depth,
+                    rect: [
+                        ox + r.left + shift.t.0,
+                        oy + r.top + shift.t.1,
+                        r.right - r.left,
+                        r.bottom - r.top,
+                    ],
+                });
+            let slots = &mut arena.observations.bars.slots;
+            match held {
+                Some(s) => slots.insert(slot, s),
+                None => slots.remove(&slot),
             };
         }
         arena.consume_layout_flags(slot);
@@ -287,9 +331,8 @@ pub(super) fn publish(
                     continue; // its own layout's, in its own space
                 }
                 let full = full || arena.flags(child).has(NodeFlags::ATTACHED);
-                let (cx, cy) = if let Some(grid) = tree.tables.grid_for(slot, child) {
-                    let l = tree.layout(grid);
-                    (fx + l.location.x, fy + l.location.y)
+                let (cx, cy) = if let Some((dx, dy)) = tree.grid_offset(slot, child) {
+                    (fx + dx, fy + dy)
                 } else {
                     (fx, fy)
                 };
@@ -349,6 +392,11 @@ impl LayoutTree {
     /// The depth of the slot the bar `node` was last laid out in.
     pub(crate) fn bar_depth(&self, node: NodeId) -> Option<f32> {
         self.taffy.bar_depth(node)
+    }
+
+    /// The slot the bar `node` was last laid out in, from its parent's border-box origin.
+    pub(crate) fn bar_slot(&self, node: NodeId) -> Option<taffy::geometry::Rect<f32>> {
+        self.taffy.bar_slot(node)
     }
 
     /// `node`'s used margins on its last layout, top right bottom left, an

@@ -90,9 +90,14 @@ impl<D: DataSource> Presenter<D> {
     /// [`Presenter::run_commands`] but for activating a staged update, which
     /// waits for the next full run: it needs a data source.
     pub(super) fn run_queued_commands(&mut self) {
-        let mut floats = Vec::new();
+        let (mut floats, mut frames) = (Vec::new(), Vec::new());
         for c in std::mem::take(&mut self.commands) {
             match c.name.as_str() {
+                // An iframe's (LLP 1020.002 D3, D7, D11), answered once the commands have run.
+                name if super::frames::is(name, &c.args) => {
+                    let target = self.frame_by_id(super::frames::id(&c.args));
+                    frames.push((c.name, c.args, target));
+                }
                 "deliveryCheck" => {
                     if !self.check_update() {
                         eprintln!("exact update: no store, or a check is already running");
@@ -100,9 +105,9 @@ impl<D: DataSource> Presenter<D> {
                 }
                 "deliveryActivate" => self.owe_update(true),
                 "relaunch" => self.host.log(if self.agent {
-                    "relaunch refused: the agent owns this process; start a new drive on the same storage"
+                    "relaunch refused: the agent owns this process; start a new drive on the same storage".to_string()
                 } else {
-                    "relaunch refused: process relaunch is unsupported on Linux"
+                    format!("relaunch refused: process relaunch is unsupported on {}", crate::agent::HOST_NAME)
                 }),
                 "setScheme" => self.app_scheme(super::preferences::app_dark(c.args.first())),
                 // The shell's haptic engine (LLP 1077 D14); desktop Linux has
@@ -127,6 +132,13 @@ impl<D: DataSource> Presenter<D> {
                 // The shell's share sheet; with no shell, refused into the
                 // journal. Held for the agent like every host (LLP 1069.003 D6).
                 "share" => self.share(&c.args, c.source),
+                "cancelReorder" => {
+                    if let Some(id) = c.args.first().and_then(exact_plan::Value::as_str) {
+                        if let Err(error) = self.cancel_reorder(id) {
+                            self.host.log(error);
+                        }
+                    }
+                }
                 "blur" => self.blur_command(&c.args),
                 "focus" => {
                     self.focus_command(&c.args);
@@ -148,7 +160,8 @@ impl<D: DataSource> Presenter<D> {
                     let arg = |i: usize| c.args.get(i).and_then(exact_plan::Value::as_str);
                     let (text, name) = (arg(0).unwrap_or_default(), arg(1).unwrap_or_default());
                     if arg(2) == Some("iframe") {
-                        self.host.log("postMessage: iframe replies are unavailable on Linux");
+                        let host = if cfg!(target_os = "android") { "Android" } else { "this host" };
+                        self.host.log(format!("postMessage: iframe replies are unavailable on {host}"));
                         continue;
                     }
                     if let Err(refused) = self.post_message(name, text) {
@@ -205,7 +218,7 @@ impl<D: DataSource> Presenter<D> {
                 | "load" | "exitPictureInPicture") => {
                     eprintln!("exact: {name} unsupported on the headless/DRM host");
                     if name == "openURL" {
-                        self.answer_open(&c.args, false);
+                        self.answer_open(c.args.get(1).and_then(exact_plan::Value::as_str), false);
                     }
                 }
                 // The image hears the refusal too, once the commands have run (LLP 1042 §9).
@@ -214,6 +227,8 @@ impl<D: DataSource> Presenter<D> {
                     floats.extend(c.args.first().and_then(exact_plan::Value::as_str).map(str::to_owned));
                 }
                 // A window that fades or leaves full screen is the Mac's so far (LLP 1069.010).
+                "panel" => self.host.log("panel unsupported: route panels are available on macOS only"),
+                name @ ("setBounds" | "setAspectRatio" | "setWindowAlwaysOnTop" | "setWindowIgnoreMouseEvents") => self.host.log(format!("{name} refused: supported on macOS only")),
                 name @ ("exitFullscreen" | "setWindowOpacity") => self
                     .host
                     .log(format!("{name} refused: the window's full screen and opacity are on the Mac host only")),
@@ -239,6 +254,9 @@ impl<D: DataSource> Presenter<D> {
         }
         for id in floats {
             self.refuse_picture_in_picture(&id);
+        }
+        for (name, args, target) in frames {
+            self.frame_command(&name, &args, target);
         }
         // Selection events are queued tasks: the input's commands run first.
         self.drain_field_select_tasks();

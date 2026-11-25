@@ -28,9 +28,12 @@ pub(super) struct Member {
     pub(super) gone: bool,
 }
 
-/// A rendered page's answer for one element of a list.
+/// A rendered page's answer for one element of a list, or for one instance's
+/// request (LLP 1035.005.004 D8).
 #[derive(Clone)]
 pub(super) struct PageAnswer {
+    /// The instance's path; an element has none.
+    pub(super) path: Option<String>,
     pub(super) args: Vec<Value>,
     pub(super) value: Value,
     /// It is asked again: its stream was open, or it read the store and the
@@ -40,7 +43,8 @@ pub(super) struct PageAnswer {
     pub(super) reads: bool,
 }
 
-/// A rendered page's answers for one list's elements.
+/// A rendered page's answers for one list's elements, or for the instances
+/// that own one resource.
 #[derive(Clone)]
 pub(super) struct PageAnswers {
     answers: Vec<PageAnswer>,
@@ -65,19 +69,22 @@ impl PageAnswers {
         }
     }
 
-    /// An answer at `args`. Elements with equal arguments make the same
-    /// request, so each takes an answer at those arguments, in the page's
-    /// order. Look first at the answer after the last one taken: the boot
-    /// makes the elements in the list's order, and the page wrote their
-    /// answers in the order of their rows, which is the list's unless the
-    /// list changed during the render. An element the list moved is found by
-    /// a scan; one the render did not answer costs a scan that finds
-    /// nothing.
-    fn take(&mut self, args: &[Value]) -> Option<&PageAnswer> {
+    /// An answer at `args`, the one of the instance at `path` for an
+    /// instance, whose sibling at equal arguments may have shown another
+    /// answer or none. Elements with equal arguments make the same request,
+    /// so each takes an answer at those arguments, in the page's order. Look
+    /// first at the answer after the last one taken: the boot makes the
+    /// elements in the list's order, and the page wrote their answers in the
+    /// order of their rows, which is the list's unless the list changed
+    /// during the render. An element the list moved is found by a scan; one
+    /// the render did not answer costs a scan that finds nothing.
+    fn take(&mut self, path: Option<&str>, args: &[Value]) -> Option<&PageAnswer> {
         let count = self.answers.len();
         let at = (0..count)
             .map(|step| (self.next + step) % count)
-            .find(|&at| self.answers[at].args == args)?;
+            .find(|&at| {
+                self.answers[at].path.as_deref() == path && self.answers[at].args == args
+            })?;
         self.next = at + 1;
         self.taken[at] = true;
         Some(&self.answers[at])
@@ -123,9 +130,11 @@ impl<D: DataSource> Runner<D> {
             Some(o) => o.site,
             None => self.member(i)?.family,
         };
+        self.resources[family].page_answers.as_ref()?;
+        let path = self.owned_row(i).map(|o| o.path.clone());
         let page = self.resources[family].page_answers.as_mut()?;
         let store_revision = page.store_revision;
-        let answer = page.take(args)?;
+        let answer = page.take(path.as_deref(), args)?;
         let (value, again, reads) = (answer.value.clone(), answer.again, answer.reads);
         self.seed_reads(i, reads);
         if again && self.source_ready(self.plan.str(self.resource_row(i).source)) {

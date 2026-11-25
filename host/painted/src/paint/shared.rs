@@ -119,13 +119,26 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         let hit_space = walk.hit_space;
-        self.record_sticky(walk, id, ts, |painter, walk| {
-            painter.node_at_inner(walk, id, ts, offset, clip);
+        // A subtree painted out of its ancestors (a stage's route, a split's
+        // pane) keeps the scheme they give it.
+        let previous = self.dark;
+        self.dark =
+            super::scheme_of(walk.scene.kernel, walk.scene.presented, id).unwrap_or(previous);
+        self.without_grid(grid::changes_axes(ts), |painter| {
+            let offset = if painter.flatten == Some(id) {
+                offset
+            } else {
+                sticky(walk.scene, id, offset, painter.grid(), &walk.scroll_grids)
+            };
+            painter.record_sticky(walk, id, ts, |painter, walk| {
+                painter.node_at_inner(walk, id, ts, offset, clip);
+            });
         });
+        self.dark = previous;
         walk.hit_space = hit_space;
     }
 
@@ -134,7 +147,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         id: ViewId,
         ts: Transform,
-        offset: (f32, f32),
+        offset: PaintOffset,
         clip: Option<Rect4>,
     ) {
         if self.lift(walk, id, offset) {
@@ -161,8 +174,8 @@ impl Painter {
             return;
         }
         let node = name.expect("named live node");
-        let rect = paint_rect(node.frame, sticky(walk.scene, id, offset));
         let shown = (walk.scene.presented)(id);
+        let rect = self.node_rect(&node, offset, &shown);
         let paint = BoxPaint::capture(&node, walk.scene.kernel, self.dark);
         let geometry = paint.geometry(rect);
         let transform = if shown.lowered & crate::host::lower::LOWER_TRANSFORM == 0 {
@@ -209,7 +222,7 @@ impl Painter {
         let turned_by_reader = |id| {
             let p = (walk.scene.presented)(id);
             p.lowered & crate::host::lower::LOWER_TRANSFORM != 0
-                && (p.rotate != 0.0 || p.scale * p.press <= 0.0)
+                && (p.rotate != 0.0 || p.scale.0 * p.press <= 0.0 || p.scale.1 * p.press <= 0.0)
         };
         let upright = transform.kx == 0.0
             && transform.ky == 0.0

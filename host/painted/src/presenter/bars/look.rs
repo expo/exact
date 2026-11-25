@@ -3,14 +3,14 @@
 //! widgets: each bar is a view of the reader's, and what is in it is drawn
 //! here from the reference's own metrics, the Compose Material 3 library's
 //! (1.4: `TopAppBar` with `TopAppBarSmallTokens`, `NavigationBar` and
-//! `NavigationBarItem` with `NavigationBarTokens`), in the device's colours.
+//! `NavigationBarItem` with `NavigationBarTokens`), using device roles wherever the bar leaves its colours unsaid.
 //!
 //! Lengths are dp, which are this host's points. Type is sp, a point times
 //! the person's font scale, taken linearly, as the top layer's is
 //! (`top/look.rs`).
 //!
 //! **The top app bar** is 64 tall under the status bar, whose area it
-//! fills with its own colour: `surface`, and `surfaceContainer` once the
+//! fills with its own colour. The defaults are `surface` and `surfaceContainer` once the
 //! route's content has scrolled under it (Material's "on scroll" colour).
 //! It does not collapse. The Up arrow is a 24 icon in a 48 target, 4 from
 //! the edge; the title is title-large, 16 from the edge, or 4 after what
@@ -19,7 +19,7 @@
 //! symbol, else a text button. Its numbers are the `top-` rows.
 //!
 //! **The navigation bar** is 80 tall over the gesture bar, whose area it
-//! fills with its own colour, `surfaceContainer`. Its destinations share
+//! fills with its own colour, by default `surfaceContainer`. Its destinations share
 //! its width, 8 apart: a 24 symbol with its label under it (label-medium),
 //! and behind the selected one's symbol the active indicator, a 56 by 32
 //! pill in `secondaryContainer`. The selected destination's symbol is
@@ -37,8 +37,12 @@ use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::generated::metric;
 use exact_kernel::style::metrics::{self, Column};
 use exact_kernel::{Direction, ViewId};
+use material_colors::{color::Rgb, dynamic_color::DynamicScheme, scheme::variant::SchemeTonalSpot};
 use std::rc::Rc;
 use tiny_skia::Transform;
+
+pub(super) mod ink;
+use ink::Accent;
 
 const TITLE_LARGE: Type = Type(22.0, 28.0, 400, 0.0);
 const LABEL_MEDIUM: Type = Type(12.0, 16.0, 500, 0.5);
@@ -108,6 +112,11 @@ fn told(role: Material, dark: bool, light: u32, night: u32) -> [u8; 4] {
         let [_, r, g, b] = if dark { night } else { light }.to_be_bytes();
         [r, g, b, 255]
     })
+}
+
+fn disabled(mut ink: [u8; 4]) -> [u8; 4] {
+    ink[3] = (f32::from(ink[3]) * 0.38).round() as u8;
+    ink
 }
 
 /// A header's button as the top bar shows it.
@@ -182,9 +191,37 @@ pub struct Bottom {
     pub tabs: Vec<Tab>,
 }
 
-/// What a bar's look depends on besides what it says.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Inputs {
+pub(super) struct BarFill {
+    pub paint: [u8; 4],
+    /// The fill over the window, as seen through the system band.
+    pub ground: [u8; 4],
+}
+
+/// CSS written on the element the bar replaces (LLP 1115.001 D11).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(super) struct BarColors {
+    pub container: Option<BarFill>,
+    pub ink: Option<[u8; 4]>,
+    pub seed: Option<([u8; 3], f32)>,
+}
+
+impl BarColors {
+    fn accent(self, dark: bool) -> Option<DynamicScheme> {
+        let ([r, g, b], contrast) = self.seed?;
+        Some(SchemeTonalSpot::new(Rgb::new(r, g, b).into(), dark, Some(f64::from(contrast))).scheme)
+    }
+}
+
+fn opaque(color: Rgb) -> [u8; 4] {
+    [color.red, color.green, color.blue, 255]
+}
+
+/// What a bar's look depends on besides what it says.
+#[derive(Clone, Copy)]
+pub struct Inputs<'a> {
+    pub(super) device_inks: &'a ink::DeviceInks,
+    pub(super) colors: BarColors,
     /// The scheme is dark.
     pub dark: bool,
     /// The person's font scale.
@@ -388,8 +425,19 @@ impl Layout {
         };
         let mut left = inputs.sides.0 + edge;
         let mut right = inputs.width - inputs.sides.1 - edge;
+        let base = if top.scrolled {
+            Role::SurfaceContainer
+        } else {
+            Role::Surface
+        };
+        let container = inputs
+            .colors
+            .container
+            .map_or_else(|| base.color(dark), |f| f.paint);
+        let content = inputs.colors.ink;
+        let title_ink = content.unwrap_or_else(|| Role::OnSurface.color(dark));
         if top.up {
-            let ink = Role::OnSurface.color(dark);
+            let ink = title_ink;
             let at = (left + (ICON_BUTTON - icon) / 2.0, middle(icon), icon, icon);
             items.push(Item::Symbol("back".into(), at, ink));
             targets.push(Target {
@@ -401,13 +449,32 @@ impl Layout {
             left += ICON_BUTTON;
         }
         // A button's box is its 48 target; what it draws sits in the middle.
+        let primary = std::cell::LazyCell::new(|| {
+            inputs.accent_ink(
+                inputs.colors.accent(dark).as_ref(),
+                Accent::Primary,
+                inputs.colors.container.map(|f| f.ground),
+                ink::TEXT,
+            )
+        });
         let mut button = |b: &Button, x: Option<f32>, right: &mut f32, left: &mut f32| {
-            let ink = match (b.enabled, b.destructive, b.tint, b.symbol.is_some()) {
+            let ink = match (b.enabled, b.tint, b.symbol.is_some(), content) {
+                (false, _, true, Some(ink)) => disabled(ink),
                 (false, ..) => Role::Disabled.color(dark),
-                (true, _, Some(tint), _) => tint,
-                (true, true, ..) => Role::Error.color(dark),
-                (true, false, None, true) => Role::OnSurfaceVariant.color(dark),
-                (true, false, None, false) => Role::Primary.color(dark),
+                (true, Some(tint), ..) => tint,
+                (true, _, true, Some(ink)) => ink,
+                _ if b.destructive => inputs.accent_ink(
+                    None,
+                    Accent::Error,
+                    inputs.colors.container.map(|f| f.ground),
+                    if b.symbol.is_some() {
+                        ink::SYMBOL
+                    } else {
+                        ink::TEXT
+                    },
+                ),
+                (_, _, true, _) => Role::OnSurfaceVariant.color(dark),
+                _ => *primary,
             };
             let label = (b.symbol.is_none()).then(|| {
                 let room = (inputs.width / 2.0 - 2.0 * TEXT_BUTTON_PADDING).max(1.0);
@@ -481,19 +548,15 @@ impl Layout {
                 label_x(&p, x.min(right - edge - bounds.2), 0.),
                 middle(p.height),
             );
-            items.push(Item::Text(p, at, Role::OnSurface.color(dark), heading));
+            items.push(Item::Text(p, at, title_ink, heading));
         }
         if top.direction == Direction::Rtl {
             mirror(&mut items, &mut targets, inputs.width);
         }
-        let container = match top.scrolled {
-            true => Role::SurfaceContainer,
-            false => Role::Surface,
-        };
         Layout {
             size: (inputs.width, y0 + h),
             direction: top.direction,
-            container: container.color(dark),
+            container,
             items,
             targets,
         }
@@ -551,27 +614,68 @@ impl Layout {
         let span = (inputs.width - inputs.sides.0 - inputs.sides.1).max(0.0);
         let count = bottom.tabs.len().max(1) as f32;
         let cell = ((span - nav.item_gap * (count - 1.0)) / count).max(0.0);
-        let inactive = told(Material::OnSurfaceVariant, dark, 0xFF49_454F, 0xFFCA_C4D0);
+        let container = inputs
+            .colors
+            .container
+            .map_or_else(|| Role::SurfaceContainer.color(dark), |f| f.paint);
+        let accent = inputs.colors.accent(dark);
+        let indicator = accent.as_ref().map_or_else(
+            || Role::SecondaryContainer.color(dark),
+            |s| opaque(s.secondary_container()),
+        );
+        let inactive = inputs
+            .colors
+            .ink
+            .unwrap_or_else(|| told(Material::OnSurfaceVariant, dark, 0xFF49_454F, 0xFFCA_C4D0));
         let (mut items, mut targets) = (Vec::new(), Vec::new());
         for (index, tab) in bottom.tabs.iter().enumerate() {
             let x = inputs.sides.0 + (cell + nav.item_gap) * index as f32;
             let middle = x + cell / 2.0;
-            let (ink, text) = match (tab.enabled, tab.selected) {
-                (false, _) => {
-                    let mut faded = inactive;
-                    faded[3] = (255.0 * 0.38f32).round() as u8;
-                    (faded, faded)
+            let (ink, text) = if tab.selected && (tab.enabled || accent.is_some()) {
+                let bar_ground = inputs.colors.container.map(|f| f.ground);
+                // A translucent ButtonFace exposes the authored bar through the indicator.
+                let pill_ground = bar_ground
+                    .filter(|_| indicator[3] < 255)
+                    .map(|bar| ink::over(indicator, bar));
+                let symbol = inputs.accent_ink(
+                    accent.as_ref(),
+                    Accent::OnSecondaryContainer,
+                    pill_ground,
+                    ink::SYMBOL,
+                );
+                let label_ground = if tab.symbol.is_some() {
+                    bar_ground
+                } else {
+                    pill_ground
+                };
+                let mut label = inputs.accent_ink(
+                    accent.as_ref(),
+                    Accent::Secondary,
+                    label_ground.filter(|_| tab.enabled),
+                    ink::TEXT,
+                );
+                // On an opaque seeded indicator a lone label may need the pill's own on-colour.
+                if accent.is_some()
+                    && tab.symbol.is_none()
+                    && material_colors::contrast::ratio_of_tones(
+                        Rgb::new(label[0], label[1], label[2]).as_lstar(),
+                        Rgb::new(indicator[0], indicator[1], indicator[2]).as_lstar(),
+                    ) < f64::from(ink::TEXT)
+                {
+                    label = symbol;
                 }
-                (true, true) => (
-                    told(
-                        Material::OnSecondaryContainer,
-                        dark,
-                        0xFF1D_192B,
-                        0xFFE8_DEF8,
-                    ),
-                    told(Material::Secondary, dark, 0xFF62_5B71, 0xFFCC_C2DC),
-                ),
-                (true, false) => (inactive, inactive),
+                if tab.enabled {
+                    (symbol, label)
+                } else {
+                    (disabled(symbol), disabled(label))
+                }
+            } else {
+                let ink = if tab.enabled {
+                    inactive
+                } else {
+                    disabled(inactive)
+                };
+                (ink, ink)
             };
             let label = (!tab.label.is_empty())
                 .then(|| line(engine, &tab.label, LABEL_MEDIUM, scale, cell, tab.direction));
@@ -585,8 +689,7 @@ impl Layout {
             match (&tab.symbol, &label) {
                 (Some(role), _) => {
                     if tab.selected {
-                        let fill = Role::SecondaryContainer.color(dark);
-                        items.push(Item::Fill(layer, fill));
+                        items.push(Item::Fill(layer, indicator));
                     }
                     let icon = (middle - nav.icon / 2.0, padding, nav.icon, nav.icon);
                     items.push(Item::Symbol(role.clone(), icon, ink));
@@ -615,8 +718,7 @@ impl Layout {
                     );
                     layer = Shape::new(around, [around.3 / 2.0; 4]);
                     if tab.selected {
-                        let fill = Role::SecondaryContainer.color(dark);
-                        items.push(Item::Fill(layer, fill));
+                        items.push(Item::Fill(layer, indicator));
                     }
                     items.push(Item::Text(p.clone(), at, text, tab.node));
                     // A destination of a label alone: the label is the badge's anchor, as the icon is.
@@ -639,7 +741,17 @@ impl Layout {
                 rect: (start, 0.0, end - start, h),
                 what: What::Tab(tab.node),
                 enabled: tab.enabled,
-                layer: (layer, Role::OnSurface.color(dark)),
+                layer: (
+                    layer,
+                    if tab.selected {
+                        Role::OnSurface.color(dark)
+                    } else {
+                        inputs
+                            .colors
+                            .ink
+                            .unwrap_or_else(|| Role::OnSurface.color(dark))
+                    },
+                ),
             });
         }
         if bottom.direction == Direction::Rtl {
@@ -648,12 +760,15 @@ impl Layout {
         Layout {
             size: (inputs.width, h + inputs.edge),
             direction: bottom.direction,
-            container: Role::SurfaceContainer.color(dark),
+            container,
             items,
             targets,
         }
     }
 }
+
+#[cfg(test)]
+mod ink_tests;
 
 #[cfg(test)]
 mod tests {
@@ -698,6 +813,8 @@ mod tests {
             ],
         };
         let inputs = Inputs {
+            device_inks: &Default::default(),
+            colors: BarColors::default(),
             dark: false,
             font_scale: 1.0,
             width: 412.0,
@@ -738,6 +855,8 @@ mod tests {
         };
         for font_scale in [1., 2.] {
             let inputs = Inputs {
+                device_inks: &Default::default(),
+                colors: BarColors::default(),
                 dark: false,
                 font_scale,
                 width: 300.,
@@ -848,8 +967,10 @@ component App
             .unwrap();
             assert!(error.is_none(), "{error:?}");
             p.host.set_bar_room(Some((64., 80., 80.))).unwrap();
-            let (top, bottom) = p.read_bars(false);
+            let (top, bottom) = p.read_bars();
             let inputs = Inputs {
+                device_inks: &Default::default(),
+                colors: BarColors::default(),
                 dark: false,
                 font_scale: 1.,
                 width: 300.,
@@ -950,6 +1071,8 @@ component App
         // the inset (16) instead, the title would be cut.
         let width = wide + 4.0 + 48.0 + 4.0 + 8.0 + 2.0;
         let inputs = Inputs {
+            device_inks: &Default::default(),
+            colors: BarColors::default(),
             dark: false,
             font_scale: 1.0,
             width,
@@ -967,6 +1090,220 @@ component App
         // Moved back from the button: it ends 4 before the button's target.
         let bounds = text_rect(&p, at);
         assert!((bounds.0 + bounds.2 - (width - 4.0 - 48.0 - 4.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn bars_without_authored_colours_keep_every_device_paint_role() {
+        use super::super::tests::{barred, APP};
+        let (mut p, _) = barred(APP);
+        let paints = |layout: &Layout| {
+            layout
+                .items
+                .iter()
+                .map(|item| match item {
+                    Item::Fill(_, c) | Item::Symbol(_, _, c) | Item::Text(_, _, c, _) => *c,
+                })
+                .collect::<Vec<_>>()
+        };
+        for dark in [false, true] {
+            p.set_system_scheme(dark);
+            p.sync_bars();
+            let top = &p.bars.top.as_ref().unwrap().layout;
+            let bottom = &p.bars.bottom.as_ref().unwrap().layout;
+            assert_eq!(top.container, Role::Surface.color(dark));
+            assert_eq!(
+                paints(top),
+                [
+                    Role::OnSurfaceVariant.color(dark),
+                    Role::OnSurface.color(dark)
+                ]
+            );
+            let inactive = told(Material::OnSurfaceVariant, dark, 0xff49454f, 0xffcac4d0);
+            assert_eq!(bottom.container, Role::SurfaceContainer.color(dark));
+            assert_eq!(
+                paints(bottom),
+                [
+                    Role::SecondaryContainer.color(dark),
+                    told(Material::OnSecondaryContainer, dark, 0xff1d192b, 0xffe8def8),
+                    told(Material::Secondary, dark, 0xff625b71, 0xffccc2dc),
+                    inactive,
+                    inactive,
+                ]
+            );
+            assert_eq!(
+                (
+                    p.chrome().status_light_icons,
+                    p.chrome().navigation_light_icons
+                ),
+                (dark, dark)
+            );
+        }
+    }
+
+    #[test]
+    fn the_root_accent_seeds_only_the_bars_accent_roles() {
+        use super::super::tests::{barred, APP};
+        let source = APP
+            .replace(
+                "main navigationKey",
+                r##"main accent-color="#245c46" navigationKey"##,
+            )
+            .replace(r#"image "symbol:more""#, r#"text "More""#)
+            .replace(
+                r#"header display"#,
+                r##"header accent-color="#bb2222" display"##,
+            );
+        let (mut p, _) = barred(&source);
+        // Google's Material Color Utilities, SchemeTonalSpot(#245c46), standard contrast.
+        for (dark, primary, indicator, symbol, label) in [
+            (
+                false,
+                0xff1e6a4fu32,
+                0xffcfe9dau32,
+                0xff354b41u32,
+                0xff4c6358u32,
+            ),
+            (
+                true,
+                0xff8cd5b4u32,
+                0xff354b41u32,
+                0xffcfe9dau32,
+                0xffb3ccbeu32,
+            ),
+        ] {
+            p.set_system_scheme(dark);
+            p.sync_bars();
+            let rgba = |argb: u32| {
+                let [a, r, g, b] = argb.to_be_bytes();
+                [r, g, b, a]
+            };
+            let top = &p.bars.top.as_ref().unwrap().layout;
+            let bottom = &p.bars.bottom.as_ref().unwrap().layout;
+            assert!(matches!(&top.items[0], Item::Text(_, _, c, _) if *c == rgba(primary)));
+            assert!(matches!(&bottom.items[0], Item::Fill(_, c) if *c == rgba(indicator)));
+            assert!(matches!(&bottom.items[1], Item::Symbol(_, _, c) if *c == rgba(symbol)));
+            assert!(matches!(&bottom.items[2], Item::Text(_, _, c, _) if *c == rgba(label)));
+            assert_eq!(top.container, Role::Surface.color(dark));
+            assert_eq!(bottom.container, Role::SurfaceContainer.color(dark));
+        }
+    }
+
+    #[test]
+    fn each_bar_uses_its_own_scheme_with_the_roots_single_seed() {
+        use super::super::tests::{barred, APP};
+        let source = APP
+            .replace(
+                "main navigationKey",
+                r##"main accent-color="light-dark(#245c46, #bb2222)" navigationKey"##,
+            )
+            .replace(r#"image "symbol:more""#, r#"text "More""#)
+            .replace("header display", r##"header color-scheme="dark" display"##)
+            .replace(
+                r#"testId="tabs""#,
+                r##"testId="tabs" background-color="#4c6358""##,
+            );
+        let (mut p, _) = barred(&source);
+        p.set_system_scheme(false);
+        p.sync_bars();
+        let top = &p.bars.top.as_ref().unwrap().layout;
+        let bottom = &p.bars.bottom.as_ref().unwrap().layout;
+        assert!(matches!(
+            &top.items[0],
+            Item::Text(_, _, [0x8c, 0xd5, 0xb4, 255], _)
+        ));
+        assert!(matches!(
+            &bottom.items[1],
+            Item::Symbol(_, _, [0x35, 0x4b, 0x41, 255])
+        ));
+        // Both secondary roles miss on #4c6358. Material's foreground tone is 86.28.
+        assert!(matches!(
+            &bottom.items[2],
+            Item::Text(_, _, [0xc5, 0xde, 0xcf, 255], _)
+        ));
+    }
+
+    #[test]
+    fn a_seeded_bar_tracks_material_contrast_and_respects_action_tints() {
+        use super::super::tests::{barred, APP};
+        let source = APP
+            .replace(
+                "main navigationKey",
+                r##"main accent-color="#245c46" navigationKey"##,
+            )
+            .replace(r#"image "symbol:more""#, r#"text "More""#)
+            .replace(
+                "button popovertarget",
+                r##"button color="#bb2222" popovertarget"##,
+            );
+        let (mut p, _) = barred(&source);
+        for (level, indicator) in [
+            (0.5, [0x5b, 0x72, 0x66, 255]),
+            (1., [0x38, 0x4e, 0x43, 255]),
+        ] {
+            p.colors.material_contrast = level;
+            p.sync_bars();
+            let top = &p.bars.top.as_ref().unwrap().layout;
+            let bottom = &p.bars.bottom.as_ref().unwrap().layout;
+            assert!(matches!(
+                &top.items[0],
+                Item::Text(_, _, [0xbb, 0x22, 0x22, 255], _)
+            ));
+            assert!(matches!(&bottom.items[0], Item::Fill(_, c) if *c == indicator));
+            assert!(matches!(&bottom.items[1], Item::Symbol(_, _, c) if *c == [255; 4]));
+        }
+        drop(p);
+        let lone = source.replace(r#"          image "symbol:home""#, "");
+        let (mut p, _) = barred(&lone);
+        p.colors.material_contrast = 1.;
+        p.sync_bars();
+        let bottom = &p.bars.bottom.as_ref().unwrap().layout;
+        assert!(matches!(
+            &bottom.items[0],
+            Item::Fill(_, [0x38, 0x4e, 0x43, 255])
+        ));
+        assert!(matches!(&bottom.items[1], Item::Text(_, _, c, _) if *c == [255; 4]));
+        drop(p);
+        for accent in [r##"accent-color="#245c46""##, ""] {
+            let source = source
+                .replace(r##"accent-color="#245c46""##, accent)
+                .replace(
+                    r##"button color="#bb2222""##,
+                    r##"button disabled=true color="#bb2222""##,
+                );
+            let (mut p, _) = barred(&source);
+            p.sync_bars();
+            let top = &p.bars.top.as_ref().unwrap().layout;
+            assert!(
+                matches!(&top.items[0], Item::Text(_, _, c, _) if *c == Role::Disabled.color(false))
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_selected_symbol_keeps_its_on_colour_over_the_seeded_indicator() {
+        use super::super::tests::{barred, APP};
+        let source = APP
+            .replace(
+                "main navigationKey",
+                r##"main accent-color="transparent" navigationKey"##,
+            )
+            .replace(r#"testId="tabs""#, r##"testId="tabs" color="#ffd9e2""##)
+            .replace(r#"testId="tab-home""#, r#"testId="tab-home" disabled=true"#);
+        let (mut p, _) = barred(&source);
+        p.sync_bars();
+        let bottom = &p.bars.bottom.as_ref().unwrap().layout;
+        assert!(matches!(
+            &bottom.items[0],
+            Item::Fill(_, [0xff, 0xd9, 0xe2, 255])
+        ));
+        assert!(matches!(
+            &bottom.items[1],
+            Item::Symbol(_, _, [0x5a, 0x3f, 0x47, 97])
+        ));
+        assert!(matches!(
+            &bottom.items[2],
+            Item::Text(_, _, [0x74, 0x56, 0x5f, 97], _)
+        ));
     }
 
     #[test]

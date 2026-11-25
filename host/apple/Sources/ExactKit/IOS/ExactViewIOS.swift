@@ -35,8 +35,10 @@ enum LaunchScreenColor {
 
 public final class ExactView: UIView {
     public let session: ExactSession
-    /// A fit or a layout this view has queued, for the main queue or for the end of the batch being applied
+    /// A fit or a layout this view has queued for the main queue
     private(set) var fitPending = false
+    /// A fit owed when the presenter finishes applying its batch
+    private var fitAfterBatch = false
     private var fitting = false
     /// The canvas's colour, which this view shows wherever the viewport does
     /// not reach (`paintUnderKeys`).
@@ -63,6 +65,9 @@ public final class ExactView: UIView {
     /// hinge), and how many layouts have re-read the division regions since
     /// it last changed while they disagreed with it (LLP 1078 D5).
     private var hingeStatus: Int?
+    #if targetEnvironment(simulator) && EXACT_AGENT
+    private(set) var simulatorHingeAngle: CGFloat?
+    #endif
     private var regionRereads = 0
     private static let regionRereadLimit = 5
     private var lastDisplayScale: CGFloat = 0
@@ -71,6 +76,7 @@ public final class ExactView: UIView {
     /// What this view adds beside the viewport, for `layout agree` (LLP 1080.001 D3).
     var inspectionOwned: [UIView] { keyboardProbe.map { [$0] } ?? [] }
     private var editingObservers: [NSObjectProtocol] = []
+    private var sceneGeometry: NSKeyValueObservation?
     private var sceneObservers: [NSObjectProtocol] = []
     /// The appearance traits `reportScheme` last told the session.
     private var reportedTraits: (UIUserInterfaceStyle, CGFloat, UIAccessibilityContrast)?
@@ -161,8 +167,11 @@ public final class ExactView: UIView {
         // lay out again (LLP 1078 D5). The status is kept: the posture
         // follows it, and a layout whose regions disagree with it re-reads
         // them on the following frames (`fit`).
-        ReservedRegions.observeHinge(on: self) { [weak self] status in
+        ReservedRegions.observeHinge(on: self) { [weak self] status, angle in
             guard let self else { return }
+            #if targetEnvironment(simulator) && EXACT_AGENT
+            simulatorHingeAngle = angle.map { $0 * 180 / .pi }
+            #endif
             session.presenter.hingeReported = true
             if status != nil { session.presenter.hasFold = true }
             if status != hingeStatus { hingeStatus = status; regionRereads = 0 }
@@ -220,9 +229,12 @@ public final class ExactView: UIView {
     /// It comes with the first keyboard, not before: a constraint anywhere in
     /// the window gives the window a layout engine, and every view added
     /// after joins it (`_switchToLayoutEngine:`), which a list pays for each
-    /// view of each row it builds. No node view uses a constraint.
+    /// view of each row it builds. No node view uses a constraint. The window's
+    /// own keyboard sampler comes after it (`KeyboardSampleIOS`), so this probe's
+    /// constraint is still the one whose layout lays the view out at once.
     #if !os(tvOS)
     func installKeyboardProbe() {
+        defer { if let window { KeyboardSampleIOS.install(in: window) } }
         guard keyboardProbe == nil else { return }
         keyboardLayoutGuide.usesBottomSafeArea = false
         let probe = UIView()
@@ -292,10 +304,51 @@ public final class ExactView: UIView {
     public override func paste(_ sender: Any?) { rootHearer(#selector(paste(_:)))?.clipboard(#selector(paste(_:))) }
     #endif
 
+    private var finishScreenMove: (() -> Void)?
+    private var disappearingOwner: UIViewController?
+    private var unmountAfterAppearance = false
+
+    public override func willMove(toSuperview newSuperview: UIView?) {
+        if let newSuperview, superview != nil, let window, newSuperview.window === window {
+            finishScreenMove = session.natives.prepareScreenMove(self, into: newSuperview)
+        }
+        super.willMove(toSuperview: newSuperview)
+    }
+
+    public override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        let finish = finishScreenMove
+        finishScreenMove = nil
+        finish?()
+    }
+
     public override func willMove(toWindow newWindow: UIWindow?) {
+        // Unmount retires the navigation hierarchy before UIKit's next turn. Finish
+        // its disappearance while the visible route still contains its children.
+        if newWindow == nil, window != nil, session.natives.hasScreens {
+            if let owner = session.presenter.navigation.primaryOwner, owner.viewIfLoaded?.window != nil {
+                // A pop may already have removed the embedding controller from the
+                // window's controller hierarchy. UIKit finishes that disappearance.
+                var host = owner
+                while let parent = host.parent ?? host.presentingViewController { host = parent }
+                unmountAfterAppearance = host !== window?.rootViewController || owner.transitionCoordinator != nil
+                if !unmountAfterAppearance {
+                    disappearingOwner = owner
+                    owner.beginAppearanceTransition(false, animated: false)
+                }
+            } else {
+                session.natives.setScreensMounted(false, in: self)
+            }
+        }
         // Child didMoveToWindow callbacks can retry focus before our own
         // didMoveToWindow. Wait until their native owners have been installed.
-        if newWindow != nil { session.presenter.navigation.willMount() }
+        if newWindow != nil {
+            if unmountAfterAppearance {
+                unmountAfterAppearance = false
+                session.presenter.navigation.unmounted()
+            }
+            session.presenter.navigation.willMount()
+        }
         if newWindow !== window {
             session.natives.windowLeaving(window) // its window hatch ends while the window is there
         }
@@ -304,21 +357,35 @@ public final class ExactView: UIView {
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
+        let owner = disappearingOwner
+        disappearingOwner = nil
+        owner?.endAppearanceTransition()
         ExactApp.shared.refreshDevPills() // in the window it joined, or another's (DevPill.swift)
         // The window it joined takes the accent; one it left has its own back
         session.presenter.accent.apply()
         if window != nil { reportScheme() }
         #if os(iOS)
+        sceneGeometry = window?.windowScene?.observe(\.effectiveGeometry, options: [.initial, .old, .new]) { [weak self] _, change in
+            guard change.oldValue?.interfaceOrientation != change.newValue?.interfaceOrientation else { return }
+            DispatchQueue.main.async { [weak self] in self?.session.tellPreferencesSoon() }
+        }
         if window != nil { session.presenter.resolveOrientationLock() } // a lock told before there was a window
+        session.presenter.dragIn?.sync() // a drag is heard through the window it joined, and none it left
         #endif
-        session.tellPage() // `hasFocus` is this window's scene's (#114)
+        session.tellPage() // `hasFocus` is this window's scene's
         session.natives.scopesChanged()
         session.rasters?.setPaused(window == nil)
         session.canvases.refreshLifecycle()
         if window == nil {
             session.presenter.menus.unmounted()
             session.presenter.modals.unmounted()
-            session.presenter.navigation.unmounted()
+            if unmountAfterAppearance {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, unmountAfterAppearance, window == nil else { return }
+                    unmountAfterAppearance = false
+                    if session.state != .destroyed { session.presenter.navigation.unmounted() }
+                }
+            } else { session.presenter.navigation.unmounted() }
             if session.state != .destroyed { _ = fitKeyboard(in: session.presenter.pageFrame) }
         } else {
             // Install native ownership after UIKit finishes attaching this
@@ -327,6 +394,7 @@ public final class ExactView: UIView {
                 guard let self, window != nil, session.state != .destroyed else { return }
                 fit()
                 session.presenter.navigation.mounted()
+                session.natives.setScreensMounted(true, in: self)
                 session.presenter.syncAccessibility()
                 #if os(iOS)
                 // Nothing focused (autofocus has run): this view holds the
@@ -363,6 +431,15 @@ public final class ExactView: UIView {
         (agentFold, lastFold) = was
         return refused
     }
+
+    /// The agent's explicit viewport size (`--size`), shared with web/macOS/Linux
+    package static var agentSize: CGSize? = {
+        let env = ExactEnv.environment
+        guard env["EXACT_AGENT"] == "1", let width = Double(env["EXACT_WINDOW_WIDTH"] ?? ""),
+              let height = Double(env["EXACT_WINDOW_HEIGHT"] ?? ""),
+              width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
+        return CGSize(width: width, height: height)
+    }()
 
     /// Native routes keep the window's division regions. An ordinary page clips
     /// them to its layout viewport, or only the last row under visual resizing.
@@ -437,16 +514,14 @@ public final class ExactView: UIView {
             }
             return
         }
-        // Containment may synchronously lay us out during a partial batch.
-        // Finish that batch, then resize synchronously before returning to UIKit.
         if presenter.applying {
-            if !fitPending {
-                fitPending = true
+            // Fit the latest geometry at the batch's end even with a layout queued for the next turn
+            if !fitAfterBatch {
+                fitAfterBatch = true
                 presenter.afterBatch { [weak self] in
                     guard let self else { return }
-                    self.fitPending = false
-                    guard self.session.state != .destroyed else { return }
-                    self.fit()
+                    fitAfterBatch = false
+                    fit()
                 }
             }
             return
@@ -465,9 +540,11 @@ public final class ExactView: UIView {
         // or not, as UIKit's do: a bar's material reaches under the status
         // bar. Its routes keep their content inside its safe area through
         // covers (LLP 1075.003 §3.5); `env()` stays what the page authored.
-        let whole = cover || presenter.navigation.wantsWholeView
+        // The agent's explicit size is drawn inside the safe area, where nothing of the device's overlaps the page.
+        let explicit = Self.agentSize
+        let whole = explicit == nil && (cover || presenter.navigation.wantsWholeView)
         var frame = whole ? bounds : bounds.inset(by: safe)
-        var insets = cover ? safe : .zero
+        var insets = whole && cover ? safe : .zero
         let keyboard = fitKeyboard(in: frame)
         if presenter.keyboardPolicy == "resizes-content", !presenter.navigation.wantsWholeView,
            let top = keyboard.top, top < frame.maxY, presenter.dialogs.top == nil {
@@ -500,21 +577,19 @@ public final class ExactView: UIView {
         // tops and lefts read
         let screenFrame = whole ? bounds : bounds.inset(by: safe)
         var screen: CGSize? = screenFrame.size
-        // The agent's explicit viewport size is shared with web/macOS/Linux.
-        // Fit those logical points into the device window; hit testing and
-        // captures still use the viewport's own coordinate system.
-        let env = ExactEnv.environment
+        // Fit the explicit size's logical points into the device window; hit
+        // testing and captures still use the viewport's own coordinate system.
         var regions: [CGFloat]? = nil
-        if env["EXACT_AGENT"] == "1", let width = Double(env["EXACT_WINDOW_WIDTH"] ?? ""),
-           let height = Double(env["EXACT_WINDOW_HEIGHT"] ?? ""),
-           width.isFinite, height.isFinite, width > 0, height > 0 {
-            size = CGSize(width: width, height: height)
+        // Where the window the kernel lays out in is drawn, which the fold is read against
+        var drawn = screenFrame
+        if let explicit {
+            size = explicit
             screen = size
             let scale = min(frame.width / size.width, frame.height / size.height)
             presenter.viewport.transform = CGAffineTransform(scaleX: scale, y: scale)
             presenter.viewport.bounds = CGRect(origin: .zero, size: size)
             presenter.viewport.center = CGPoint(x: frame.midX, y: frame.midY)
-            insets = .zero
+            drawn = presenter.viewport.frame
             setPageMargins(.zero)
         } else {
             presenter.viewport.transform = .identity
@@ -541,7 +616,7 @@ public final class ExactView: UIView {
         let bent = hingeStatus == 2
         // The window's, not a sheet's (LLP 1075.003 §9.11), or the agent's
         // on a device with none, under the keyboard.
-        let fold = Self.fold(of: self, viewport: screenFrame, size: screen ?? size, hingeBent: bent)
+        let fold = Self.fold(of: self, viewport: drawn, size: screen ?? size, hingeBent: bent)
         if fold.hasFold { presenter.hasFold = true }
         // Discard an override accepted before UIKit first reported the hardware fold
         if presenter.hasFold { agentFold = nil }

@@ -56,12 +56,7 @@ pub(super) fn exit_status_menu<D: exact_runner::DataSource>(
     hide();
     presenter.advance(elapsed_ms);
     let now = presenter.host().now();
-    let quit = presenter.before_unload(now);
-    if quit {
-        presenter.end_hatches();
-        presenter.end_packages();
-    }
-    Some(quit)
+    Some(presenter.before_unload(now))
 }
 
 /// What a notification icon's callback says.

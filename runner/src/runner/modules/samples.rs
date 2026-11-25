@@ -24,6 +24,7 @@
 //! takes each input's samples on its grid as the surface's input events
 //! ([`Runner::surface_sensor_events`]), a display frame at a time.
 
+use super::super::provenance::Cause;
 use super::super::{DataSource, Runner};
 use super::{error_code, CallOrigin, Json, ModulesRow, Route};
 use serde_json::json;
@@ -58,7 +59,8 @@ struct Input {
     next: u64,
     /// Points skipped while the page was hidden, owed to the next sample.
     dropped: u32,
-    origin: CallOrigin,
+    /// The cause of the send that started it.
+    cause: Cause,
 }
 
 #[derive(Default)]
@@ -69,8 +71,8 @@ pub(in crate::runner) struct Samples {
     landing: Vec<(Reader, f64)>,
     /// Data code's cursors, which a reply leaving the implementation sets.
     data: Arc<Mutex<BTreeMap<String, f64>>>,
-    /// The reader being asked now, and its origin.
-    pub(in crate::runner) asking: Option<(Reader, CallOrigin)>,
+    /// The reader being asked now, and its cause.
+    pub(in crate::runner) asking: Option<(Reader, Cause)>,
     /// Each reader group's grid start, by `extension.source` and arguments.
     grids: BTreeMap<(String, String), f64>,
     /// Each sampled source's preferences, oldest first: when each was set,
@@ -230,11 +232,7 @@ impl<D: DataSource> Runner<D> {
         if !tracked {
             return;
         }
-        let value = if value == "clear" {
-            Json::Null
-        } else {
-            value.clone()
-        };
+        let value = value.clone();
         let track = self
             .extensions
             .samples
@@ -276,18 +274,19 @@ impl<D: DataSource> Runner<D> {
 
     /// A reader's period, in ms: its frequency, else the declared rate; a
     /// tool's or a wake's at most the app's own fastest (D4).
-    fn sampled_period(&self, decl: &Json, args: &Json, origin: CallOrigin) -> f64 {
+    fn sampled_period(&self, decl: &Json, args: &Json, cause: Cause) -> f64 {
         let rate = decl["rate"].as_f64().unwrap_or(60.0);
         let asked = (decl["frequency"].as_str())
             .and_then(|o| args[o].as_f64())
             .filter(|f| *f > 0.0)
             .unwrap_or(rate);
-        let frequency = match origin {
-            CallOrigin::App => asked,
-            _ => asked.min(
+        let frequency = if cause.origin() == CallOrigin::App {
+            asked
+        } else {
+            asked.min(
                 self.app_rate(decl["stream"].as_str().unwrap_or_default())
                     .unwrap_or(asked),
-            ),
+            )
         };
         1000.0 / frequency.max(1e-3)
     }
@@ -297,8 +296,8 @@ impl<D: DataSource> Runner<D> {
         let Some(decl) = self.samples_of(row) else {
             return json!({ "error": "NotSupportedError" });
         };
-        let origin = (self.extensions.samples.asking.as_ref()).map_or(CallOrigin::App, |a| a.1);
-        let period = self.sampled_period(&decl, args, origin);
+        let cause = (self.extensions.samples.asking.as_ref()).map_or(Cause::person(), |a| a.1);
+        let period = self.sampled_period(&decl, args, cause);
         let stamp = decl["stamp"].as_str().unwrap_or("timestamp");
         let bound = (decl["bound"].as_str())
             .and_then(|o| {
@@ -405,66 +404,6 @@ impl<D: DataSource> Runner<D> {
         reading
     }
 
-    /// Whether a value preferred for a sampled source is a reading, or a
-    /// list of steps each a reading with its `at`.
-    pub(in crate::runner) fn track_checked(
-        &self,
-        row: &ModulesRow,
-        value: &Json,
-    ) -> Result<(), String> {
-        let decl = self.samples_of(row).unwrap_or_default();
-        let counts = self.substitute(row)["counts"].clone();
-        let stamp = decl["stamp"].as_str().unwrap_or("timestamp");
-        let key = self.key(row);
-        let one = |reading: &Json| -> Result<(), String> {
-            let mut full = reading.clone();
-            let Some(map) = full.as_object_mut() else {
-                return Err(format!("{key}: a reading is an object"));
-            };
-            map.remove("at");
-            // What the runner adds to a count's step, or a batch's.
-            let added: Vec<(&str, Json)> = match counts.is_object() {
-                true => ["since", "stamp"]
-                    .iter()
-                    .filter_map(|f| Some((counts[*f].as_str()?, json!(0))))
-                    .filter(|(f, _)| !map.contains_key(*f))
-                    .collect(),
-                false => vec![
-                    (stamp, json!(0)),
-                    (decl["cursor"].as_str().unwrap_or("sequence"), json!(0)),
-                    ("samples", json!([])),
-                    ("dropped", json!(0)),
-                    ("interrupted", json!(false)),
-                ]
-                .into_iter()
-                .chain(decl["since"].as_str().map(|f| (f, json!(0))))
-                .collect(),
-            };
-            for (field, value) in added {
-                map.insert(field.into(), value);
-            }
-            let ty = self.plan.sources[row.source.0 as usize].ty;
-            self.answer_json(ty, &key, &full)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        };
-        match value {
-            Json::Array(steps) if !steps.is_empty() => {
-                for step in steps {
-                    if !step["at"].as_f64().is_some_and(|at| at >= 0.0) {
-                        return Err(format!(
-                            "{key}: each step has `at`, ms after it is preferred"
-                        ));
-                    }
-                    one(step)?;
-                }
-                Ok(())
-            }
-            Json::Array(_) => Err(format!("{key}: a track has at least one step")),
-            reading => one(reading),
-        }
-    }
-
     /// The fastest frequency an app-origin consumer of `stream` reads it at:
     /// a Contract reader whose last ask was the app's, or a canvas input.
     /// `None` when none does: the stream is not running for the app.
@@ -481,7 +420,9 @@ impl<D: DataSource> Runner<D> {
             let rate = decl["rate"].as_f64().unwrap_or(60.0);
             let readers = self.extensions.readers.get(&self.key(row));
             for (i, args) in readers.into_iter().flatten() {
-                let app = !self.origin_asked(*i).is_some_and(|o| o != CallOrigin::App);
+                let app = !self
+                    .asked_cause(*i)
+                    .is_some_and(|c| c.origin() != CallOrigin::App);
                 if !app
                     || !self
                         .resources
@@ -502,7 +443,7 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .filter(|i| i.sensor == stream)
         {
-            if input.origin == CallOrigin::App {
+            if input.cause.origin() == CallOrigin::App {
                 take(input.frequency);
             }
         }
@@ -563,7 +504,7 @@ impl<D: DataSource> Runner<D> {
 
     /// A send that `feeds` a canvas's input, answered by the substitute: the
     /// input starts, on a fresh grid, or ends (D6).
-    pub(in crate::runner) fn feed(&mut self, row: &ModulesRow, args: &Json, origin: CallOrigin) {
+    pub(in crate::runner) fn feed(&mut self, row: &ModulesRow, args: &Json, cause: Cause) {
         let feeds = self.substitute(row)["feeds"].clone();
         let field = |k: &str| {
             (feeds[k].as_str())
@@ -614,7 +555,7 @@ impl<D: DataSource> Runner<D> {
             start: self.now_ms,
             next: 0,
             dropped: 0,
-            origin,
+            cause,
         };
         let samples = &mut self.extensions.samples;
         match was {
@@ -708,12 +649,12 @@ impl<D: DataSource> Runner<D> {
                 .into_iter()
                 .flatten()
             {
-                let origin = self.origin_asked(*i).unwrap_or_default();
+                let cause = self.asked_cause(*i).unwrap_or(Cause::device());
                 let cursor = self.extensions.samples.cursors.get(&Reader::Resource(*i));
                 readers.push(json!({ "name": self.plan.str(row.declared),
                     "resource": self.plan.str(self.resource_row(*i).name),
                     "args": serde_json::from_str::<Json>(args).unwrap_or_default(),
-                    "cursor": cursor, "origin": origin.word() }));
+                    "cursor": cursor, "origin": cause.origin().word() }));
             }
             if let Some(rate) = self.app_rate(&stream) {
                 streams.insert(stream, json!({ "frequency": rate }));
@@ -722,7 +663,7 @@ impl<D: DataSource> Runner<D> {
         let inputs: Vec<Json> = (self.extensions.samples.inputs.iter())
             .map(|i| {
                 json!({ "surface": i.surface, "sensor": i.sensor,
-                "frequency": i.frequency, "origin": i.origin.word() })
+                "frequency": i.frequency, "origin": i.cause.origin().word() })
             })
             .collect();
         let tracks: serde_json::Map<String, Json> = (self.extensions.samples.tracks.iter())
@@ -750,5 +691,60 @@ impl<D: DataSource> Runner<D> {
             .and_then(|s| self.sibling(row, s))
             .and_then(|s| self.value_of(&s));
         value.is_some_and(|v| error_code(&v).is_none() && v["available"] == false)
+    }
+}
+
+pub(super) fn track_checked(
+    sub: &Json,
+    key: &str,
+    check: impl Fn(&Json) -> Result<(), String>,
+    value: &Json,
+) -> Result<(), String> {
+    let decl = &sub["samples"];
+    let counts = &sub["counts"];
+    let stamp = decl["stamp"].as_str().unwrap_or("timestamp");
+    let one = |reading: &Json| -> Result<(), String> {
+        let mut full = reading.clone();
+        let Some(map) = full.as_object_mut() else {
+            return Err(format!("{key}: a reading is an object"));
+        };
+        map.remove("at");
+        // What the runner adds to a count's step, or a batch's.
+        let added: Vec<(&str, Json)> = match counts.is_object() {
+            true => ["since", "stamp"]
+                .iter()
+                .filter_map(|f| Some((counts[*f].as_str()?, json!(0))))
+                .filter(|(f, _)| !map.contains_key(*f))
+                .collect(),
+            false => vec![
+                (stamp, json!(0)),
+                (decl["cursor"].as_str().unwrap_or("sequence"), json!(0)),
+                ("samples", json!([])),
+                ("dropped", json!(0)),
+                ("interrupted", json!(false)),
+            ]
+            .into_iter()
+            .chain(decl["since"].as_str().map(|f| (f, json!(0))))
+            .collect(),
+        };
+        for (field, value) in added {
+            map.insert(field.into(), value);
+        }
+        check(&full)
+    };
+    match value {
+        Json::Array(steps) if !steps.is_empty() => {
+            for step in steps {
+                if !step["at"].as_f64().is_some_and(|at| at >= 0.0) {
+                    return Err(format!(
+                        "{key}: each step has `at`, ms after it is preferred"
+                    ));
+                }
+                one(step)?;
+            }
+            Ok(())
+        }
+        Json::Array(_) => Err(format!("{key}: a track has at least one step")),
+        reading => one(reading),
     }
 }

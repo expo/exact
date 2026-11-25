@@ -47,8 +47,25 @@ that holds the Cloudflare token uploads a build's files without running them.
 `bun run build:pages` makes what is uploaded: `dist.pages`, which is `dist` with each page at
 `<path>.html` (Pages redirects `/start` to `/start/` for a `start/index.html`), a `_headers` within
 Pages' 100 rules, and the worker. The worker (`worker/index.ts`) answers a request that prefers
-`text/markdown` as `bun start` does, and marks every host but the site's origin `noindex`. `bun
+`text/markdown` as `bun start` does, sends the Markdown to `ChatGPT-User`, `Claude-User` and
+`Perplexity-User` when they do not ask for it, and marks every host but the site's origin `noindex`. `bun
 run test:worker` tests the worker, and `bun run test:pages` the tree under `wrangler pages dev`.
+
+`constants/redirects.ts` holds the redirects. A moved page goes in `redirects`. A redirect or a
+rewrite for any other path goes in `nonPageRules`, as the fields of a rule in [Pages'
+syntax](https://developers.cloudflare.com/pages/configuration/redirects/): status 200 makes a
+rewrite, and `from` can have a splat. The build writes both lists to `dist/_redirects`. Pages
+applies those rules. `bun start` does not: it answers a moved page's old path with a fallback
+page, and the path of any other rule with a 404.
+
+## Prompts
+
+A page shows the prompt in `prompts/<its source>`, after its introduction: `prompts/recipes/tabs.md`
+is the prompt on `docs/recipes/tabs.md`'s page. A recipe with no file of its own shows
+`prompts/recipes.md`, with `{{SOURCE}}` replaced by the recipe's path, and `bun run build` names
+each recipe that does. To give a new recipe its own prompt, add `prompts/recipes/<name>.md` in the
+form of the others: the task, the questions only the person can answer, the recipe's steps, a
+test, the platform checks, the feedback step and what to report.
 
 ## Search
 
@@ -57,3 +74,30 @@ search-only key, so it works the same locally and on the deployed site. As on do
 the index is the Algolia Crawler's: it crawls the deployed site from `sitemap.xml` on a schedule
 and writes DocSearch records (`hierarchy.lvl0` to `lvl6`, `content`, `url`), so nothing here
 holds a write key. Its configuration lives in the Algolia dashboard (Data sources, Crawler).
+
+## WebMCP tools
+
+`app.contract` declares six tools for a browser's agent, and `intents.tools` in `app.json` holds
+each one's title and the words for its parameters (`../recipes/tools.md`). `pages/agents.md` lists
+them for readers.
+
+- A tool that reads writes what it asks for to state, and the resource `answered` (`answerTool`
+  in `app.ts`) holds the answer. The call ends when that resource settles. A tool whose action
+  has a `send` is not read-only for the agent (`readOnlyHint`).
+- `app.ts` can fetch only `/assets/` files from the site's own origin. The tools read
+  `/assets/markdown/<route>.md` and `/assets/llms.txt`, a copy of `/llms.txt` that
+  `tools/postbuild.ts` writes.
+- A tool's parameters are all required, each a string, a number or a bool, so an empty string
+  stands for one left out.
+- `tests/browser.test.mjs` gives the page a stand-in `document.modelContext` and calls each tool.
+
+## Descriptions
+
+A page's description is in `llms.txt`, `sitemap.md`, the page's head and the top of its Markdown.
+`constants/navigation.ts` holds a written one: `description` on a page's row, the map given to
+`pagesFromFolder` for a recipe, and `sectionDescriptions`, keyed by the section's anchor, for a
+section of a split guide. A page with none takes its first sentence of 40 characters or more. A
+section with no such sentence takes the first sentence of each item of its list, as many as fit in
+180 characters. A sentence over 180 characters ends at its last full stop that fits, or is cut.
+`bun run build` stops when two pages share a description, or when one is under 40 characters or
+ends with a colon. It names each page whose description is cut and carries on.

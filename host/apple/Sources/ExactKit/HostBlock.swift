@@ -83,8 +83,8 @@ extension Runtime {
     /// `shown` says how blocks show against their stacks' tops (kind 23,
     /// LLP 1127 D8), applied once the blocks stand.
     static func blockRecords(_ blocks: [(UInt32, HostBlock?)], placements: [(UInt32, BlockPlacement?)] = [], shows: [(UInt32, Bool)] = [],
-                             shown: [(UInt32, BlockShown)] = []) -> Data {
-        var bytes = Data(capacity: (blocks.count + placements.count + shows.count + shown.count) * 36)
+                             shown: [(UInt32, BlockShown)] = [], barItems: [(UInt32, Bool)] = [], sideBars: [(UInt32, (CGFloat, CGFloat))] = []) -> Data {
+        var bytes = Data(capacity: (blocks.count + placements.count + shows.count + shown.count + barItems.count + sideBars.count) * 36)
         let append = { (words: [UInt32]) in
             for word in words { withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) } }
         }
@@ -103,7 +103,10 @@ extension Runtime {
             let offset = placement.contentOffset ?? .zero
             append([view, placement.contentOffset == nil ? 6 : 13] + [r.minX, r.minY, r.width, r.height].map { Float($0).bitPattern } + [placement.within] + [offset.x, offset.y].map { Float($0).bitPattern })
         }
+        for (view, sides) in sideBars { append([view, 28, Float(sides.0).bitPattern, Float(sides.1).bitPattern, 0, 0]) }
         for (view, how) in shown { append([view, 23, how.rawValue.bitPattern, 0, 0, 0]) }
+        // Whether a given block is a navigation bar's item (LLP 1141.004 D3), after the blocks
+        for (view, item) in barItems { append([view, 27, Float(item ? 1 : 0).bitPattern, 0, 0, 0]) }
         return bytes
     }
 }

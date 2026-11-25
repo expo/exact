@@ -312,13 +312,13 @@ impl Gpu {
         _key: u64,
         ts: Transform,
         pivot: (f32, f32),
-        base: [f32; 7],
+        base: [f32; 8],
     ) {
         let origin = self.rows.origin();
         let space = self.affine(ts);
         let own = Affine::translate(((pivot.0 + base[0]) as f64, (pivot.1 + base[1]) as f64))
             * Affine::rotate((base[3] as f64).to_radians())
-            * Affine::scale(base[2] as f64)
+            * Affine::scale_non_uniform(base[2] as f64, base[7] as f64)
             * Affine::translate((-pivot.0 as f64, -pivot.1 as f64));
         if !self.rows.capture.is_empty() {
             self.fragment();
@@ -367,7 +367,7 @@ fn refused_images_do_not_publish_rows_slots_or_layers() {
                 Transform::identity(),
                 (0., 0.),
                 (0., 0.),
-                [0., 0., 1., 0., 1., 0., 0.],
+                [0., 0., 1., 0., 1., 0., 0., 1.],
             );
         }
         gpu.image_refused = true;

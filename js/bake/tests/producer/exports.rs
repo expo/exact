@@ -569,6 +569,8 @@ fn assert_drawing(baked: &Baked) {
     assert_eq!(receipt["abi"], 2);
     assert_eq!(receipt["surfaces"], serde_json::json!({ "spark": 0 }));
     let mut candidate = paired(baked);
+    // A replacement's runner routes `surface=spark` to this module only by its roster.
+    assert_eq!(candidate.module.canvas_roster(), [("spark".to_string(), 0)]);
     candidate.module.bind(&candidate.plan);
     candidate.module.load().unwrap();
     let request = DrawRequest {
@@ -578,6 +580,7 @@ fn assert_drawing(baked: &Baked) {
         surface: "spark",
         args: &[],
         names: &[],
+        args_json: "[]",
         frame: Default::default(),
         current_color: None,
         rtl: false,

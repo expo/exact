@@ -21,6 +21,7 @@ import androidx.camera.core.impl.StreamSpec
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.MutableLiveData
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
 import dev.exact.canvas.TrackConsumer
@@ -166,9 +167,9 @@ class FrameRateTest {
         ReflectionHelpers.setField(CameraCapture, "ready", null)
     }
 
-    private fun call(name: String, args: JSONObject): JSONObject {
+    private fun call(name: String, args: JSONObject, cause: Cause = Cause("app")): JSONObject {
         var answer: JSONObject? = null
-        module.later(name, args) { answer = it }
+        module.later(name, args, null, cause) { answer = it }
         return requireNotNull(answer)
     }
 
@@ -181,7 +182,7 @@ class FrameRateTest {
         override fun muted(reason: String) {}
         override fun unmuted() {}
         override fun ended() {}
-    }, false, "app")
+    }, false, Cause("app"))
 
     private fun state(id: String) = call("mediaStreamTrack", JSONObject().put("track", id))
 
@@ -288,8 +289,7 @@ class FrameRateTest {
     @Test fun aRefusedCameraMoveDoesNotChangeTheFrameRateRequest() {
         val id = open(15.0)
         show(id)
-        context.origin = "tool"
-        val result = call("applyConstraints", JSONObject().put("track", id).put("facingMode", "user").put("frameRate", 30))
+        val result = call("applyConstraints", JSONObject().put("track", id).put("facingMode", "user").put("frameRate", 30), Cause("tool"))
         assertEquals("NotAllowedError", result.getString("error"))
         assertTrue(CameraCapture.attach(ImageAnalysis.Builder().build()))
         assertEquals(Range(15, 15), Provider.bound?.frameRateRange)

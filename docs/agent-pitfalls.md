@@ -46,6 +46,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `flex=1 min-width=0` so it takes the space left by the heading and buttons.
   (Agents, 402-point iOS simulator, 2026-11-12.)
 
+- **Safari drops a declaration that names a viewport segment, its fallback included.** Safari on
+  iOS 27.1 parses no `env()` with indices, so `width="env(viewport-segment-width 1 0, 100%)"` leaves
+  the width `auto`. It tells a page of no fold either: on an iPhone Duo the posture, the segments and
+  the window's size are the same at 180° and 90°. Fix: write a segment only where `exactViewport()`
+  reports two, as the [foldables recipe](recipes/foldables.md) does. (A page in Safari on an iPhone
+  Duo simulator, 2026-11-24.)
 - **A layout-region inset is not a page gutter.** The web can report zero
   for `env(-exact-readable-content-corners-inset-left)` and its right-edge equivalent. Give reading
   content ordinary padding inside the safe region, and bound a full-width
@@ -191,10 +197,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   2026-10-09.)
 - **A menu opens white on a dark page.** Cause: `scheme=fixed` tokens colour the
   boxes they are written on, but the app's scheme is still the device's, so the
-  platform's menus, sheets and alerts stay light. Fix: an always-dark design says
-  `"userInterfaceStyle": "dark"` in `app.json` (or `color-scheme="dark"` on the
-  root); a menu in the brand's colours writes `background-color` and `color` on its
-  `popover` column, which the web draws and its rows take. (#552, 2026-11-14.)
+  platform's menus, sheets, alerts and pickers stay light. Fix: an always-dark design
+  writes `color-scheme="dark"` on the root, which every host's surfaces take, or says
+  `"userInterfaceStyle": "dark"` in `app.json`, which Android, Linux and Windows do not
+  read; a menu in the brand's colours writes `background-color` and `color` on its
+  `popover` column, which the web draws and its rows take. (#552, 2026-11-14; #1469.)
 
 - **The app is wider than the window, and its tests still pass.** A box with
   `width="100%"` and padding is wider than its parent by the padding (`content-box`, as
@@ -315,10 +322,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   so the binding can skip unrelated changes. Found in the harness's matrix
   animation, 2026-10-10; LLP 1017.003 D6 describes the field mask.
 
-- **`scale` accepts one factor for both axes.** A keyframe with `scale="0 1"`
-  is refused. To grow a progress bar horizontally, translate a full-width fill
-  inside an `overflow="hidden"` box. Verified by the heavy-list benchmark's
-  Contract build (2026-10-29).
+- **`scale` takes x then y.** `scale="1 0.5"` keeps the width and halves the
+  height. A single value applies to both axes. Rows, keyframes and transitions
+  use the same factors; percentages work too (`scale="100% 50%"`).
 
 - **A tap that changes one row of a long list takes ~80 ms on the web.** Cause: the
   mutation answers the whole list (10,000 rows), and on the JS target a Rust
@@ -669,7 +675,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 - **A link in the app's own scheme never matches.** `signalclone://connect?x=1`
   reaches the root's `navigate` handler as the location `/connect?x=1`: the scheme
   is dropped and the host becomes the first path segment (`location_of`, LLP 1038
-  D8). Fix: match on the path (`location.startsWith("/connect?")`), not the URL.
+  §3). `signalclone:///connect?x=1` and `signalclone:/connect?x=1`, with no host,
+  are `/connect?x=1` too. Fix: match on the path (`location.startsWith("/connect?")`),
+  not the URL.
   (Signal Clone, phone path.)
 - **VoiceOver reads the screen behind a full-screen overlay.** A call screen
   or menu drawn as a root child above the bars hides the chat list from sight,
@@ -787,14 +795,20 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `0% rotate=-2deg` in `keyframes` | `syntax-unquoted-length` | `0% rotate="-2deg"`, each keyframe on one line |
 | `tags.find(t => …)` | `syntax-method-call` | `first(tags.filter(t => …))`; in each row of a list, `lower-row-lookup` (warning): join it in the data module |
 | a helper action reading state its caller just set | `analyze-read-after-assign` (warning) | `let next = …` in the caller, `n = next`, pass `next` |
-| `width=120` on a box of text | `lower-text-px-width` (warning) | `width="7.5rem"`, or let the content size it |
+| `width=120` on a box of text | `lower-text-px-width` (warning) | let the content size it, or, where the width should grow with the text, `` width=`${120 / 17}rem` ``: 120 pt at iOS's default text size, where `7.5rem` is 127.5 pt |
 | `numberOfLines`, `ellipsizeMode`, `resizeMode`, `textTransform`, `fontVariant` | `lower-unknown-attr` | `line-clamp`, `text-overflow`, `object-fit`, `text-transform`, `font-variant-numeric` |
 | `backgroundColor`, `flexDirection`, `onPress`, `activeOpacity` | `lower-unknown-attr` | `background-color`, `flex-direction`, `press`, `-exact-press-opacity` |
 | `paddingHorizontal=16` | `lower-unknown-attr` | `padding-left=16 padding-right=16`, or `padding="0px 16px"` |
 | `marginVertical=8` | `lower-unknown-attr` | `margin-top=8 margin-bottom=8`, or `margin="8px 0px"` |
+| `useWindowDimensions().width` used as a pane's width | nothing: the window and pane can differ | `exactViewport().width` is the window's; use `resize=<action>` on the pane for its content-box width. A sidebar, sheet or split view can make it narrower ([viewport units](contract-for-agents.md#viewport-and-container-units)) |
 | `shadowColor`, `shadowOpacity`, `shadowRadius`, `shadowOffset`, `elevation` | `lower-unknown-attr`, `lower-attr-tag` | one `box-shadow="<x>px <y>px <2 × radius>px <colour>"` (below); nothing when the same style has `overflow: "hidden"`, which iOS draws without its shadow |
+| `` line-height=`${28 / 17}` ``, `` width=`${n}` `` for numeric `n` | `lower-attr-value` | `line-height=(28 / 17)` for a multiplier, `width=n` for pixels or `` width=`${n}px` `` |
 | `font-weight="bold"`, `"600"` | `lower-attr-value` | `font-weight=700`, `font-weight=600` |
-| `fontSize: 16` | nothing; `verify` lists it as a fixed size | `font-size="1rem"` (16 ÷ 16), or a text style (`font="-exact-body"`): React Native's `fontSize` follows Dynamic Type by default (`allowFontScaling`), and a bare number here is points that do not (LLP 1115.000 D12) |
+| `fontSize: 16` | nothing; `verify` lists it as a fixed size | `` font-size=`${16 / 17}rem` ``, or a text style (`font="-exact-body"`) where the platform's body is meant: React Native's `fontSize` follows Dynamic Type by default (`allowFontScaling`), and a bare number here is points that do not (LLP 1115.000 D12). `1rem` is the root font size: 17 pt at iOS's default text size, 13 pt on the Mac (`NSFont.systemFontSize`, which the Mac's text size does not change) and normally 16 px on the web; an authored root font size changes it on every host, and the user's text size on iOS and the web. `font-size=16` is a fixed 16 pt |
+| `Text` with no `fontSize` of its own or inherited | nothing | `font-size=14` for a fixed size, or `` font-size=`${14 / 17}rem` `` to scale from it: React Native's default is 14 pt, and unstyled text here is the platform's body, 17 pt at iOS's default text size |
+| `withTiming(x)`, `withSpring(x)` with no configuration | nothing: neither function has a counterpart | a `transition` on the property that changes ([motion](recipes/motion.md)). Read the defaults in the installed Reanimated: in 4.7.1 timing is 300 ms with `Easing.inOut(Easing.quad)`, and the spring has stiffness 900, damping 120, mass 4. `transition="translate 300ms ease-in-out"` keeps the duration with a different curve; `transition="translate -exact-spring(900, 120, 4)"` takes the spring's numbers. Whether either ends when Reanimated's does, or follows Reduce Motion as it does, is not established |
+| `Gesture.Pan().activeOffsetX(…).failOffsetY(…).minPointers(2)` | nothing: no attribute sets a threshold or a pointer count | `pan` with `touch-action` is the drag the platform recognizes, without these thresholds, and its iOS recognizer takes one touch. Where the gesture needs two fingers or thresholds of its own, add a recognizer through an [access hatch](reference.md#access-hatches) |
+| `ScreenOrientation.lockAsync(OrientationLock.LANDSCAPE_LEFT)` | nothing: both landscape words compile | on iPhone `orientationlock="landscape-secondary"` is UIKit's landscape left, and `LANDSCAPE_RIGHT` is `"landscape-primary"`. The lock holds while its element is displayed, with no unlock call: when the element goes, another displayed lock or the platform decides ([the reference](reference.md#lock-the-screen-orientation) has the manifest's limit and iPad's) |
 | `transform="rotate(-2deg)"` | `lower-attr-tag` | `rotate="-2deg"`, `translate="0px 25px"`, `scale=0.8` |
 | Expo's `NativeTabs.Trigger role="search"`, SwiftUI's `Tab(role: .search)` | `lower-attr-value` on `role="search"` | `rel="search"` on the root tab, written last; `autofocus` on its root's header search field sets it apart on iOS 26 (`contract vocab search`) |
 | a `ScrollView` in a `flex: 1` `View`: `column flex=1` › `scroll flex=1` | `lower-scroll-grows` (warning) | `min-height=0` on the column; the scroller alone needs none |
@@ -802,6 +816,10 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `alignItems`, `justifyContent`, `gap` on a `View` (a flex column in RN) | `lower-flex-on-block` (warning) | `column` or `row`: a `view` is `display: block`, as a `<div>` is |
 | `flexDirection="row"` on a `Pressable` with content | `lower-flex-on-block` (warning) | `button display="flex"`, and `text-align="left"` where its text is not centred: a `button` is a block with centred text, as `<button>` is |
 | `<SFSymbol name="x" size={N}>`, expo-symbols `SymbolView` | nothing; hand-drawn as an `svg`, or as `font-size=N`, the glyph comes out smaller | `image "symbol:sf/x" width=N height=N object-fit="contain"`, its tint as `color` ("Values beside an SF Symbol", below) |
+
+Dividing by 17 keeps an iOS measurement at the default text size and follows the root
+font from there. It does not reproduce React Native's `allowFontScaling` curve, and a
+fixed length that holds no text needs no conversion.
 
 What the original's style objects say is not always what its iOS screen shows. Port
 what the screenshot shows. (euxy port against its Expo original, judged screen by
@@ -1265,11 +1283,18 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   Alt+F4, Alt+Space, Control+Escape, Control+Shift+Escape, Control+Alt+Delete).
   (LLP 1115.004 D9.6.)
 
-- **A hold's `pointerup` never arrives.** Cause: the press started on a node that a
-  state change replaced during the hold; the up is not delivered to a node that no
-  longer exists (declared in LLP 1005). Fix: keep the pressed node across the state
-  change (change its contents, not which branch renders it).
+- **A hold's `pointerup` never arrives.** Handle `pointercancel` when the system
+  takes the contact. Keep the pressed node mounted through either end. If a
+  state change replaces it during the hold, its handler is gone (LLP 1005).
   **Candidate diagnostic:** the runtime could log a dropped up in development.
+- **A `heightDragFor` handle does nothing.** Its target must be the handle's
+  unique strict ancestor with that `id`, with `box-sizing="border-box"` and a
+  finite nonnegative point height (`height=200`, or a number binding).
+  The CSS default is content-box; a percentage, `auto` or an omitted height also
+  prevents binding. The handle and its ancestors must also be displayed,
+  enabled and non-inert (`kernel/src/motion.rs`). The compiler warns with
+  `lower-height-drag-ineligible` when it can prove a requirement fails, naming
+  the element and repair. Computed values remain runtime checks.
 - **A `transformDragFor` handle does nothing.** The binding resolves only for a
   strict shape (`kernel/src/transform.rs`). The compiler warns with
   `lower-transform-drag-ineligible` when it can prove a target, clip or path
@@ -1842,6 +1867,9 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `scripts/agent.mjs` for dates that read as intended and stay reproducible; in a test
   file, `epoch "…"` and `time-zone "…"` lines, so a run without the flags still means it.
   Against a live backend, `--epoch now` (`epoch now`) instead.
+- **Every app launches slowly on the same iOS simulator.** An XCTest UI session can leave accessibility enabled
+  across reboots. `test ios` reports the existing settings and the commands to
+  clear them. [Timing an installed build](recipes/porting-and-release.md).
 - **A simulator measurement shows a 100–200 ms stall the app never makes.** A
   plain launch's frames hold 16.7 ms, but a run driven with `axe` shows one
   stall with no batch applied about 0.4 s after `axe` first reads the screen
@@ -2201,7 +2229,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   key with explicit curve parameters, which Bun cannot read back (`startNet` in
   `host/web-js/conformance/net.mjs`), so every `conform.mjs` run fails, the async
   lane's `conform` and `conform-browsers` steps included. Fix: put
-  Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (#1148, 2026-10-30.)
+  Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (2026-10-30.)
 - **An `EXACT_WEB_DIST` build compiles, then fails renaming its stage.** The
   destination's parent directory does not exist. Create that parent before
   running `host/web/build.mjs --wasm` with an external dist path.

@@ -30,7 +30,8 @@ use std::rc::{Rc, Weak};
 pub(super) struct OwnedRow {
     /// The plan's resource.
     pub(super) site: usize,
-    /// The instance's path, for the agent's `state` and the journal.
+    /// The instance's path, which finds its page's answer (`PageAnswers`)
+    /// and names it in the agent's `state` and the journal.
     pub(super) path: String,
     /// The instance's storage: gone once the render destroys the instance.
     storage: Weak<RefCell<vm::Owned>>,
@@ -105,7 +106,8 @@ impl<D: DataSource> Runner<D> {
     /// its instances' requests need.
     pub(super) fn boot_owned(&mut self, receipt: &mut CommitReceipt) -> Result<(), RunnerError> {
         self.owned_launch = true;
-        let asked = self.reconcile_owned();
+        let owners = self.tree.as_ref().expect("booted").owners();
+        let asked = self.reconcile_owned(&owners);
         self.owned_launch = false;
         // The first frame's launch asks are made: their marks go, as the
         // boot's own do (`boot_inner`), so a later forced ask is a refresh.
@@ -118,9 +120,10 @@ impl<D: DataSource> Runner<D> {
             }
         }
         if !asked? {
-            self.reconcile_tasks(&self.tree.as_ref().expect("booted").owners())?;
+            self.reconcile_tasks(&owners)?;
             return Ok(());
         }
+        drop(owners);
         let next = self.render_owned(true, |tree, u| tree.update(u))?;
         *receipt = merged(std::mem::take(receipt), next);
         Ok(())
@@ -131,13 +134,11 @@ impl<D: DataSource> Runner<D> {
     /// destroyed instances let go. When anything changed, settle it, and say
     /// so: the caller renders again. (A `refresh` is the commit's own
     /// settlement's, which settles every row.)
-    pub(super) fn reconcile_owned(&mut self) -> Result<bool, RunnerError> {
+    pub(super) fn reconcile_owned(
+        &mut self,
+        owners: &[crate::instance::OwnerInst],
+    ) -> Result<bool, RunnerError> {
         let requests = self.plan.resources.iter().any(|r| r.owner.is_some());
-        let tasks = self.plan.timers.iter().any(|t| t.owner.is_some());
-        if !requests && !tasks && !self.sends_live() {
-            return Ok(false);
-        }
-        let owners = self.tree.as_ref().map(Tree::owners).unwrap_or_default();
         // A destroyed instance's sends go with it (D6); nothing a live
         // instance shows reads them.
         if self.sends_live() {
@@ -149,7 +150,7 @@ impl<D: DataSource> Runner<D> {
         }
         let mut changed = false;
         let mut live = Vec::new();
-        for owner in &owners {
+        for owner in owners {
             let requests: Vec<(usize, Option<usize>)> = (owner.storage.borrow().requests)
                 .iter()
                 .map(|q| (q.resource as usize, q.row))
@@ -163,7 +164,8 @@ impl<D: DataSource> Runner<D> {
                 });
                 let r = match mine {
                     Some(r) => {
-                        let o = self.resources[r].owned.as_mut().expect("owned");
+                        let resource = &mut self.resources[r];
+                        let o = resource.owned.as_mut().expect("owned");
                         if o.path != owner.path {
                             o.path.clone_from(&owner.path);
                         }
@@ -171,8 +173,11 @@ impl<D: DataSource> Runner<D> {
                         let same = o.want.open == want.open
                             && crate::compare::unchanged_arguments(&o.want.args, &want.args);
                         if !same {
+                            let asleep = !resource.pending
+                                && resource.state.as_ref().is_some_and(|state| state.asleep);
+                            // A settled sleeping row only uses its arguments on wake.
+                            changed |= !asleep || o.want.open || want.open;
                             o.want = want;
-                            changed = true;
                         }
                         r
                     }

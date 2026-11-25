@@ -9,7 +9,9 @@
 // checks only their sizes and says so): under the agent, the library through the reader's
 // picture door, a copy and an add, limited access and a revocation; the image codec's conformance (LLP 1133.019 §11,
 // checklist step 9) through the fixture's `editImage`; and MediaStore itself, the implementation bound and the read
-// granted by `pm grant`, and paged through with Older. Both need an NDK in ANDROID_NDK_HOME and a JDK 17 or newer in JAVA_HOME. checklist.md's
+// granted by `pm grant`, and paged through with Older; and, from API 30, the replacement path `photoChanges` sends an
+// app to (drive 8: what another app changes while the fixture is away is listed on its return), and the fixture's
+// photo index kept in step with MediaStore through it (drive 9). Both need an NDK in ANDROID_NDK_HOME and a JDK 17 or newer in JAVA_HOME. checklist.md's
 // Android part is what needs a person: the platform's dialogs and what is chosen in them.
 //
 // usage: bun packages/photos/test/android.mjs [--emulator]
@@ -324,6 +326,262 @@ if (process.argv.includes('--emulator')) {
         : [...seeded.map(f => `${f.dir}${f.name}`), ...system.map(s => `${s.path}${s.name}`)].map(p => `am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/${p}`).join(' && '));
     }
   }
+  // 8: the replacement path (LLP 1133.019.000 D1, D3), over MediaStore's screenshots, in one launch: a token answers
+  // `expired`, and after each change another app makes while the fixture is away (a screenshot added, a photo moved
+  // into `Screenshots/` and out, trashed, restored and deleted) the list on return is MediaStore's, with nothing
+  // pressed and the read unchanged. Then, relaunched, a denial and limited access. The shell moves, trashes and
+  // restores a row through MediaStore, as root (an emulator's adb runs as root), and deletes by the file. It touches
+  // only the files it made, by their paths, and puts the fixture's read permissions and their user-fixed flags back.
+  if (api >= 30) {
+    const { open } = await import(resolve(root, 'scripts/agent.mjs'));
+    const id = 'com.exact.photosfixture', images = 'content://media/external/images/media', tag = `exact-photos-rescan-${process.pid}-${Date.now()}-`;
+    const shots = 'Pictures/Screenshots/', made = ['Pictures/', shots].filter(d => adb('shell', `ls -d '/sdcard/${d}'`).status !== 0).reverse();
+    const read = `android.permission.${api >= 33 ? 'READ_MEDIA_IMAGES' : 'READ_EXTERNAL_STORAGE'}`, selected = 'android.permission.READ_MEDIA_VISUAL_USER_SELECTED';
+    const held = p => {
+      const line = adb('shell', `dumpsys package ${id}`).stdout.toString().split('\n').find(l => l.trim().startsWith(`${p}: granted=`));
+      if (!line) throw new Error(`dumpsys package ${id} names no ${p}`);
+      return { granted: /granted=true/.test(line), fixed: /USER_FIXED/.test(line), set: /USER_SET/.test(line) };
+    };
+    const found = Object.fromEntries([read, ...(api >= 34 ? [selected] : [])].map(p => [p, held(p)]));
+    const out = resolve(tmpdir(), `photos-android-rescan-${process.pid}`);
+    mkdirSync(out, { recursive: true });
+    const scan = () => adb('shell', 'content call --method scan_volume --uri content://media --arg external_primary');
+    const rowsOf = () => [...adb('shell', `content query --uri ${images} --projection _id:_display_name:relative_path:datetaken:date_added`).stdout.toString()
+      .matchAll(/_id=(\d+), _display_name=(.*), relative_path=(.*), datetaken=(.*), date_added=(.*)$/gm)]
+      .map(m => ({ id: m[1], name: m[2], path: m[3].trim(), taken: m[4] === 'NULL' ? null : Number(m[4]), added: Number(m[5]) }));
+    const poll = (done) => { let rows = rowsOf(); for (let t = 0; t < 20 && !done(rows); t++) { spawnSync('sleep', ['0.5']); rows = rowsOf(); } return rows; };
+    const names = [];
+    const push = (name, dir) => {
+      // The cleanup removes the name from both directories, so it must be free in both.
+      for (const d of ['Pictures/', shots]) if (adb('shell', `ls '/sdcard/${d}${name}'`).status === 0) throw new Error(`/sdcard/${d}${name} is there already`);
+      const file = resolve(out, name);
+      writeFileSync(file, Buffer.concat([readFileSync(resolve(here, '../fixture/agent-1.jpg')), Buffer.from(name)]));
+      adb('shell', `mkdir -p '/sdcard/${dir}'`);
+      names.push(name);
+      adb('push', file, `/sdcard/${dir}`);
+      scan();
+      const at = r => r.name === name && r.path === dir;
+      return poll(rows => rows.some(at)).find(at);
+    };
+    const uri = row => `${images}/${row.id}`, update = (row, bind) => adb('shell', `content update --uri ${uri(row)} --bind ${bind}`);
+    // What the first page of screenshots should be now: the list's order (D1) over the rows in a Screenshots directory.
+    const screenshot = r => /(^|\/)screenshots\/*$/i.test(r.path);
+    const newest = (a, b) => (b.taken ?? -Infinity) - (a.taken ?? -Infinity) || b.added - a.added || Number(b.id) - Number(a.id);
+    const want = () => rowsOf().filter(screenshot).sort(newest).slice(0, 12).map(r => `photos:${uri(r)}`);
+    const shown = t => (t?.nodes ?? []).map(n => n.props?.imageSource).filter(v => /^photos:/.test(v ?? ''));
+    const text = (t, testId) => t?.nodes?.find(n => n.props?.testId === testId)?.props?.text;
+    const component = adb('shell', `cmd package resolve-activity --brief -c android.intent.category.LAUNCHER ${id}`).stdout.toString().trim().split('\n').at(-1);
+    const decode = t => { try { return JSON.parse(Buffer.from(t, 'base64').toString()); } catch { return null; } };
+    // The drive's photos have no date taken, so they sort after every screenshot that has one.
+    const dated = rowsOf().filter(r => screenshot(r) && r.taken !== null).length;
+    let s;
+    if (dated > 9) check(where, '8: at most 9 screenshots here with a date taken, so the drive\'s photos reach the first page', false, `${dated} have one`);
+    else try {
+      const s1 = push(`${tag}1.jpg`, shots), p1 = push(`${tag}2.jpg`, 'Pictures/');
+      adb('shell', 'pm', 'grant', id, read);
+      s = await open({ host: 'android', app, reader: true, bind: 'photos' });
+      await s.tap('@recent', { choice: 'allow' }).catch(() => {});
+      await s.clock('settle');
+      await s.tap('screenshots');
+      await s.clock('settle');
+      let page = shown(await s.tree());
+      check(where, '8: the first page of screenshots, the one pushed there in it and the one in Pictures/ not', JSON.stringify(page) === JSON.stringify(want())
+        && page.includes(`photos:${uri(s1)}`) && !page.includes(`photos:${uri(p1)}`), `${JSON.stringify(page)} against ${JSON.stringify(want())}`);
+      await s.tap('watch');
+      await s.tap('only-screenshots');
+      await s.clock('settle');
+      const panel = async () => {
+        const t = await s.tree();
+        return { changes: text(t, 'changes'), error: text(t, 'changes-error'), token: text(t, 'token') };
+      };
+      let p = await panel();
+      const full = p.token, start = decode(full);
+      check(where, '8: no token: a rescan-only starting point for the screenshots', p.changes === '|||false false' && start?.backend === 'mediastore' && start.access === 'full'
+        && JSON.stringify(start.subtypes) === '["screenshot"]' && !('at' in start), JSON.stringify(p));
+      await s.type('since', p.token);
+      await s.clock('settle');
+      p = await panel();
+      check(where, '8: the token: expired, empty, the same starting point', p.changes === '|||false true' && !p.error && JSON.stringify(decode(p.token)) === JSON.stringify(start), JSON.stringify(p));
+      /** [change] made while the fixture is in the background: the first page after its return once it is
+       * MediaStore's, else after 10 s, and what MediaStore's is. */
+      const away = async (change) => {
+        adb('shell', 'input keyevent KEYCODE_HOME');
+        const front = () => /ResumedActivity.*com\.exact\.photosfixture\//.test(adb('shell', 'dumpsys activity activities').stdout.toString());
+        for (let n = 0; n < 20 && front(); n++) spawnSync('sleep', ['0.25']);
+        const left = !front();
+        change();
+        const target = want();
+        adb('shell', `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${component}`);
+        let t = await s.tree();
+        for (let n = 0; n < 40 && JSON.stringify(shown(t)) !== JSON.stringify(target); n++) {
+          await s.clock('+250 real');
+          t = await s.tree();
+        }
+        return { page: shown(t), target, status: text(t, 'status'), left };
+      };
+      const listed = (name, r, ok) => check(where, `8: ${name}: on return the first page is MediaStore's, the read unchanged`,
+        ok && r.left && JSON.stringify(r.page) === JSON.stringify(r.target) && r.status === 'granted full granted',
+        `${r.left ? '' : 'never left the foreground; '}${r.status} ${JSON.stringify(r.page)} against ${JSON.stringify(r.target)}`);
+      let s2;
+      let r = await away(() => { s2 = push(`${tag}3.jpg`, shots); });
+      listed('a screenshot added', r, s2 && r.page.includes(`photos:${uri(s2)}`));
+      r = await away(() => update(p1, `relative_path:s:${shots}`));
+      listed('a photo moved into Screenshots/', r, r.page.includes(`photos:${uri(p1)}`));
+      r = await away(() => update(p1, 'relative_path:s:Pictures/'));
+      listed('the photo moved out', r, !r.page.includes(`photos:${uri(p1)}`));
+      r = await away(() => update(s1, 'is_trashed:i:1'));
+      listed('a screenshot trashed', r, !r.page.includes(`photos:${uri(s1)}`));
+      r = await away(() => update(s1, 'is_trashed:i:0'));
+      listed('the screenshot restored, its id kept', r, r.page.includes(`photos:${uri(s1)}`));
+      r = await away(() => { adb('shell', `rm -f '/sdcard/${shots}${s1.name}'`); scan(); poll(rows => !rows.some(x => x.id === s1.id)); });
+      listed('the screenshot deleted', r, !r.page.includes(`photos:${uri(s1)}`));
+      await s.close();
+      s = null;
+
+      /** A launch after setting [grants], the Changes panel given the full view's token. */
+      const relaunch = async (grants) => {
+        for (const [p, on] of Object.entries(grants)) adb('shell', 'pm', on ? 'grant' : 'revoke', id, p);
+        s = await open({ host: 'android', app, reader: true, bind: 'photos' });
+        await s.tap('@recent', { choice: 'allow' }).catch(() => {});
+        await s.clock('settle');
+        await s.tap('watch');
+        await s.tap('only-screenshots');
+        await s.clock('settle');
+        await s.type('since', full);
+        await s.clock('settle');
+        return { panel: await panel(), tree: await s.tree() };
+      };
+      // A denial: the read revoked and fixed by the user, so asking answers at once with no dialog.
+      adb('shell', 'pm', 'revoke', id, read);
+      adb('shell', 'pm', 'set-permission-flags', id, read, 'user-fixed');
+      let { panel: denied, tree } = await relaunch(api >= 34 ? { [selected]: false } : {});
+      check(where, '8: denied: the list and the token NotAllowedError, nothing shown', text(tree, 'recent-error') === 'NotAllowedError' && shown(tree).length === 0
+        && denied.error === 'NotAllowedError' && /^denied none/.test(text(tree, 'status') ?? ''), `${text(tree, 'status')}, ${text(tree, 'recent-error')}, ${JSON.stringify(denied)}`);
+      await s.close();
+      s = null;
+      adb('shell', 'pm', 'clear-permission-flags', id, read, 'user-fixed');
+
+      // Limited access (API 34) with nothing selected here: the list reads the app's own photos (drive 5 leaves its
+      // add) and none of the shell's, and the full view's token expires into a limited one.
+      if (api >= 34) {
+        let limited;
+        ({ panel: limited, tree } = await relaunch({ [selected]: true }));
+        const mine = shown(tree), own = (adb('shell', `content query --uri ${images} --projection _id --where "owner_package_name='${id}'"`).stdout.toString()
+          .match(/_id=\d+/g) ?? []).map(m => `photos:${images}/${m.slice(4)}`);
+        check(where, '8: limited: status limited, Manage, the list read with the app\'s own photo and none of the shell\'s', /^granted limited/.test(text(tree, 'status') ?? '')
+          && text(tree, 'recent-error') === '' && JSON.stringify(tree).includes('"manage"') && own.some(o => mine.includes(o))
+          && ![s1, s2, p1].some(x => x && mine.includes(`photos:${uri(x)}`)), `${text(tree, 'status')}, ${text(tree, 'recent-error')}, ${JSON.stringify(mine)}, own ${JSON.stringify(own)}`);
+        // The drive's screenshot is on the first page of screenshots under full access (the check above): not here.
+        await s.tap('screenshots');
+        await s.clock('settle');
+        const shots8 = shown(await s.tree());
+        check(where, '8: limited: the screenshots read, without the shell\'s screenshot', text(await s.tree(), 'recent-error') === '' && s2 && !shots8.includes(`photos:${uri(s2)}`),
+          JSON.stringify(shots8));
+        check(where, '8: limited: the full view\'s token expires into a limited one', limited.changes === '|||false true' && decode(limited.token)?.access === 'limited'
+          && JSON.stringify(decode(limited.token)?.subtypes) === '["screenshot"]', JSON.stringify(limited));
+      } else console.log(`SKIP ${where} 8: limited access needs API 34`);
+    } finally {
+      if (s) await s.close().catch(e => console.log(`8: the session did not close: ${e.message}`));
+      for (const [p, was] of Object.entries(found)) {
+        adb('shell', 'pm', was.granted ? 'grant' : 'revoke', id, p);
+        for (const [flag, on] of [['user-fixed', was.fixed], ['user-set', was.set]]) adb('shell', 'pm', on ? 'set-permission-flags' : 'clear-permission-flags', id, p, flag);
+      }
+      const now = Object.entries(found).filter(([p, was]) => JSON.stringify(held(p)) !== JSON.stringify(was));
+      check(where, "8: the fixture's read permissions are as they were", now.length === 0, JSON.stringify(now));
+      // This run's files, by their names, wherever the drive left them; a trashed one under its trashed name.
+      for (const name of names)
+        adb('shell', `rm -f '/sdcard/Pictures/${name}' '/sdcard/${shots}${name}' /sdcard/Pictures/.trashed-*-'${name}' /sdcard/${shots}.trashed-*-'${name}'`);
+      for (const dir of made) adb('shell', `rmdir '/sdcard/${dir}'`);
+      scan();
+    }
+  } else console.log(`SKIP ${where} 8: trash and restore need API 30`);
+  // 9: the fixture's photo index of the screenshots (LLP 1133.019.000 D1, importer.mjs), against MediaStore, which
+  // answers every token `expired`: 501 screenshots pushed, the first import, a change while the app is away, a
+  // relaunch, a sync stopped mid-list and a denial. Each sync is one replacement, and the index settles in step with
+  // the list of the screenshots. The read permissions and their flags are put back, and the pushed files removed.
+  if (api >= 30) {
+    const { open } = await import(resolve(root, 'scripts/agent.mjs'));
+    const { imported, settled } = await import('./importer.mjs');
+    const id = 'com.exact.photosfixture', tag = `exact-photos-index-${process.pid}-`, shots = '/sdcard/Pictures/Screenshots';
+    const read = `android.permission.${api >= 33 ? 'READ_MEDIA_IMAGES' : 'READ_EXTERNAL_STORAGE'}`, selected = 'android.permission.READ_MEDIA_VISUAL_USER_SELECTED';
+    const flags = p => adb('shell', `dumpsys package ${id}`).stdout.toString().split('\n').find(l => l.trim().startsWith(`${p}: granted=`)) ?? '';
+    const found = Object.fromEntries([read, ...(api >= 34 ? [selected] : [])].map(p => [p, flags(p)]));
+    const made = adb('shell', `ls -d ${shots}`).status !== 0;
+    const scan = () => adb('shell', 'content call --method scan_volume --uri content://media --arg external_primary');
+    const out = resolve(tmpdir(), `photos-android-index-${process.pid}`);
+    mkdirSync(out, { recursive: true });
+    let pushed = 0;
+    /** `n` more screenshots, pushed as one directory and scanned once. */
+    const push = (n) => {
+      const batch = resolve(out, `batch-${pushed}`);
+      mkdirSync(batch, { recursive: true });
+      for (let i = 0; i < n; i++, pushed++)
+        writeFileSync(resolve(batch, `${tag}${pushed}.jpg`), Buffer.concat([readFileSync(resolve(here, `../fixture/agent-${1 + pushed % 6}.jpg`)), Buffer.from(`${tag}${pushed}`)]));
+      adb('shell', `mkdir -p ${shots}`);
+      adb('push', `${batch}/.`, `${shots}/`);
+      scan();
+    };
+    const component = adb('shell', `cmd package resolve-activity --brief -c android.intent.category.LAUNCHER ${id}`).stdout.toString().trim().split('\n').at(-1);
+    const store = `importer-${process.pid}`;
+    let s;
+    const launch = async (grants = { [read]: true, ...(api >= 34 ? { [selected]: false } : {}) }) => {
+      for (const [p, on] of Object.entries(grants)) adb('shell', 'pm', on ? 'grant' : 'revoke', id, p);
+      s = await open({ host: 'android', app, reader: true, bind: 'photos', storage: store });
+      await s.tap('@recent', { choice: 'allow' }).catch(() => {});
+      await s.clock('settle');
+    };
+    const close = async () => { await s?.close(); s = null; };
+    /** One replacement: the stored token's walk, which expires, then the list and the walk from its checkpoint. */
+    const replacement = r => r.how === 'replaced' && r.pages === 2 + Math.ceil(r.listed / 500);
+    try {
+      push(501);
+      await launch();
+      const first = await imported(s, { shots: true });
+      // The first has no checkpoint: it takes one, where a later sync's walk expires.
+      check(where, '9: the first import of 501 screenshots and more: the list, in step', first.inStep && replacement(first) && first.count >= 501 && first.syncs === 1, JSON.stringify(first));
+      // Away: three screenshots deleted and two pushed. On return the module announces the list and the feed.
+      adb('shell', 'input keyevent KEYCODE_HOME');
+      spawnSync('sleep', ['1']);
+      adb('shell', `rm -f ${[0, 1, 2].map(i => `${shots}/${tag}${i}.jpg`).join(' ')}`);
+      push(2);
+      adb('shell', `am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n ${component}`);
+      const back = await settled(s, r => r.inStep && r.count === first.count - 1 && r.syncs > first.syncs);
+      await s.clock('+2000 real');
+      const after = await settled(s);
+      check(where, '9: back in the app: the index replaced, in step, one replacement a sync', back.inStep && replacement(after) && after.count === first.count - 1, JSON.stringify(after));
+      check(where, '9: the return asks the index once', after.syncs === first.syncs + 1, `${first.syncs} then ${after.syncs}`);
+      await close();
+      await launch();
+      const again = await imported(s, { shots: true });
+      check(where, '9: relaunched: the token expires, one replacement, in step', again.inStep && replacement(again) && again.syncs === 1, JSON.stringify(again));
+      await close();
+      push(1);
+      await launch();
+      const cut = await imported(s, { shots: true, two: true, budget: true }, r => !!r.how);
+      check(where, '9: stopped mid-list: the replacement discarded, the index as it was', cut.how === 'interrupted' && cut.pages === 2 && cut.count === again.count, JSON.stringify(cut));
+      await close();
+      adb('shell', 'pm', 'set-permission-flags', id, read, 'user-fixed');
+      await launch({ [read]: false, ...(api >= 34 ? { [selected]: false } : {}) });
+      const denied = await imported(s, { shots: true }, r => !!r.error);
+      check(where, '9: denied: NotAllowedError, the index as it was committed', denied.how === 'failed' && denied.error === 'NotAllowedError' && denied.count === again.count, JSON.stringify(denied));
+      await close();
+      adb('shell', 'pm', 'clear-permission-flags', id, read, 'user-fixed');
+      await launch();
+      const whole = await imported(s, { shots: true });
+      check(where, '9: granted again: one replacement, in step', whole.inStep && replacement(whole) && whole.count === again.count + 1, JSON.stringify(whole));
+    } finally {
+      await close().catch(e => console.log(`9: the session did not close: ${e.message}`));
+      for (const [p, line] of Object.entries(found)) {
+        adb('shell', 'pm', /granted=true/.test(line) ? 'grant' : 'revoke', id, p);
+        for (const [flag, word] of [['user-fixed', 'USER_FIXED'], ['user-set', 'USER_SET']]) adb('shell', 'pm', line.includes(word) ? 'set-permission-flags' : 'clear-permission-flags', id, p, flag);
+      }
+      const now = Object.entries(found).filter(([p, line]) => flags(p).trim() !== line.trim());
+      check(where, "9: the fixture's read permissions are as they were", now.length === 0, JSON.stringify(now));
+      adb('shell', `rm -f ${shots}/${tag}*`);
+      if (made) adb('shell', `rmdir ${shots}`);
+      scan();
+    }
+  } else console.log(`SKIP ${where} 9: the index's drive needs API 30`);
 }
 console.log(failed() ? `${failed()} failed` : 'all passed');
 process.exit(failed() ? 1 : 0);

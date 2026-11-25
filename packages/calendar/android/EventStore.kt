@@ -30,6 +30,7 @@ import android.provider.CalendarContract
 import android.provider.CalendarContract.Calendars
 import android.provider.CalendarContract.Events
 import android.provider.CalendarContract.Instances
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import exact.calendar.AgentCalendar.Companion.text
 import org.json.JSONArray
@@ -64,13 +65,13 @@ internal class EventStore(private val context: ExtensionContext, private val say
 
     private fun has(permission: String) = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
-    fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    fun later(name: String, args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "calendarStatus", "requestFullCalendarAccess" -> reply(status())
-            "calendars" -> allowed(listOf(READ), reply) { observe(); work.execute { answer(reply) { JSONObject().put("calendars", JSONArray(calendars())) } } }
-            "calendarEvents" -> allowed(listOf(READ), reply) { observe(); page(args, reply) }
-            "saveEvent" -> allowed(listOf(READ, WRITE), reply) { work.execute { answer(reply) { save(args) } } }
-            "removeEvent" -> allowed(listOf(READ, WRITE), reply) { work.execute { answer(reply) { remove(args) } } }
+            "calendars" -> allowed(listOf(READ), cause, reply) { observe(); work.execute { answer(reply) { JSONObject().put("calendars", JSONArray(calendars())) } } }
+            "calendarEvents" -> allowed(listOf(READ), cause, reply) { observe(); page(args, reply) }
+            "saveEvent" -> allowed(listOf(READ, WRITE), cause, reply) { work.execute { answer(reply) { save(args) } } }
+            "removeEvent" -> allowed(listOf(READ, WRITE), cause, reply) { work.execute { answer(reply) { remove(args) } } }
             "showEventEditor" -> editor(args, reply)
             else -> reply(CalendarModule.error("NotSupportedError"))
         }
@@ -111,12 +112,12 @@ internal class EventStore(private val context: ExtensionContext, private val say
 
     /** [then] once the app holds [permissions]: asked in one request while any is not refused for good; refused while
      * the manifest lacks one or the person refused. */
-    private fun allowed(permissions: List<String>, reply: (JSONObject) -> Unit, then: () -> Unit) {
+    private fun allowed(permissions: List<String>, cause: Cause, reply: (JSONObject) -> Unit, then: () -> Unit) {
         val missing = permissions.filter { it !in declared }
         if (missing.isNotEmpty()) return reply(CalendarModule.error("NotAllowedError", "the manifest declares no ${missing.joinToString(", ")}"))
         if (permissions.all(::has)) return then()
         if (permissions.any { context.permission(it).state == "denied" }) return reply(CalendarModule.error("NotAllowedError"))
-        context.requestPermissions(permissions.toTypedArray()) { answered ->
+        context.requestPermissions(cause, permissions.toTypedArray()) { answered ->
             // A refusal with no rationale owed after it is permanent: the history `permission` reads.
             val activity = context.activity
             for (p in permissions) if (p in answered && !has(p) && activity != null && !activity.shouldShowRequestPermissionRationale(p)) {

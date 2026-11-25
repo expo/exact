@@ -49,8 +49,8 @@ export function arrangeDrags({ w, views, viewId, api, lower, ops, now, applyBatc
   };
   function groupRequest(f, op, b, g, token) {
     if (op === 'reorder-begin') {
-      if (token !== 0 || active || !same(L().binding(b.handle), b, KEYS) || !same(L().geometry(b.list), g, GEOMETRY)) return stale();
-      const started = L().beginGroup(b, g, f.flags === 1);
+      if (token !== 0 || active || !same(L().binding(b.handle), b, KEYS) || b.wrapper !== b.root && !same(L().geometry(b.list), g, GEOMETRY)) return stale();
+      const started = L().beginGroup(b, b.wrapper === b.root ? L().geometry(b.list) : g, f.flags === 1);
       if (!started) return stale();
       active = { binding: b, token: started.token, grouped: true, holds: new Map(), terminal: false, captured: false, released: false, velocity: [0, 0] };
       return groupReply(true, false);
@@ -58,13 +58,13 @@ export function arrangeDrags({ w, views, viewId, api, lower, ops, now, applyBatc
     if (!active?.grouped || !same(active.binding, b, KEYS) || active.token !== token) return stale();
     const target = f.targetView != null ? Number(f.targetView) : null, tg = target != null ? { ...g, list: target } : g;
     if (op === 'reorder-preview' || op === 'reorder-preview-into') {
-      const progress = L().into(active.token, target ?? b.list, tg, f.contentY ?? 0);
+      const progress = L().into(active.token, target ?? b.list, b.wrapper === b.root ? L().geometry(b.list) : tg, f.contentY ?? 0, b.wrapper === b.root ? f.rows?.[1]?.key ?? null : undefined);
       if (progress === 'stale') return stale();
       return groupReply(progress === 'accepted', false);
     }
     if (op === 'reorder-step') return L().step(active.token, f.flags) ? groupReply(true, false) : groupReply(false, false);
     if (op === 'reorder-terminal') {
-      const dropped = L().dropGroup(active.token, tg, f.now);
+      const dropped = L().dropGroup(active.token, b.wrapper === b.root ? L().geometry(b.list) : tg, f.now);
       if (!dropped) L().cancelGroup(active.token);
       return groupReply(dropped, dropped);
     }
@@ -161,11 +161,12 @@ export function arrangeDrags({ w, views, viewId, api, lower, ops, now, applyBatc
   const controller = arrangeController({ views, collections: new Proxy({}, { get: (_, k) => L()?.controller()?.[k] }), motion: api, request, applyBatch, now, generation: () => 0, inert: inertAncestor,
     grouped: groupController, root: document.getElementById('exact-root'), viewOf: viewId,
     log: line => globalThis.exact?.journal?.push(`t=${globalThis.exact.clock?.now ?? 0} ${line}`) });
+  globalThis.exact.cancelReorder = id => controller.cancel(id);
   // A grip's group, and whether the keys may drive it (LLP 1094 D9: no `press`, `key`, `pan` or `pointerdown` of its own).
   const groupOf = (h, b) => {
     const group = b ? views.get(b.list)?.dataset.reordergroup || null : null;
     const on = (h.el.dataset.exactOn ?? '').split(' ');
-    return { group, keys: !['press', 'key', 'pan', 'pointerdown'].some(k => on.includes(k)) };
+    return { section: !!b && b.wrapper === b.root, group, keys: !['press', 'key', 'pan', 'pointerdown'].some(k => on.includes(k)) };
   };
   return {
     request, controller,

@@ -72,9 +72,24 @@ package protocol GroupedLists: AnyObject {
     /// The authored parent of a row carried into a cell.
     func logicalParent(of view: UIView) -> UIView?
     #if os(iOS)
+    /// The grouped list that projects this authored reorder grip into a UIKit accessory.
+    func reorderList(for grip: NodeView) -> UInt32?
+    func reorderResponder(for grip: NodeView, accessibility: Bool) -> UIView?
     /// Close the swipe actions revealed in the list that draws row `id`.
     func closeSwipe(row id: UInt32)
     #endif
+}
+
+extension NodeView {
+    /// The visible cell receives the keys for the grip UIKit projects.
+    package func projectedReorderResponder(accessibility: Bool = false) -> UIView? {
+        #if os(iOS)
+        guard props["reorderFor"] != nil, !formDisabled, !inert, !cssVisibilityHidden else { return nil }
+        return presenter?.groupedLists?.reorderResponder(for: self, accessibility: accessibility)
+        #else
+        return nil
+        #endif
+    }
 }
 
 /// Where a finger aimed at a row a list draws lands (LLP 1080.000 D4): a
@@ -99,8 +114,21 @@ package enum GroupedListsLink {
 #endif
 
 #if os(iOS)
+/// A view that stands for a node the page hides, whose long press opens the
+/// node's context popover: a grouped list's cell, or a navigation bar's title.
 package protocol GroupedMenuSurface: AnyObject {
     var menuSource: NodeView? { get }
+}
+
+/// A navigation bar's title that stands for its header's pressable group,
+/// which the page hides while the bar shows it (LLP 1021 §5.1, LLP 1075.003
+/// §9.10). Its menu stands only while the bar shows it for that group.
+package protocol TitleMenuSurface: GroupedMenuSurface {
+    /// Whether the bar shows this title for `menuSource` now
+    var showsSource: Bool { get }
+    /// The avatar's view and its outline, which a lift with no preview row
+    /// shows alone (LLP 1021 §5.1)
+    var avatarLift: (view: UIView, outline: UIBezierPath)? { get }
 }
 
 extension Presenter {

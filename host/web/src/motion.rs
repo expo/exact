@@ -16,13 +16,13 @@
 //! [`Motion`], which is [`Still`] unless the app's entry registered
 //! [`springs`], so an app that uses no spring or hold carries no engine.
 
-use exact_kernel::motion::{motion_node, targets, transitions, MotionSync};
-use exact_kernel::{CommitReceipt, Kernel, NodeKey, ViewId};
+use exact_kernel::motion::{motion_node, receipt_nodes, targets, transitions, MotionSync};
+use exact_kernel::{CommitReceipt, Kernel, NodeKey, StyleId, ViewId};
 use exact_motion::{
     Change, Engine, EngineError, HoldEnd, HoldStart, HoldToken, Property, SpringDescriptor,
     TransformHold, Value,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What the page must do about one property's spring after a commit.
 #[derive(Debug, Clone, PartialEq)]
@@ -321,9 +321,14 @@ pub struct Springs {
     frame_compilations: usize,
     /// Compare fixed-size curve identity before compiling browser keyframes.
     playing: BTreeMap<(u64, Property), (SpringDescriptor, f64)>,
+    /// Boxes with authored height and transition rows. A computed transition can
+    /// first select a spring in the same commit that changes the height.
+    height_transitions: BTreeMap<NodeKey, Option<Value>>,
     /// One explicit trial owner, bound to its arena generation. Unsupported
     /// styles retire its slot; a later eligible style can adopt it again.
     height_owner: Option<(NodeKey, ViewId)>,
+    /// A hold or its return curve retires with the drag registration.
+    dragged_height: bool,
     /// Springs lowered held, by their curve (the descriptor without its
     /// start, which moves with the clock while held): lowered once.
     held: BTreeMap<(u64, Property), SpringDescriptor>,
@@ -345,6 +350,8 @@ impl Springs {
         let node = motion_node(key);
         let removed = self.engine.remove_property(node, Property::Height);
         self.playing.remove(&(node, Property::Height));
+        self.held.remove(&(node, Property::Height));
+        self.presented.remove(&(node, Property::Height));
         if removed {
             out.push(Lowered::Retire {
                 view,
@@ -353,11 +360,60 @@ impl Springs {
         }
     }
 
+    fn tracks_height(kernel: &Kernel, key: NodeKey) -> bool {
+        kernel.node_by_key(key).is_some_and(|node| {
+            let rows = node.style.mask.union(node.style.written);
+            rows.has(StyleId::Height) && rows.has(StyleId::Transition)
+        })
+    }
+
+    fn sync_height(&mut self, kernel: &Kernel, key: NodeKey, view: ViewId, out: &mut Vec<Lowered>) {
+        let node = motion_node(key);
+        let value = kernel.height_target(key);
+        let previous = self.height_transitions.insert(key, value).flatten();
+        let covers = kernel
+            .node(view)
+            .is_some_and(|n| n.style.transition.matching(Property::Height).is_some());
+        let target = self.engine.target(node, Property::Height);
+        if !covers || value.is_none() {
+            if target.is_some() {
+                self.retire_height(key, view, out);
+            }
+            return;
+        }
+        // A newly covering transition needs the box's last numeric value as its first observation.
+        let start = previous.filter(|_| target.is_none());
+        for value in start
+            .into_iter()
+            .chain(value.filter(|v| Some(*v) != target))
+        {
+            let applied = self.engine.observe(Change {
+                node,
+                property: Property::Height,
+                value,
+                velocity: None,
+            });
+            debug_assert!(applied.is_ok(), "validated pixel height");
+        }
+    }
+
     fn reconcile_height(&mut self, kernel: &Kernel, out: &mut Vec<Lowered>) {
         let Some((key, view)) = self.height_owner else {
             return;
         };
         let sync = kernel.height_motion_sync(key);
+        if let Some(previous) = self.height_transitions.get_mut(&key) {
+            *previous = sync.changes.first().map(|change| change.value);
+        }
+        if self.dragged_height
+            && !self.engine.is_held(motion_node(key), Property::Height)
+            && sync
+                .changes
+                .first()
+                .is_some_and(|c| self.engine.target(c.node, c.property) != Some(c.value))
+        {
+            self.dragged_height = false;
+        }
         if !sync.retired.is_empty() {
             self.retire_height(key, view, out);
         }
@@ -429,8 +485,18 @@ impl Motion for Springs {
         }
         let mut out = Vec::new();
         if let Some((key, view)) = self.height_owner.take() {
-            self.retire_height(key, view, &mut out);
+            let ordinary = self.height_transitions.contains_key(&key)
+                && kernel
+                    .node(view)
+                    .is_some_and(|n| n.style.transition.matching(Property::Height).is_some());
+            if !ordinary || self.dragged_height {
+                self.retire_height(key, view, &mut out);
+                if ordinary {
+                    self.sync_height(kernel, key, view, &mut out);
+                }
+            }
         }
+        self.dragged_height = false;
         self.height_owner = next;
         self.reconcile_height(kernel, &mut out);
         self.holds.retain(|_, token| self.engine.has_hold(*token));
@@ -464,6 +530,9 @@ impl Motion for Springs {
         let Some(node) = kernel.node(view) else {
             return Ok(None);
         };
+        if property == Property::Height && self.height_owner != Some((node.key, view)) {
+            return Ok(None);
+        }
         if self.engine.value(motion_node(node.key), property).is_none() {
             return Ok(None);
         }
@@ -476,6 +545,7 @@ impl Motion for Springs {
         };
         self.holds.retain(|_, token| self.engine.has_hold(*token));
         self.holds.insert(start.token.serial(), start.token);
+        self.dragged_height |= property == Property::Height;
         // Even a curve crossing its target must be cancelled on takeover; a
         // same-clock release with new velocity must not hit the old dedup key.
         self.playing.remove(&(start.token.node(), property));
@@ -571,6 +641,20 @@ impl Motion for Springs {
             // node's animation starts at the boot, not at its first update
             // (which would find no animation and start one then).
             kernel.motion_sync_node(node.key, &mut sync);
+            if Self::tracks_height(kernel, node.key) {
+                let value = kernel.height_target(node.key);
+                self.height_transitions.insert(node.key, value);
+                if let Some(value) =
+                    value.filter(|_| node.style.transition.matching(Property::Height).is_some())
+                {
+                    sync.changes.push(Change {
+                        node: motion_node(node.key),
+                        property: Property::Height,
+                        value,
+                        velocity: None,
+                    });
+                }
+            }
         }
         let applied = sync.apply(&mut self.engine);
         debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
@@ -594,7 +678,24 @@ impl Motion for Springs {
         // name's resolution, so while any node bears a timeline every commit
         // is followed; pages without one never are.
         let mut timelines = !receipts.is_empty() && kernel.has_timelines();
+        let mut out = Vec::new();
+        let mut touched = BTreeSet::new();
         for receipt in receipts {
+            for key in receipt.destroyed.iter().chain(&receipt.renewed) {
+                self.height_transitions.remove(key);
+            }
+            for key in receipt_nodes(receipt) {
+                if Self::tracks_height(kernel, key) {
+                    self.height_transitions.entry(key).or_default();
+                    touched.insert(key);
+                } else if self.height_transitions.remove(&key).is_some() {
+                    if let Some(node) = kernel.node_by_key(key) {
+                        if self.height_owner != Some((key, node.id)) {
+                            self.retire_height(key, node.id, &mut out);
+                        }
+                    }
+                }
+            }
             let sync = kernel.motion_sync(receipt);
             // Engine::remove also erases dirty entries, so frame() will never
             // mention these nodes again. Retire ownership directly, without
@@ -602,6 +703,8 @@ impl Motion for Springs {
             for node in &sync.removed {
                 for property in Property::ALL {
                     self.playing.remove(&(*node, property));
+                    self.held.remove(&(*node, property));
+                    self.presented.remove(&(*node, property));
                 }
             }
             // Before it applies: the last consumer, unbound here, was bound.
@@ -611,12 +714,20 @@ impl Motion for Springs {
             let applied = sync.apply(&mut self.engine);
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
         }
-        let mut out = Vec::new();
         if timelines {
             out.push(Lowered::Timelines);
         }
-        // Ancestor hide/detach does not touch the owner's receipt key. This
-        // checks only its ancestor path, never all mounted numeric heights.
+        // Hiding or moving an ancestor can change a height target without touching the box itself.
+        if receipts.iter().any(|r| r.layout_invalidated) {
+            touched.extend(self.height_transitions.keys());
+        }
+        for key in touched {
+            if let Some(node) = kernel.node_by_key(key) {
+                if self.height_owner != Some((key, node.id)) {
+                    self.sync_height(kernel, key, node.id, &mut out);
+                }
+            }
+        }
         self.reconcile_height(kernel, &mut out);
         self.holds.retain(|_, token| self.engine.has_hold(*token));
         out

@@ -9,8 +9,8 @@
 <script type="module">
 const out = [];
 const stage = document.getElementById("stage");
-const css = (property, [x, y, z, w]) => w !== undefined ? `rgba(${x}, ${y}, ${z}, ${w})` : property === "translate" ? `${x}px ${y}px` : property === "rotate" ? `${x}deg` : String(x);
-const identity = { translate: [0, 0], scale: [1, 0], rotate: [0, 0], opacity: [1, 0] };
+const css = (property, [x, y, z, w]) => w !== undefined ? `rgba(${x}, ${y}, ${z}, ${w})` : property === "translate" ? `${x}px ${y}px` : property === "rotate" ? `${x}deg` : property === "scale" ? `${x} ${y}` : String(x);
+const identity = { translate: [0, 0], scale: [1, 1], rotate: [0, 0], opacity: [1, 0] };
 function read(el, property) {
   const v = getComputedStyle(el)[property];
   if (v === "none") return identity[property];
@@ -18,7 +18,7 @@ function read(el, property) {
   const color = /^rgba?\(([^)]*)\)$/.exec(v);
   if (color) { const c = color[1].split(",").map(parseFloat); return [c[0], c[1], c[2], c[3] ?? 1]; }
   const parts = v.split(/\s+/).map(parseFloat);
-  return [parts[0], parts[1] ?? 0];
+  return [parts[0], parts[1] ?? (property === "scale" ? parts[0] : 0)];
 }
 try {
   const cases = await (await fetch("./cases.json")).json();

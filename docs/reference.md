@@ -220,6 +220,32 @@ be absent. Animations that do not set `box-shadow` remain on the section. On
 iPad, pointer hover over a grouped section does not activate its `:hover` shadow;
 forwarding from UIKit’s visible cells, header and footer is not implemented yet.
 
+## A `portal` element on each host
+
+`portal="<id>"` shows an element written once inside the plain box with that `id`
+(`contract vocab portal`; [the recipe](recipes/keep-a-playing-video.md); LLP 1013.002).
+Every host keeps the element's state, and its press, pointer-button and key events
+bubble through where it is written; hover, focus on the web and the painted hosts'
+pan, swipe and long press still follow where it is shown. What each does with the
+element itself:
+
+| Host | The element as it moves | A video through the move | Shown nowhere |
+|---|---|---|---|
+| Web (the JS build) | the same DOM element, by `moveBefore()`, or `insertBefore` where the browser lacks it (WebKit) | plays on, no reload or seek (Chrome, Firefox; WebKit on a bare page); an `iframe` reloads under `insertBefore` | in a connected, `display: none`, inert holder: Chrome pauses a muted autoplay video and resumes it, Firefox keeps it playing |
+| Web (the wasm host) | the same DOM element, through the same holder; a reorder within one destination is an `insertBefore`, which reloads an `iframe` | plays on (Chrome) | in the same holder: Chrome pauses and resumes it (other browsers not run) |
+| macOS, iOS | the same view, its `AVPlayer` included; a native flight draws it live | plays on | out of the window: the off-screen rule pauses a muted autoplay video and resumes it |
+| Android | the same node and player | plays on; Material's container transform draws it in the arriving screen | kept with its player: paused and resumed as on Apple |
+| Linux, Windows | the same node | no video decoder: its state and `poster` carry, with no decoded frames; no flights | out of the tree |
+| Terminal | laid out where it is shown | no video | out of the tree |
+
+Not yet: a page rendered ahead (`render=build` or `request`) leaves the element out and
+builds the page afresh in the browser. On the native hosts a design-token colour inside
+the element resolves in its declaration's modes, not its destination's (`color-scheme`
+and plain inheritance follow the destination). tvOS and watchOS have not been run;
+watchOS has no video. On Android a mover placed in a
+box under `display: none` loses its player, which loads again when shown. Windows has
+been compiled, not run.
+
 ## Serve RealWorld
 
 RealWorld's public pages can be served by the native renderer:
@@ -693,9 +719,12 @@ override func destroy() {
 
 An app says what it opens with `file_handlers` in `app.json` — the W3C Web App
 Manifest's own key — and the macOS bake derives `CFBundleDocumentTypes` from
-it. A Linux binary carries the same declarations into the desktop portal's
-Open and Save filters; a directory pick remains a directory pick rather than a
-file-type filter. Each MIME type it accepts must be one the Apple hosts map to
+it. Linux and Windows binaries carry the same declarations into their Open and
+Save dialogs; a directory pick remains a directory pick rather than a file-type
+filter. Each handler is one file type in the document pickers, labelled with its
+`name`, so an app that wants a "Documents" choice showing only PDFs declares
+`{ "action": "/", "name": "Documents", "accept": { "application/pdf": [".pdf"] } }`
+(below, "Documents the person chose"). Each MIME type it accepts must be one the Apple hosts map to
 a system type (`DOCUMENT_UTIS` in `scripts/app.mjs`; `application/octet-stream`
 is `public.data`), which the app views (`Viewer`, rank `Alternate`), or the
 app's own format: a vendor or unregistered type (`application/vnd.studio.board+json`,
@@ -721,6 +750,15 @@ the browser's supported schemes and installation behavior. Linux's CLI URL
 argument retains the ordinary location conversion because it does not
 register OS protocol handlers.
 
+A scheme in `host.ios.urlSchemes`, `host.macos.urlSchemes` or `host.android.urlSchemes`
+alone delivers its link as a location, cold as the launch location and warm
+as one navigation, with no `/open` route. A non-empty authority is the first
+segment and an empty one is none: `notes://post/42?x=1`,
+`notes:///post/42?x=1` and `notes:/post/42?x=1` are all `/post/42?x=1`, the
+fragment kept (LLP 1038 §3). Expo's `Linking.createURL("/post/42")` writes
+the three-slash form. Android matches the declared spelling and its lowercase form,
+and refuses a scheme declared in both `urlSchemes` and `protocol_handlers`.
+
 For packaged-only Apple registration, add `"distribution_only": true` to an
 entry, for example `{"protocol":"notes","url":"/open?u=%s","distribution_only":true}`.
 Archives and `--distribution` builds include it; local builds, including
@@ -733,7 +771,7 @@ the web manifest or explicit `host.<platform>.urlSchemes`.
 `http` and `https` are the web's own schemes. An app declares both or
 neither: each once, with the same `url` and the same `distribution_only`.
 `readManifest` refuses any other form, so every build does, and
-`host.ios.urlSchemes` and `host.macos.urlSchemes` refuse both. The pair makes
+all three hosts refuse both in `urlSchemes`. The pair makes
 the app a web browser:
 
 | host | what the pair does |
@@ -1100,6 +1138,11 @@ tag, so a relaunched process lists it again. If the person dismisses it (Android
 14 and later let them swipe away an ongoing notification the system has not
 promoted), it leaves the list when the app is next in front, and a later send to
 it is refused. A send is answered once the system shows its notification.
+Several activities stay separate notifications where Android would bundle an
+app's notifications into one whose collapsed rows show only titles: each is a
+notification group of its own (LLP 1126 D13). Android 16 still bundles six or
+more activities it has not promoted, and those left stay in that bundle; a
+manufacturer's shade may group differently.
 An `updateActivity` with an alert alerts again, with its text as the
 accessibility ticker; a stale date is listed as `stale` once past.
 `endActivity` with `"immediate"` removes the notification; `"default"` leaves an
@@ -1324,6 +1367,16 @@ text paragraph, so the widget can reserve its width; calendar formats may be
 inline. Links must be their own elements, not runs among other paragraph text.
 Snapshot handlers are refused; use a link to open the app.
 
+On Apple platforms a widget's first rendered root gives the widget its container
+background: the root's `background-color` and gradient layers paint edge to
+edge, behind the system's content margins, through SwiftUI's
+`containerBackground(for: .widget)` (LLP 1126 D5). The system removes that
+background where it shows widgets without one, such as StandBy and the Lock
+Screen. With no background on the root, the widget takes the system's. A
+background on a nested box paints that box alone, inside the margins: put it on
+the root when it should fill the widget. A Live Activity's Lock Screen root
+likewise gives the activity its `activityBackgroundTint` (above).
+
 Snapshot accessibility admits labels, roles, hints, heading levels and hidden
 content. Live announcements and control-state accessibility rows are refused.
 
@@ -1355,10 +1408,12 @@ from `color_scheme_dark.icons`, and its tinted icon is a square `monochrome`
 PNG, whose alpha iOS draws white on black. The web links each scheme's favicons
 (the smallest square raster of at least 32 px, then an SVG when there is one)
 and an Apple touch icon (the smallest opaque square PNG of at least 180 px, else
-the largest). Android takes a square `maskable` of at least 432 px as its
-adaptive icon, a `monochrome` one as its themed layer, a square `any` of 192 px
-when there is no `maskable`, and a 16:9 `any` of at least 640×360 px as the TV
-banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
+the largest). Android centres a square `maskable` PNG of at least 432 px at 82.5 dp on
+a 108 dp layer. For fully opaque artwork, a low-resolution copy extends the local edge
+colours into the margin. If any pixel has transparency, the background uses the light
+launch colour, or the top-left pixel’s RGB when none is named. A square `monochrome` supplies the themed layer,
+a square `any` of at least 192 px the legacy fallback, and a 16:9 `any` of at least
+640×360 px the TV banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
 at least 1280×768 px (an 8:3 and a 29:9 one give the Top Shelf images); the
 watch app a square one of 1024 px, or `host.ios.icon` when its `icon.json` lists
 watchOS; Windows a square `any` of at least 256 px, linked into the executable.
@@ -1456,7 +1511,10 @@ in its middle, as every app's does. `host.android.launchImage` replaces it:
 platform shows within a centred square 192 dp across and, on stock Android, cuts
 to the circle in that square (a `width` above 192 is refused); before Android 12,
 whose launch window has no icon, the picture is centred on the window. `false`
-shows no icon. Changing a colour or a picture requires a new native build.
+shows no icon in either appearance. Both hosts accept a dark PNG inside `launchImage`:
+`{ "src": "mark-light.png", "width": 128, "color_scheme_dark": { "src": "mark-dark.png" } }`.
+Each picture uses the parent's width and its own aspect ratio. Without a dark PNG the
+same picture appears in both schemes. Changing a colour or picture requires a new native build.
 
 ### Store category, Game Mode and memory
 
@@ -2034,12 +2092,12 @@ the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
 
 ### Build Android artifacts without a device
 
-From the app's directory, `bun exact.mjs android --release --no-install --json`
-builds an APK without querying adb. `bun exact.mjs android --bundle --json`
-builds a production App Bundle (`.aab`) without installing. Both report the
-artifact's absolute path. An outside app's outputs are
-`target/android/app/outputs/apk/release/app-release.apk` and
-`target/android/app/outputs/bundle/release/app-release.aab`.
+From the app's directory, `bun exact.mjs android --release --no-install --json` builds an APK without querying adb. `bun exact.mjs android --bundle --json` builds a production App Bundle (`.aab`) without installing. Both report the
+artifact's absolute path. An outside app's outputs are `target/android/app/outputs/apk/release/app-release.apk` and `target/android/app/outputs/bundle/release/app-release.aab`.
+
+An app’s Kotlin can call `registerScreenCaptureCallback` on its front activity on Android 14 and later. Declare its install-time permission in `host.android` with `"permissions": ["android.permission.DETECT_SCREEN_CAPTURE"]`. The APK merges the app’s and packages’ allow-listed install-time permissions with grant-derived names, writing each permission once. A runtime permission comes from its grant line. Only a package declaring a POI car service may request `androidx.car.app.MAP_TEMPLATES`.
+
+For Android package visibility, put `"queries": [{"action": "android.intent.action.TTS_SERVICE"}]` in `host.android`. Entries take `{package}`, `{action}` or `{action, scheme}` under the same allow-list as a bound package's `manifest.queries`. The APK merges matching entries once. A package with a Kotlin POI car service declares `manifest.carAppService` in its Android implementation. [Android module implementations](../host/android/README.md#module-implementations-llp-1133001-d5)
 
 `EXACT_BUILD_NUMBER` sets Android's `versionCode` (1 by default, an integer
 from 1 through 2100000000); `EXACT_VERSION` sets `versionName` (0.1.0 by
@@ -2298,13 +2356,15 @@ sign-in callback and the app's own document types are shared by both installs.
 A brand that ships as its own store app is another app, not a variant: one directory and manifest per brand,
 sharing its screens and data code through workspace packages ([one app under several brands](recipes/white-label.md)).
 
-## Controls (Control Center, the Lock Screen, the Action button)
+## Controls (Control Center, the Lock Screen, the Action button, Quick Settings)
 
 A control is a button the system draws outside the app; a press runs one of
 the app's tools or opens one of its locations (LLP 1126.004). iOS and iPadOS
 18 and later draw them: the build puts each offered control in the app's
 WidgetKit extension, where the person adds it to Control Center, the Lock
-Screen or the Action button. Android, the Mac and the watch do not yet.
+Screen or the Action button. Android draws each as a Quick Settings tile,
+which the person adds by editing Quick Settings. The Mac and the watch do not
+yet.
 
 Declare each in `app.json`:
 
@@ -2343,8 +2403,9 @@ and puts it in `compat.inputs.controls` and the compatibility id, so any
 change to a row, its tool's signature or its effects is a new binary. The
 web has no binary and its id does not move.
 
-1. A host other than iOS and iPadOS (the Mac, Android, the watch, tvOS,
-   visionOS, Linux, Windows): omitted, `control-host`.
+1. A host other than iOS, iPadOS and Android (the Mac, the watch, tvOS,
+   visionOS, Linux, Windows): omitted, `control-host`. Android's placement
+   is below.
 2. A build that packages no control extension: omitted, `control-metadata`.
    The Apple build on Linux is one, since only Xcode extracts a control's App
    Intents metadata; so is `--extensions` without `controls`.
@@ -2361,7 +2422,50 @@ web has no binary and its id does not move.
    iOS 18, as a `LiveActivityIntent`.
 7. Any other tool: omitted, `control-process`.
 
-An offered control is a `ControlWidgetButton` in the widget extension, which
+On Android every control is offered from Android 10 as a tile, but a tool
+known to start camera, screen or speech capture (`control-capture`). A press
+is the person's action (origin `action`) everywhere, and starts at most the
+two captures below:
+
+- a `url`: `"intent": "open"`. The tile opens the app at the location,
+  asking for the device credential if needed. On a cold app launch the URL
+  is the launch location. On Android 14 and 15, a tap before the first PIN
+  unlock after reboot can leave Quick Settings open without asking for the
+  PIN. Unlock the device and tap the tile again.
+- a tool whose reach can start or restart a capture (the microphone, a
+  recorder, or a capture its arguments decide): `"intent": "foreground"`. A
+  tile grants no microphone, so the tile opens the app, and the press runs
+  once the app is in front, unlocked, drawn and its data ready. While it
+  runs and the app shows, it may call `getUserMedia` for audio alone and
+  `startMediaRecorder`, which the microphone starts for; anything else it
+  or its tasks try is refused as for any background action, a camera,
+  speech recognition and every permission prompt included. With the
+  microphone's permission not yet granted, `getUserMedia` fails
+  `NotAllowedError`, and the app asks in its own UI. So does a Live
+  Activity the tool starts (`startActivity`), which Android shows as a
+  notification: with notifications off it fails, and the app asks with
+  `requestNotificationPermission()` (Recorder shows the request when a
+  press finds them off). The control needs `device.microphone`
+  (`grant-needs`); `device.microphone-background` keeps a take the person
+  leaves running. The press runs at once or not at all (`busy` with other
+  work running), and pressing another tile, leaving the app or the screen
+  turning off ends it. On a Lock Screen that holds a credential, `required`
+  and `local` ask for it first, then open the app; `always` is refused
+  there. The press is dropped if the app is not ready within 20 seconds of
+  the click.
+- any other tool: `"intent": "tool"`. The press runs where it is, in a
+  session booted with no view if none shows. On a Lock Screen that holds a
+  credential, `required` and `local` ask for it and then press, leaving the
+  person where they were; a swipe lock, or a keyguard Smart Lock trusts,
+  asks for nothing. `always` runs there.
+
+A tile is the system's, in its inactive appearance, with the row's `title`,
+its `description` beneath, and the Material glyph of its `symbol` (a `.fill`
+name without one takes its outline's; with none at all, the app's icon or
+the platform's default one). Its service is named by the control's kind,
+so a placed tile survives reordering the rows.
+
+On iOS an offered control is a `ControlWidgetButton` in the widget extension, which
 an app with controls and no widgets or Live Activities also gets, linking no
 Exact runtime. Its WidgetKit kind is `<app id>.control.<kind>`. Its intent is
 compiled into both the app and the extension and is not discoverable, so
@@ -2374,7 +2478,9 @@ extension's copy refuses without running anything.
 A press enters only through a host's native entry, `Runner::press_control`,
 with the compiled control's kind and digest; on Apple, the tool door's
 `exact_tool` export takes it as op `press`, and the app's generated intent
-calls `ExactTools.press`. It is for tool controls (a host opens a URL control
+calls `ExactTools.press`; on Android, the tile's `onClick` calls
+`Native.press`. A tile that opens the app names a one-use record it left in
+the app's process, so a replayed or stale launch presses nothing. It is for tool controls (a host opens a URL control
 itself). The runner runs the tool as the person's action
 (origin `action`), refused `unavailable` when the installed control's
 digest is not the plan's, and `busy` while the same control's press waits or
@@ -2391,16 +2497,61 @@ web, which compiles no control, says `absent`:
 bun scripts/agent.mjs ios --app <app> "state controls"
 ```
 
+On an Android device or emulator, add a tile and press it from adb
+(`<id>/dev.exact.app.ExactControl_<kind in UTF-8 hex>`):
+
+```
+adb shell cmd statusbar add-tile <id>/dev.exact.app.ExactControl_7265636f7264
+adb shell cmd statusbar click-tile <id>/dev.exact.app.ExactControl_7265636f7264
+```
+
+A qualification build (LLP 1126.004 §6d) offers on iOS what items 5 and 7
+omit only for want of a device run, so the device run can be made:
+`EXACT_QUALIFY_CONTROLS=1 bun host/apple/build.mjs <app> --ios --device --run`.
+Such a placement carries the omission it lifts, `{"offered": [{"from":
+"26.0", "intent": "tool"}], "qualifying": "control-process"}`, so its
+compatibility id is never an ordinary build's; a bake with production trust
+(`--release`, `--archive`, a deploy) refuses the variable. A plain tool's
+intent then asks to run in the app (`supportedModes = .background` from 26,
+`allowedExecutionTargets = .main` from 27); a recording tool's
+(`"intent": "recording"`) is an `AudioRecordingIntent` and a
+`LiveActivityIntent`, and while its press runs, the tool and the `then`s of
+its sends may call `getUserMedia` for audio alone and `startMediaRecorder`
+with the app not in front. A press never asks for the microphone: with its
+permission not yet granted, `getUserMedia` fails `NotAllowedError`.
+Recorder's `record` control is the device run's subject.
+
 ## Apple bundle metadata
 
 Exact writes Info.plist keys and entitlements from grants, named manifest fields,
-packages and build inputs. Entitlements remain derived (LLP 1069.008 D4).
-The `host.ios` and `host.macos` dictionaries `infoPlist` and `entitlements` refuse
-all supplied keys together; their values never enter a bundle. Diagnostics give
-specific grant advice only where tests apply those lines, including companion
-grants, through the bake and platform writer. Other derived keys cannot be set
-there. For a key Exact never writes, record a `bun exact.mjs feedback note` from
-the app directory naming the key and what the native module needs.
+packages and build inputs (LLP 1069.008 D4). Every `host.ios.entitlements` and
+`host.macos.entitlements` key is refused.
+
+`host.ios.infoPlist` and `host.macos.infoPlist` take a vendor SDK's configuration
+keys, the ones a library the app links reads from its bundle:
+
+```json
+"host": { "macos": { "infoPlist": {
+  "SUFeedURL": "https://example.com/appcast.xml",
+  "SUPublicEDKey": "<your EdDSA public key>"
+} } }
+```
+
+- A value is written as given: a string, number, boolean, array or dictionary.
+  It is public in the bundle, so it is no place for a secret.
+- The iOS keys go into the iOS and tvOS apps, not an App Clip.
+- A key in Apple's namespaces is refused: `NS`, `UI`, `LS`, `CF`, `UT`, `CA`, `GC`,
+  `GK`, `MK`, `BG`, `WK`, `IN`, `NFC`, `ITS`, `SK`, `CK`, `AV`, `PH`, `QL` and `DT`, each
+  followed by a capital, and `MinimumOSVersion` and `BuildMachineOSBuild`. So are an
+  `Exact` key and any key Exact writes itself. The refusal names the grant line or
+  field that writes the key. For an Apple key Exact never writes, it asks for a
+  `bun exact.mjs feedback note` from the app directory naming the key and what the
+  native module needs.
+- A key a package's Apple implementation writes is refused here.
+- The keys are binary inputs: changing one needs a new binary, and `exact deploy`
+  says so. They do not move the compatibility id, so installed binaries keep taking
+  updates. The deploy table and the install page list each key under what the app
+  can reach.
 
 ### Language and direction on macOS
 
@@ -2609,7 +2760,10 @@ answers and route statuses, and are not shared between requests. Production buil
 ignore these inputs. `--fail-fetch` with `--test` arms every test.
 A Mac agent drive never takes the focus: the app is an accessory, never activated (a `type` makes its window key
 without activating it), so AppKit draws its controls as in an inactive app. On the agent's clock its window, and a picture-in-picture
-panel it opens, sit one level below every other app's windows, so they never show over them; `--timing platform` orders them in front. `EXACT_AGENT_ACTIVATE=1`, which only
+panel it opens, sit one level below every other app's windows, so they never show over them; `--timing platform` and `--live` order them in front,
+since a covered window presents no frames and its page reads as hidden. `--display <name|index>` (`EXACT_AGENT_DISPLAY`, beside `EXACT_AGENT=live`, for a launch by hand) opens
+the window centred on one display, named as `NSScreen.localizedName` or by its index in `NSScreen.screens`; on a Mac someone is working at,
+name a display they are not using. A name no display has, or two have, is refused with the list. `EXACT_AGENT_ACTIVATE=1`, which only
 `scripts/measure-controls.mjs` sets (never a default), activates that one run, and the app that was in front is put
 back when it exits, however it exits (LLP 1121 stage 9 F2).
 A data module's `crypto.getRandomValues()` and `crypto.randomUUID()` draw from the seed too, so every drive with the same seed
@@ -2667,10 +2821,54 @@ Each new connection asks again. One driver attaches at a time, to one window: `-
 the window when several are open, and a PID chooses among several running copies.
 The connection only reads: `tree`, `state` (masked, as the tree shows a password field), `logs`,
 `layout`, `perf` and `screenshot` (the window server's picture of the window, which is not brought
-forward). The app refuses `clock` with `live-clock` and input with `input-not-granted`, and the
-driver refuses launch flags such as `--storage`, `--live` and `--url`. Only a Mac app that
-`host/apple/build.mjs` builds to run carries the listener; a release, archive or embedded build has
-none of it.
+forward). The app's clock is never taken, seeked, settled or landed: `clock` is refused with
+`live-clock`, except the waits, which watch the app's own wall clock through masked `state` reads
+while its timers go on. `clock until state <path> == <literal> within <ms>` refuses a value a
+password field masks; `clock held [<target>…] [<n>s|<n>ms]` waits for one reply to each held request;
+`clock replies [<n>s|<n>ms]` reports `{clock, settled, pending, waitedMs}` at the first read with no
+data request in flight (held, timer and device entries aside), or after 20 s. A read still out at a
+wait's deadline ends the connection. The driver refuses launch flags such as `--storage`, `--live`
+and `--url`.
+
+Input needs a second grant: **Develop ▸ Allow Agent Input** on the Mac, or the developer menu's
+**Allow Agent Input** in the simulator, which the person chooses while the agent is attached (the
+indicator then reads **Agent Attached · Input Allowed**); choosing it again revokes input and leaves
+the reads. Until then `tap`, `type` and `call` are refused `input-not-granted`, and the driver says
+it is waiting for the grant, for up to 60 s. Granted, `tap <target>` is a plain tap at a test ID or
+`#<id>`, `type <target> <text>` a whole text entry, and `call <tool> <json>` a declared tool's call
+through the app's own agent door (`--door` is refused). On the Mac the app clicks and sets the text
+itself, only in its key window while it is the active app; in the simulator the touch runner plays a
+real touch the app aims and checks, and the text is typed where the tap left the caret. Input is
+refused `background` when the app is not in front, `person-input` while a person's finger, mouse
+button or modifier key is down, and `unsupported` for anything else: a point, a held contact, a key,
+a gesture, `prefer`, `pick`, a toolbar or sidebar item, or a web view's content. A request whose
+reply is lost is reported as of unknown outcome and never sent again.
+
+`bun scripts/agent.mjs ios --app <app> --attach [--sim <udid|name>] tree state logs layout "screenshot now.png"`
+reads the development app open in an iOS simulator the same way. The simulator is the one `--sim`
+or `EXACT_SIM` names, else the one a drive would choose; nothing is booted. The person opens the
+developer menu (four fingers, or ⌘D) and chooses **Enable Agent Attach**, then **Allow** in the
+alert the driver's connection raises; **Agent Attached** shows at the top of the screen while the
+driver is connected. **Detach Agent** in the same menu ends it, and so does sending the app to the
+background. The picture is UIKit's snapshot of the app's window, without the indicator. The
+driver names a simulator that runs the app when the selected one does not.
+
+`bun scripts/agent.mjs web --app <app> --attach tree state logs layout` reads a tab of the app's
+running JS-target dev loop (`bun exact.mjs web`) the same way, in the person's own browser. The
+person presses **⌥⇧A** in the tab, which shows a pairing code that works once, for two minutes; the
+driver asks for it on a terminal, or reads the first line of stdin (`… --attach tree < code.txt`, or
+piped), and presents it on the loop's attach channel; then the tab asks the person to **Allow**. **Agent Attached** shows in the tab's corner
+while the driver is connected; **Detach**, ⌥⇧A again, a reload, loading another page or closing the tab
+ends it, and a code from before a reload is refused. The channel takes only a connection from this
+machine naming the loop by a loopback name, and no browser page. A tab is only read: it cannot take
+its own picture, and nothing a page does is a person's input, so `screenshot`, `tap`, `type` and
+`call` are refused `unsupported`. A tab the driver opened (`?agent`), a game's wasm loop and a
+release build have no attach.
+
+Only a Mac app or an iOS simulator app that `host/apple/build.mjs` builds to run carries the
+listener; a release, archive, embedded, physical-device or Apple TV build has none of it, and the
+driver refuses Android, Windows, Linux, tvOS, watchOS and a physical iPhone before it runs any
+platform tool.
 
 ### Inspect work and native presentation
 
@@ -2688,6 +2886,7 @@ and dropped records. An ordinary launch on the wall clock is available on macOS 
 (use `ios --live` on a simulator or `ios --device --live` on a phone). The driver launches and closes this process and keeps input
 available. `--live` uses normal scheduling and the wall clock: `performanceNow()` and
 timers advance in real time between operations, and `perf frames` records real frames.
+On macOS the window opens in front without taking the focus; `--display` puts it on a display other than the one being worked at.
 On iOS, `--touch platform` sends the gesture through XCTest so UIKit delivers the scroll callbacks.
 For example, `bun exact.mjs agent ios --device --live --touch platform "tap s drag 0 -300 over 100" "perf frames health scroll"`
 drags the scroll view named `s` on a phone. Unlock the paired phone, enable Developer Mode and UI Automation,
@@ -2747,9 +2946,9 @@ export const answer: TypeScriptAnswer = (source, args, store, storage, native) =
 The app's `build_mixed_with` bake derives these types from its `rust_sources`
 argument; no ownership list goes in `app.json` or TypeScript. Every remaining
 provider is required. Run `bun exact.mjs contract build app.contract` to obtain
-the narrowed declaration beside `app.ts`: its TypeScript check runs the app's
-Cargo bake, which writes the declaration before checking `app.ts`, even if
-the check fails. Native bakes use it too, and a development producer keeps
+the narrowed declaration beside `app.ts`: its TypeScript check builds the app's
+Rust module, which carries `RUST_SOURCES`, and writes the declaration before
+checking `app.ts`, even if the check fails. Native bakes use it too, and a development producer keeps
 the roster from the previous bake's `rustSources` receipt. Rebuild after
 changing Rust ownership. `Sources`, `Source`, `Args` and `Result` still
 describe every app-owned source, including Rust's.
@@ -2807,7 +3006,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 
 | Available on every executor | Notes on Hermes |
 | --- | --- |
-| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. Natively a request holds at most 4 MiB, its URL, headers and body together: a larger one is refused before anything is sent (`FetchError`, kind `Refused`, `native request exceeds 4 MiB …`), so send a larger body from a file with `exactBodyFrom`. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host opens it when it sends the request, under `fs.read` as `readFile` is, and streams it from disk as the request goes out, with the size it had when opened as its `Content-Length`; the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing, and a 300 MB video costs half a megabyte of memory (LLP 1133.008.000 D4). Exact sets no bound on its size; the server answers 413 for one it will not take. A file cut shorter while it is sent fails the request, naming the path; a file changed in place while it is sent sends a mix, so leave it alone until the reply. Two hosts still read the file whole and refuse one over 64 MiB, naming why: the web, for a file the app wrote with `writeFile` or `appendFile` (a picked file, a recorded video or an `exactBodyTo` reply is the browser's own Blob, and streams), and the asynchronous executor (`EXACT_HTTP_ASYNC`), with kind `Unsupported`. With `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file or a denied path rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
+| `fetch`, `Headers`, `Response` | On the web, a relative URL resolves against the document base before the grant check. Native data modules have no document origin and take absolute URLs. `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. Natively a request holds at most 4 MiB, its URL, headers and body together: a larger one is refused before anything is sent (`FetchError`, kind `Refused`, `native request exceeds 4 MiB …`), so send a larger body from a file with `exactBodyFrom`. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host opens it when it sends the request, under `fs.read` as `readFile` is, and streams it from disk as the request goes out, with the size it had when opened as its `Content-Length`; the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing, and a 300 MB video costs half a megabyte of memory (LLP 1133.008.000 D4). Exact sets no bound on its size; the server answers 413 for one it will not take. A file cut shorter while it is sent fails the request, naming the path; a file changed in place while it is sent sends a mix, so leave it alone until the reply. Two hosts still read the file whole and refuse one over 64 MiB, naming why: the web, for a file the app wrote with `writeFile` or `appendFile` (a picked file, a recorded video or an `exactBodyTo` reply is the browser's own Blob, and streams), and the asynchronous executor (`EXACT_HTTP_ASYNC`), with kind `Unsupported`. With `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file or a denied path rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
 | `structuredClone` | No transfer list |
 | `ReadableStream`, `WritableStream`, `TransformStream`, their readers, writers and controllers, `CountQueuingStrategy`, `ByteLengthQueuingStrategy` | WHATWG Streams, with `pipeTo`, `pipeThrough`, `tee`, `for await` and `ReadableStream.from`. No byte streams: `type: "bytes"` and a BYOB reader are a `TypeError` |
 | `DecompressionStream`, `CompressionStream` | WHATWG Compression's `"deflate"`, `"deflate-raw"` and `"gzip"`, worked by native code in the turn that writes each chunk: 8 MB of JSON inflates from 1.4 MB in about 25 ms of that turn's budget, and writing it in slices with `await scheduler.yield()` between spreads it over turns of their own. Its errors are the standard's `TypeError`s: corrupt data, data after the end, input that ends before its end at `close()`, a chunk that is not an `ArrayBuffer` or view. One stream may span many writes: Discord's `zlib-stream` (one zlib stream across a socket's messages, each ending in a sync flush) inflates message by message, each write's output queued once it settles; keep a `read()` pending, as a write waits for one |
@@ -2844,9 +3043,32 @@ refuses `ws:` from an `https:` page except to loopback. A render-server page's
 doesn't hold a scheme-wide `net.fetch` line: a source that needs one keeps its
 placeholder in the rendered page, and the client fetches it after adoption.
 
-For `fetch` with the default `redirect: "follow"`, native hosts check each
+In the browser, a website's `fetch('/_data/page.json')` starts at the base URL's origin root and
+`fetch('data/page.json')` starts at the document base, including a `<base href>`.
+A stream uses the same base. The resolved URL needs an ordinary grant. For
+unrelated HTTPS sites, `net.fetch https:` admits every HTTPS origin in the browser.
+
+For a web app served on several domains, `net.fetch self` admits the document's
+HTTP(S) scheme, host and port. A `<base>` changes where the browser resolves
+a relative URL. The document still supplies the grant. Native hosts have no
+page origin, so this line grants them no access.
+
+For a JS request render, pass the trusted absolute page URL to the function
+returned by `renderer(dist)`. Relative fetches resolve against that URL, and
+its origin is the allow-list for `net.fetch self`. Validate the URL against
+your own tenant list. Never take it from a request header, including `Host`
+or a forwarded header. A path-only request render grants nothing under `self`.
+A page rendered at build time can use `app.origin` in `app.json` for `self`.
+To read an external API, grant its origin or a matching subdomain wildcard. Use
+`credentials: 'omit'` for public data. Visitor credentials and scheme-wide
+network grants wait for the browser. The internal wasm browser target ignores `credentials`. When a browser `Request` carries a body, that target needs the bytes explicitly: `fetch(req, {body: await req.arrayBuffer()})`.
+
+For `fetch` with the default `redirect: "follow"`, native hosts and the JS render server check each
 redirect target against the source's `net.fetch` grants before contacting it.
-The web lets the browser follow and checks only the final response URL. On
+When an ordinary browser fetch needs `self` for its starting URL, it stays
+on the page origin through redirects. If another grant admits the starting
+URL, the fetch uses those other grants through redirects. Exact checks the
+final response URL against them after the browser follows redirects. On
 render-server pages, CSP `connect-src` allows the page's own origin and the
 app's granted origins, while request admission uses the source's grants. A hop
 outside the page origin and app grants is blocked before contact (`Network` on
@@ -2880,9 +3102,14 @@ fetching 20 times can all wait and answer. A failed resource keeps its last
 value; `refresh` asks again. See LLP 1041 §8.4 for the byte reservations and
 cancellation policy.
 
-A mutation's answer hands over one request at a time, in order. Sends of the
-same `parallel` mutation overlap, up to three at a time on the six shared
-workers. They wait for everything before them except the other sends of
+A mutation's answer hands over one request at a time, in order.
+To [wait for a click in a frame](recipes/wait-for-a-frame-click.md), arm
+the listener, issue the click, then await its saved promise. Putting the wait
+first in the same answer's `Promise.all` holds the click behind it on native
+hosts and on the Wasm web host. For an external click, give the waiting
+evaluation and the click separate mutation targets.
+Sends of the same `parallel` mutation overlap, up to three at a time on the
+six shared workers. They wait for everything before them except the other sends of
 their mutation; later work waits for them. Replies retain the order asked.
 The six workers, a source's scoped requests and the launch's preloads share
 one connection pool natively (LLP 1162 D5), so a read reuses a connection
@@ -2956,7 +3183,11 @@ does. A mutation fails on its first overrun. `failure(x).code` is `error`
 and `failure(x).reason` is `overrun` for either failure. The app can show a
 retry button for a failed mutation. A development build also reports the
 overrun in the host console (the app’s logcat tag on Android). The Apple
-development window shows it until the next input or plan replacement.
+development window shows it until the next input or plan replacement. A launch
+with `EXACT_DEV_PILL=0` draws no such pill, nor the dev loop's status pill: for a
+screenshot of a development build (a simulator screenshot service such as Exact Build's,
+whose emulated clock can overrun budgets a device keeps). The budgets, the refusal and the
+console line are unchanged.
 The runner never retries a stream message
 that overruns.
 The host asks a yielded answer again at once, in its place among the source's
@@ -3086,7 +3317,7 @@ Rust and TypeScript storage share the bundled provider. Swift code in the same
 process must not open a database the Rust provider owns: Apple's launch-service
 dylibs still link system SQLite (`host/apple/launch-parts.mjs`), and closing a
 file through another copy can release the provider's POSIX locks
-([SQLite's locking rules](https://sqlite.org/howtocorrupt.html#posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)).
+([SQLite's locking rules](https://sqlite.org/howtocorrupt.html#_posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)).
 A native production build links SQLite only when the app grants `sqlite.open`
 or names `"sqlite"` in the manifest's `link` list. Naming it without the grant
 links unused code: adding `sqlite.open` changes the compatibility identity and
@@ -3161,11 +3392,16 @@ answer fails for it, caught or not, compiles no value: it shows its placeholder
 So a source that asks the app's module needs no bake code of its own
 (`native!.watch('state'); return native!.call({op: 'state'});`). Catch it only to answer
 something better than the placeholder. Browser storage uses app-scoped IndexedDB files
-and SQLite WASM in a dedicated worker, loaded on the first database operation.
+and loads SQLite WASM in a dedicated worker on the first database operation.
+A database uses OPFS (`opfs-sahpool`) when the worker can open a synchronous
+access handle. Without that capability it opens IndexedDB images and creates
+new databases in IndexedDB. Opening an existing OPFS database requires OPFS.
+SQLite uses DELETE journaling and FULL synchronization on OPFS. The app has no store or durability setting.
 Use HTTPS or localhost for Web Locks. Data persists across reloads within the
 same browser origin, subject to browser storage retention and quota policies.
-An open database exclusively locks its file; conflicting opens or filesystem
-mutations return `Unavailable` with a busy message. Agent mode skips storage.
+An open database exclusively locks its path. When the first tab closes the
+connection, a waiting tab can open the committed database. After ten seconds
+a waiting open returns `Unavailable` with code `EBUSY`. Agent mode skips storage.
 
 In `app.ts`, a storage refusal is an `Error` with `kind: 'Unavailable'`, a `code` and a
 `message`. The code is the same on every host; the message says more and may
@@ -3561,7 +3797,9 @@ out (a limit, the grants, the local network's rule) was never sent, and
 
 It must be an `http:` or `https:` request other than GET or HEAD, without
 `exactLongPoll`, and with `redirect` left to follow (XMLHttpRequest can only
-follow), or it is a `TypeError`. On the web a cross-origin upload asks a CORS
+follow), or it is a `TypeError`. For all grants, browser progress uploads use
+XMLHttpRequest, which follows redirects before Exact can check the final response URL.
+On the web a cross-origin upload asks a CORS
 preflight, as any XMLHttpRequest with an upload listener does. Uploads are
 sent without consulting the browser's cache. `only-if-cached` fails with a
 network error and sends nothing; a forced ask overrides it, as for other
@@ -3763,11 +4001,20 @@ worker-placed TypeScript do not provide the send path (on wasm the handle never
 opens); a Rust source's `Request::socket` is refused by name in both. No ambient `WebSocket` constructor is admitted. SSE
 remains unchanged.
 
-This first browser implementation targets modest app stores: filesystem
-operations read the app's file records, and each SQLite mutation atomically
-saves the whole database file. Database files share the filesystem namespace,
-so closed databases can be copied or exported through `storage.fs`. SQLite integer results
-are `bigint`: convert them to a Contract-compatible value before returning.
+On OPFS, SQLite writes the changed pages. In IndexedDB, a mutation saves
+the whole database image in one transaction. When the worker can use OPFS,
+it imports any existing IndexedDB image under the path lock. The worker
+checks the stored byte count and runs SQLite’s integrity check before it
+replaces the source record. An interrupted import retries at the next open.
+
+On either store, `storage.fs.readFile` and `copyFile` can read the last
+committed image of an open database, including one open in another tab.
+An OPFS read returns `EBUSY` if the owning worker cannot answer or release
+the pool within ten seconds. A tab running an older worker releases it on close.
+Writing, deleting or renaming an open database, or moving or removing its
+directory, returns `EBUSY`. After close, the database can be read, replaced,
+copied, renamed or removed like any other file. SQLite integer results are
+`bigint`: convert them to a Contract-compatible value before returning.
 
 ### Sign in through the system browser (`openAuthSession`)
 
@@ -3838,6 +4085,14 @@ grant beside this one: see [Push](#push).
   is `prompt` asks first; while `denied` it is refused. A post from a wake or
   a tool while `prompt` is refused `person-required`: ask from a person's
   press first (`requestNotificationPermission()`).
+- `notificationshow` on the root hears a local post presented while the page is visible.
+  Its handler takes the same arguments as a click, the tag and an optional
+  `NotificationEvent` carrying `tag`, `title`, `body` and `data`. The handler runs
+  with the device’s origin. iOS, macOS and the web report presentation. Android reports the handoff
+  to the notification manager for an enabled channel while the activity is visible.
+  The system can still suppress the notification.
+  The agent emits it when its clock reaches `showTrigger`, or immediately for a post due now.
+  Push arrivals and posts delivered while hidden raise no event.
 - A plain click with `navigate=` opens that route location: one `navigate`
   event to the navigation root while the app runs, or the launch location when
   it starts the app. `navigate=` is reduced by the router's `location_of`
@@ -4337,6 +4592,8 @@ OS floor) reaches an install only through its store. `@exact/store-update`
 (LLP 1133.038; [recipe](recipes/store-update.md)) says what the store has and
 opens it. It is not Exact's own signed updates: those are `exactDelivery()`
 and the update store (LLP 1030), which this package never touches.
+A Mac app distributed outside the Mac App Store updates its binary with
+Sparkle, as its own Swift ([recipe](recipes/mac-binary-updates.md)).
 
 `storeUpdateStatus()` is live, announced again on a return to the foreground
 and as a download moves:
@@ -4871,6 +5128,15 @@ unset`) and holds nothing. The runner decides which elements hold it
 `state.wakelock` is `{held, by}`: whether any element holds it and their view
 ids, on every host's driver.
 
+### Screen orientation
+
+A resource reading `exactViewport()` may declare `orientationType: string` and
+`orientationAngle: number`. The type is `portrait-primary`, `portrait-secondary`,
+`landscape-primary` or `landscape-secondary`. The angle is 0, 90, 180 or 270
+degrees from natural. Both update when the scene or display turns, including
+a half-turn at the same window size. A screen without a rotation reading uses
+its shape and angle 0. The terminal uses its viewport shape.
+
 ### Lock the screen orientation
 
 `orientationlock` on any element keeps the window to the orientations it
@@ -4942,7 +5208,7 @@ asks, from a press. [Recipe](recipes/displays.md).
 
 ### Still desktop capture (`@exact/screen-capture`)
 
-`captureScreens({directory, type?, quality?})` writes a still of every
+`captureScreens({directory, type?, quality?, screen?, rect?, window?, cursor?})` defaults to a still of every
 display, in display-list order, without a picker or window activation
 (LLP 1178). It answers `{captures: [{path, width, height, type, screen}]}`:
 physical pixel sizes and the corresponding `ScreenDetailed`, with
@@ -4960,19 +5226,24 @@ wake cannot request or capture. Files publish in call order after all
 encodes finish; cancellation before publication leaves previous files.
 A failure before publication preserves every previous file; a failure
 between renames reports `EncodingError` and may leave some files new.
-Limits are 8,192² pixels per display and 2²⁷ per call, checked before
+Limits are 8,192² pixels per picture and 2²⁷ per call, checked before
 allocation (`QuotaExceededError`). Unsupported encodings fall back to PNG;
 JPEG is supported on both desktop hosts.
 
 On macOS, status is `prompt` until this install has asked, `denied` after an
 unsuccessful request, and `granted` when the OS permits capture. It is read
 again when the app becomes active. A denial is changed in System Settings.
+On macOS, select a display with `screen` from `getScreenDetails()`. A `rect` within that
+display uses display-local CSS pixels. Select a window with the handle from
+`getWindowAtPoint({x, y})` or `getFrontmostWindow()`. Both lookups use the
+capture grant and app origin. The window still adds its desktop `frame`.
+The Screen Capture API's `cursor` accepts `always` or `never` (default).
 See the [capture recipe](recipes/screen-capture.md) for setup and fixtures.
 
 | host | still capture |
 | --- | --- |
-| macOS 14+ | `SCScreenshotManager`, sRGB at backing pixels, without the pointer; Screen Recording permission, checked at each capture |
-| Windows | per-monitor `BitBlt` with `SRCCOPY \| CAPTUREBLT`, physical pixels, no pointer or permission dialog; GDI's SDR colors, tagged sRGB |
+| macOS 14+ | `SCScreenshotManager`, sRGB at backing pixels, Screen Recording checked at each capture |
+| Windows | per-monitor GDI for the default call. Window lookup and explicit capture selectors or cursor settings return `NotSupportedError` |
 | web, Linux | deterministic fixture images under the agent; real capture answers `NotSupportedError` |
 | mobile, TV, watch, terminal | unavailable |
 
@@ -5004,6 +5275,54 @@ finishing the task can end it before copying completes. No persistable permissio
 is taken or released. Under the agent the picker stays held. Image pixel readback and a canvas's
 synchronous readback (`getImageData`, `toDataURL`, `toBlob`) remain deferred;
 a canvas's pixels go to a file (below).
+
+### Canvas 2D surfaces (`draw`)
+
+`canvas surface=board(nodes)` is drawn by the data module when no GPU module
+registers `board`: `app.ts` exports `surfaces`, each surface's name and its
+number of arguments, and `draw(surface, args, ctx, frame)`, which draws on `ctx`
+with `CanvasRenderingContext2D`'s names and returns `true` to be asked for
+another frame (LLP 1056).
+
+`args` holds the call's values in order, or an object by the argument names
+when the call names them (`surface=pin(at=spot, label=title)`). On every host
+each value is what `answer` receives for its type: a record is an object by
+field name, a list an array, an `option` `null` or its value, an enum its
+string. Type `draw` as `Draw` from `app.contract.d.ts`, with all four
+parameters, and checking `surface` narrows `args` to that surface's types:
+
+```contract
+shape Node
+  x: number
+  y: number
+
+component Board
+  state nodes = [Node(x=8, y=8)]
+  view
+    canvas surface=board(nodes) width=200 height=120
+```
+
+```ts
+import type { Draw } from './app.contract.d.ts';
+export const surfaces = { board: 1 };
+export const draw: Draw = (surface, args, ctx, frame) => {
+  ctx.clearRect(0, 0, frame.width, frame.height);
+  if (surface === 'board') for (const n of args[0]) ctx.fillRect(n.x, n.y, 8, 8);
+  return false;
+};
+```
+
+Treat `args` as read-only. The web freezes it and keeps it between draws until
+a value changes; elsewhere each draw gets a fresh copy.
+
+The context's space is the content box in CSS px, at the device's scale.
+`bitmap-width` and `bitmap-height` give the canvas a fixed bitmap instead, as
+HTML's `width` and `height` attributes do: `frame.width` × `frame.height`
+pixels, stretched to the box, with 300 or 150 for one left unset. Either may be
+computed, as may `color-space` and `color-type`. On every host a change clears
+the bitmap and draws again with `frame.cause` `"size"`, as assigning
+`canvas.width` does on the web. A size is a whole number of pixels: a negative
+one is 0, and a fraction leaves it unset.
 
 ### A 2D canvas's pixels as an image file (`captureCanvas`)
 
@@ -5559,7 +5878,7 @@ are pixels of the upright image. Lines keep the recognizer's reading order.
 | Host | Answer |
 | --- | --- |
 | iOS, iPadOS, macOS, tvOS | Vision; omitted languages use the request's defaults. Named languages match Vision's supported languages. `apple.confidence` is the top candidate's confidence. |
-| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Built and JVM-tested; recognition on a device is not yet verified. |
+| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Lines come in ML Kit's block order: in a photo that also holds text outside the page (a window's tab strip above a paragraph), that text can come first. Verified on a phone (Android 14) with the fixture pictures and camera photos. |
 | Web, Windows, Linux, terminal, and targets without an implementation | Declared default: `unavailable`, `reason: "not-supported"`, `languages: []`; `detectText` fails `NotSupportedError`. |
 
 Availability is fixed for an Apple or Android build; neither uses `downloadable`
@@ -5574,6 +5893,25 @@ ML Kit's [language table](https://developers.google.com/ml-kit/vision/text-recog
 distinguishes supported, experimental and mapped languages; all its Latin entries
 are admitted. Its [line result](https://developers.google.com/android/reference/com/google/mlkit/vision/text/Text.Line)
 defines the corner order and the unknown-language tag.
+
+### Detect faces in a still image (`@exact/face-detection`)
+
+`detectFaces(image=, maxDetectedFaces=, fastMode=)` reads a path covered by `fs.read`, such as a camera still or a picked file. It returns the EXIF-upright `width` and `height` and a `faces` list, largest box first. A picture with no face succeeds with an empty list. A face’s `boundingBox` has `x`, `y`, `width` and `height` in upright, full-resolution pixels measured from the top left. A box can extend beyond the image. Intersect it with the image before cropping. Each landmark has point `locations` and a `type` when known (`eye`, `mouth`, or `nose`). Vision returns an eye contour. ML Kit returns one point per detected eye. Models can infer landmarks on a partly hidden face. [Shape Detection API §2.2](https://wicg.github.io/shape-detection-api/#face-detection-api)
+
+Optional `pose` holds three angles in degrees. From the photographed person’s frame, positive `yaw` turns the nose to their left, positive `pitch` lifts their chin, and positive `roll` tips their right ear toward their right shoulder. A host omits `pose` when any angle is unavailable. An app checking for exactly one face should omit `maxDetectedFaces` so it can see a second face.
+
+| Host | Detection |
+| --- | --- |
+| iOS, iPadOS, macOS, tvOS | Vision supplies face rectangles, pose and landmarks. |
+| Android | Bundled ML Kit 16.1.7 runs offline and added 13,791,238 bytes to the signed arm64 test APK. The `android` member holds `leftEyeOpenProbability` and `rightEyeOpenProbability` when available, each from 0 to 1. The sides are the person’s. ML Kit’s default minimum face size is a tenth of the input width. |
+| Web | The browser’s own `FaceDetector` where available. The web API supplies boxes and landmarks. Landmark types are optional, and the API supplies no head angles. |
+| Hosts without a detector | `NotSupportedError`, including under a drive. |
+
+Landmark positions were checked on macOS and Android. On the iOS 26.5 simulator, Vision moved eye points between reads of identical pixels and eventually placed them outside the face box. Use an iPhone to test landmark positions. The iPhone check is still pending. The tvOS implementation has been compiled only.
+
+The image and detection results stay on the device. Google documents the operational metrics its SDK collects. [ML Kit data disclosure](https://developers.google.com/ml-kit/android-data-disclosure)
+
+The native implementations decode at up to 2048 pixels on the longer side. The browser decodes the full bitmap, then draws it into an upright canvas at that limit. With `fastMode`, Vision uses a 1024-pixel thumbnail, ML Kit uses its fast performance mode, and the browser receives the hint. The Apple `requestHatch` can configure both Vision requests before they run. The landmarks request’s search region also applies to the rectangles request unless the app overrides it there. Android’s `optionsHatch` configures the ML Kit options builder before a client is created. ML Kit omits head angles when fast mode, all contours, no landmarks and no classification are selected together. Drives use the default native options. An explicit `maxDetectedFaces` must be an integer from 0 through 65535 (`TypeError`). A missing file fails with `NotFoundError`, unreadable image data with `InvalidStateError`, and detector failure with `OperationError`. A drive uses the same on-device detector as the app. [Measured boxes, angles, eye probabilities and APK size](../packages/face-detection/test/checklist.md)
 
 ### Read barcodes (`@exact/barcode-detection`)
 
@@ -5654,6 +5992,26 @@ remains a compound suffix. Their Bun and Rust tests read the same cases from
 `scripts/fixtures/document-suffixes.json`. An invalid suffix or an empty or
 control-bearing handler name makes the build fail.
 
+The open picker, and the save picker where the platform's save dialog lists
+types, offer the declared types and nothing else: each handler's `name` labels
+its type where the platform lists types by name (Windows, Linux and the web),
+and macOS and iOS offer their union, as their panels do. The pickers take their
+types from the manifest, never from the call.
+
+| Host | `showOpenFilePicker`, `showSaveFilePicker` |
+| --- | --- |
+| Web (Chromium) | `types`, one `{ description: name, accept }` per handler, and `excludeAcceptAllOption: true` |
+| Windows | one `SetFileTypes` entry per handler, `Documents (*.pdf)`, the first selected; Save starts on the type with the longest suffix ending `suggestedName` and adds that type's extension to a name typed without one |
+| Linux | one portal filter per handler, the first as `current_filter` |
+| macOS | `NSOpenPanel`'s `allowedContentTypes`, the union, with no type menu; the save panel takes no types |
+| iOS | Open: the document picker's content types, the union; Save exports with no types |
+
+On Windows a handler with MIME types and no extension matches the extension the
+system registers for each MIME type. Where there is none, the dialog cannot
+offer that type and the journal names the MIME type; where it can offer none
+of the declared types, the pick is refused. Give such a handler its
+extensions. With no handlers a picker offers every file.
+
 The web passes those suffixes to its picker and matches a drop by the whole
 filename suffix. Apple registers each without its leading dot; its picker offers
 the handler's content types and the complete extension tokens the system resolves,
@@ -5677,8 +6035,8 @@ the app keeps what the person chose (below).
 
 On Windows, the three document pickers, file inputs and `saveFile` use the
 shell's common item dialogs, owned by the app's window. A headless host refuses
-them; under the agent they remain held pickers. Document pickers offer every
-file until the Windows build carries `file_handlers`. File inputs copy the
+them; under the agent they remain held pickers. Open and Save offer the
+`file_handlers` types, as the table above says. File inputs copy the
 chosen files into `app:/tmp/picked/` and leave the originals in place.
 
 **Where a picker opens** (LLP 1173 D2). The three pickers and `saveFile`
@@ -5729,9 +6087,34 @@ carries nothing: the answer reads again, as LLP 1016.002's `native.watch`.
 Call it inside an answer, on a `doc:` path the app may read (`fs.read
 doc:/`):
 
+```contract
+component Notes
+  state folder = ""
+  resource names = markdownIn(folder) when folder != "" as shape string[] else empty()
+  action pick
+    showDirectoryPicker("folder")
+  action chose(value)
+    folder = value
+  view
+    column
+      input id="folder" display="none" change=chose
+      button press=pick
+        text "Choose a folder"
+      for n in names key=n
+        text n
+```
+
 ```ts
-await storage.fs.watch(folder);                  // its own entries
-return (await storage.fs.readdir(folder)).filter((n) => n.endsWith('.md'));
+import type { Answer, Sources } from './app.contract.d.ts';
+
+export const grants = 'fs.read doc:/';
+const sources: Sources = {
+  markdownIn: async ([folder], _store, storage) => {
+    await storage.fs.watch(folder); // its own entries
+    return (await storage.fs.readdir(folder)).filter((n) => n.endsWith('.md'));
+  },
+};
+export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
 A Rust source records the same topic:
@@ -5759,12 +6142,43 @@ The kept set is File ▸ Open Recent's: Clear Menu, or an entry falling off
 the end of the list, ends its reopening (a window that has it open keeps it
 until the app quits).
 
+```contract
+shape Kept
+  path: string
+  name: string
+
+shape Done
+  ok: bool
+
+component Recent
+  resource kept = recentDocuments() as shape Kept[] else empty()
+  mutation forgot as shape Done refreshes kept
+  action forget(path: string)
+    send forgot = forgetDocument(path)
+  view
+    column
+      for k in kept key=k.path
+        button press=forget(k.path)
+          text `Forget ${k.name}`
+```
+
 ```ts
+import type { Answer, Sources } from './app.contract.d.ts';
+
 export const grants = ['fs.read doc:/', 'doc.keep'].join('\n');
-storage.fs.watch('doc:/');                       // asked again when the list changes
-const recent = await storage.fs.recentDocuments();
-// [{ path: 'doc:/12/notes', name: 'notes', kind: 'directory', mode: 'readwrite', opened: 1760572800000 }, …]
-await storage.fs.forgetDocument(recent[0].path); // off the list and Open Recent; ENOENT if not kept
+const sources: Sources = {
+  recentDocuments: async (_args, _store, storage) => {
+    storage.fs.watch('doc:/'); // asked again when the list changes
+    const recent = await storage.fs.recentDocuments();
+    // [{ path: 'doc:/12/notes', name: 'notes', kind: 'directory', mode: 'readwrite', opened: 1760572800000 }, …]
+    return recent.map(({ path, name }) => ({ path, name }));
+  },
+  forgetDocument: async ([path], _store, storage) => {
+    await storage.fs.forgetDocument(path); // off the list and Open Recent; ENOENT if not kept
+    return { ok: true };
+  },
+};
+export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
 A Rust source sends `fs.recentDocuments` and `fs.forgetDocument` storage
@@ -5814,17 +6228,23 @@ component Reopen
 ### Files dropped or pasted
 
 A `drop` hands its action a `DragEvent` whose `files` are `doc:` handles of
-any type, a folder's included; a `paste`'s `ClipboardEvent` has `files` too,
-image data with no file (a screenshot) as one `image.png`. Read them as any
-`doc:` path, under `fs.read doc:/`; `storage.fs.stat(path).isDirectory` tells
-a folder. A file drag over a `textarea` or `input` whose node or an ancestor
-declares `drop` lands there, not as path text in the field. `dragenter` and
-`dragleave` bracket the drag over a node, for a drop overlay
-([grammar](contract-grammar.md#pointer)):
+any type, a folder's included, whose `text` is the drag's plain text and
+whose `url` is its link, each `""` when it has none; a `paste`'s
+`ClipboardEvent` has `files` too, image data with no file (a screenshot) as
+one `image.png`. Read files as any `doc:` path, under `fs.read doc:/`;
+`storage.fs.stat(path).isDirectory` tells a folder. A file drag over a
+`textarea` or `input` whose node or an ancestor declares `drop` lands there,
+not as path text in the field; a drag of plain text over a field is the
+field's unless the field declares `drop`, and on Windows, where a field takes
+no drag, it lands on the `drop` above. An app can show an overlay at
+`dragenter`; the `drop` action clears it when the drop lands, and
+`dragleave` otherwise ([grammar](contract-grammar.md#pointer)):
 
 ```text
 action took(e: DragEvent)
   paths = e.files
+  if e.url != ""
+    links = links.concat([e.url])
 action pasted(e: ClipboardEvent)
   if e.files.length > 0
     paths = e.files
@@ -5835,16 +6255,20 @@ column dragenter=entered dragleave=left drop=took
 
 | Host | `drop`, `dragenter`, `dragleave` | `ClipboardEvent.files` |
 | --- | --- | --- |
-| Web (JS and wasm targets) | yes: Chromium's handles, else read-only copies; a folder's entry as a read-only folder | `clipboardData.files`, read-only copies |
-| macOS | yes: every file URL Finder drags, a field forwarding the drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
-| iOS | none (declared; the driver's drag forms answer `unsupported`) | file URLs, else the pasteboard's image as `image.png` |
+| Web (JS and wasm targets) | yes: Chromium's handles, else read-only copies; a folder's entry as a read-only folder; `text/plain` and `text/uri-list` | `clipboardData.files`, read-only copies |
+| macOS | yes: file URLs, promised files (Photos', an Exact app's), strings and links, a field forwarding a file drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
+| iOS | yes: files, text and links from another app or this one, each file a copy, no folders; a field keeps text, links, text files and the text of a drag that also carries files, as UIKit's text views do, unless the field declares `drop` | file URLs, else the pasteboard's image as `image.png` |
 | tvOS | none | empty: tvOS has no pasteboard |
-| Windows | yes, files and folders in Explorer selection order, including over an editable field | empty (text only) |
-| Linux, Android, terminal | none | empty (text only) |
+| Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
+| Android | yes: files, text and links from another app or this one, each file a copy of a `content:` item, no folders and no `file:` paths. Another app's files are copied under the read permission Android grants for the drop; without one, that drop brings its text and link alone. While a drop has no `url`, a text item whose whole last line is an `http://` or `https://` link gives that link as the `url`, and its lines before it, such as the title Chrome sends, as the `text`; a field keeps text, links and text files, as Android's text views do, unless it declares `drop`, and gives a file to the `drop` above it | empty (text only) |
+| Linux | yes, in the Wayland window, from another app, taken as a copy: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`); image data is not taken, so a browser's picture arrives as the link or file it offers beside the data, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop`; Wayland tells the window no keys, so the modifiers are those it holds | empty (text only) |
+| terminal | none | empty (text only) |
 
-The driver: `tap <target> drop <path…>` (files and folders), `tap <target>
-dragenter <path…>` and `tap <target> dragleave`, `type <target> paste --file
-<path…>` and `type <target> paste --image <png>`.
+The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,
+folders except on iOS and Android, text and a link), `tap <target> dragenter …` and `tap <target>
+dragleave`, `type <target> paste --file <path…>` and `type <target> paste
+--image <png>`. A test drops with `tap "zone" drop file "a.pdf" text "…" url
+"…"`, with at least one of those parts.
 
 ### Shares from other apps (`share_target`)
 
@@ -5950,6 +6374,47 @@ A Mac build signed ad hoc leaves out the share extension
 ([Mac development signing](#mac-development-signing)).
 
 ### Clipboard images
+
+A press can start a data-code clipboard read on macOS, iOS, Android and the web. With
+the `clipboard.read` grant, `await readText()` returns plain text (up to
+1 MiB of UTF-8), or an empty string when there is none. On Apple platforms and Android it takes
+the first item with plain text. Android rejects with
+`NotAllowedError` if the window lacks input focus. iOS controls permission to paste from another app. `await read()`
+returns clipboard items. Inspect `item.types` and call
+`await item.getType("text/plain")` for text. On Apple platforms, Android and the web,
+`await item.getType("image/png")` returns a temporary `app:/tmp/` PNG path. The host sanitizes each image within
+the 64 MiB and 64-million-pixel bounds. File access uses the app's ordinary
+file grants.
+
+On macOS, iOS and the web, a clipboard item can carry formatted text.
+Supply the plain-text alternative explicitly when writing for both rich and
+plain-text fields.
+
+```ts
+await write([new ClipboardItem({ "text/html": "<b>Note</b>", "text/plain": "Note" })]);
+```
+
+Exact keeps text formatting, lists, tables and absolute HTTP, HTTPS and
+mailto links. It strips scripts, event handlers, styles and embedded resources
+before writing. Both the input and sanitized HTML must fit in 1 MiB of UTF-8.
+Windows and a development bake with no target report
+`ClipboardItem.supports("text/html")` as false. A web page whose Trusted
+Types policy blocks HTML parsing needs a browser with `Document.parseHTML`
+to write HTML. Rust struct literals can omit unused clipboard item fields
+with `..Default::default()`.
+
+On iOS, pass UIKit's write options in an optional second argument. Each
+applies to the entire item, including its plain-text fallback.
+
+```ts
+await write([new ClipboardItem({ "text/plain": note })], {
+  apple: { localOnly: true, expirationDate: Date.now() + 60_000 },
+});
+```
+
+`localOnly` keeps the copy on the device. `expirationDate` is an absolute
+time in milliseconds since the Unix epoch. UIKit removes the item at expiry.
+macOS, Windows and the web ignore both words.
 
 Data code writes images with [`@exact/clipboard`](contract-grammar.md#clipboard).
 Windows accepts an `app:/` PNG file, up to 64 MiB and 64,000,000 pixels;
@@ -6250,12 +6715,53 @@ Linux native apps can run TypeScript through `exact-js` and Hermes;
 
 Signed delivery carries one module pair, and which pair depends on the host. The
 Apple loader accepts TypeScript or a Rust module enabled by the binary's Rust policy.
-A Linux binary built with its update entry installs a Rust pair only. A Linux app
-whose module is TypeScript, and every Windows app, sets that platform's
-`deploy.store` to `"0"`: with any other level the binary exits at start. The
-installed binary must supply the required runtime and admit the module's app
-identity and grants. An app with both TypeScript and Rust modules sets every
-`deploy.store` entry to `"0"`: delivery of both together is not implemented. See LLP 1027 for the design record.
+A generated Linux entry links the delivery adapter at the default store level
+`"A"`. It can install a TypeScript pair or a Rust pair when the binary admits it.
+Set `deploy.store.linux` to `"0"` for a binary-only build or to run the Linux
+host headless on Windows. The Windows host requires `deploy.store.windows` to
+be `"0"`. The installed binary must supply the required runtime and admit the
+module's app identity and grants. An app with both TypeScript and Rust modules
+sets every `deploy.store` entry to `"0"` because delivery of both together is
+not implemented. See LLP 1027 for the design record.
+
+## Package configuration
+
+A package's interface declares the values it takes from the app in its
+`exact.json`, per target (`web`, `android`, `ios`, `macos`, `tvos`):
+`"config": {"<target>": {"<key>": {"type": "string" | "number" | "boolean" | "env",
+"required": true | "release", "missing": "<code>"}}}`. An `android` key may add
+`"metadata": "<name>"` to also fill a vendor SDK's `<meta-data>`, if the name is
+on `CONFIG_METADATA` in `scripts/android-manifest.mjs`.
+
+The app supplies a base value in `packages.<interface>.<target>.<key>` in
+`app.json`. A development-trust build overlays individual keys from
+`development.packages.<interface>.<target>`. Both sections take the keys and
+types the interface declares. A key supplied only under `development` is
+absent in production. The build selects the value before reading an `env`
+reference (`{"env": "<VARIABLE>"}`). Each selected value ships in the app.
+A production JSON import of `app.json` sees an empty `development.packages`
+map when the app declared that section.
+
+The package reads the result through `context.config` in Swift, Kotlin and
+JavaScript. A build refuses a value of another type (`bake-config-type`),
+an undeclared key (`bake-config-unknown`) and a missing required value
+(the declared `missing` code). A release checks `"required": "release"`
+after selection. Production must satisfy it from the base. A changed native
+value needs a new binary.
+
+**Package context.** The read-only Boolean `context.development` is true
+when the app was built with development trust and false in production.
+Linux and Windows Rust packages read it as `context.development()`.
+It has the same value when the app runs under the agent or launches normally.
+The package's Swift sources also have the `EXACT_DEVELOPMENT` compilation
+condition in a development build. SwiftPM products build in release
+configuration and the APK is non-debuggable in both trusts. A package can
+use the fact to select a vendor SDK's test mode.
+See [A package's configuration](contract-for-agents.md#a-packages-configuration).
+
+Both web targets load a placed package view from its bound web implementation
+after first paint. A game can also supply the tag in its own web module.
+Package sources and sends in a wasm game still use the runner’s substitutes.
 
 ## Access hatches
 
@@ -6454,11 +6960,16 @@ An app outside this checkout names its data crate in app.json (LLP 1153.003 D2):
 `source`, optional, is what every host and the web's module run: the type itself, its `::default()` (the
 default) or its `::new(…)` with literal arguments (`"field_log_data::FieldLog::new(true)"`). A source
 built from anything else (a local, a path read at build time) is exported by a crate of the app's own,
-named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead.
+named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead. Beside
+`app.ts`, that crate also carries the data crate's `RUST_SOURCES`, which the web reads from the module:
+`exact_logic_abi::export_sources!(field_log_data::RUST_SOURCES);` beside its `export!`.
 
 The crate sits beside app.json and joins the workspace exact2 generates: its `Cargo.toml` sets
 `package.workspace = "../.exact/shells"` and takes exact2's crates as workspace dependencies
-(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). The host crates are
+(`exact-runner.workspace = true`; `contract.workspace = true` for a build script). Any other crate of
+exact2's is taken the same way (`exact-canvas.workspace = true`), never by a path through
+`.exact/checkout`: the workspace names exact2 by its real path, and a second path to the same crate is a
+second package to Cargo, so a build refuses one and `bun exact.mjs update` rewrites it. The host crates are
 generated under `.exact/shells/` and link it; without `app.ts` they link no JavaScript engine. With
 `app.ts` beside it the two compose: Rust answers the sources the crate lists in `pub const RUST_SOURCES:
 &[&str]`, TypeScript the rest. `exact new <path> --rust` writes such an app: `data/`, whose type answers
@@ -6565,7 +7076,7 @@ The web does not call `storage`. Its GPU artifact is WebAssembly with generated
 wasm-bindgen JavaScript; Exact supplies it no filesystem or browser-storage bridge.
 A GPU module that needs persistence must supply its own browser API integration.
 The app's data module can separately use Exact's `storage.fs` and `storage.sqlite`
-APIs, backed by IndexedDB in this repo. Those APIs are not injected into GPU modules
+APIs, backed by browser storage on the web. Those APIs are not injected into GPU modules
 and supply no paths usable by `std::fs` or native SQLite.
 `exact-gpu` 0.4 carries the hook and the native `gpu_storage` export; rebuild GPU
 artifacts with the host.
@@ -7073,6 +7584,14 @@ neither
 runs when it lifts 64 points or more that way. Both directions are the
 screen's, in a right-to-left layout too, and a node may have both
 ([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
+
+`swipe=action` with `swipe-direction` (`left`, `right`, `up` or `down`) is the
+platform's discrete swipe: nothing follows the finger, and the action runs once
+when UIKit's swipe recognizer recognizes a swipe that way on the node or a view
+inside it, a text field included. UIKit arbitrates it with the other gestures
+under the finger, as it does any swipe: a field whose text overflows pans
+instead. Only iOS has it; macOS,
+tvOS, the web, Linux, Windows and Android fire none (LLP 1057.001 §8).
 
 ## Timer options
 

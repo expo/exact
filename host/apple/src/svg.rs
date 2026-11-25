@@ -39,7 +39,7 @@ pub(crate) const LOWERED: [Property; 7] = [
 /// A box's transform and background colour too (LLP 1055.001):
 /// both presenters anchor an animated box at its centre, CSS's initial
 /// `transform-origin`, and Core Animation's `transform.translation`,
-/// `transform.rotation.z` and `transform.scale` key paths replace one
+/// `transform.rotation.z` and `transform.scale.x`/`.y` key paths replace one
 /// component of the layer's transform and keep the others, composed
 /// translate, rotate, scale: CSS's individual transform properties.
 pub(crate) const BOX_LOWERED: [Property; 4] = [
@@ -385,7 +385,7 @@ impl SvgState {
                     engine.target(key, p).unwrap_or(Value::ZERO),
                     std::f64::consts::PI / 180.0,
                 ),
-                Property::Scale => (engine.target(key, p).unwrap_or(Value::scalar(1.0)), 1.0),
+                Property::Scale => (engine.target(key, p).unwrap_or(Value::new(1.0, 1.0)), 1.0),
                 _ => (engine.target(key, p).unwrap_or(Value::ZERO), 1.0),
             };
             let props: &[Property] = if self.box_motion {
@@ -760,7 +760,7 @@ fn element(
                             .unwrap_or(Value::scalar(t.rotate as f64)),
                         std::f64::consts::PI / 180.0,
                     ),
-                    Property::Scale => (Value::scalar(t.scale as f64), 1.0),
+                    Property::Scale => (Value::new(t.scale.0 as f64, t.scale.1 as f64), 1.0),
                     _ => (Value::ZERO, 1.0),
                 };
                 let specs = specs(engine, key, &turns, &underlying);

@@ -8,11 +8,52 @@ import {spawnSync} from 'node:child_process';
 import {boundedHttpBody as readBody, longPollTiming, request, waitForInflight} from './http-body.js';
 import {admittingGrant, createGrantSet, grantError, scopedGrantSet} from './grant-admission.js';
 import {createRequestExecutor} from '../web-js/admission.js';
+import {suiteBrowser} from '../../scripts/agent-launch.mjs';
+import {engineTests} from '../../scripts/coverage.mjs';
 
 const ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),sets=new Map();
 const target=resolve(process.env.CARGO_TARGET_DIR||resolve(ROOT,'target'),`debug/exact-web-js${process.platform==='win32'?'.exe':''}`);
 const built=spawnSync('cargo',['build','-q','-p','exact-web-js'],{cwd:ROOT,encoding:'utf8'});
 if(built.status!==0)throw new Error(built.stderr||'grant normalizer build failed');
+const engineTest = await engineTests(['chromium']);
+engineTest.chromium('net.fetch self follows the document origin across tenants', async () => {
+  const browser = await suiteBrowser(), page = await browser.newPage();
+  const hits = [];
+  const sites = [0, 1].map(i => Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    const { pathname } = new URL(request.url), other = sites[1 - i].url.origin;
+    if (['/grant-admission.js', '/navigation/network.js', '/http-body.js', '/faults.js', '/address-space.js'].includes(pathname))
+      return new Response(Bun.file(resolve(import.meta.dir, pathname.slice(1))), { headers: { 'content-type': 'application/javascript' } });
+    if (pathname === '/') return new Response('<base href="' + other + '/">', { headers: { 'content-type': 'text/html' } });
+    if (pathname === '/favicon.ico') return new Response(null, { status: 204 });
+    hits.push(request.url);
+    if (pathname === '/bounce') return Response.redirect(other + '/foreign');
+    return new Response(request.url);
+  }}));
+  try {
+    for (const site of sites) {
+      const origin = site.url.origin;
+      await page.goto(origin);
+      const specs = ['net.fetch self', 'net.fetch self\nnet.fetch ' + origin, 'net.fetch ' + origin + '\nnet.fetch self'];
+      const actual = await page.evaluate(async data => {
+        const {admittingGrant, admitsFetchHop, createGrantSet} = await import(location.origin + '/grant-admission.js');
+        const {request} = await import(location.origin + '/http-body.js');
+        const [self, ...mixed] = data.map(createGrantSet);
+        const own = location.origin + '/data';
+        const get = url => request({method: 'GET', headers: [], url}, { grantSet: self, controllers: new Set() });
+        const reply = await get(own), redirect = await get(location.origin + '/bounce');
+        return [
+          admittingGrant(self, own), admittingGrant(self, document.baseURI),
+          admittingGrant(self, own.replace('http:', 'https:')), admittingGrant(self, own, 'websocket'),
+          ...mixed.map(set => admittingGrant(set, own)), admitsFetchHop(self, own, true), admitsFetchHop(self, own, false),
+          reply.status, new TextDecoder().decode(reply.body), redirect.status,
+        ];
+      }, specs.map(normalized));
+      expect(actual).toEqual(['net.fetch self', null, null, null, 'net.fetch ' + origin, 'net.fetch ' + origin, true, false, 200, origin + '/data', 0]);
+      expect(hits.splice(0)).toEqual([origin + '/data', origin + '/bounce']);
+    }
+  } finally { await browser.close(); for (const site of sites) site.stop(true); }
+});
+
 function normalized(spec){
   if(sets.has(spec))return sets.get(spec);
   const scratch=mkdtempSync(resolve(tmpdir(),'exact-grants-')),input=resolve(scratch,'grants.txt');writeFileSync(input,spec);

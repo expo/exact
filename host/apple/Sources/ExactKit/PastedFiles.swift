@@ -96,11 +96,12 @@ extension NodeView {
     }
 }
 
-/// The folders a session's pasted images were written to: removed when its
-/// handles go (`forgetDocuments`), which is when nothing can read them.
-enum PastedImages {
+/// The folders a session's pasted images and dropped promised files were
+/// written to: removed when its handles go (`forgetDocuments`), which is
+/// when nothing can read them.
+package enum PastedImages {
     nonisolated(unsafe) private static var folders: [ObjectIdentifier: [URL]] = [:]
-    static func held(_ folder: URL, by session: ExactSession) { folders[ObjectIdentifier(session), default: []].append(folder) }
+    package static func held(_ folder: URL, by session: ExactSession) { folders[ObjectIdentifier(session), default: []].append(folder) }
     static func forget(_ session: ExactSession) {
         for folder in folders.removeValue(forKey: ObjectIdentifier(session)) ?? [] { try? FileManager.default.removeItem(at: folder) }
     }

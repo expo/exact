@@ -23,6 +23,7 @@ pub(crate) struct FlightFrame {
     /// A route change's: the reader dissolves the source's drawing into the
     /// destination's (LLP 1013.004 D3 step 4), where an in-page flight
     /// carries the live destination alone (LLP 1013.000 D4).
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
     pub dissolve: bool,
 }
 

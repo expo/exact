@@ -1,5 +1,7 @@
 //! A host's input event (`exact_gpu`) as the engine's, from the local player.
-use exact_gpu::InputEvent;
+use super::{Executor, WorldSurface};
+use exact_game::Game;
+use exact_gpu::{InputEvent, SurfaceError};
 
 pub(super) fn engine_event(event: &InputEvent) -> exact_game::InputEvent {
     use exact_game::{InputEvent as E, PointerPhase as P};
@@ -128,5 +130,40 @@ fn sensor_kind(kind: exact_gpu::SensorKind) -> exact_game::SensorKind {
         K::Magnetometer => E::Magnetometer,
         K::AbsoluteOrientation => E::AbsoluteOrientation,
         K::RelativeOrientation => E::RelativeOrientation,
+    }
+}
+
+impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, P, ASSETS, H> {
+    pub(super) fn queue_input(&mut self, event: &InputEvent) {
+        self.reported = false;
+        use exact_gpu::PointerPhase as Q;
+        let Some(sim) = &mut self.sim else {
+            return;
+        };
+        if matches!(
+            event,
+            InputEvent::Key { down: true, .. }
+                | InputEvent::Pointer { phase: Q::Down, .. }
+                | InputEvent::Control { phase: Q::Down, .. }
+        ) || matches!(event, InputEvent::Pad { buttons, .. } if buttons.iter().any(|b| *b >= 0.5))
+        {
+            self.presentation.unlock();
+        }
+        let e = engine_event(event);
+        if let Err(error) = sim.validate_input(&e) {
+            self.refusal = Some(SurfaceError(error));
+            return;
+        }
+        if let InputEvent::Pointer {
+            id, phase: Q::Move, ..
+        } = event
+        {
+            self.dirty |= self.poll_input
+                && self
+                    .render
+                    .as_ref()
+                    .is_some_and(|(_, f)| f.mouse_look() || f.pointer_pan() == Some(*id as u64));
+        }
+        sim.input(e);
     }
 }

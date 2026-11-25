@@ -4,6 +4,7 @@
 //! cause (D16 item 6), whose kept request carries each origin that gave it
 //! arguments into the commit its answer makes.
 
+use crate::source::{boxed, Source};
 use exact_runner::{
     agent, Answer, CallOrigin, DataError, Dispatch, Outcome, Reply, Request, Response, Runner,
     Store, Value, Work,
@@ -204,7 +205,7 @@ impl exact_runner::DataSource for Data {
 /// The host: the runner, its requests run, and the fetches the test
 /// answers itself, by target.
 struct Host {
-    r: Runner<Data>,
+    r: Runner<Source>,
     data: Data,
     waiting: Vec<(u64, mpsc::Receiver<Outcome>)>,
     fetches: Vec<(u64, String)>,
@@ -222,7 +223,7 @@ impl Host {
         let data = Data::default();
         let mut r = Runner::boot(
             plan,
-            data.clone(),
+            boxed(data.clone()),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",

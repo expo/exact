@@ -131,7 +131,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // What motion writes over the author's style, which `restore` puts back: the lift's `z-index` and `position`, the
   // `transition` that keeps a held property from animating, and each held property (`scale` as `--exact-scale` on a
   // pressable, `cssProperty`)
-  const overwritten=['z-index','position','transition','translate','scale','--exact-scale','--exact-translate-x','--exact-translate-y','--exact-translate-z','rotate','opacity','height'];
+  const overwritten=['z-index','position','transition','translate','scale','--exact-scale','--exact-scale-y','--exact-translate-x','--exact-translate-y','--exact-translate-z','rotate','opacity','height'];
   const animations=new Map(), held=new Map(), authored=new Map(), drags=new Map(), waitingShape=new WeakMap();
   const raised=new Set();
   const active=new Map(), heightBindings=new Map(); let reconciling=false;
@@ -144,11 +144,13 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // A translate frame is `[x,y]` lengths, or `[x,y,px,py]` with percentages
   // of the box, which the browser resolves (chess diary #4).
   const axis=(l,p)=>p?(l?`calc(${l}px + ${p}%)`:`${p}%`):`${l}px`;
-  const css=(property,value)=>property==='translate'?`${axis(value[0],value[2])} ${axis(value[1],value[3])}`:property==='rotate'?`${value[1]||0} ${value[2]||0} ${value[3]||(!(value[1]||value[2])?1:0)} ${value[0]}deg`:property==='height'?`${Math.max(0,value[0])}px`:String(value[0]);
+  const css=(property,value)=>property==='translate'?`${axis(value[0],value[2])} ${axis(value[1],value[3])}`:property==='rotate'?`${value[1]||0} ${value[2]||0} ${value[3]||(!(value[1]||value[2])?1:0)} ${value[0]}deg`:property==='scale'?`${value[0]} ${value[1]??value[0]}`:property==='height'?`${Math.max(0,value[0])}px`:String(value[0]);
   const composedTranslate=el=>getComputedStyle(el).getPropertyValue('--exact-translate-composes').trim()==='1';
   const cssValues=(el,property,value)=>property==='translate'&&composedTranslate(el)
     ? {translate:css(property,value),'--exact-translate-x':axis(value[0],value[2]),'--exact-translate-y':axis(value[1],value[3]),'--exact-translate-z':'0px'}
-    : {[cssProperty(el,property)]:css(property,value)};
+    : property==='scale'&&cssProperty(el,property)==='--exact-scale'
+      ? {'--exact-scale':String(value[0]),'--exact-scale-y':String(value[1]??value[0])}
+      : {[cssProperty(el,property)]:css(property,value)};
   const writeValue=h=>{for(const [p,v] of Object.entries(cssValues(h.el,h.property,h.value)))h.el.style.setProperty(p,v);};
   const call=(op,h,value=[0,0],t=now())=>request({op,view:h.view,property:h.property,token:h.token??0,x:value[0],y:value[1],now:t});
   const local=h=>h && h.generation===generation() && views.get(h.view)===h.el && h.el.isConnected && held.get(key(h.view,h.property))===h;
@@ -184,12 +186,17 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // A press handler or control between the contact and an ancestor's
   // recognizer keeps the contact (rule 3's boundary, as AppKit and Linux do).
   const pressable=(e,el)=>{const inner=e.target.closest('button,a[href],select,[data-exact-on~="press"]');return !!inner&&inner!==el&&el.contains(inner);};
-  // By a mouse the innermost draggable node that carries something drags, not a drag recognizer around it (LLP 1094.000 D8).
-  // A press between the contact and that node keeps the contact from the node, and the recognizer treats it as it treats
-  // any press inside it.
+  // By a mouse the innermost draggable node that drags, not a drag recognizer around it, takes the contact (LLP 1094.000
+  // D8): another script's draggable, whatever is inside it, or the app's node when it carries something. A press between
+  // the contact and the app's node keeps the contact from the node, and the recognizer treats it as it treats any press
+  // inside it.
   const lifts=(e,el)=>{
-    const source=e.pointerType==='mouse'&&e.target.closest('[draggable="true"]');
-    if(!source||source===el||!el.contains(source)||!['text','url','files'].some(k=>source.hasAttribute(`data-datatransfer${k}`)))return false;
+    // An SVG element's mark is skipped, as drag-out.js skips it, since an engine may ignore it (Firefox does).
+    let source=e.pointerType==='mouse'&&e.target.closest('[draggable="true" i]');
+    while(source?.namespaceURI==='http://www.w3.org/2000/svg')source=source.parentElement?.closest('[draggable="true" i]');
+    if(!source||source===el||!el.contains(source))return false;
+    if(source.exactDraggable!=='true')return true;
+    if(!['text','url','files'].some(k=>source.hasAttribute(`data-datatransfer${k}`)))return false;
     const kept=e.target.closest('button,a[href],[data-exact-on~="press"]');
     return !(kept&&kept!==source&&source.contains(kept));
   };
@@ -470,8 +477,11 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   function sample(el,property) {
     const text=getComputedStyle(el).getPropertyValue(cssProperty(el,property)), numbers=text.trim().split(/\s+/);
     if(property==='translate') return translation(el,text);
-    if(property==='scale' && numbers.length>1 && Number(numbers[0])!==Number(numbers[1])) return null;
-    return [text==='none'?(property==='scale'?1:0):parseFloat(text),0];
+    if(property==='scale') {
+      if(cssProperty(el,property)==='--exact-scale')return [parseFloat(text),parseFloat(getComputedStyle(el).getPropertyValue('--exact-scale-y'))||0];
+      return text==='none'?[1,1]:[Number(numbers[0]),Number(numbers[1]??numbers[0])];
+    }
+    return [text==='none'?0:parseFloat(text),0];
   }
   function adopt(view,property,reply,adopted) {
     const el=views.get(view);
@@ -491,7 +501,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     const el=b.targetEl,view=b.target;
     own(view,el);
     const pair=['translate','scale'].map((property,i)=>({view,property,el,token:i?reply.scaleToken:reply.translateToken,
-      generation:generation(),runtime:b.runtime,value:i?[reply.value[2],0]:reply.value.slice(0,2)}));
+      generation:generation(),runtime:b.runtime,value:i?[reply.value[2],reply.value[2]]:reply.value.slice(0,2)}));
     // BOTH records and recognizer ownership precede any synchronous begin batch.
     for(const h of pair)held.set(key(view,h.property),h);
     for(const h of pair)cancelProperty(view,h.property,el);
@@ -520,7 +530,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   }
   function pairCurve(animation) {
     const props=new Set(animation.effect.getKeyframes().flatMap(frame=>Object.keys(frame))
-      .filter(p=>!['offset','computedOffset','easing','composite'].includes(p)).map(p=>p==='--exact-scale'?'scale':p));
+      .filter(p=>!['offset','computedOffset','easing','composite'].includes(p)).map(p=>['--exact-scale','--exact-scale-y'].includes(p)?'scale':p));
     return {pair:props.has('translate')||props.has('scale'),coupled:[...props].some(p=>p!=='translate'&&p!=='scale')};
   }
   function transformSnapshot(b) {
@@ -545,7 +555,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       // stays identity. Refuse unsupported active curves, not decompose them.
       for(const a of el.getAnimations()) {
         if(a.effect?.target!==el||['idle','finished'].includes(a.playState))continue;
-        const forbidden=['rotate','transform','transformOrigin','transform-origin','perspective','zoom',...(el===b.targetEl?[]:['translate','scale','--exact-scale','--exact-press-factor'])];
+        const forbidden=['rotate','transform','transformOrigin','transform-origin','perspective','zoom',...(el===b.targetEl?[]:['translate','scale','--exact-scale','--exact-scale-y','--exact-press-factor'])];
         if(forbidden.includes(a.transitionProperty)||a.effect.getKeyframes().some(frame=>forbidden.some(p=>p in frame)))return null;
         const curve=pairCurve(a);if(el===b.targetEl&&curve.pair&&curve.coupled)return null;
       }
@@ -774,7 +784,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       cancelProperty(id,property);
       if(!op.values.length || held.has(k)) return;
       const el=views.get(id); if(!el) return;
-      const animation=el.animate(op.values.map(value=>cssValues(el,property,Array.isArray(value)?value:[value,0])),
+      const animation=el.animate(op.values.map(value=>cssValues(el,property,Array.isArray(value)?value:[value])),
         {delay:op.delay,duration:op.duration,easing:'linear',fill:'backwards'});
       // Started where the engine lowered it (`at`, the host's clock), not
       // when the browser next commits a pending animation, two frames later
@@ -829,7 +839,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     // changes; one release while both tokens are live.
     attachTransformDrag(el,id,on) {
       let drag=null,suppressClick=false;
-      const interactive=e=>e.target.closest('button,a,input,textarea,select,[contenteditable]');
+      // A control at or inside the handle keeps the contact; one around it, a draggable button's, does not.
+      const interactive=e=>{const c=e.target.closest('button,a,input,textarea,select,[contenteditable]');return !!c&&el.contains(c);};
       const pairLocal=d=>d.pair?.every(local)&&transformLocal(d.binding)&&d.binding.admitted&&d.sequence===d.binding.sequence;
       const finiteTerminal=v=>pixel(v[0])&&pixel(v[1])&&positiveScale(v[2])&&v.slice(3).every(Number.isFinite);
       function clearContact(d) {
@@ -871,7 +882,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         return [to[0]-k*(from[0]-a.value[0]),to[1]-k*(from[1]-a.value[1]),a.value[2]*k];
       }
       function present(d,v) {
-        d.value=v;d.pair[0].value=v.slice(0,2);d.pair[1].value=[v[2],0];
+        d.value=v;d.pair[0].value=v.slice(0,2);d.pair[1].value=[v[2],v[2]];
         for(const h of d.pair)if(local(h))writeValue(h);
         if(d.binding.targetEl.style.getPropertyValue('--exact-drag-timeline'))followTimelines();
       }
@@ -924,7 +935,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         // An action/receipt may replace exactly one property. Independently end
         // each original; local/token checks never retire its replacement.
         api.end(d.pair[0],velocity.slice(0,2),cancel);
-        api.end(d.pair[1],[velocity[2],0],cancel);
+        api.end(d.pair[1],[velocity[2],velocity[2]],cancel);
         clearContact(d);
       }
       on('pointerdown',e=>{
@@ -1003,7 +1014,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         d.factor=e.scale;d.gesture={x:e.clientX,y:e.clientY,spread:0};follow(d);
       });
       on('gestureend',e=>{const d=drag;if(!d?.gesture)return;e.preventDefault();release(d);});
-      on('dragstart',e=>{if(transformLocal(transformBindings.get(id))&&!interactive(e)&&!e.target.closest?.('[draggable="true"]'))e.preventDefault();});// a draggable node's own drag is the page's (LLP 1094.000 D6)
+      on('dragstart',e=>{if(e.isTrusted!==false&&transformLocal(transformBindings.get(id))&&!interactive(e)&&!e.target.closest?.('[draggable="true" i]'))e.preventDefault();});// a draggable node's own drag is the page's (LLP 1094.000 D6)
       on('click',e=>{if(suppressClick){suppressClick=false;e.preventDefault();e.stopPropagation();}});
     },
     attachHeightDrag(el,id,on) {
@@ -1021,7 +1032,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       drags.set(id,stop);
       on('pointerdown',e=>{
         const binding=heightBindings.get(id);
-        if(!e.isPrimary||e.button!==0||!bindingLive(binding)||e.target.closest('button,a,input,textarea,select,[contenteditable]')||lifts(e,el)) return;
+        const control=e.target.closest('button,a,input,textarea,select,[contenteditable]');
+        if(!e.isPrimary||e.button!==0||!bindingLive(binding)||control&&el.contains(control)||lifts(e,el)) return;
         stop(); drag={pointer:e.pointerId,x:e.clientX,y:e.clientY,binding,id,el,deferred:contacts().get(e.pointerId)==='pending'}; active.set(id,stop);
         if(drag.deferred)drag.unwatch=watchEnd(el,finish);
         // A fast first move can already leave a narrow header. Retain delivery
@@ -1128,8 +1140,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       // the pointer stream to the swipe. A finger lifts by resting, not by moving, so only a hold cancels its drag.
       // A drag that goes ends the swipe's contact.
       const dragstart=e=>{
-        // Only a drag on this contact's path: begun inside the row or at a node around it.
-        if(!drag||!(el.contains(e.target)||e.target.contains?.(el)))return;
+        // Only a drag on this contact's path: begun inside the row or at a node around it. A script's is none.
+        if(e.isTrusted===false||!drag||!(el.contains(e.target)||e.target.contains?.(el)))return;
         const [right,left]=ways(),shown=sample(el,'translate')?.[0]??0;
         const takes=dx=>dx>0?right||shown<0:left||shown>0;
         const dx=drag.lastX===undefined?null:drag.lastX-drag.x,dy=(drag.lastY??drag.y)-drag.y;
@@ -1170,7 +1182,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         for(const companion of drag.holds.slice(1)) {
           const base=companion.base[0];
           const value=progress===caught?base:progress<caught?base*progress/caught:base+(1-base)*(progress-caught)/(1-caught);
-          track(companion,[value,0]);
+          track(companion,[value,companion.property==='scale'?value:0]);
         }
         e.preventDefault(); if(e.type==='pointermove') e.stopPropagation(); return true;
       };
@@ -1196,6 +1208,40 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   return api;
 }
 
+// Android Chrome recognizes contextmenu at its platform long-press time;
+// Safari needs the 500 ms fallback. Before recognition, let a quick swipe scroll.
+// touch-action is fixed at pointerdown, so touchmove must cancel after the lift.
+export function reorderPress(e, el, lift, abandon) {
+  if (!['touch', 'pen'].includes(e.pointerType)) return { move: () => true, block() {}, clear() {} };
+  const pansY = /(?:auto|manipulation|pan-y|pan-up|pan-down)/.test(getComputedStyle(el).touchAction);
+  let active = false, stopped = false, last = e;
+  const begin = () => {
+    clearTimeout(timer);
+    if (stopped || active) return;
+    active = lift(last) === true;
+    if (!active) abandon();
+  };
+  const timer = setTimeout(begin, 500);
+  return {
+    block(event) {
+      if (!stopped && event.type === 'contextmenu') begin();
+      if (active && !stopped) event.preventDefault();
+    },
+    move(v) {
+      last = v;
+      if (!active && v.timeStamp - e.timeStamp >= 500) begin();
+      if (!active && Math.hypot(v.clientX - e.clientX, v.clientY - e.clientY) >= 8) {
+        if (pansY) abandon();
+        else { active = true; clearTimeout(timer); }
+      }
+      return active;
+    },
+    clear() {
+      stopped = true; clearTimeout(timer);
+    },
+  };
+}
+
 // One physical Arrange contact and its settling source; Common owns logical keys.
 // A grip whose list has a `reorderGroup` is `group-glue.js`'s (LLP 1094): the
 // ghost, the target lists, the hold and the keys; `grouped` is its controller.
@@ -1210,7 +1256,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
       if(cs.visibility!=='visible'||cs.transform!=='none'||cs.perspective!=='none'||!['none','0deg'].includes(cs.rotate)
         ||!['none','1'].includes(cs.scale)||!['1','normal',''].includes(cs.zoom)||el!==b.row&&translate.some(v=>v!==0))return null;
       for(const a of el.getAnimations())if(a.effect?.target===el&&!['idle','finished'].includes(a.playState)) {
-        const forbidden=['scale','--exact-scale','--exact-press-factor','rotate','transform','perspective','zoom',...(el===b.row?[]:['translate'])];
+        const forbidden=['scale','--exact-scale','--exact-scale-y','--exact-press-factor','rotate','transform','perspective','zoom',...(el===b.row?[]:['translate'])];
         if(forbidden.includes(a.transitionProperty)||a.effect.getKeyframes().some(f=>forbidden.some(p=>p in f)))return null;
       }
     }
@@ -1226,7 +1272,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
   }
   function stopEdge(){if(edge!==null)cancelAnimationFrame(edge);edge=null;edgeTime=null;}
   function clearContact(d) {
-    stopEdge();if(d.binding.el.hasPointerCapture(d.pointer))d.binding.el.releasePointerCapture(d.pointer);
+    d.clearPress?.();stopEdge();if(d.binding.el.hasPointerCapture(d.pointer))d.binding.el.releasePointerCapture(d.pointer);
     for(const [el,name,fn] of d.listeners??[])el.removeEventListener(name,fn);
     d.listeners=[];
   }
@@ -1291,7 +1337,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
   }
   function down(b,e) {
     if(!ready()||!e.isPrimary||e.button!==0||e.target.closest('input,textarea,select,[contenteditable]'))return;
-    if(group&&groups.get(b.id)?.group){group.down(b,e,groups.get(b.id));return;}
+    if(group&&(groups.get(b.id)?.group||groups.get(b.id)?.section)){group.down(b,e,groups.get(b.id));return;}
     let reservation=null,returning=current?.phase==='settling'&&current.binding.wrapper===b.wrapper?current:null;
     // A tap or horizontal refusal is not a takeover. Keep the old Terminal
     // and its return/pin owner until replacement recognition actually succeeds.
@@ -1310,15 +1356,16 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
     if(!reservation&&!returning)collections.reorderContact(b.el,e.pointerId);
     let contact={x:e.clientX,y:e.clientY},drag=null;
     const events=[],on=(el,name,fn)=>{el.addEventListener(name,fn);events.push([el,name,fn]);};
-    const cleanup=()=>{for(const [el,name,fn]of events)el.removeEventListener(name,fn);if(pending===cleanup)pending=null;if(!drag){if(reservation)collections.releaseRetainedInteraction(reservation);else collections.releaseInteraction(e.pointerId);}};
+    const cleanup=()=>{press?.clear();for(const [el,name,fn]of events)el.removeEventListener(name,fn);if(pending===cleanup)pending=null;if(!drag){if(reservation)collections.releaseRetainedInteraction(reservation);else collections.releaseInteraction(e.pointerId);}};
     cleanup.handle=b.id;
     pending=cleanup;
-    on(b.el.ownerDocument,'pointermove',v=>{
-      if(v.pointerId!==e.pointerId)return;
+    let press;
+    const moved=(v,held=false)=>{
+      if(v.pointerId!==e.pointerId||!held&&!press.move(v))return;
       if(!drag){
         const dx=v.clientX-contact.x,dy=v.clientY-contact.y;
-        if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){cleanup();return;}
-        if(Math.abs(dy)<8)return;
+        if(!held&&Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){cleanup();return;}
+        if(!held&&Math.abs(dy)<8)return;
         if(returning){
           if(current!==returning||!mapping(b,v.clientY)){cleanup();return;}
           reservation=collections.transferRetainedInteraction(returning.lease,b.row,e.pointerId);
@@ -1335,7 +1382,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
         const captured=motion.captureReorder([{view:b.wrapper,key:b.wrapperKey,hold:'0'}]);
         if(captured.length!==1){collections.releaseRetainedInteraction(lease);cleanup();return;}
         const d={binding:b,map:m,lease,pointer:e.pointerId,phase:'active',value:captured[0].value,base:captured[0].value,
-          originY:v.clientY,originRaw:m.raw,x:v.clientX,y:v.clientY,listeners:events};
+          originY:v.clientY,originRaw:m.raw,x:v.clientX,y:v.clientY,listeners:events,clearPress:()=>press.clear()};
         current=d;busy=true;let ok;
         try{ok=adoptReply(d,call(d,'reorder-begin'),captured);}finally{busy=false;}
         if(!ok){current=null;collections.releaseRetainedInteraction(lease);cleanup();return;}
@@ -1343,7 +1390,10 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
         on(m.port,'scroll',()=>{if(!busy&&sampleMove(d,d.x,d.y))edges(d);});
       }
       if(sampleMove(drag,v.clientX,v.clientY)){v.preventDefault();v.stopPropagation();edges(drag);}
-    });
+    };
+    b.press=press=reorderPress(e,b.el,v=>{moved(v,true);return !!drag;},cleanup);
+    on(b.el.ownerDocument,'pointermove',moved);
+    on(b.el.ownerDocument.defaultView,'blur',()=>{cleanup();if(drag)terminal(drag,true);});
     // A touch is implicitly captured by the element it lands on, often the
     // grip's text child; taking capture to the grip bubbles that child's
     // capture loss here, which is not the contact ending (habits F10).
@@ -1354,7 +1404,8 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
   }
   function destroy(id) {
     const b=bindings.get(id);if(!b)return;group?.release(b);
-    b.el.removeEventListener('pointerdown',b.down);b.el.style.touchAction=b.touch;bindings.delete(id);
+    b.el.removeAttribute('data-exact-reorder-grip');
+    b.el.removeEventListener('pointerdown',b.down);b.el.removeEventListener('touchmove',b.block);b.el.removeEventListener('contextmenu',b.block);bindings.delete(id);
     if(pending?.handle===id)pending();
     // The completed batch supplies the terminal frame and surviving source
     // wrapper. Preserve that hold/pin until commit can capture and rebase it.
@@ -1366,9 +1417,21 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
       destroy(op.id);
       if(op.list===null||!views.has(op.id)||!views.has(op.wrapper))return;
       const b={...op,el:views.get(op.id),row:views.get(op.wrapper),generation:generation()};
-      b.touch=b.el.style.touchAction;b.el.style.touchAction='none';b.down=e=>down(b,e);
+      b.down=e=>down(b,e);b.block=e=>b.press?.block(e);
+      // The wasm host replaces cssText when the authored style changes.
+      const doc=b.el.ownerDocument;
+      if(!doc.getElementById('exact-reorder-grips'))doc.head.append(Object.assign(doc.createElement('style'),{
+        id:'exact-reorder-grips',textContent:'[data-exact-reorder-grip]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}',
+      }));
+      b.el.setAttribute('data-exact-reorder-grip','');
+      // Chromium decides whether touchmove can cancel scrolling before pointerdown.
+      b.el.addEventListener('touchmove',b.block,{passive:false});b.el.addEventListener('contextmenu',b.block);
       bindings.set(op.id,b);b.el.addEventListener('pointerdown',b.down);
       if(groups.has(op.id))group?.bind(b,groups.get(op.id));
+    },
+    cancel(id) {
+      if (current && views.get(current.binding.list)?.id === id) terminal(current, true);
+      group?.cancel(id);
     },
     // A grip's group and whether the keys may drive it (LLP 1094 D1, D9).
     group(op) {groups.set(op.id,op);const b=bindings.get(op.id);if(b)group?.bind(b,op);},
@@ -1390,7 +1453,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
       group?.reset();
       if(current){if(current.phase==='active')terminal(current,true);if(current?.phase==='settling')finish(current);}
       if(current){clearContact(current);collections.releaseRetainedInteraction(current.lease);motion.raiseReorder(current.binding.wrapper,false);current=null;}
-      for(const b of bindings.values()){b.el.removeEventListener('pointerdown',b.down);b.el.style.touchAction=b.touch;}
+      for(const b of bindings.values()){b.el.removeAttribute('data-exact-reorder-grip');b.el.removeEventListener('pointerdown',b.down);b.el.removeEventListener('touchmove',b.block);b.el.removeEventListener('contextmenu',b.block);}
       pending?.();pending=null;bindings.clear();stopEdge();
     },
   };

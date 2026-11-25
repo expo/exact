@@ -44,6 +44,7 @@ pub use host_kinds::{HistorySwipe, ScrollDrag};
 mod pointer;
 pub use pointer::{AtomEvent, DropEvent, MouseEvent, PointerEvent, WheelEvent};
 mod intersect;
+mod mounted_reorder;
 mod reorder;
 mod reorder_codec;
 mod reorder_group;
@@ -87,8 +88,8 @@ mod source;
 mod tabs;
 pub use source::{
     Announce, BackgroundState, DataError, DataSource, DataSourceWrapper, InFlight, Interrupt,
-    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, Report, Reporter, ResourceChange,
-    SnapshotModule, Target, Write, BACKGROUND,
+    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, QueuedSendReplacer, Report, Reporter,
+    ResourceChange, SnapshotModule, Target, Write, BACKGROUND,
 };
 mod delivery;
 mod links;
@@ -150,7 +151,7 @@ mod apply;
 mod live_time;
 pub mod midi;
 mod modules;
-pub use modules::AppState;
+pub use modules::{check_arrival_field, check_source_substitute, AppState};
 mod calls;
 pub use calls::CallHow;
 mod module_seam;
@@ -162,7 +163,7 @@ mod provenance;
 mod seams;
 pub use audio_seam::{Audio, LinkedAudio, NoAudio};
 pub use list_seam::Lists;
-pub(crate) use processes::refusal as process_refusal;
+pub(crate) use processes::held as process_held;
 pub use provenance::CallOrigin;
 pub use seams::{ModuleLinks, PresenceSecrets, TextAxes, Tools};
 mod wakes;
@@ -180,7 +181,6 @@ mod transport_tests;
 mod uploads;
 mod viewport;
 mod writes;
-
 use crate::instance::{Ids, InstanceError, InstanceStep, SurfaceUpdate, Tree, Update};
 use crate::request::{Answer, Dispatch, Outcome, Request, RequestClass, RequestOut};
 use crate::store::{Store, StoreWrite};
@@ -193,16 +193,7 @@ pub use router::{launch_matches, routing, RouterChange, Routing};
 pub use split::{press_writes_router, RouteInspector, StackSplit};
 pub use uploads::{UploadEnd, UploadMark};
 
-/// A host-facing effect an action asked for; executed after commit, in order.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Command {
-    /// The capability name.
-    pub name: String,
-    /// Its arguments.
-    pub args: Vec<Value>,
-    /// The node whose input ran the action, when a host event did: where a command that shows system UI anchors it (LLP 1069.003 D3). `None` for a timer, an answer, or anything else no input dispatched.
-    pub source: Option<ViewId>,
-}
+pub use crate::commands::Command;
 
 #[derive(Clone)]
 #[cfg_attr(test, derive(Debug))]
@@ -371,11 +362,9 @@ impl PendingReq {
 
 type FocusPath = Vec<(ViewId, NodesId, Vec<Frame>)>;
 
-/// A send made before the data source was ready: its target, source and
-/// arguments, and the origin and invocation of the commit that made it,
-/// which `data_ready` sends it under (LLP 1133.002 D12), as a queue's
-/// waiting send keeps them (`queue.rs`).
-type Unsent = (Target, String, Vec<Value>, (CallOrigin, u64));
+/// A send made before the data source was ready: its target, source,
+/// arguments and the cause `data_ready` sends it under (LLP 1133.023 D7a).
+type Unsent = (Target, String, Vec<Value>, provenance::Cause);
 /// A send's request this commit hands out once it stands.
 type Later = (Target, String, Vec<Value>, Request);
 
@@ -386,7 +375,9 @@ pub struct Runner<D: DataSource> {
     strings: vm::Strings,
     sites: crate::instance::SiteIndex,
     inspection_digest: std::cell::OnceCell<String>,
-    /// The plan's tab panel sites and whether each needs a navigation controller (`Runner::panels_need_navigation`).
+    /// Panel templates with a route that can request a split.
+    split_panel_sites: std::cell::OnceCell<Vec<NodesId>>,
+    /// The plan's tab panel sites and whether each needs a navigation controller.
     panel_navigation: std::cell::OnceCell<(Vec<NodesId>, Vec<bool>)>,
     /// [`Runner::keeps_midi`], made at the first agent read.
     keeps_midi: std::cell::OnceCell<bool>,
@@ -485,7 +476,7 @@ pub struct Runner<D: DataSource> {
     pending_mut: Vec<bool>,
     failed_mut: Vec<Option<crate::failure::Failure>>,
     /// Mutations whose answer landed in the commit being made; their `then` actions are armed once it stands (LLP 1016.001).
-    landed: Vec<usize>,
+    landed: Vec<(usize, provenance::Cause)>,
     /// Sends made before the data source was ready, sent at `data_ready`
     /// (LLP 1027 D4): pending meanwhile, one per mutation but a parallel
     /// one, which keeps each.
@@ -882,8 +873,10 @@ impl<D: DataSource> Runner<D> {
             strings,
             failed_mut: vec![None; plan.mutations.len()],
             audio: audio_seam::AudioState(seams.audio.state(&plan, &data)),
+            page: crate::time::launch_page(&plan),
             plan,
             inspection_digest: std::cell::OnceCell::new(),
+            split_panel_sites: std::cell::OnceCell::new(),
             panel_navigation: std::cell::OnceCell::new(),
             keeps_midi: std::cell::OnceCell::new(),
             action_binding_origin: std::rc::Rc::new(()),
@@ -981,7 +974,8 @@ impl<D: DataSource> Runner<D> {
             churn: Default::default(),
             activities: activities::Activities::default(),
             extensions: module_seam::ModuleState(seams.modules.state()),
-            origins: Default::default(),
+            // Boot is the app's (LLP 1133.023 D7a), until `booted` below.
+            origins: provenance::Origins::booting(),
             processes: Default::default(),
             wakes: Default::default(),
             calls: Default::default(),
@@ -992,7 +986,6 @@ impl<D: DataSource> Runner<D> {
             viewport,
             viewport_geometry,
             geometry: Default::default(),
-            page: Default::default(),
             presented: crate::page::Presented::at_boot(),
             time: crate::time::launch_time(),
             live_times: Default::default(),
@@ -1036,6 +1029,7 @@ impl<D: DataSource> Runner<D> {
             fragment_warned: Default::default(),
             conformed: Default::default(),
         };
+        runner.seams.modules.launch_substitutes(&mut runner)?;
         runner.record_replacement(carried);
         runner.init_slots(carried, launch)?;
         runner.carry_modes(carried.map_or(&[], |c| &c.modes));
@@ -1168,6 +1162,7 @@ impl<D: DataSource> Runner<D> {
         }
         drop(booting);
         runner.roles.install();
+        runner.origins.booted();
         Ok(runner)
     }
 

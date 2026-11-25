@@ -27,6 +27,7 @@ pub(crate) mod bar;
 pub(crate) mod block;
 mod cover;
 mod document;
+mod edge_bar;
 mod environment;
 mod geometry;
 mod height_targets;
@@ -43,7 +44,9 @@ mod provenance;
 pub(crate) mod readers;
 mod replacement;
 mod segments;
+mod session_update;
 pub(crate) mod targets;
+mod window_map;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
 mod scroll_terms;
@@ -60,13 +63,18 @@ pub(crate) use cover::{
     style_changed as cover_style_changed,
 };
 pub use cover::{credited_edges, HostCover};
-pub use keyboard::{Keyboard, KeyboardPolicy};
+pub use edge_bar::BarEdgeEffect;
+pub use keyboard::{Keyboard, KeyboardFacts, KeyboardPolicy, KeyboardReport};
 pub use margins::OwnerMargins;
-pub use owner_update::{decode_registration, encode_registration, OwnerUpdate};
+pub use owner_update::{
+    decode_registration, encode_registration, BarRegion, OwnerChrome, OwnerUpdate, VerticalBarEdge,
+};
 pub use provenance::{Contribution, Operation};
 pub use scroll_terms::ScrollTerms;
+pub use session_update::SessionUpdate;
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
+pub use window_map::WindowMap;
 
 /// How many receipts the kernel retains for late readers.
 pub const RECEIPT_RING: usize = 64;
@@ -400,6 +408,25 @@ fn engine(layout: &mut Option<Box<dyn LayoutMirror>>) -> &mut LayoutTree {
 }
 
 impl Kernel {
+    /// Whether any live node has a non-identity scale row.
+    pub fn has_scale(&self) -> bool {
+        !self.arena.scaled.is_empty()
+    }
+
+    /// Whether a descendant has a non-identity scale row.
+    pub fn has_scaled_descendant(&self, key: NodeKey) -> bool {
+        self.arena.scaled.iter().any(|slot| {
+            let mut parent = self.arena.parent(slot);
+            while let Some(at) = parent {
+                if self.arena.key(at) == key {
+                    return true;
+                }
+                parent = self.arena.parent(at);
+            }
+            false
+        })
+    }
+
     /// Nodes the layout engine holds: the live nodes, when every removal
     /// reached it.
     #[cfg(test)]

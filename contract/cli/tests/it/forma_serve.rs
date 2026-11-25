@@ -6,6 +6,7 @@
 #![cfg(unix)]
 
 use crate::scratch::Scratch;
+use crate::source::boxed;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -1015,7 +1016,7 @@ fn uses_sites_are_the_same_on_the_js_plan_and_the_native_bake() {
     let map: Value = serde_json::from_str(&map.json(&mapped.encode())).unwrap();
     // The JS target's compile (host/web-js `exact-web-js js`, with sites).
     let (js, _) = contract::compile_path_all(&root, true).unwrap();
-    let native = contract::bake(mapped.clone(), NoData).unwrap();
+    let native = contract::bake(mapped.clone(), boxed(NoData)).unwrap();
     let none = std::collections::BTreeSet::new();
     for token in [
         "surface.page",

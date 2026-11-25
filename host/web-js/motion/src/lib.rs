@@ -147,16 +147,16 @@ impl Motion {
     pub fn observe(
         &mut self,
         node: u64,
-        values: [f64; 10],
+        values: [f64; 11],
         velocity: Option<Value>,
         now: f64,
     ) -> Result<(), EngineError> {
         self.seek(now)?;
         let enabled = self.enabled_translate.remove(&node);
-        let [x, y, px, py, scale, rotate, opacity, ax, ay, az] = values;
+        let [x, y, px, py, sx, sy, rotate, opacity, ax, ay, az] = values;
         let targets = [
             Value::four(x, y, px, py),
-            Value::scalar(scale),
+            Value::new(sx, sy),
             Value::four(rotate, ax, ay, az),
             Value::scalar(opacity),
         ];
@@ -177,9 +177,7 @@ impl Motion {
         Ok(())
     }
 
-    /// The height owner's numeric border-box height at `now` (the kernel's
-    /// `height_motion_sync`): a height drag holds it and releases it by the
-    /// node's `transition`.
+    /// The authored pixel height at `now`, including changes made while a drag holds it.
     pub fn height(&mut self, node: u64, height: f64, now: f64) -> Result<(), EngineError> {
         self.seek(now)?;
         self.engine.observe(Change {
@@ -192,6 +190,8 @@ impl Motion {
 
     /// The node owns height no more: its height motion retires.
     pub fn retire_height(&mut self, node: u64) -> bool {
+        self.held.remove(&(node, Property::Height));
+        self.presented.remove(&(node, Property::Height));
         self.playing.remove(&(node, Property::Height));
         self.engine.remove_property(node, Property::Height)
     }
@@ -201,6 +201,8 @@ impl Motion {
         self.engine.remove(node);
         self.enabled_translate.remove(&node);
         self.playing.retain(|(n, _), _| *n != node);
+        self.held.retain(|(n, _), _| *n != node);
+        self.presented.retain(|(n, _), _| *n != node);
         self.holds.retain(|_, token| token.node() != node);
     }
 
@@ -244,7 +246,10 @@ impl Motion {
         values: [f64; 3],
         now: f64,
     ) -> Result<Option<(u64, u64, [f64; 3])>, EngineError> {
-        let presented = [Value::new(values[0], values[1]), Value::scalar(values[2])];
+        let presented = [
+            Value::new(values[0], values[1]),
+            Value::new(values[2], values[2]),
+        ];
         let Some(pair) = self
             .engine
             .begin_transform_hold(node, now, Some(presented))?
@@ -278,7 +283,10 @@ impl Motion {
         let Some(pair) = self.pairs.get(&serial).copied() else {
             return Ok(false);
         };
-        let values = [Value::new(values[0], values[1]), Value::scalar(values[2])];
+        let values = [
+            Value::new(values[0], values[1]),
+            Value::new(values[2], values[2]),
+        ];
         self.engine.update_transform_hold(pair, now, values)
     }
 

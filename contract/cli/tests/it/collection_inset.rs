@@ -3,6 +3,7 @@
 //! host reports offsets from the first row's start and the padding it laid
 //! out, so the runner's end (the window, `reachend`, a followed end,
 //! `scroll-start: end`, a clamped `scrollIntoView`) is the true one.
+use crate::source::{boxed, Source};
 use exact_kernel::{Env, Kernel, Offer};
 use exact_plan::Value;
 use exact_runner::{
@@ -41,10 +42,10 @@ impl DataSource for Data {
         ))
     }
 }
-fn boot(source: &str) -> Runner<Data> {
+fn boot(source: &str) -> Runner<Source> {
     let mut r = Runner::boot(
         contract::compile(source).unwrap(),
-        Data,
+        boxed(Data),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -56,13 +57,13 @@ fn boot(source: &str) -> Runner<Data> {
     layout(&mut r);
     r
 }
-fn layout(r: &mut Runner<Data>) {
+fn layout(r: &mut Runner<Source>) {
     let k = r.kernel_mut();
     let root = k.node_by_key(k.find_by_test_id("root")[0]).unwrap().id;
     k.compute_layout(root, Offer::definite(400.0, 800.0))
         .unwrap();
 }
-fn list(r: &Runner<Data>) -> CollectionSnapshot {
+fn list(r: &Runner<Source>) -> CollectionSnapshot {
     r.collections().into_iter().next().unwrap()
 }
 /// The farthest a padded scroller's `scrollTop` goes, under a padding after
@@ -75,7 +76,7 @@ fn max_top(c: &CollectionSnapshot) -> f64 {
 }
 /// The padding before the rows and after them, along the list's axis, as
 /// laid out now.
-fn pads(r: &Runner<Data>) -> (f64, f64) {
+fn pads(r: &Runner<Source>) -> (f64, f64) {
     let k = r.kernel();
     let c = list(r);
     let (left, top, right, bottom) = k.resolved_padding(k.node(c.view).unwrap().key).unwrap();
@@ -84,11 +85,11 @@ fn pads(r: &Runner<Data>) -> (f64, f64) {
         ListAxis::Horizontal => (left as f64, right as f64),
     }
 }
-fn end_of(r: &Runner<Data>) -> f64 {
+fn end_of(r: &Runner<Source>) -> f64 {
     pads(r).1
 }
 /// The farthest a padded scroller's `scrollTop` goes now.
-fn max_top_now(r: &Runner<Data>) -> f64 {
+fn max_top_now(r: &Runner<Source>) -> f64 {
     let (lead, end) = pads(r);
     (lead + list(r).total_extent + end - PORT).max(0.0)
 }
@@ -98,11 +99,11 @@ fn max_top_now(r: &Runner<Data>) -> f64 {
 /// laid out, moves where a correction says (plus the padding), clamped to
 /// its range, and measures every mounted row, until the list asks for
 /// nothing more. The `scrollTop` it ends at.
-fn host(r: &mut Runner<Data>, top: f64) -> f64 {
+fn host(r: &mut Runner<Source>, top: f64) -> f64 {
     host_by(r, top, |_| ROW)
 }
 /// [`host`], measuring row `i` at `size(i)`.
-fn host_by(r: &mut Runner<Data>, mut top: f64, size: impl Fn(usize) -> f64) -> f64 {
+fn host_by(r: &mut Runner<Source>, mut top: f64, size: impl Fn(usize) -> f64) -> f64 {
     let mut sequence = 0;
     for _ in 0..12 {
         layout(r);
@@ -298,7 +299,7 @@ const SNAP: &str = r#"component App
         for x in rows key=x
           text `${x}` height=100 width="100%"
 "#;
-fn into(r: &mut Runner<Data>, action: &str, row: f64, from: f64) -> f64 {
+fn into(r: &mut Runner<Source>, action: &str, row: f64, from: f64) -> f64 {
     r.act(action, vec![Value::Number(row)]).unwrap();
     let top = host(r, from);
     assert!(
@@ -389,7 +390,7 @@ fn nearest_keeps_a_row_that_covers_the_snapport() {
     ));
     let tall = |i: usize| if i == 3 { 700.0 } else { ROW };
     // A host that measures row 3 at 700.
-    let host_tall = |r: &mut Runner<Data>, top: f64| host_by(r, top, tall);
+    let host_tall = |r: &mut Runner<Source>, top: f64| host_by(r, top, tall);
     host_tall(&mut r, 0.0);
     // Row 3 runs 300..1000 in rows; at scrollTop 92 + 250 the snapport
     // (342..767 in rows) is inside it.
@@ -613,19 +614,22 @@ fn calculated_scroll_padding_clamps_at_use_for_keyed_jumps() {
 #[test]
 fn a_request_uses_its_actions_computed_scroll_padding_immediately() {
     for (inset, ends) in [
-        ("(collapsed ? 0 : 100)", 0.0),
-        ("(collapsed ? \"4em\" : \"10em\")", 40.0),
+        (r#"scroll-padding-top=(collapsed ? 0 : 100)"#, 0.0),
+        ("class=Inset", 58.0),
+        (r#"scroll-padding-top=(collapsed ? "4em" : "10em")"#, 40.0),
     ] {
         let app = format!(
-            r#"component App
+            r#"style Inset
+  scroll-padding-top="var(--inset)"
+component App
   state collapsed = false
   resource rows = rows(100) as shape number[]
   action collapse(n: number)
     collapsed = true
     scrollIntoView("feed", n, block="start")
   view
-    column testId="root"
-      list id="feed" virtualized=true height=600 width=400 overflow-x="hidden" estimated-item-height=100 font-size=10 scroll-padding-top={inset}
+    column testId="root" --inset=(collapsed ? "10%" : "5%")
+      list id="feed" virtualized=true height=600 width=400 overflow-x="hidden" estimated-item-height=100 font-size=10 box-sizing="border-box" border-width="8px 0 12px" border-style="solid" {inset}
         for x in rows key=x
           text `${{x}}` height=100 width="100%"
 "#
@@ -643,6 +647,43 @@ fn a_request_uses_its_actions_computed_scroll_padding_immediately() {
         assert_eq!(top, 50.0 * ROW - ends, "{inset}: within the new one");
         assert!(exact_runner::agent::state(&r).contains("\"status\":\"done\""));
     }
+}
+
+#[test]
+fn a_keyed_jump_uses_the_browsers_measured_scrollport() {
+    let source = APP
+        .replace(
+            r#"column testId="root""#,
+            r#"column testId="root" --inset="10%""#,
+        )
+        .replace("padding-top=92", r#"scroll-padding-top="var(--inset)""#);
+    let mut r = Runner::boot(
+        contract::compile(&source).unwrap(),
+        boxed(Data),
+        Kernel::with_monospace_on_demand(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    // A kernel measurement must not supersede the dimensions reported by the browser.
+    layout(&mut r);
+    let c = list(&r);
+    r.collection_feedback(CollectionFeedback {
+        view: c.view,
+        revision: c.revision,
+        scroll_sequence: 1,
+        offset: 0.,
+        port_main: 280.,
+        port_cross: 400.,
+        cross: 400.,
+        padding: [0.; 2],
+        measurements: Vec::new(),
+        focus_view: None,
+        interaction_view: None,
+    })
+    .unwrap();
+    r.act("go", vec![Value::Number(50.)]).unwrap();
+    assert_eq!(list(&r).correction.unwrap().offset, 4972.);
 }
 
 #[test]
@@ -805,7 +846,7 @@ fn ordered_seeks_keep_retained_rows_held_until_the_host_shows_them() {
             .created
             .iter()
             .all(|key| r.kernel().node_by_key(*key).is_some()));
-        let report = |r: &mut Runner<Data>, offset| {
+        let report = |r: &mut Runner<Source>, offset| {
             let c = list(r);
             if feedback {
                 let (lead, end) = pads(r);
@@ -863,7 +904,7 @@ fn scroll_anchor_snapshots_use_the_event_axis_and_padding_and_restore_signed_off
         let mut r = boot(&source);
         host(&mut r, 0.0);
         let view = list(&r).view;
-        let report = |r: &mut Runner<Data>, at: f64, port: f64| {
+        let report = |r: &mut Runner<Source>, at: f64, port: f64| {
             let event = exact_runner::ScrollEvent {
                 left: if horizontal { at } else { 0.0 },
                 top: if horizontal { 0.0 } else { at },

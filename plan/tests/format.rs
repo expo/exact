@@ -630,6 +630,15 @@ fn values_round_trip_and_conform_to_shapes() {
     deep.resize(100, 5);
     deep.push(3);
     assert_eq!(Value::from_bytes(&deep), Err(PlanError::ValueTooDeep));
+    let deepest = (0..64).fold(Value::Unit, |v, _| Value::some(v));
+    assert!(deepest.fits_codec());
+    assert!(Value::from_bytes(&deepest.to_bytes()).is_ok());
+    let too_deep = Value::some(deepest);
+    assert!(!too_deep.fits_codec());
+    assert_eq!(
+        Value::from_bytes(&too_deep.to_bytes()),
+        Err(PlanError::ValueTooDeep)
+    );
     let mut r = Reader::new(&[6, 0xff, 0xff, 0xff, 0x7f]);
     assert!(
         matches!(Value::decode(&mut r), Err(PlanError::BadCount(_))),
@@ -1095,11 +1104,17 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// Component member names share their qualifier in the string pool. Elements and
 /// keyed loops carry local source steps. Every plan-reading host must rebuild
 /// for these records (LLP 1029.000.002 D1).
+/// A surface argument carries its declared type (`surface_args.ty`, LLP
+/// 1056 D1), by which a TypeScript `draw` receives records by field name:
+/// every plan-reading host rebuilds for it.
+/// `EventKind::Swipe`, the platform's discrete swipe (LLP 1057.001 §8.2):
+/// every plan-reading host rebuilds for it.
+/// The `formatShortcut` roster entry also gates `Mod` on every reader (LLP 1021 §5.3).
 /// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0x8f2f_d636_115e_5ea5,
+        FORMAT_DIGEST, 0xc086_c3cf_4ce6_40e5,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

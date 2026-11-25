@@ -14,6 +14,8 @@ component RangeAdjust
       level = level + 10
     if k == "ArrowLeft"
       level = level - 10
+  action resetFloor
+    floor = 1
   action stepFloor(k: string)
     if k == "ArrowUp"
       floor = floor + 1
@@ -86,8 +88,9 @@ component RangeAdjust
       text `${bare}` testId="bare-at"
       text `${at}` testId="at"
       box role="slider" tabindex=0 aria-label="Level" aria-valuenow=level aria-valuetext=`${level} percent` key=stepLevel testId="level" width=200 height=44
-      box role="spinbutton" tabindex=0 aria-label="Floor" aria-valuenow=floor key=stepFloor testId="floor" width=100 height=44
-      column direction="rtl"
+      button "Reset quantity" id="reset" press=resetFloor disabled=(floor == 1)
+      box aria-actions="reset" role="spinbutton" tabindex=0 aria-label="Floor" aria-valuenow=floor key=stepFloor testId="floor" width=100 height=44
+      column direction="rtl" aria-actions="reset" aria-label="Other controls" testId="others"
         box role="slider" tabindex=0 aria-label="Back" aria-valuenow=back key=stepBack testId="back" width=200 height=44
         box role="slider" tabindex=0 aria-label="Ahead" aria-valuenow=ahead key=stepAhead direction="ltr" testId="ahead" width=200 height=44
         input type="range" min=0 max=240 step="any" value=mirrored key=hearMirrored input=setMirrored aria-label="Mirrored" testId="mirrored"

@@ -2,6 +2,16 @@
 import UIKit
 
 extension MenuHost {
+    /// The order a menu shows its rows in for its trigger's `menuOrder`
+    /// `word`; unsaid, UIKit's `.automatic`, which shows a menu that opens
+    /// upward last row first (LLP 1115 §2: unsaid, the platform's).
+    package static func order(_ word: String?) -> UIContextMenuConfiguration.ElementOrder {
+        switch word {
+        case "fixed": .fixed
+        case "priority": .priority
+        default: .automatic
+        }
+    }
     package func rejectActiveMenuProperties(in pop: NodeView) {
         for row in pop.menuRowsThroughSections {
             row.rejectNativeActiveProperties(on: "UIAction")
@@ -10,8 +20,8 @@ extension MenuHost {
     private func opensConfirmation(_ row: NodeView) -> Bool {
         presenter?.invocation(of: row).map { $0.opens && isConfirmation($0.target) } ?? false
     }
-    /// The menu grammar, extracted (LLP 1021 D3): button rows become
-    /// actions, a row that opens another menu its submenu (§5,
+    /// The menu grammar, extracted (LLP 1021 D3): button rows, links among
+    /// them, become actions, a row that opens another menu its submenu (§5,
     /// "Submenus"), a `role="group"` row an inline section of its own rows
     /// titled by its `aria-label`; any other row is a section boundary. A row's action
     /// presses it, then presents the confirmation or dialog it opens, or any other popover as
@@ -28,6 +38,8 @@ extension MenuHost {
         }
         // The item `row` is, appended to the last section; false for no item.
         func add(_ row: NodeView) -> Bool {
+            // A link row its author hides (`display: none`, a call a device cannot make) is no item
+            if row.defaultLink != nil, row.style["display"]?.string == "none" { return false }
             row.rejectNativeActiveProperties(on: "UIAction")
             let face = label(of: row)
             if let children = submenu(of: row, path: path + [pop], opener: opener) {
@@ -39,10 +51,11 @@ extension MenuHost {
                 sections[sections.count - 1].items.append(element)
                 rows.append(GivenRow(row, title: element.title, subtitle: element.subtitle))
                 return true
-            } else if row.handlers.contains("press") || opensConfirmation(row) || presenter?.invocation(of: row).map({ $0.opens && $0.target.props["accessibilityRole"] != "menu" }) == true {
+            } else if row.handlers.contains("press") || row.defaultLink != nil || opensConfirmation(row) || presenter?.invocation(of: row).map({ $0.opens && $0.target.props["accessibilityRole"] != "menu" }) == true {
                 let id = row.id, token = row.incarnation
                 let image = image(of: row)
                 let action = UIAction(title: face.title, image: image) { [weak self] action in
+                    self?.barMenuClosed() // A pick dismisses the menu.
                     // The row this menu showed, not a recycled view's next node,
                     // and still enabled: a disabled or inert button does nothing (HTML)
                     func current() -> NodeView? {
@@ -50,6 +63,13 @@ extension MenuHost {
                         return row
                     }
                     guard let self, let presenter = self.presenter, let row = current() else { return }
+                    // A link follows its link, as a press on it does, unless it opens a popover, as it did before
+                    // read as the menu read it, by the row's own inertness: one behind a sheet the menu shows over still acts
+                    if row.defaultLink != nil, presenter.invocation(of: row)?.opens != true {
+                        // one hidden since the menu was built (`display: none`) follows nothing
+                        if row.style["display"]?.string != "none" { presenter.press(id, bubbled: true) }
+                        return
+                    }
                     if row.handlers.contains("press") { self.presenting(row) { presenter.press(id) } }
                     // Once the menu has gone, what the surviving row opens, from
                     // where UIKit says the menu's presentations come from.

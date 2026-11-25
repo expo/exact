@@ -41,8 +41,15 @@ const page = `<!doctype html>
   };
   const handlers = createInputHandlers({ root, views, retiredViews: new Set(), ready: () => true, inertAncestor: () => false,
     dispatch: (id, payload) => window.log.push(['pan', id, payload]),
-    release: (id, payload) => window.log.push(['panrelease', id, payload]), velocity, log: (line) => window.log.push(['journal', line]) });
-  views.get(1).exactHandlers = ['pan', 'panrelease'];
+    release: (id, payload) => { ends.push('release'); window.log.push(['panrelease', id, payload]); }, velocity, log: (line) => window.log.push(['journal', line]) });
+  const card = views.get(1);
+  card.exactHandlers = ['pan', 'panrelease', 'pointercancel', 'pointerup'];
+  window.ends = [];
+  card.exactPointerDown = handlers.pointer(card, (type, f) => card.addEventListener(type, f),
+    k => ends.push(k === 65 ? 'cancel' : 'up'));
+  for (const type of ['lostpointercapture', 'pointerout', 'pointerleave', 'click'])
+    card.addEventListener(type, e => ends.push(type));
+  card.addEventListener('pointerdown', e => { window.heldId = e.pointerId; ends.length = 0; });
   // Each press and release's own timestamp, as the page sees it
   window.stamps = [];
   for (const type of ['pointerdown', 'pointerup']) views.get(1).addEventListener(type, e => window.stamps.push(e.timeStamp));
@@ -59,7 +66,10 @@ const page = `<!doctype html>
 check('a pan that began releases once with its velocity; a tap none; a cancel at rest', async () => {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/navigation.js' ? 'navigation.js' : 'input-glue.js')));
+    if (!['/input-glue.js', '/navigation.js', '/drag-in.js', '/prompt-glue.js', '/alert-message.js'].includes(req.url)) {
+      res.writeHead(404); res.end(); return;
+    }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, '.' + req.url)));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=600,900'] }), { cdp } = suite;
@@ -135,6 +145,17 @@ check('a pan that began releases once with its velocity; a tap none; a cancel at
     expect(log.filter(([kind]) => kind === 'panrelease')).toHaveLength(1);
 
     // A touch contact the platform cancels after the pan began releases at rest.
+    await mouse('mousePressed', 100, 150); await mouse('mouseMoved', 160, 150); await frame();
+    await evaluate('document.getElementById("card").releasePointerCapture(heldId)');
+    await mouse('mouseMoved', 165, 150); await mouse('mouseReleased', 165, 150);
+    expect(await evaluate('ends.filter(e => ["cancel","up","release","click"].includes(e))')).toEqual(['cancel','release']);
+    await take();
+    await mouse('mousePressed', 100, 150); await mouse('mouseMoved', 160, 150); await frame();
+    await evaluate('document.getElementById("exact-root").setPointerCapture(heldId)');
+    await mouse('mouseMoved', 165, 150); await mouse('mouseReleased', 165, 150);
+    expect(await evaluate('ends.filter(e => ["cancel","up","release","click"].includes(e))')).toEqual(['cancel','release']);
+    await take();
+
     await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
     await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 100, y: 150 }] });
     for (let i = 1; i <= 4; i++) await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 100 + i * 20, y: 150 }] });
@@ -144,7 +165,9 @@ check('a pan that began releases once with its velocity; a tap none; a cancel at
     log = await take();
     expect(kinds(log)).toContain('pan');
     expect(log.filter(([kind]) => kind === 'panrelease')).toEqual([['panrelease', 1, '0,0']]);
-    // The journal says the browser took it, and what keeps it (files diary F10).
+    expect(await evaluate('ends.filter(e => e !== "lostpointercapture")')).toEqual(['cancel','release','pointerout','pointerleave']);
+    expect(await evaluate('document.getElementById("card").hasPointerCapture(heldId)')).toBe(false);
+    // The journal names the browser takeover and the touch-action that prevents it.
     expect(log.filter(([kind]) => kind === 'journal').map(([, line]) => line)).toEqual([expect.stringMatching(/^pan cancelled: the browser took the touch contact .*touch-action="none"/)]);
   } finally {
     await suite.close();

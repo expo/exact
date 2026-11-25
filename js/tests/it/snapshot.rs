@@ -359,9 +359,10 @@ fn missing_snapshot_roots_do_not_prevent_activation_or_create_app_directories() 
             assert!(refresh(&mut r, 3.).unwrap().contains("saved with no cache"));
             assert!(!root.0.join("cache").exists() && !root.0.join("tmp").exists());
         } else {
+            let error = refresh(&mut r, 3.).unwrap_err();
             assert!(
-                refresh(&mut r, 3.).is_err(),
-                "a missing file remains a read error for the app's loader"
+                error.contains(&format!("(os error {})", libc::ENOENT)),
+                "{error}"
             );
             assert!(
                 !root.0.exists(),

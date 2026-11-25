@@ -328,7 +328,7 @@ class AuthTest {
             .get(owner) as android.os.HandlerThread
         Exact.owner = owner
         owner.running(false)
-        owner.asked = { Requests(activity).perform(it) }
+        owner.asked = Requests(activity)::perform
         try {
             controller.pause().stop().destroy()
             assertNull(Exact.reader)
@@ -358,7 +358,7 @@ class AuthTest {
             .get(owner) as android.os.HandlerThread
         Exact.owner = owner
         owner.running(false)
-        owner.asked = { Requests(activity).perform(it) }
+        owner.asked = Requests(activity)::perform
         try {
             controller.pause().stop().destroy()
             assertNull(Exact.reader)
@@ -465,6 +465,27 @@ class AuthTest {
         // Warm: the URL as given, to `Exact.open`.
         controller.newIntent(intent("sscontrol://urgencies"))
         assertEquals("sscontrol://urgencies", Host.urls.lastOrNull())
+    }
+
+    @Test fun customSchemeDeliveredDuringRecreationOrWhileStoppedArrivesOnce() {
+        controller.pause().stop().destroy()
+        Exact.live = false
+        val original = intent("notes:///links?from=cold#part")
+        controller = Robolectric.buildActivity(Reader::class.java, original)
+        controller.create().start().resume()
+        assertEquals(original.dataString, Environment.values["EXACT_LAUNCH_URL"])
+        val saved = Bundle()
+        controller.pause().saveInstanceState(saved).stop().destroy()
+        controller = Robolectric.buildActivity(Reader::class.java, original)
+        controller.create(saved)
+        val first = "notes:///links?from=recreation"
+        controller.newIntent(intent(first)).start().resume()
+        val second = "notes://links?from=stopped"
+        controller.pause().stop().newIntent(intent(second)).restart().start().resume()
+        controller.pause().saveInstanceState(saved).stop().destroy()
+        controller = Robolectric.buildActivity(Reader::class.java, intent(second))
+        controller.create(saved).start().resume()
+        assertEquals(listOf(first, second), Host.urls)
     }
 
     @Test fun aCallbackRecreatesTheActivityWithSavedStateInTheLiveProcess() {

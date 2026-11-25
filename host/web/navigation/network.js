@@ -1,3 +1,19 @@
+let documentOrigin;
+function browserOrigin() {
+  if (!globalThis.document) return undefined;
+  if (documentOrigin === undefined) {
+    // Blob URLs carry the creator's effective origin, including an opaque sandbox origin.
+    const url = URL.createObjectURL(new Blob());
+    try { documentOrigin = new URL(url).origin; } finally { URL.revokeObjectURL(url); }
+  }
+  return documentOrigin;
+}
+// Only the server bundle links the renderer's predicate. A browser module always uses its document.
+const renderAdmitsPage = import.meta.exactPageAdmits;
+export const hasPageOrigin = () => renderAdmitsPage ? renderAdmitsPage() : /^https?:\/\//.test(browserOrigin() ?? '');
+export const matchesPage = url => (url.protocol === "http:" || url.protocol === "https:") &&
+  (renderAdmitsPage ? renderAdmitsPage(url.origin) : url.origin === browserOrigin());
+
 // a host on the local network as a URL writes it (LLP 1133.036 D5); with `loopback`, loopback too.
 const hextets = (text) => {
   const [head, tail] = text.split("::"), h = head?.match(/[^:]+/g) ?? [], t = tail?.match(/[^:]+/g) ?? [];

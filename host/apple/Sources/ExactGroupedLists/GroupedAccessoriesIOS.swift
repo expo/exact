@@ -28,6 +28,13 @@ import ExactKit
 import UIKit
 
 extension GroupedListModel.Row {
+    var replacedGrip: UInt32? {
+        #if os(iOS)
+        return reorderGrip == view ? nil : reorderGrip
+        #else
+        return nil
+        #endif
+    }
     /// Whether UIKit draws the row's accessory, so its cell speaks for it.
     var projected: Bool { !custom || accessoryView != nil }
 }
@@ -43,9 +50,15 @@ extension GroupedListHost {
         var wanted: [UInt32: HostCover] = [:]
         for list in lists.values {
             var slots: [UInt32: String] = [:]
-            for row in list.rows.values.filter({ $0.custom && $0.accessoryView != nil }).sorted(by: { $0.view < $1.view }) {
-                guard let accessory = row.accessoryView else { continue }
-                wanted[accessory] = .whole
+            for row in list.rows.values.filter({ $0.custom }).sorted(by: { $0.view < $1.view }) {
+                guard row.accessoryView != nil || row.replacedGrip != nil else { continue }
+                if let accessory = row.accessoryView { wanted[accessory] = .whole }
+                if let grip = row.replacedGrip { wanted[grip] = .whole }
+                if list.movingRow != nil {
+                    wanted[row.view] = covered[row.view]
+                    slots[row.view] = list.slots[row.view]
+                    continue
+                }
                 let slot = list.slot(row)
                 if let room = list.room(for: row) { wanted[row.view] = .edges(room) }
                 else if list.slots[row.view] == slot, let old = covered[row.view] { wanted[row.view] = old }
@@ -85,13 +98,14 @@ extension GroupedListView {
     /// The accessory as UIKit lays it out: rows with the same one leave their content the same room. A radio
     /// is a checkmark while it is checked and nothing otherwise, and so is a toggle where UIKit has no switch.
     func slot(_ row: GroupedListModel.Row, switchless: Bool = GroupedListView.switchless) -> String {
+        let suffix = row.replacedGrip == nil ? "" : "+reorder"
         let on: Bool
         switch row.accessory {
         case "radio": on = row.checked
         case "toggle" where switchless: on = row.target.flatMap { host.presenter.views[$0] }?.props["checked"] == "true"
-        default: return row.accessory
+        default: return row.accessory + suffix
         }
-        return on ? "checkmark" : "none"
+        return (on ? "checkmark" : "none") + suffix
     }
 
     /// The edges of `row`'s cell that UIKit keeps from its content, beyond the cell's margins: measured from the
@@ -103,8 +117,14 @@ extension GroupedListView {
         cell.layoutIfNeeded()
         let content = cell.contentView, frame = content.convert(content.bounds, to: cell)
         let margin = content.layoutMargins, outer = cell.layoutMargins
-        let room = HostCover.Edges(top: 0, right: max(0, cell.bounds.maxX - frame.maxX + margin.right - outer.right),
-                                   bottom: 0, left: max(0, frame.minX + margin.left - outer.left))
+        // Beside an accessory UIKit's own content keeps its configuration's trailing margin, which a content view with
+        // no configuration need not have: 8 points on iOS 27.0 and none on the iPhone Duo (iOS 27.1)
+        let least = cell.defaultContentConfiguration().directionalLayoutMargins.trailing
+        func kept(_ gap: CGFloat, _ margin: CGFloat, _ outer: CGFloat) -> CGFloat {
+            max(0, gap + (gap > 0.5 ? max(margin, least) : margin) - outer)
+        }
+        let room = HostCover.Edges(top: 0, right: kept(cell.bounds.maxX - frame.maxX, margin.right, outer.right),
+                                   bottom: 0, left: kept(frame.minX, margin.left, outer.left))
         rooms[slot(row)] = room
         // The row was carried before this layout, which may have moved the content view it is in.
         if let node = host.presenter.views[row.view], node.superview === content, let place = carried[row.view] {
@@ -118,12 +138,21 @@ extension GroupedListView {
     /// A carried row's frame in its cell's content view. Beside a kept accessory the row is laid out in the
     /// cell's own space, and UIKit moves the content view clear of an accessory at its left.
     func seated(_ drawn: CGRect, _ id: UInt32, in cell: UICollectionViewListCell) -> CGRect {
-        rows[id]?.accessoryView == nil ? drawn : drawn.offsetBy(dx: -cell.contentView.frame.minX, dy: 0)
+        guard let row = rows[id], row.accessoryView != nil || row.replacedGrip != nil else { return drawn }
+        return drawn.offsetBy(dx: -cell.contentView.frame.minX, dy: 0)
     }
 
     /// A row custom only for its Markdown keeps UIKit's accessory: the view its author wrote for it is hidden
     /// while the cell draws it, and shown again when the row is carried no longer (`forget`).
     func carryAccessory(_ id: UInt32) {
+        #if os(iOS)
+        let grip = rows[id]?.reorderGrip.flatMap { $0 == id ? nil : host.presenter.views[$0] }
+        if carried[id]?.grip?.node !== grip {
+            if let old = carried[id]?.grip { old.node.isHidden = old.hidden }
+            carried[id]?.grip = grip.map { ($0, $0.hiddenByHost) }
+        }
+        grip?.isHidden = true
+        #endif
         let target = rows[id]?.accessoryView
         let node = target.flatMap { host.presenter.views[$0] }
         if carried[id]?.accessory?.node !== node {

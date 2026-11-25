@@ -22,8 +22,8 @@ test('clock settle returns a busy reply before a next-commit task can open a dev
       return { clock: this.now, settled: false, reason: 'device', tickets: [1] };
     },
   };
-  const session = new Function('s', 'carrier', 'CLOCK_STEP_MS', 'nextCommitTasks', 'settleBound', 'worldTells',
-    `return ({${source.slice(start, end)}});`)(s, { host: 'web' }, 250, nextCommitTasks, settleBound, (_s, r) => r);
+  const session = new Function('s', 'carrier', 'env', 'CLOCK_STEP_MS', 'nextCommitTasks', 'settleBound', 'worldTells',
+    `return ({${source.slice(start, end)}});`)(s, { host: 'web' }, {}, 250, nextCommitTasks, settleBound, (_s, r) => r);
   const reply = await session.clock('settle');
   expect(reply).toMatchObject({ clock: 0, settled: false, reason: 'busy', busy: ['17'] });
   expect(reply.diagnostic).toContain('aria-busy elements (17)');
@@ -34,8 +34,8 @@ function harness(events = {}) {
   let wall = 0;
   const sent = [], s = { now: 1000, async op(req) { sent.push(req.to); return { clock: req.to }; } };
   const performance = { now: () => { const t = wall; wall += 100; for (const [ms, f] of Object.entries(events)) if (t >= Number(ms)) { f(); delete events[ms]; } return t; } };
-  const clock = new Function('s', 'carrier', 'performance', 'setTimeout', 'REAL_STEP_MS', 'statSync', 'resolve', 'dirname', 'MalformedOperation',
-    `return ({${source.slice(start, end)}}).clock;`)(s, { host: 'web' }, performance, (done) => done(), 50, statSync, resolve, dirname, MalformedOperation);
+  const clock = new Function('s', 'carrier', 'env', 'performance', 'setTimeout', 'REAL_STEP_MS', 'statSync', 'resolve', 'dirname', 'MalformedOperation',
+    `return ({${source.slice(start, end)}}).clock;`)(s, { host: 'web' }, {}, performance, (done) => done(), 50, statSync, resolve, dirname, MalformedOperation);
   return { clock, sent, s };
 }
 

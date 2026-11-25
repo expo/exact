@@ -29,10 +29,10 @@ fn layout_bits(tree: &TaffyTree, node: NodeId) -> Vec<u32> {
             l.location.y,
             l.size.width,
             l.size.height,
-            l.scrollable_overflow_rect.left,
-            l.scrollable_overflow_rect.right,
-            l.scrollable_overflow_rect.top,
-            l.scrollable_overflow_rect.bottom,
+            l.scrollable_overflow_rect.left(),
+            l.scrollable_overflow_rect.right(),
+            l.scrollable_overflow_rect.top(),
+            l.scrollable_overflow_rect.bottom(),
             l.scrollbar_size.width,
             l.scrollbar_size.height,
             l.border.left,
@@ -89,7 +89,7 @@ fn the_nine_entry_policy_counts_repeated_size_questions() {
                     } else {
                         FlexDirection::Column
                     },
-                    align_items: Some(AlignItems::FLEX_START),
+                    align_items: AlignItems::FLEX_START,
                     ..Style::default()
                 },
                 &[node],
@@ -173,7 +173,7 @@ fn an_indefinite_known_width_keeps_the_available_space() {
                     .new_with_children(
                         Style {
                             flex_direction: FlexDirection::Column,
-                            align_items: Some(AlignItems::FLEX_START),
+                            align_items: AlignItems::FLEX_START,
                             ..Style::default()
                         },
                         &[child],
@@ -243,10 +243,10 @@ fn shape(
             style.padding = Rect::length((level % 3 + 1) as f32);
         }
         if kind == "start" {
-            style.align_items = Some(AlignItems::FLEX_START);
+            style.align_items = AlignItems::FLEX_START;
         }
         if kind.starts_with("baseline") && row {
-            style.align_items = Some(AlignItems::BASELINE);
+            style.align_items = AlignItems::BASELINE;
         }
         if kind == "wrap" && row {
             style.flex_wrap = FlexWrap::Wrap;
@@ -493,7 +493,7 @@ fn final_after_baseline_probe(grid: bool) {
             )
             .unwrap();
         let mut style = Style {
-            align_items: Some(AlignItems::BASELINE),
+            align_items: AlignItems::BASELINE,
             ..Style::default()
         };
         if grid {

@@ -340,11 +340,11 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             if s.display == taffy::style::Display::Block {
                 use taffy::style::AlignContent;
                 let said = style.mask.has(StyleId::VerticalAlign);
-                s.align_content = Some(match style.rare.vertical_align {
+                s.align_content = match style.rare.vertical_align {
                     VerticalAlign::Middle => AlignContent::SAFE_CENTER,
                     _ if said => AlignContent::START,
                     _ => AlignContent::SAFE_CENTER,
-                });
+                };
             }
         }
     }

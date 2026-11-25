@@ -13,6 +13,7 @@
 //     "activities": [{"name": "<class>", "actions": ["androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"]}],
 //     "aliases": [{"name": "<class>", "targetActivity": "<an activity above>", "action": "android.intent.action.VIEW_PERMISSION_USAGE",
 //                  "category": "android.intent.category.HEALTH_PERMISSIONS"}],
+//     "carAppService": {"name": "<class>", "category": "POI", "minCarApiLevel": 1},
 //     "permissions": ["android.permission.ACCESS_NETWORK_STATE"],
 //     "metadata": [{"name": "com.google.android.gms.wallet.api.enabled", "value": "true"},
 //                  {"name": "com.google.firebase.messaging.default_notification_icon", "resource": "@drawable/exact_notification"}]
@@ -32,6 +33,10 @@
 // and asks nothing for; a runtime permission comes only from a grant line, which derives its prompt (LLP 1133.002 D6).
 // There is no `<provider>` but a library's removed one, and no `android:process`.
 
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { grantLines } from './grant-advice.mjs';
+import { implementationFor, moduleInterfaces } from '../js/bake/src/typescript.mjs';
 import { EXACT_PATHS, androidAuthCallbacks } from './links.mjs';
 
 /** The broadcasts a package's receiver may name: the boot, the package replaced, the clock and zone, the exact-alarm
@@ -47,6 +52,31 @@ export const RECEIVER_ACTIONS = new Set([
 
 /** The foreground service types a package's service may declare. */
 export const SERVICE_TYPES = new Set(['systemExempted']);
+
+/** Translation's registrar eagerly migrates model files when ML Kit's provider initializes the process. */
+const defersMlKit = bound => bound.some(b => b.maven?.some(c => c.startsWith('com.google.mlkit:translate:')));
+
+/** Kotlin factories for the bound packages. When translation defers ML Kit, all SDK clients share its initializer. */
+export function extensionFactories(bound) {
+  const deferred = defersMlKit(bound);
+  return bound.map(pkg => {
+    const usesMlKit = deferred && pkg.maven?.some(c => c.startsWith('com.google.mlkit:') || c.startsWith('com.google.android.gms:play-services-mlkit-'));
+    const guard = pkg.className === 'exact.translation.TranslationModule' ? 'if (!c.agent) ' : '';
+    const init = usesMlKit ? `${guard}ExactMlKit.initialize(c.application); ` : '';
+    return `        ${JSON.stringify(pkg.extension)} to { c -> ${init}${pkg.className}(c) },`;
+  });
+}
+
+/** Emitted beside the roster of an APK that defers ML Kit. Google's manual initializer runs once per process. */
+export const mlKitInitializer = bound => defersMlKit(bound) ? ['', `object ExactMlKit {
+    private var initialized = false
+
+    @Synchronized fun initialize(context: android.content.Context) {
+        if (initialized) return
+        com.google.mlkit.common.MlKit.initialize(context)
+        initialized = true
+    }
+}`] : [];
 
 /** The packages a fragment may make visible (`<queries>`): Health Connect's provider on Android 13 and earlier (LLP
  * 1133.026 D19 item 3). */
@@ -91,23 +121,130 @@ export const ACTIVITY_ACTIONS = new Set(['androidx.health.ACTION_SHOW_PERMISSION
 export const ALIAS_ACTIONS = new Set(['android.intent.action.VIEW_PERMISSION_USAGE']);
 export const ALIAS_CATEGORIES = new Set(['android.intent.category.HEALTH_PERMISSIONS']);
 
-/** The normal permissions a fragment may declare (LLP 1133.031 D12 item 1): `protectionLevel="normal"` in the
- * platform's own manifest, granted at install with no prompt. */
-export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE', 'android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC']);
+/** Install-time permissions an app or package can declare (LLP 1133.030 D9, LLP 1133.031 D12). */
+export const NORMAL_PERMISSIONS = new Set([
+  'android.permission.ACCESS_NETWORK_STATE',
+  'android.permission.DETECT_SCREEN_CAPTURE',
+  'android.permission.FOREGROUND_SERVICE',
+  'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+  'android.permission.RUN_USER_INITIATED_JOBS',
+]);
 
-/** The normal permissions every bound implementation's fragment declares, which the build adds as `<uses-permission>`
- * beside the grants' (`-Ppermissions`). Throws, naming the package, for any permission not on the list. */
-export function fragmentPermissions(bound) {
-  const names = new Set();
-  for (const impl of bound) {
-    const list = impl.manifest?.permissions;
-    if (list == null) continue;
-    const refuse = (what) => { throw new Error(`${impl.extension}'s Android implementation: its manifest fragment ${what} (LLP 1133.031 D12 item 1: normal permissions only; a runtime permission comes from a grant line)`); };
-    if (!Array.isArray(list)) refuse('has permissions that are not a list');
-    for (const p of list) {
-      if (!NORMAL_PERMISSIONS.has(p)) refuse(`asks for ${JSON.stringify(p)}, which is not on the list`);
-      names.add(p);
+// Only the package providing the POI service may declare its map permission.
+const MAP_TEMPLATES = 'androidx.car.app.MAP_TEMPLATES';
+
+/** The one POI service in this APK. Its owning package also owns the optional map permission. */
+export function carAppService(bound) {
+  let service;
+  for (const { extension, className, manifest } of bound) {
+    if (manifest?.carAppService === undefined) continue;
+    const row = manifest.carAppService;
+    const refuse = (why) => { throw new Error(`${extension}'s Android carAppService: ${why}`); };
+    if (Array.isArray(row) && row.length > 1) refuse(`a second car service ${JSON.stringify(row[1]?.name)} is not allowed`);
+    if (!row || typeof row !== 'object' || Array.isArray(row)) refuse('expected one service object');
+    if (service) refuse(`a second car service ${JSON.stringify(row.name)} conflicts with ${service.name}`);
+    for (const key of Object.keys(row)) if (!['name', 'category', 'minCarApiLevel'].includes(key)) refuse(`${key}=${JSON.stringify(row[key])} is not allowed`);
+    const own = className.slice(0, className.lastIndexOf('.'));
+    if (typeof row.name !== 'string' || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(row.name) || !row.name.startsWith(own + '.')) refuse(`${JSON.stringify(row.name)} must name a class in ${own}`);
+    if (row.category !== 'POI') refuse(`category ${JSON.stringify(row.category)} must be POI`);
+    if (!Number.isInteger(row.minCarApiLevel) || row.minCarApiLevel < 1 || row.minCarApiLevel > 8) refuse(`minCarApiLevel ${JSON.stringify(row.minCarApiLevel)} must be an integer from 1 to 8`);
+    service = row;
+  }
+  return service;
+}
+
+/** Prefer the narrowest grant that directly declares the permission. A package's
+ * name-derived permission also needs the call that derives it (e.g. getUserMedia). */
+function androidPermissionGrant(permission, appDir) {
+  let table;
+  try { table = readFileSync(new URL('../runner/src/device.rs', import.meta.url), 'utf8').replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, ''); }
+  catch { return; } // A partial checkout can still name the offending permission and the allow-list.
+  const hints = [];
+  for (const [, row] of table.matchAll(/^    Device \{([\s\S]*?)^    \},/gm)) {
+    const name = /\bname:\s*"([^"]+)"/.exec(row)?.[1];
+    if (!name) continue;
+    for (const [, writes, field] of row.matchAll(/\bandroid(_writes)?:\s*(&\[[^\]]*\]|\w+)/g)) {
+      const array = field.startsWith('&[') ? field : new RegExp(`\\bconst ${field}\\s*:[^=]+?=\\s*(&\\[[^\\]]*\\])`).exec(table)?.[1];
+      const names = [...(array ?? '').matchAll(/"([^" ]+)(?: maxSdkVersion=\d+)?"/g)].map(m => m[1]);
+      if (names.includes(permission)) hints.push({ grant: `device.${name}`, writes: !!writes, count: names.length });
     }
+  }
+  hints.sort((a, b) => Number(a.writes) - Number(b.writes) || a.count - b.count || a.grant.localeCompare(b.grant));
+  const lines = grant => grantLines([grant], table)[0].map(line => `\`${line}\``).join(' beside ');
+  if (hints.length) return `Use ${lines(hints[0].grant)}${hints[0].writes ? ' with a package call that writes under this grant' : ''}.`;
+
+  // The app can install an interface outside Exact. Resolve it as the builder
+  // does, then consider standard packages the author could add to this app.
+  const advice = new Set();
+  for (const root of new Set([appDir, resolve(import.meta.dir, '..')].filter(Boolean))) {
+    let interfaces;
+    try { interfaces = moduleInterfaces(root); } catch { continue; }
+    for (const iface of interfaces) {
+      const spec = iface.declaration;
+      let impl;
+      try { impl = implementationFor(root, iface, 'android')?.json; } catch { /* an unrelated package can lack a binding */ }
+      const addNames = (declaration, inheritedGrants) => {
+        if (!Array.isArray(declaration?.names)) return;
+        for (const name of declaration.names) {
+          if (Array.isArray(name?.targets) && !name.targets.includes('android')) continue;
+          for (const [key, value] of Object.entries(name?.derives?.android ?? {})) {
+            if (value !== permission && !(value && typeof value === 'object' && Object.values(value).includes(permission))) continue;
+            const grants = Array.isArray(name.grants) ? name.grants : inheritedGrants;
+            const grant = key.startsWith('device.') ? key : Array.isArray(grants) && grants[0];
+            const call = name.source ?? name.send ?? name.event;
+            if (typeof call === 'string' && typeof grant === 'string' && /^[a-z][a-z0-9.-]*$/.test(grant)) {
+              const option = Array.isArray(name.derives.android) || key.startsWith('device.') ? '' : typeof value === 'string' ? ` using ${key}` :
+                ` using ${key}=${JSON.stringify(Object.keys(value).find(k => value[k] === permission))}`;
+              advice.add(`${lines(grant)} with ${call} from ${iface.name}${option}`);
+            }
+          }
+        }
+      };
+      addNames(spec, spec.grants);
+      addNames(impl, impl?.grants ?? spec.grants);
+    }
+    if (advice.size) return `Use ${[...advice].sort().join(' or ')}.`;
+  }
+}
+
+/** Native source comparisons use the app's declarations. The installed names come from Gradle's merge. */
+export function androidHostMetadata({ permissions = [], ...host } = {}) {
+  return permissions.length ? { ...host, permissions: [...new Set(permissions)].sort() } : host;
+}
+
+/** The app reports every invalid declaration. A package keeps its manifest-fragment diagnostic. */
+export function permissionProblems(list, appDir, extension, ownsCar = false) {
+  const owner = extension === undefined ? null : `${extension}'s Android implementation`;
+  const fragment = what => `${owner}: its manifest fragment ${what} (LLP 1133.031 D12 item 1: normal permissions only; a runtime permission comes from a grant line)`;
+  const source = 'app.json host.android.permissions';
+  if (!Array.isArray(list)) return [owner ? fragment('has permissions that are not a list') : `${source}: expected an array of permission names`];
+  const allowed = [...NORMAL_PERMISSIONS].join(', ');
+  const problems = [];
+  for (const name of new Set(list)) {
+    if (NORMAL_PERMISSIONS.has(name) || (ownsCar && name === MAP_TEMPLATES)) continue;
+    if (owner) return [name === MAP_TEMPLATES ? `${owner} asks for ${name} without its own carAppService (LLP 1133.030 D9)` :
+      fragment(`asks for ${JSON.stringify(name)}, which is not on the list`)];
+    if (name === MAP_TEMPLATES) {
+      problems.push(`${source} asks for ${name} without its own carAppService. Only the package declaring that service may request it. Normal permissions: ${allowed}`);
+      continue;
+    }
+    const hint = typeof name === 'string' && androidPermissionGrant(name, appDir);
+    problems.push(`${source}: ${JSON.stringify(name)} is not on the allow-list (normal permissions only): ${allowed}. Runtime permissions come from a grant line.${hint ? ' ' + hint : ''}`);
+  }
+  return problems;
+}
+
+/** Permissions from the app and its bound packages, merged with grant-derived names by the APK builder. */
+export function fragmentPermissions(bound, appPermissions = [], appDir) {
+  const car = carAppService(bound);
+  const problems = permissionProblems(appPermissions, appDir);
+  if (problems.length) throw new Error(problems.join('\n'));
+  const names = new Set(appPermissions);
+  for (const { extension, manifest } of bound) {
+    if (manifest?.permissions == null) continue;
+    const [problem] = permissionProblems(manifest.permissions, appDir, extension, !!car && manifest.carAppService === car);
+    if (problem) throw new Error(problem);
+    for (const name of manifest.permissions) names.add(name);
   }
   return [...names];
 }
@@ -125,16 +262,22 @@ const ONE = { receivers: 'receiver', services: 'service', queries: 'query', acti
 
 const escape = (s) => s.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
-/** The application meta-data a package's configuration may become (LLP 1133.021 §9 item 7, D18): by interface and
- * configuration key, the meta-data name. The Maps SDK reads its key from `com.google.android.geo.API_KEY`. */
-export const CONFIG_META = { '@exact/maps': { apiKey: 'com.google.android.geo.API_KEY' } };
+/** The `<meta-data>` names a package's configuration key may fill (LLP 1133.021 §9 item 7), for a vendor SDK that reads
+ * its key from the manifest by its own name: Google's Maps SDK, `com.google.android.geo.API_KEY` ([set
+ * up](https://developers.google.com/maps/documentation/android-sdk/config)). An interface opts a key in with
+ * `"metadata": "<name>"` in its `config.android` declaration. */
+export const CONFIG_METADATA = new Set(['com.google.android.geo.API_KEY']);
 
-/** The `<meta-data>` lines `config` (`packageConfig`'s map, extension to values) carries under [CONFIG_META]. */
-export function configMetaData(config) {
-  const lines = [];
-  for (const [name, keys] of Object.entries(CONFIG_META)) {
-    const values = config.get(name.split('/').at(-1)) ?? {};
-    for (const [key, meta] of Object.entries(keys)) if (typeof values[key] === 'string') lines.push(`        <meta-data android:name="${meta}" android:value="${escape(values[key])}" />`);
+/** The `<meta-data>` lines `configs` (`packageConfigs`' entries) fill. Throws, naming the package, for a name not on
+ * [CONFIG_METADATA] and for a name two packages fill. */
+export function configMetaData(configs) {
+  const lines = [], filled = new Map();
+  for (const { name, declared, values } of configs) for (const [key, d] of Object.entries(declared)) {
+    if (d.metadata === undefined) continue;
+    if (!CONFIG_METADATA.has(d.metadata)) throw new Error(`${name}'s exact.json: its android configuration key ${key} fills <meta-data> ${JSON.stringify(d.metadata)}, which is not on the list (scripts/android-manifest.mjs CONFIG_METADATA)`);
+    if (filled.has(d.metadata)) throw new Error(`${name} and ${filled.get(d.metadata)} both fill <meta-data> ${d.metadata}; an app binds one of them`);
+    filled.set(d.metadata, name);
+    if (values[key] !== undefined) lines.push(`        <meta-data android:name="${d.metadata}" android:value="${escape(String(values[key]))}" />`);
   }
   return lines;
 }
@@ -146,12 +289,45 @@ export function withMetaData(fragment, meta) {
   return [fragment, '    <application>', ...meta, '    </application>'].filter(Boolean).join('\n');
 }
 
-/** The manifest's children for every bound implementation's fragment (a `<queries>` element and an `<application>`
- * one, each when it has entries), or '' when none declares one. Throws, naming the package and what the allow-list
- * refuses. `bound` is `androidImplementations`' list; `privacyPolicy` is the app's `privacy_policy`, carried as
- * meta-data when a fragment declares an activity. */
-export function manifestFragment(bound, { privacyPolicy = null } = {}) {
+function addQueries(queries, list, refuse) {
+  if (!Array.isArray(list)) refuse('has queries that is not a list');
+  for (const c of list) {
+    for (const key of Object.keys(c ?? {})) if (!FIELDS.queries.has(key)) refuse(`gives a query "${key}", which the list does not allow`);
+    const keys = Object.keys(c ?? {}).sort().join();
+    if (c == null || typeof c !== 'object' || Array.isArray(c) || !['package', 'action', 'action,scheme'].includes(keys)) refuse('gives a query without exactly one of package or action (with a scheme or not)');
+    if (Object.hasOwn(c, 'package')) {
+      if (!QUERY_PACKAGES.has(c.package)) refuse(`gives a query the package ${JSON.stringify(c.package)}, which is not on the list`);
+      queries.add(`        <package android:name="${c.package}" />`);
+    } else if (Object.hasOwn(c, 'scheme')) {
+      if (typeof c.action !== 'string' || !Object.hasOwn(QUERY_SCHEMES, c.action) || !QUERY_SCHEMES[c.action].has(c.scheme)) refuse(`gives a query the action ${JSON.stringify(c.action)} with the scheme ${JSON.stringify(c.scheme)}, which is not on the list`);
+      queries.add(`        <intent><action android:name="${c.action}" /><data android:scheme="${c.scheme}" /></intent>`);
+    } else {
+      if (!QUERY_ACTIONS.has(c.action)) refuse(`gives a query the action ${JSON.stringify(c.action)}, which is not on the list`);
+      queries.add(`        <intent><action android:name="${c.action}" /></intent>`);
+    }
+  }
+}
+
+/** Merge the app's and bound implementations' visibility queries with the packages' application entries.
+ * A refused entry names its source. A rationale activity carries the app's privacy policy as meta-data. */
+export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] } = {}) {
   const lines = [], queries = new Set(), names = new Set(), removed = new Set();
+  if (defersMlKit(bound)) removed.add('com.google.mlkit.common.internal.MlKitInitProvider');
+  addQueries(queries, appQueries, (what) => { throw new Error(`app.json host.android.queries: ${what} (LLP 1133.030 D9's allow-list)`); });
+  const car = carAppService(bound);
+  if (car) {
+    names.add(car.name);
+    // The POI row admits a template service. The library also ships unrelated connection,
+    // permission and notification components in its own manifest.
+    queries.add('        <provider android:authorities="androidx.car.app.connection" android:name="androidx.car.app.connection.provider" tools:node="remove" />');
+    lines.push('        <activity android:name="androidx.car.app.CarAppPermissionActivity" tools:node="remove" />',
+      '        <receiver android:name="androidx.car.app.notification.CarAppNotificationBroadcastReceiver" tools:node="remove" />',
+      `        <service android:name="${car.name}" android:exported="true" tools:node="replace">`, '            <intent-filter>',
+      '                <action android:name="androidx.car.app.CarAppService" />', '                <category android:name="androidx.car.app.category.POI" />',
+      '            </intent-filter>', '        </service>',
+      '        <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc" tools:node="replace" />',
+      `        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="${car.minCarApiLevel}" tools:node="replace" />`);
+  }
   let activities = 0;
   for (const impl of bound) {
     const fragment = impl.manifest;
@@ -170,26 +346,12 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
     const kinds = Object.keys(fragment).sort((a, b) => (a === 'aliases') - (b === 'aliases'));
     for (const kind of kinds) {
       const list = fragment[kind];
-      if (kind === 'permissions') continue; // fragmentPermissions'
-      if (!FIELDS[kind]) refuse(`names "${kind}"; only ${[...Object.keys(FIELDS), 'permissions'].join(', ')} are allowed`);
+      if (kind === 'queries') { addQueries(queries, list, refuse); continue; }
+      if (kind === 'carAppService' || kind === 'permissions') continue;
+      if (!FIELDS[kind]) refuse(`names "${kind}"; only ${[...Object.keys(FIELDS), 'carAppService', 'permissions'].join(', ')} are allowed`);
       if (!Array.isArray(list)) refuse(`has ${kind} that is not a list`);
       for (const c of list) {
         for (const key of Object.keys(c ?? {})) if (!FIELDS[kind].has(key)) refuse(`gives a ${ONE[kind]} "${key}", which the list does not allow`);
-        if (kind === 'queries') {
-          const keys = Object.keys(c ?? {}).sort().join();
-          if (c == null || typeof c !== 'object' || Array.isArray(c) || !['package', 'action', 'action,scheme'].includes(keys)) refuse('gives a query without exactly one of package or action (with a scheme or not)');
-          if (Object.hasOwn(c, 'package')) {
-            listed(QUERY_PACKAGES, c.package, 'a query the package');
-            queries.add(`        <package android:name="${c.package}" />`);
-          } else if (Object.hasOwn(c, 'scheme')) {
-            if (!QUERY_SCHEMES[c.action]?.has(c.scheme)) refuse(`gives a query the action ${JSON.stringify(c.action)} with the scheme ${JSON.stringify(c.scheme)}, which is not on the list`);
-            queries.add(`        <intent><action android:name="${c.action}" /><data android:scheme="${c.scheme}" /></intent>`);
-          } else {
-            listed(QUERY_ACTIONS, c.action, 'a query the action');
-            queries.add(`        <intent><action android:name="${c.action}" /></intent>`);
-          }
-          continue;
-        }
         if (kind === 'metadata') {
           const field = Object.hasOwn(c ?? {}, 'resource') ? 'resource' : 'value';
           if (c == null || typeof c !== 'object' || Array.isArray(c) || typeof c.name !== 'string' || typeof c[field] !== 'string' || (field === 'resource' && Object.hasOwn(c, 'value'))) refuse('gives a meta-data without a string name and one string value or resource');
@@ -299,13 +461,14 @@ export const androidProtocolHandlers = (manifest, distributed = false) => (manif
   .filter((h) => !['http', 'https'].includes(h.protocol.toLowerCase()) && (!h.distribution_only || distributed))
   .map(({ protocol, url }) => ({ protocol: protocol.toLowerCase(), url }));
 
-/** The protocol handlers on the app's activity (LLP 1038 D8): a VIEW filter for each scheme, and the handlers as the
- * application's `dev.exact.protocol_handlers` meta-data, which the reader gives exact2 so that the whole URL arrives at
- * the template's `%s` (cold, the launch location; warm, `navigate`), as Apple's `ExactProtocolHandlers`. */
-export function withProtocolHandlers(fragment, handlers = []) {
-  if (!handlers.length) return fragment;
-  const filters = [...new Set(handlers.map((h) => h.protocol))].flatMap(viewFilter);
-  return onMainActivity(fragment, filters, [`        <meta-data android:name="dev.exact.protocol_handlers" android:value="${escape(JSON.stringify(handlers))}" />`]);
+/** Both declarations register browsable VIEW filters. Only protocol handlers supply templates to the reader.
+ * A URL with no template reaches `location_of` directly (LLP 1038 D8). */
+export function withProtocolHandlers(fragment, manifest, distributed = false) {
+  const handlers = androidProtocolHandlers(manifest, distributed), urlSchemes = manifest?.host?.android?.urlSchemes ?? [];
+  const schemes = new Set([...handlers.map((h) => h.protocol), ...urlSchemes.flatMap((s) => [s, s.toLowerCase()])]);
+  if (!schemes.size) return fragment;
+  const metadata = handlers.length ? [`        <meta-data android:name="dev.exact.protocol_handlers" android:value="${escape(JSON.stringify(handlers))}" />`] : [];
+  return onMainActivity(fragment, [...schemes].flatMap(viewFilter), metadata);
 }
 
 /** The App Links on the app's activity (LLP 1038 D8): for each claimed host (`androidLinkFilters`), an `autoVerify`
@@ -358,4 +521,29 @@ export function withAuthCallbacks(fragment, callbacks = []) {
   ].join('\n');
   if (app.includes('    </queries>')) return app.replace('    </queries>', `${queries}\n    </queries>`);
   return `${app}\n    <queries>\n${queries}\n    </queries>`;
+}
+
+/** Leave an explicit Gradle property to Gradle. Otherwise select the graph from the sources it compiles. */
+export function composeArgs(uses, appDir, bound, env) {
+  if (uses.includes('dates')) return ['-Pcompose=1'];
+  if (['0', '1'].includes(env.ORG_GRADLE_PROJECT_compose)) return [];
+  const modules = env.ORG_GRADLE_PROJECT_modulesDir ?? resolve(appDir, 'modules/android');
+  const kotlin = new Bun.Glob('**/*.kt');
+  for (const dir of [resolve(import.meta.dir, '../host/android/app', modules), ...bound.flatMap(b => b.dirs)]) {
+    if (!existsSync(dir)) continue;
+    for (const path of kotlin.scanSync({ cwd: dir, absolute: true, dot: true, followSymlinks: true })) {
+      const source = readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ');
+      if (/\bimport\s+androidx\s*\.\s*compose\s*\.|@Composable\b/.test(source)) return ['-Pcompose=1'];
+    }
+  }
+  return [];
+}
+
+export const systemWidgets = manifest => (manifest.widgets ?? []).filter(row => row.families?.some(f => f.startsWith('system')));
+
+/** The modules selected for the APK also select the classpaths its lock report resolves. An unlocked development
+ * APK includes the player so a live edit can add video. A locked app links it only when its plan uses it. */
+export function androidLibraryArgs(app, bound, uses, env, liveVideo = false) {
+  return [...composeArgs(uses, app.dir, bound, env), ...(uses.includes('video') || liveVideo ? ['-Pvideo=1'] : []),
+    ...(systemWidgets(app.manifest).length ? ['-Pwidgets=1'] : []), `-PcarAppService=${carAppService(bound)?.name ?? ''}`];
 }

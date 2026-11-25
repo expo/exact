@@ -2,8 +2,8 @@
 // visibly (CSS Overflow 3, `overflow: visible`), and they paint and take
 // touches. UIKit's accessibility leaves out a view whose bounds are empty
 // together with everything under it, which kept a zero-height box's
-// floating buttons from VoiceOver and XCTest while the web exposes them
-// (#721). A view holding such a box lists its accessibility children
+// floating buttons from VoiceOver and XCTest while the web exposes them.
+// A view holding such a box lists its accessibility children
 // itself, as UIKit would were the box a point tall: its subviews in
 // UIKit's order, with that box's children in its place.
 #if os(iOS) || os(tvOS)
@@ -44,7 +44,7 @@ extension NodeView {
 
     /// UIKit's order for a container's children, as XCTest's snapshot of
     /// an iOS 27 app read it: by top edge, except that tops less than 8
-    /// points apart are one line, read by leading edge (#721). A stable
+    /// points apart are one line, read by leading edge. A stable
     /// insertion, since that rule is not transitive.
     private static func readingOrder(_ views: [UIView]) -> [UIView] {
         guard views.count > 1 else { return views }
@@ -68,7 +68,7 @@ extension NodeView {
     /// holds them, and it is neither an element (whose children are never
     /// visited) nor a modal boundary.
     private var passesAccessibilityThrough: Bool {
-        bounds.isEmpty && !subviews.isEmpty && !isHidden && alpha > 0.01 && !accessibilityElementsHidden && !accessibilityViewIsModal
+        bounds.isEmpty && !heldSubviews.isEmpty && !isHidden && alpha > 0.01 && !accessibilityElementsHidden && !accessibilityViewIsModal
             && !clipsToBounds && clipBox == nil && clipPath == nil && scroll == nil && !isAccessibilityElement
     }
 }
@@ -78,8 +78,8 @@ extension NodeView {
     /// placeholder has no accessible content; virtual elements still count.
     var isEmptyPanelPlaceholder: Bool {
         props["accessibilityRole"] == "tabpanel" && presenter?.navigation.tabPanels.contains(id) == true
-            && container.subviews.isEmpty && !isAccessibilityElement && accessibilityElements?.isEmpty != false
-            && (container === self || subviews.allSatisfy({ $0 === container })
+            && container.heldSubviews.isEmpty && !isAccessibilityElement && accessibilityElements?.isEmpty != false
+            && (container === self || heldSubviews.allSatisfy({ $0 === container })
                 && !container.isAccessibilityElement && container.accessibilityElements?.isEmpty != false)
     }
 }

@@ -2,7 +2,7 @@
 //! @ref LLP 1149 D5.2, D6.1, D11.
 use super::check_region;
 use super::texture_ids;
-use super::{Device, Error, Format, Info, Result, Submission, TextureDesc};
+use super::{Device, Error, Format, GpuTime, Info, Result, Submission, TextureDesc};
 use crate::instance::{flags, Bindings, Frame, Instance, Kind, TextureId};
 use std::{
     cell::Cell,
@@ -34,6 +34,7 @@ pub mod startup_watchdog;
 #[cfg(test)]
 mod tests;
 mod text_host;
+mod timing;
 pub use composition::{PresentStatistics, Window};
 
 /// Only free-threaded objects cross to the paint thread. A pending worker stays
@@ -291,6 +292,7 @@ pub struct D3d11 {
     retiring_devices: Vec<(Box<D3d11>, composition::Retirement)>,
     /// The staging texture large uploads are copied from (`upload_texture`).
     staging: Option<ID3D11Texture2D>,
+    timing: timing::Timing,
 }
 
 impl D3d11 {
@@ -382,6 +384,7 @@ impl D3d11 {
             presentation_pending: false,
             retiring_devices: Vec::new(),
             staging: None,
+            timing: timing::Timing::default(),
             info,
             software,
         })
@@ -781,6 +784,7 @@ impl Device for D3d11 {
             self.device
                 .CreateRenderTargetView(&t.raw, None, Some(&mut view))?;
         }
+        self.timing.stamp(&self.device, &self.context)?;
         self.draw(
             frame,
             &view.unwrap(),
@@ -788,6 +792,7 @@ impl Device for D3d11 {
             clear,
             None,
         )?;
+        self.timing.stamp(&self.device, &self.context)?;
         let s = self.submit()?;
         self.buffer.last.set(s);
         self.textures.get_mut(&target).unwrap().last = s;
@@ -856,6 +861,15 @@ impl Device for D3d11 {
         self.wait(self.submitted)?;
         self.buffer = self.create_buffer(192)?;
         Ok(())
+    }
+    fn begin_gpu_span(&mut self) -> Result<()> {
+        self.timing.begin(&self.device, &self.context)
+    }
+    fn end_gpu_span(&mut self) -> Result<()> {
+        self.timing.end(&self.context)
+    }
+    fn gpu_times(&mut self) -> Result<Vec<Option<GpuTime>>> {
+        self.timing.times(&self.context)
     }
 }
 

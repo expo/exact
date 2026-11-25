@@ -153,7 +153,7 @@ pub const HOST_COMMANDS: &[&str] = &[
     "relaunch",
     "removeAllRanges",
     "selectText",
-    // A field's range, or a reader text's source range (issue #274), by id.
+    // A field's range, or a reader text's source range, by id.
     // `setSelectionRange("editor", 4, 4)`.
     "setSelectionRange",
     "setRangeText",
@@ -204,6 +204,7 @@ pub const HOST_COMMANDS: &[&str] = &[
     "requestPermission",
     // @ref LLP 1070.000 — a virtualized list's row brought into view, by key.
     "scrollIntoView",
+    "cancelReorder",
     // @ref LLP 1101.004 R3 — `Element.scrollBy(x, y)` by the scroller's
     // `id`, in pixels: a reader's `j` and `k`.
     "scrollBy",
@@ -233,6 +234,10 @@ pub const HOST_COMMANDS: &[&str] = &[
     // drawn at that opacity, 0 to 1, as Electron's `BrowserWindow.setOpacity`.
     // The Mac's; the web refuses it (a page has no window to fade).
     "setWindowOpacity",
+    "setWindowAlwaysOnTop",
+    "setWindowIgnoreMouseEvents",
+    "setBounds",
+    "setAspectRatio",
     // @ref LLP 1133.025 D4 — `hideWindow()`: the session's window is put
     // away as a person's close puts it away under `keepRunning` or a placed
     // status item, the app still running, as Electron's `BrowserWindow.hide`.

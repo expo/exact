@@ -118,6 +118,14 @@ function methodsFor(manifest, platform) {
  * it (a JS development build has no bake receipt), never an empty claim;
  * `build.source` and `build.dirty` are null where git did not answer.
  * Release builds leave `builtAt` null so identical builds keep identical pages. */
+/** The reach table's `rows` (LLP 1069.008 D7) with a row for each vendor key the app writes into an Apple bundle
+ * (D4, `host.<platform>.infoPlist`); null, where the build computed none, stays null. */
+export const withVendorReach = (rows, manifest) => rows && [...rows, ...['ios', 'macos'].flatMap(platform => {
+  const keys = manifest.host?.[platform]?.infoPlist;
+  return Object.keys(keys && typeof keys === 'object' && !Array.isArray(keys) ? keys : {}).map(key => ({
+    grant: `Info.plist ${key} (${platform === 'ios' ? 'iOS' : 'macOS'})`, purpose: null, enforced: `nothing; declared by app.json host.${platform}.infoPlist` }));
+})];
+
 export function installData(manifest, build = {}) {
   const errors = installProblems(manifest);
   if (methodsFor(manifest, 'web').some(m => !validURL(m.url, 'browser'))) errors.push('install.web: invalid browser URL');
@@ -138,7 +146,7 @@ export function installData(manifest, build = {}) {
     ...(brand.logo || wordmark ? { brand: { ...(brand.logo ? { logo: rooted(brand.logo) } : {}), ...(wordmark ? { wordmark } : {}) } } : {}),
     build: { id: build.id ?? null, source: build.source ?? null, dirty: build.dirty ?? null, builtAt: build.builtAt ?? null, mode: build.mode ?? null },
     platforms,
-    reach: build.reach ?? null,
+    reach: withVendorReach(build.reach ?? null, manifest),
   };
 }
 

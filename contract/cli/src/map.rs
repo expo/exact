@@ -18,6 +18,34 @@ pub struct SourceMap {
     sources: Sources,
 }
 
+/// The Contract text or entry file whose compiled bytes a tool compares.
+pub enum ComparisonInput<'a> {
+    /// Standalone text with no relative imports.
+    Text(&'a str),
+    /// An entry whose imports resolve from its directory.
+    Path(&'a std::path::Path),
+}
+
+/// Compile the ordinary GUI plan with authored place rows and references omitted
+/// before their names enter the string pool (LLP 1116.017).
+pub fn compile_for_comparison(
+    input: ComparisonInput<'_>,
+) -> Result<exact_plan::Plan, CompileError> {
+    let output = contract_lower::SourceOutput::Comparison;
+    match input {
+        ComparisonInput::Text(src) => crate::compile_text(src, output),
+        ComparisonInput::Path(path) => crate::compile_path_checked(
+            path,
+            &crate::read_source(path)?,
+            output,
+            true,
+            contract_lower::Profile::Web,
+        )
+        .map(|(plan, _)| plan)
+        .map_err(crate::first),
+    }
+}
+
 /// SHA-256 of the final encoded plan, matching the development envelope.
 pub fn plan_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

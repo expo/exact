@@ -10,7 +10,8 @@
 use crate::geometry::view_of;
 use crate::DataError;
 use exact_kernel::style::calc::Family;
-use exact_kernel::{Kernel, ViewId};
+use exact_kernel::style::targets::{Kind, NativeTarget};
+use exact_kernel::{Kernel, OwnerChrome, ViewId};
 use exact_plan::{Plan, TypeKind, TypesId, Value};
 
 /// `exactGeometry(id[, space[, node[, regions]]])`, whose `regions` names the query options of
@@ -77,6 +78,15 @@ impl Fact {
             ("y", Fact::Number(y)),
             ("width", Fact::Number(width)),
             ("height", Fact::Number(height)),
+        ])
+    }
+
+    fn edges([top, right, bottom, left]: [bool; 4]) -> Fact {
+        Fact::Record(vec![
+            ("top", Fact::Bool(top)),
+            ("right", Fact::Bool(right)),
+            ("bottom", Fact::Bool(bottom)),
+            ("left", Fact::Bool(left)),
         ])
     }
 
@@ -163,8 +173,11 @@ pub enum Query {
         /// The space its frames are in.
         space: Space,
     },
-    /// `exactNativeChain`.
-    Chain,
+    /// `exactNativeChain`: the targets of the owner of the node `id` names.
+    Chain {
+        /// The node's `id`.
+        id: String,
+    },
     /// `exactSafeAreaUnsettled`.
     Unsettled,
 }
@@ -240,7 +253,7 @@ pub fn query(source: &str, args: &[Value]) -> Result<Query, DataError> {
             }
             Ok(Query::Geometry { id, space })
         }
-        CHAIN => id("the node whose owner's chain it reads").map(|_| Query::Chain),
+        CHAIN => id("the node whose owner's chain it reads").map(|id| Query::Chain { id }),
         _ => Ok(Query::Unsettled),
     }
 }
@@ -262,6 +275,8 @@ pub fn geometry(kernel: &Kernel, id: &str, space: &Space, generation: u64) -> Fa
         laid.size,
         frame_in(kernel, &laid, space),
         reading,
+        keyboard_fact(kernel, &laid, space),
+        chrome_fact(kernel.owner_chrome(laid.view)),
     )
 }
 
@@ -278,13 +293,57 @@ pub fn unsettled(kernel: &Kernel, generation: u64) -> Fact {
     unsettled_fact(kernel.layouts() > 0, generation, boxes.len(), ids.collect())
 }
 
-/// What `exactNativeChain` reads: the owner's native chain, which only a host that reports one
-/// has (D9; LLP 1123 stage 3).
-pub fn chain(generation: u64) -> Fact {
+/// What `exactNativeChain` reads of the node `id` names (D6, D9): the native chain of its owner,
+/// or the session view's outside every owner, then the relational targets beside it, as the host
+/// last reported them. A node that is gone, or whose holder's host reported no targets, is
+/// unavailable.
+pub fn chain(kernel: &Kernel, id: &str, generation: u64) -> Fact {
+    let Some(targets) = view_of(kernel, id).and_then(|view| kernel.native_targets(view)) else {
+        return chain_fact(false, generation, Fact::Absent);
+    };
+    let numbered = (targets.chain.iter().zip(1..))
+        .map(|(e, number)| target_fact(Some(number), None, e.kinds, &e.target));
+    let related = (targets.relations.iter()).map(|(r, t)| target_fact(None, Some(r.name()), 0, t));
+    chain_fact(
+        true,
+        generation,
+        Fact::List(numbered.chain(related).collect()),
+    )
+}
+
+fn chain_fact(available: bool, generation: u64, entries: Fact) -> Fact {
     Fact::Record(vec![
-        ("available", Fact::Bool(false)),
+        ("available", Fact::Bool(available)),
         ("generation", Fact::Number(generation as f64)),
-        ("entries", Fact::Absent),
+        ("entries", entries),
+    ])
+}
+
+/// One target of a chain answer: its number in the chain from 1 (the owner's controller) or its
+/// relation's name, its kinds' names, its identity and generation, its frame in its window, and
+/// its raw insets in its own coordinates; the frame and insets `none` while it is unavailable.
+fn target_fact(number: Option<u32>, relation: Option<&str>, kinds: u8, t: &NativeTarget) -> Fact {
+    let kinds = (Kind::ALL.iter())
+        .filter(|k| kinds & k.bit() != 0)
+        .map(|k| Fact::Str(k.name().to_string()));
+    let four = |v: Option<[f32; 4]>| v.map(|v| v.map(f64::from));
+    Fact::Record(vec![
+        (
+            "number",
+            number.map_or(Fact::Absent, |n| Fact::Number(n.into())),
+        ),
+        (
+            "relation",
+            relation.map_or(Fact::Absent, |r| Fact::Str(r.to_string())),
+        ),
+        ("kinds", Fact::List(kinds.collect())),
+        ("id", Fact::Number(t.id as f64)),
+        ("generation", Fact::Number(t.generation as f64)),
+        (
+            "frame",
+            four(t.frame).map_or(Fact::Absent, |[x, y, w, h]| Fact::rect(x, y, w, h)),
+        ),
+        ("insets", four(t.insets).map_or(Fact::Absent, Fact::insets)),
     ])
 }
 
@@ -295,24 +354,87 @@ pub fn chain(generation: u64) -> Fact {
 pub fn templates(source: &str) -> Vec<Fact> {
     match source {
         GEOMETRY => vec![
-            answer(0, (1.0, 1.0), Some([0.0, 0.0, 1.0, 1.0]), |_| {
-                Some([0.0; 4])
-            }),
-            answer(0, (1.0, 1.0), None, |_| None),
+            answer(
+                0,
+                (1.0, 1.0),
+                Some([0.0, 0.0, 1.0, 1.0]),
+                |_| Some([0.0; 4]),
+                Fact::Record(vec![
+                    ("guide", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                    ("occupancy", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                    ("docked", Fact::Bool(false)),
+                    ("near", Fact::edges([false; 4])),
+                    ("away", Fact::edges([false; 4])),
+                ]),
+                Fact::Record(vec![
+                    ("verticalBarEdge", Fact::Str(String::new())),
+                    ("sidebarAvailable", Fact::Bool(false)),
+                    ("overscan", Fact::Str(String::new())),
+                    ("auxiliaryTopLeftArea", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                    ("auxiliaryTopRightArea", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                ]),
+            ),
+            answer(
+                0,
+                (1.0, 1.0),
+                None,
+                |_| None,
+                Fact::Record(vec![
+                    ("guide", Fact::Absent),
+                    ("occupancy", Fact::Absent),
+                    ("docked", Fact::Absent),
+                    ("near", Fact::Absent),
+                    ("away", Fact::Absent),
+                ]),
+                chrome_fact(Some(Default::default())),
+            ),
+            answer(0, (1.0, 1.0), None, |_| None, Fact::Absent, Fact::Absent),
             unavailable(0),
         ],
-        CHAIN => vec![chain(0)],
+        CHAIN => {
+            let target = NativeTarget {
+                id: 1,
+                generation: 1,
+                insets: Some([0.0; 4]),
+                frame: Some([0.0; 4]),
+            };
+            let none = NativeTarget {
+                insets: None,
+                frame: None,
+                ..target
+            };
+            vec![
+                chain_fact(
+                    true,
+                    0,
+                    Fact::List(vec![target_fact(
+                        Some(1),
+                        None,
+                        Kind::Navigation.bit(),
+                        &target,
+                    )]),
+                ),
+                chain_fact(
+                    true,
+                    0,
+                    Fact::List(vec![target_fact(None, Some("window"), 0, &none)]),
+                ),
+                chain_fact(false, 0, Fact::Absent),
+            ]
+        }
         _ => vec![unsettled_fact(true, 0, 1, vec![Fact::Str(String::new())])],
     }
 }
 
-/// An `exactGeometry` answer for a laid-out box of `size`, `frame` in the space read, and what
-/// it observes of each family.
+/// An `exactGeometry` answer for a laid-out box of `size`, `frame` in the space read, what it
+/// observes of each family, its `keyboard` and its owner's `chrome`.
 fn answer(
     generation: u64,
     (width, height): (f64, f64),
     frame: Option<[f64; 4]>,
     reading: impl Fn(Family) -> Option<[f64; 4]>,
+    keyboard: Fact,
+    chrome: Fact,
 ) -> Fact {
     let observations = Family::ALL
         .iter()
@@ -356,8 +478,49 @@ fn answer(
         ("cornerRadii", Fact::Absent),
         ("regions", Fact::Absent),
         ("scroll", Fact::Absent),
-        ("keyboard", Fact::Absent),
-        ("chrome", Fact::Absent),
+        ("keyboard", keyboard),
+        ("chrome", chrome),
+    ])
+}
+
+/// D7's keyboard facts for `laid` in `space`: its guide and its owner's occupancy, each `none`
+/// where the kernel cannot place it there, and whether a docked keyboard shows; `none` where the
+/// host reported nothing of the keyboard. The tracking state, `near` and `away`, is `none` until a
+/// host tracks it (`UITrackingLayoutGuide`).
+fn keyboard_fact(kernel: &Kernel, laid: &Laid, space: &Space) -> Fact {
+    let Some(k) = kernel.keyboard_facts(laid.view) else {
+        return Fact::Absent;
+    };
+    let rect = |r: [f32; 4]| match rect_in(kernel, laid, space, r.map(f64::from)) {
+        Some([x, y, w, h]) => Fact::rect(x, y, w, h),
+        None => Fact::Absent,
+    };
+    Fact::Record(vec![
+        ("guide", k.guide.map_or(Fact::Absent, rect)),
+        ("occupancy", rect(k.occupancy)),
+        ("docked", Fact::Bool(k.docked)),
+        ("near", Fact::Absent),
+        ("away", Fact::Absent),
+    ])
+}
+
+/// D6's `chrome`: what the box's owner's host reported of it, `none` where it reported none, as
+/// outside every owner. A quantity the host does not have is `none`, as the tvOS overscan and the
+/// Mac's auxiliary areas are until those hosts report them (stage 4).
+fn chrome_fact(chrome: Option<OwnerChrome>) -> Fact {
+    let Some(c) = chrome else {
+        return Fact::Absent;
+    };
+    let edge = c.vertical_bar_edge.map(|e| Fact::Str(e.name().to_string()));
+    Fact::Record(vec![
+        ("verticalBarEdge", edge.unwrap_or(Fact::Absent)),
+        (
+            "sidebarAvailable",
+            c.sidebar_available.map_or(Fact::Absent, Fact::Bool),
+        ),
+        ("overscan", Fact::Absent),
+        ("auxiliaryTopLeftArea", Fact::Absent),
+        ("auxiliaryTopRightArea", Fact::Absent),
     ])
 }
 
@@ -397,6 +560,7 @@ fn name(family: Family) -> &'static str {
         Family::ReadableContentCorners => "readableContentCorners",
         Family::ReadableContentGuide => "readableContentGuide",
         Family::SystemMinimum => "systemMinimumLayoutMargins",
+        Family::Bar => "bar",
     }
 }
 
@@ -422,18 +586,30 @@ fn laid_out(kernel: &Kernel, view: ViewId) -> Option<Laid> {
 
 /// `laid`'s border box in `space`, `x`, `y`, `width` and `height`. In its owner's space as the
 /// kernel lays it out, a top-layer box placed in the viewport; in a node's border box where both
-/// are in one space; never yet in the window's, since only the host knows where it shows the
-/// document and its owners there (LLP 1123 stage 3).
+/// are in one space; in the window's through the map its host reported for the box's owner, or
+/// for the document outside every owner, the bounds of its mapped corners, and `None` where the
+/// host reported none.
 fn frame_in(kernel: &Kernel, laid: &Laid, space: &Space) -> Option<[f64; 4]> {
-    let (owner, [x, y]) = laid.placed?;
-    let (width, height) = laid.size;
+    let (_, [x, y]) = laid.placed?;
+    rect_in(kernel, laid, space, [x, y, laid.size.0, laid.size.1])
+}
+
+/// `rect`, x y width height in `laid`'s owner's space, in `space`, as [`frame_in`] places
+/// `laid`'s own border box.
+fn rect_in(
+    kernel: &Kernel,
+    laid: &Laid,
+    space: &Space,
+    [x, y, w, h]: [f64; 4],
+) -> Option<[f64; 4]> {
+    let (owner, _) = laid.placed?;
     match space {
-        Space::Owner => Some([x, y, width, height]),
-        Space::Window => None,
+        Space::Owner => Some([x, y, w, h]),
+        Space::Window => kernel.window_map(laid.view).map(|m| m.rect([x, y, w, h])),
         Space::Node(id) => {
             let other = view_of(kernel, id).and_then(|view| laid_out(kernel, view))?;
             let (other_owner, [ox, oy]) = other.placed?;
-            (other_owner == owner).then_some([x - ox, y - oy, width, height])
+            (other_owner == owner).then_some([x - ox, y - oy, w, h])
         }
     }
 }

@@ -84,9 +84,10 @@ pub struct GrantLinks {
     /// Whether an `fs.read` or `fs.write` line admits a path:
     /// [`crate::save_file::covered`].
     pub covers: fn(&str, &str, &str) -> bool,
-    /// Why data code may not call a child process's operation from an
-    /// origin (LLP 1133.007 D13); `process.spawn` lines link I/O.
-    pub process: fn(&str, crate::CallOrigin) -> Result<(), String>,
+    /// Whether a child process's operation is held to the app's origin
+    /// (LLP 1133.007 D13), or why data code may not call it from any;
+    /// `process.spawn` lines link I/O.
+    pub process: fn(&str) -> Result<bool, String>,
 }
 
 /// The I/O grant grammar.
@@ -95,7 +96,7 @@ pub const LINKED: GrantLinks = GrantLinks {
     admitting,
     session_admits,
     covers: crate::save_file::covered,
-    process: crate::runner::process_refusal,
+    process: crate::runner::process_held,
 };
 
 /// Read one I/O grant line.
@@ -106,6 +107,9 @@ pub fn validate(line: &str) -> Result<(), String> {
 /// Whether `grant`, the origin an `auth.session` line names, admits a
 /// sign-in page at `origin`, as a `net.fetch` line of it would admit a fetch.
 pub fn session_admits(grant: &str, origin: &str) -> bool {
+    if grant == "self" {
+        return false;
+    }
     let Ok(origin) = exact_grants::origin_of(origin) else {
         return false;
     };
@@ -266,6 +270,7 @@ pub(crate) fn own(line: &str) -> bool {
         || exact_grants::process::is_process_line(line)
         || line.starts_with("net.dns-sd ")
         || line.split_whitespace().next() == Some("net.listen")
+        || line == "clipboard.read"
         || line == "browser.automation"
         || line == "payment.google-pay"
         || line.starts_with("payment.apple-pay ")
@@ -398,6 +403,7 @@ fn quote(text: &str, out: &mut String) {
 fn grant_json(grant: &exact_grants::Grant, out: &mut String) {
     use exact_grants::Grant;
     match grant {
+        Grant::FetchSelf => out.push_str(r#"["fetch-self"]"#),
         Grant::Fetch(origin)
         | Grant::FetchSubdomains(origin)
         | Grant::WebSocket(origin)

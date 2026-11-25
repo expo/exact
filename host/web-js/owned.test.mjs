@@ -372,6 +372,37 @@ test("a rendered page's instances answer the boot's first frame", () => fixture(
   expect(await text('works')).toBe('fantasy');
 }, { path: '/discover', render: true, hold: false }), 180_000);
 
+// A panel's feed asks while its tab shows; every panel's asks the same.
+const PANELS = `routes nav
+  tab home "/"
+  tab discover "/discover" render=build
+
+shape Subject
+  ok: bool
+  works: string[]
+
+component App
+  view
+    main navigationKey=\`\${top(nav).id}\` navigationBack="back"
+      for t in nav.tabs key=t.name
+        column role="tabpanel" id=\`panel-\${t.name}\`
+          Feed(name=t.name, shown=(nav.tab == t.name))
+
+component Feed
+  props
+    name: string
+    shown: bool
+  resource works = subjectWorks("sf") when shown as shape Subject else empty(ok=true)
+  view
+    text \`\${name}: \${works.works.join(",")}\` testId=\`works-\${name}\`
+`;
+
+test("a rendered page's instance takes its own answer, not a sibling's at equal arguments", () => fixture(PANELS, async ({ browser, text, asks }) => {
+  // The page's home panel was rendered with its gate closed, so it shows its placeholder there and at the boot.
+  expect([await text('works-home'), await text('works-discover')]).toEqual(['home: ', 'discover: sf']);
+  expect(await asks()).toEqual([]);
+}, { path: '/discover', render: true, hold: false }), 180_000);
+
 
 const TASK_REFUSAL = `component App
   state shown = false

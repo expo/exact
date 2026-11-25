@@ -72,11 +72,24 @@ for (const p of pages) {
   if (p.path !== '/' && shown !== p.title) fail(p.path, `headline ${JSON.stringify(shown)} is not the page title`);
   for (const href of ICONS) if (!html.includes(` href="${href}"`)) fail(p.path, `no link to ${href}`);
   if (!html.includes(`<meta property="og:locale" content="${site.locale}">`)) fail(p.path, 'no og:locale');
+  if (!html.includes('<link rel="llms-txt" href="/llms.txt">')) fail(p.path, 'no llms-txt link');
   if (ORIGIN) for (const tag of ['property="og:image"', 'name="twitter:image"']) if (!html.includes(`<meta ${tag} content="${ORIGIN}${SHARE_IMAGE}">`)) fail(p.path, `no ${tag} for ${SHARE_IMAGE}`);
   const canonical = html.match(/<link rel="canonical" href="([^"]*)">/)?.[1];
   if (ORIGIN && canonical !== ORIGIN + p.path) fail(p.path, `canonical is ${JSON.stringify(canonical)}, not ${ORIGIN + p.path}`);
   if (!ORIGIN && canonical) fail(p.path, 'a canonical link without an origin');
 }
+
+const DESCRIPTION_MIN = 40;
+const WRITE_ONE = 'write one in constants/navigation.ts';
+const pathsByDescription = new Map<string, string[]>();
+for (const p of pages) pathsByDescription.set(p.description, [...(pathsByDescription.get(p.description) ?? []), p.path]);
+for (const [description, paths] of pathsByDescription) if (paths.length > 1) fail(paths.join(', '), `${paths.length} pages share the description ${JSON.stringify(description)}; ${WRITE_ONE} for each`);
+for (const p of pages) {
+  if (p.description.length < DESCRIPTION_MIN) fail(p.path, `description ${JSON.stringify(p.description)} is under ${DESCRIPTION_MIN} characters; ${WRITE_ONE}`);
+  if (p.description.endsWith(':')) fail(p.path, `description ${JSON.stringify(p.description)} ends with a colon; ${WRITE_ONE}`);
+}
+const cutDescriptions = pages.filter(p => p.description.endsWith('…')).map(p => p.path);
+if (cutDescriptions.length) console.warn(`seo-check: ${cutDescriptions.length} descriptions are cut short; ${WRITE_ONE} for each\n${cutDescriptions.map(p => `  ${p}`).join('\n')}`);
 
 for (const file of [...ICONS, SHARE_IMAGE, '/favicon.ico']) if (!existsSync(join(DIST, file))) fail(file, 'missing');
 
@@ -103,4 +116,4 @@ if (problems.length) {
   console.error(`seo-check: ${problems.length} problems\n${problems.map(p => `  ${p}`).join('\n')}`);
   process.exit(1);
 }
-console.log(`seo-check: ${pages.length} pages' JSON-LD, favicons, share image${ORIGIN ? ', canonical links, robots.txt and sitemap.xml' : ' and robots.txt'} are valid${ORIGIN ? '' : ' (no origin yet: URLs, canonical links and sitemap.xml not checked)'}`);
+console.log(`seo-check: ${pages.length} pages' descriptions, JSON-LD, favicons, share image${ORIGIN ? ', canonical links, robots.txt and sitemap.xml' : ' and robots.txt'} are valid${ORIGIN ? '' : ' (no origin yet: URLs, canonical links and sitemap.xml not checked)'}`);

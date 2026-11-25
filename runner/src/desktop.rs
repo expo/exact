@@ -10,6 +10,37 @@ use crate::{DataSource, Runner};
 use exact_kernel::{Display, Kernel, NodeType, PropId, PropList, ViewId};
 use serde_json::{json, Value as Json};
 
+/// Whether a global shortcut is a single-side modifier (LLP 1133.025 D3).
+/// A sided modifier cannot be part of a chord.
+pub fn single_side_shortcut(keys: &str) -> Result<bool, &'static str> {
+    if matches!(keys, "MetaRight" | "AltRight") {
+        return Ok(true);
+    }
+    for part in keys.split('+') {
+        for side in ["Left", "Right"] {
+            let modifier = part.strip_suffix(side).or_else(|| part.strip_prefix(side));
+            if matches!(
+                modifier,
+                Some(
+                    "Meta"
+                        | "Alt"
+                        | "Control"
+                        | "Shift"
+                        | "OS"
+                        | "Super"
+                        | "Hyper"
+                        | "Fn"
+                        | "Command"
+                        | "Option"
+                )
+            ) {
+                return Err("the single-side modifier codes are `MetaRight` and `AltRight`, each used alone on macOS");
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Whether `props`' `-exact-menu` names `id` among its ids.
 pub fn presents(props: &PropList, id: &str) -> bool {
     (props.str(PropId::MenuPlacement)).is_some_and(|p| p.split_whitespace().any(|w| w == id))

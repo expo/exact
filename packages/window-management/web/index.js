@@ -80,6 +80,12 @@ export function implementation({ changed }) {
       if (asked === generation && !stop) watch(details);
       return { screens: [...details.screens].map(screen), currentScreen: screen(details.currentScreen) };
     },
+    async getWindowBounds() {
+      const { screenX, screenY, outerWidth, outerHeight } = win;
+      if (![screenX, screenY, outerWidth, outerHeight].every(Number.isFinite))
+        return { error: 'NotSupportedError', message: 'getWindowBounds needs a browser window' };
+      return { screenX, screenY, outerWidth, outerHeight };
+    },
     async getPointerPosition() {
       return { error: 'NotSupportedError' };
     },

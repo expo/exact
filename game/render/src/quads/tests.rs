@@ -149,8 +149,13 @@ fn revisions_reuse_owned_values_and_membership_compacts_in_order() {
     feed::<Sprite>(&w, &mut sprites, true, false, false);
     let births = emitters[1].value.state.births.as_ptr();
     let texture = sprites[0].value.texture.as_ptr();
+    let picture = crate::Feed::default();
+    let before = picture.idle_picture(&w);
     w.get_mut::<Emitter>(entity).unwrap().rate = 90.;
+    let particles = picture.idle_picture(&w);
+    assert!(particles != before);
     w.get_mut::<Sprite>(entity).unwrap().frame = [16, 0, 16, 16];
+    assert!(picture.idle_picture(&w) != particles);
     feed::<Emitter>(&w, &mut emitters, false, false, false);
     feed::<Sprite>(&w, &mut sprites, false, false, false);
     assert_eq!(emitters[1].value.state.births.as_ptr(), births);

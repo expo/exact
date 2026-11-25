@@ -10,6 +10,7 @@
 use crate::browser_cases::{css_rows, lay_out_with, props};
 use crate::support::reader::text as t;
 use exact_kernel::StyleId::{OverflowX, OverflowY};
+use exact_kernel::{Kernel, NodeType, Offer, Op, PropId, PropValue};
 
 // `overflow: auto` is added as rows: `css_rows` reads `auto` as a length.
 const SCROLLER: &str = "width:200px;height:100px;padding:10px;";
@@ -174,6 +175,123 @@ fn end_padding_extends_children_not_descendants() {
         let got = (w.max(220.0), h.max(120.0));
         if (got.0 - width).abs() > 0.01 || (got.1 - height).abs() > 0.01 {
             failures.push(format!("{name}: {got:?}, Chrome {width} × {height}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A form control's natural size is not scrollable overflow: a control
+/// narrower than it adds its border box to its scroller, as any box does,
+/// and nothing past it (CSS Overflow 3 §2.1). Each case is one control, the
+/// only child of the scroller above made a flex column, its CSS, and
+/// Chrome's `scrollWidth`. Chrome for Testing 159 (macOS headless shell),
+/// 2026-11-24, plain HTML: a `progress` (`value=0.5`) is `10em` by `1em`,
+/// a fixed `input` twenty characters wide and a `textarea` twenty by two,
+/// all wider than the scroller at a 60px font, as the kernel's measures are.
+const CONTROLS: &[(&str, NodeType, &str, &str, f32)] = &[
+    (
+        "a full-width progress",
+        NodeType::Control,
+        "progress",
+        "width:100%;min-width:0",
+        220.0,
+    ),
+    (
+        "a progress given a narrow width",
+        NodeType::Control,
+        "progress",
+        "width:100px",
+        220.0,
+    ),
+    (
+        "a full-width text field",
+        NodeType::TextInput,
+        "text",
+        "width:100%;min-width:0;box-sizing:border-box",
+        220.0,
+    ),
+    (
+        "a full-width textarea",
+        NodeType::TextInput,
+        "textarea",
+        "width:100%;min-width:0;box-sizing:border-box",
+        220.0,
+    ),
+    // `width: 100%` sizes the content box: the border box sticks out 12px.
+    (
+        "a full-width content-box field with padding and a border",
+        NodeType::TextInput,
+        "text",
+        "width:100%;min-width:0;box-sizing:content-box;padding-left:4px;padding-right:4px;border-width:2px;border-style:solid",
+        232.0,
+    ),
+];
+
+#[test]
+fn a_form_controls_natural_width_does_not_widen_its_scroller() {
+    let mut failures = Vec::new();
+    for (name, kind, ty, css, width) in CONTROLS {
+        let mut scroller = css_rows(&format!("{SCROLLER}display:flex;flex-direction:column"));
+        scroller.extend([(OverflowX, t("auto")), (OverflowY, t("auto"))]);
+        let control = css_rows(&format!("{css};font-size:60px"));
+        let mut ops = vec![
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            Op::SetStyle {
+                id: 1,
+                patch: Box::new(props(&css_rows("width:800px"))),
+            },
+            Op::CreateView {
+                id: 2,
+                node_type: NodeType::View,
+            },
+            Op::SetStyle {
+                id: 2,
+                patch: Box::new(props(&scroller)),
+            },
+            Op::CreateView {
+                id: 3,
+                node_type: *kind,
+            },
+            Op::SetStyle {
+                id: 3,
+                patch: Box::new(props(&control)),
+            },
+        ];
+        let tag = |prop, value: &str| Op::SetProp {
+            id: 3,
+            prop,
+            value: PropValue::Str(value.into()),
+        };
+        ops.push(match *ty {
+            "textarea" => tag(PropId::SemanticTag, "textarea"),
+            _ => tag(PropId::Type, ty),
+        });
+        if *ty == "progress" {
+            ops.push(tag(PropId::Value, "0.5"));
+        }
+        ops.extend([
+            Op::SetChildren {
+                id: 2,
+                children: vec![3],
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![2],
+            },
+            Op::AttachRoot { id: 1 },
+        ]);
+        let mut k = Kernel::with_monospace();
+        k.apply(0, 1, &ops).unwrap();
+        k.compute_layout(1, Offer::definite(800.0, 600.0)).unwrap();
+        let used = k.node(3).unwrap().frame.width;
+        let got = k.node(2).unwrap().content.0.max(220.0);
+        if (got - width).abs() > 0.01 {
+            failures.push(format!(
+                "{name} (a {used} box): scrollWidth {got}, Chrome {width}"
+            ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

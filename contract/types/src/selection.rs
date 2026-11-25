@@ -70,7 +70,9 @@ pub fn event_record(attr: &str) -> Option<&'static str> {
     match attr {
         // A `contextmenu` is DOM's `PointerEvent` too (UI Events): where the
         // secondary click was (studio diary R22).
-        "pointerdown" | "pointerup" | "pointermove" | "contextmenu" => Some("PointerEvent"),
+        "pointerdown" | "pointerup" | "pointercancel" | "pointermove" | "contextmenu" => {
+            Some("PointerEvent")
+        }
         "wheel" => Some("WheelEvent"),
         "drop" | "dragenter" | "dragleave" => Some("DragEvent"),
         "atompress" => Some("AtomEvent"),
@@ -400,17 +402,19 @@ pub(super) fn declare(shapes: &mut Shapes) {
             .chain(modifiers.clone())
             .collect(),
     );
-    // DOM's `DragEvent` at a `drop` of files (studio diary R19), its
+    // DOM's `DragEvent` at a `drop`, its
     // `dataTransfer.files` as the `doc:` handles the host minted for them
-    // (LLP 1069.010 D1, as a picker's), in `exact_runner::DropEvent`'s order.
-    // A `dragenter` or `dragleave` has none: the DOM protects a drag's files
-    // until it drops.
+    // (LLP 1069.010 D1, as a picker's), then its plain text and its link
+    // (LLP 1094.001 D1), in `exact_runner::DropEvent`'s order. A `dragenter`
+    // or `dragleave` has none: the DOM keeps a drag's data until it drops.
     shapes.map.insert(
         "DragEvent".into(),
         [
             ("offsetX".into(), Ty::Number),
             ("offsetY".into(), Ty::Number),
             ("files".into(), Ty::List(Box::new(Ty::String))),
+            ("text".into(), Ty::String),
+            ("url".into(), Ty::String),
         ]
         .into_iter()
         .chain(modifiers)

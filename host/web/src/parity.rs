@@ -465,8 +465,16 @@ pub fn cases() -> Vec<Case> {
             "scale",
             Property::Scale,
             "scale 1s ease-out",
-            o(1.0),
-            o(2.0),
+            Value::new(1.0, 1.0),
+            Value::new(2.0, 2.0),
+            &mid,
+        ),
+        single(
+            "scale-per-axis",
+            Property::Scale,
+            "scale 1s linear",
+            Value::new(1.0, 1.0),
+            Value::new(3.0, 0.0),
             &mid,
         ),
         single(
@@ -481,8 +489,8 @@ pub fn cases() -> Vec<Case> {
             "all",
             Property::Scale,
             "all 1s linear",
-            o(1.0),
-            o(3.0),
+            Value::new(1.0, 1.0),
+            Value::new(3.0, 3.0),
             &mid,
         ),
     ];
@@ -597,8 +605,8 @@ pub fn cases() -> Vec<Case> {
         "spring",
         Property::Scale,
         "scale -exact-spring(180, 12, 1)",
-        o(1.0),
-        o(1.5),
+        Value::new(1.0, 1.0),
+        Value::new(1.5, 1.5),
         &[0.05, 0.1, 0.1020833333, 0.2, 0.35, 0.5, 0.8],
     ));
     let o = |v: f64| Value::scalar(v);
@@ -639,7 +647,7 @@ pub fn cases() -> Vec<Case> {
             "kf-reverse-negative-delay",
             Property::Scale,
             "k 1s ease -0.25s reverse forwards @keyframes k{from{scale:0.5}to{scale:2}}",
-            o(1.0),
+            Value::new(1.0, 1.0),
             &[0.0, 0.25, 0.5, 0.8, 1.5],
         ),
         keyframes(

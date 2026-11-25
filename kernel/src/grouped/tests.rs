@@ -905,3 +905,37 @@ fn a_header_of_more_than_one_text_is_custom_and_named_by_its_texts() {
     assert_eq!(section.header.as_deref(), Some("Ryu"));
     assert!(section.header_look.color.is_some(), "its look, as before");
 }
+
+#[test]
+fn a_bar_on_a_lists_scrollport_is_no_section_where_the_kernel_lays_such_bars_out() {
+    // 12 names the list's top edge; 11 is a section
+    for on in [false, true] {
+        let mut k = Kernel::with_monospace();
+        k.set_scrollport_bars(on);
+        let mut ops = vec![];
+        for (id, node_type) in [
+            (10, NodeType::List),
+            (11, NodeType::View),
+            (12, NodeType::View),
+        ] {
+            ops.push(Op::CreateView { id, node_type });
+        }
+        ops.push(Op::SetProp {
+            id: 10,
+            prop: PropId::ListStyle,
+            value: "inset-grouped".into(),
+        });
+        let bar = [(StyleId::SafeAreaBar, "top"), (StyleId::Height, "50")];
+        ops.push(style(12, &bar, true));
+        ops.push(Op::SetChildren {
+            id: 10,
+            children: vec![12, 11],
+        });
+        ops.push(Op::AttachRoot { id: 10 });
+        k.apply(0, 1, &ops).unwrap();
+        let list = k.grouped_list(10).unwrap();
+        let sections: Vec<ViewId> = list.sections.iter().map(|s| s.view).collect();
+        let expected = if on { vec![11] } else { vec![12, 11] };
+        assert_eq!(sections, expected, "scrollport bars {on}");
+    }
+}

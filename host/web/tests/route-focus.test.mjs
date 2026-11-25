@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // LLP 1115.000 D4 part A in a real browser: a route is a page, so the focus
 // follows it. The shell's stylesheet, the navigation glue's projection
 // (navigation.js) and the input piece (input-glue.js), which both web targets
@@ -102,9 +102,9 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 async function serve() {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    const file = ['navigation.js', 'input-glue.js', 'menu-rows.js', 'agent-input.js', 'prompt-glue.js', 'alert-message.js'].find(name => req.url === '/' + name);
-    if (!file) { res.writeHead(404); res.end(); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, file)));
+    const module = hostFixtureModule(req.url.slice(1));
+    if (module === null) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(module);
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   return server;

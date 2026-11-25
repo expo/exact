@@ -1,9 +1,8 @@
-import { expect } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { patchLines, WEB_TOOLCHAIN } from './app.mjs';
-import { pinned } from './test-workspace.mjs';
+import { WEB_TOOLCHAIN } from './app.mjs';
 import { need, notApplicable } from './coverage.mjs';
 
 const moduleRoot = resolve(import.meta.dir, '..');
@@ -29,56 +28,41 @@ function moduleFixture(kind) {
   return mkdtempSync(resolve(moduleFixtures, `module-${kind}-`));
 }
 
-function moduleEnv(dir, { target = resolve(dir, 'target'), lock = defaultLock ? null : resolve(dir, 'Cargo.lock') } = {}) {
-  const env = { ...moduleCargoEnv, CARGO_TARGET_DIR: target, CARGO_BUILD_BUILD_DIR: resolve(dir, 'build') };
-  if (lock) {
-    cpSync(resolve(moduleRoot, 'Cargo.lock'), lock);
-    env[lockfileEnv] = lock;
-  }
-  return env;
+function moduleEnv(dir, { target = resolve(dir, 'target') } = {}) {
+  return { ...moduleCargoEnv, CARGO_TARGET_DIR: target, CARGO_BUILD_BUILD_DIR: resolve(dir, 'build') };
 }
 
-for (const configured of [false, true]) {
-  const stageTest = configured ? cargoTest : defaultLockTest;
-  const lockfile = configured ? 'a configured lockfile' : 'the default lockfile';
-  stageTest(`a fresh web dev stage reuses the authored Rust module across unchanged builds and heading edits with ${lockfile}`, async () => {
-    const { dirKey, webCompiler } = await import('../host/web-js/module.mjs');
-    const appDir = resolve(moduleRoot, 'apps/sparkline');
-    const compiler = webCompiler();
-    if (compiler.cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-    const name = `exact-js-module-sparkline-${dirKey(appDir)}-dev`;
-    const dir = moduleFixture('sparkline');
-    const out = resolve(dir, 'dist'), contract = resolve(dir, 'app.contract'), target = resolve(dir, 'target');
-    const raw = resolve(target, 'web-js-modules/target/wasm32-unknown-unknown/release', `${name.replaceAll('-', '_')}.wasm`);
-    const stamps = [raw];
-    if (!configured) stamps.push(resolve(target, 'web-js-modules', 'wrappers', name, 'Cargo.lock'));
-    const stamp = () => stamps.map(path => statSync(path, { bigint: true }).mtimeNs);
-    try {
-      if (configured) {
-        mkdirSync(resolve(dir, '.cargo'));
-        cpSync(resolve(moduleRoot, 'Cargo.lock'), resolve(dir, 'Cargo.lock'));
-        writeFileSync(resolve(dir, '.cargo', 'config.toml'), '[resolver]\nlockfile-path = "Cargo.lock"\n');
-      }
-      const env = { ...moduleEnv(dir, { lock: null }), EXACT_APP_DIR: appDir, EXACT_WEB_COMPILER: compiler.cmd };
-      const build = () => {
-        const built = spawnSync(process.execPath, [resolve(moduleRoot, 'host/web-js/build.mjs'), 'sparkline', '--contract', contract, '--out', out, '--render', 'none', '--dev'],
-          { cwd: dir, env, encoding: 'utf8', timeout: 240_000 });
-        expect(built.status, built.stdout + built.stderr).toBe(0);
-        return readFileSync(resolve(out, 'rust/wasm/app.module.wasm'));
-      };
-      const source = readFileSync(resolve(appDir, 'app.contract'), 'utf8');
-      writeFileSync(contract, source);
-      const wasm = build(), before = stamp();
-      expect(build()).toEqual(wasm);
-      expect(stamp(), 'an unchanged stage rebuild must preserve the Cargo timestamps').toEqual(before);
-      writeFileSync(contract, source.replace('text "Markets"', 'text "Prices"'));
-      expect(build()).toEqual(wasm);
-      const { files } = JSON.parse(readFileSync(resolve(out, 'routes.json'), 'utf8'));
-      expect(readFileSync(resolve(out, files['app.js']), 'utf8')).toContain('Prices');
-      expect(stamp(), 'a heading edit must preserve the Cargo timestamps').toEqual(before);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  }, 300_000);
-}
+defaultLockTest('a fresh web dev stage reuses the authored Rust module across unchanged builds and heading edits', async () => {
+  const { dirKey, webCompiler } = await import('../host/web-js/module.mjs');
+  const appDir = resolve(moduleRoot, 'apps/sparkline');
+  const compiler = webCompiler();
+  if (compiler.cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const name = `exact-js-module-sparkline-${dirKey(appDir)}-dev`;
+  const dir = moduleFixture('sparkline');
+  const out = resolve(dir, 'dist'), contract = resolve(dir, 'app.contract'), target = resolve(dir, 'target');
+  const raw = resolve(target, 'web-js-modules/target/wasm32-unknown-unknown/web-dev', `${name.replaceAll('-', '_')}.wasm`);
+  const stamps = [raw, resolve(target, 'web-js-modules', 'wrappers', name, 'Cargo.lock')];
+  const stamp = () => stamps.map(path => statSync(path, { bigint: true }).mtimeNs);
+  try {
+    const env = { ...moduleEnv(dir), EXACT_APP_DIR: appDir, EXACT_WEB_COMPILER: compiler.cmd };
+    const build = () => {
+      const built = spawnSync(process.execPath, [resolve(moduleRoot, 'host/web-js/build.mjs'), 'sparkline', '--contract', contract, '--out', out, '--render', 'none', '--dev'],
+        { cwd: dir, env, encoding: 'utf8', timeout: 240_000 });
+      expect(built.status, built.stdout + built.stderr).toBe(0);
+      return readFileSync(resolve(out, 'rust/wasm/app.module.wasm'));
+    };
+    const source = readFileSync(resolve(appDir, 'app.contract'), 'utf8');
+    writeFileSync(contract, source);
+    const wasm = build(), before = stamp();
+    expect(build()).toEqual(wasm);
+    expect(stamp(), 'an unchanged stage rebuild must preserve the Cargo timestamps').toEqual(before);
+    writeFileSync(contract, source.replace('text "Markets"', 'text "Prices"'));
+    expect(build()).toEqual(wasm);
+    const { files } = JSON.parse(readFileSync(resolve(out, 'routes.json'), 'utf8'));
+    expect(readFileSync(resolve(out, files['app.js']), 'utf8')).toContain('Prices');
+    expect(stamp(), 'a heading edit must preserve the Cargo timestamps').toEqual(before);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 300_000);
 
 function moduleResolver(dir, dependency, packageName) {
   const env = moduleEnv(dir);
@@ -155,42 +139,6 @@ candidate = { package = "pin-helper", path = "candidate" }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 30_000);
 
-function rustModuleFixture(dir, dependency) {
-  const root = resolve(import.meta.dir, '..');
-  const env = moduleEnv(dir, { lock: null });
-  const app = basename(dir);
-  const sparkline = resolve(root, 'apps/sparkline');
-  pinned(dir);
-  mkdirSync(resolve(dir, 'data/src'), { recursive: true });
-  for (const file of ['app.json', 'app.contract', 'data/src/lib.rs']) cpSync(resolve(sparkline, file), resolve(dir, file));
-  writeFileSync(resolve(dir, 'Cargo.toml'), ['[workspace]', 'members = ["data"]', '[patch.crates-io]', ...patchLines(dir)].join('\n'));
-  writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
-name = "sparkline-data"
-version = "0.1.0"
-edition = "2024"
-[dependencies]
-exact-plan = { path = ${JSON.stringify(resolve(root, 'plan'))} }
-exact-runner = { path = ${JSON.stringify(resolve(root, 'runner'))} }
-${dependency}
-`);
-  return (dev, overrides = {}) => {
-    const out = resolve(dir, dev ? 'dev' : 'fresh');
-    rmSync(out, { recursive: true, force: true });
-    const built = spawnSync(process.execPath, ['--eval', `
-      import { buildModule, dirKey } from ${JSON.stringify(import.meta.resolve('../host/web-js/module.mjs'))};
-      const [app, dir, out] = ${JSON.stringify([app, dir, out])};
-      console.log(dirKey(dir));
-      buildModule(app, out, false, dir, { dev: ${dev} });
-    `], {
-      cwd: dir, encoding: 'utf8', timeout: 240_000,
-      env: { ...env, ...overrides },
-    });
-    expect(built.status, built.stdout + built.stderr).toBe(0);
-    const key = built.stdout.trim();
-    return `exact-js-module-${app}-${key}${dev ? '-dev' : ''}`;
-  };
-}
-
 defaultLockTest('a Rust dev module re-resolves pins when the Cargo resolver policy changes', () => {
   const dir = moduleFixture('resolver');
   try {
@@ -254,39 +202,31 @@ defaultLockTest('a Rust dev module follows Cargo directory source additions and 
   });
 }, 30_000);
 
-cargoTest('one-shot and dev Rust modules honor Cargo’s configured lockfile', () => {
-  withDirectorySource((dir, dependency, vendor) => {
-    const build = rustModuleFixture(dir, dependency);
-    mkdirSync(resolve(dir, 'locks'));
-    const lock = resolve(dir, 'locks/Cargo.lock');
-    const external = { [lockfileEnv]: lock };
-    const expectPinned = (dev, env) => {
-      const name = build(dev, env);
-      const packages = Bun.TOML.parse(readFileSync(lock, 'utf8')).package;
-      expect(packages.map(pkg => pkg.name), 'the configured lockfile must record the active wrapper').toContain(name);
-      expect(packages.find(pkg => pkg.name === 'resolver-helper')?.version).toBe('1.0.0');
-      return name;
-    };
-    vendor('1.0.0');
-    cpSync(resolve(moduleRoot, 'Cargo.lock'), lock);
-    build(false, external);
-    vendor('1.1.0');
-    expectPinned(false, external);
-    expectPinned(true, external);
-
-    const config = resolve(dir, '.cargo/config.toml');
-    writeFileSync(config, `include = ["lock.toml"]\n${readFileSync(config, 'utf8')}`);
+// Cargo resolves -Zbuild-std's std against a lockfile its configuration names (scripts/cargo-check.mjs
+// `refuseStdLockfile`), so a module build refuses one, set in a config file or the environment, before Cargo runs.
+cargoTest('a web module build refuses a lockfile Cargo’s configuration names', () => {
+  const dir = moduleFixture('lockfile'), plain = moduleFixture('plain');
+  try {
+    mkdirSync(resolve(dir, '.cargo'));
+    writeFileSync(resolve(dir, '.cargo/config.toml'), 'include = ["lock.toml"]\n');
     writeFileSync(resolve(dir, '.cargo/lock.toml'), '[resolver]\nlockfile-path = "locks/Cargo.lock"\n');
-    expectPinned(false);
-    const name = expectPinned(true);
-    const raw = resolve(dir, 'target/web-js-modules/target/wasm32-unknown-unknown/release', `${name.replaceAll('-', '_')}.wasm`);
-    const before = statSync(raw, { bigint: true }).mtimeNs;
-    expectPinned(true);
-    expect(statSync(raw, { bigint: true }).mtimeNs).toBe(before);
-  });
-}, 300_000);
+    const refusal = (cwd, dev, env = {}) => {
+      const built = spawnSync(process.execPath, ['--eval', `
+        import { buildModule } from ${JSON.stringify(import.meta.resolve('../host/web-js/module.mjs'))};
+        try { buildModule('sparkline', ${JSON.stringify(resolve(cwd, 'out'))}, false, ${JSON.stringify(resolve(moduleRoot, 'apps/sparkline'))}, { dev: ${dev} }); }
+        catch (error) { console.log(error.message); }
+      `], { cwd, env: { ...moduleEnv(cwd), ...env }, encoding: 'utf8', timeout: 30_000 });
+      expect(built.status, built.stderr).toBe(0);
+      return built.stdout;
+    };
+    const named = 'sparkline: Cargo\'s configuration names a lockfile (resolver.lockfile-path = ';
+    expect(refusal(dir, false)).toStartWith(`${named}"locks/Cargo.lock")`);
+    expect(refusal(plain, true, { [lockfileEnv]: 'env-only/Cargo.lock' })).toStartWith(`${named}"env-only/Cargo.lock"`);
+    for (const at of [dir, plain]) expect(existsSync(resolve(at, 'target')), 'no Cargo build ran').toBe(false);
+  } finally { for (const at of [dir, plain]) rmSync(at, { recursive: true, force: true }); }
+}, 60_000);
 
-cargoTest('authored wrappers keep their draw exports in either build order', () => {
+defaultLockTest('authored wrappers keep their draw exports in either build order', () => {
   const root = resolve(import.meta.dir, '..');
   const appDir = resolve(root, 'apps/sparkline');
   const dir = moduleFixture('draw');
@@ -310,7 +250,7 @@ cargoTest('authored wrappers keep their draw exports in either build order', () 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 300_000);
 
-cargoTest('a symlinked Cargo target does not put the generated wrapper on the watch list', () => {
+defaultLockTest('a symlinked Cargo target does not put the generated wrapper on the watch list', () => {
   const root = resolve(import.meta.dir, '..');
   const appDir = resolve(root, 'apps/sparkline');
   const dir = moduleFixture('watch');
@@ -331,3 +271,96 @@ cargoTest('a symlinked Cargo target does not put the generated wrapper on the wa
     expect(dirs.map(dirname)).not.toContain(wrappers);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 300_000);
+
+// The dev loop's module is built at the dev profile and served as Cargo linked it, marked so a production build refuses
+// it, for an app with its own module crate (Caltrain), one whose wrapper exact2 writes (Sparkline) and one whose host
+// crates it generates (`exact new --rust`); every other build asks for the profile it shipped with before and is
+// optimized. A `cargo` first on PATH stands in for Cargo's build: it records the arguments and the artifact's path and
+// links an empty module there; every other command is Cargo's own.
+(process.platform === 'win32' ? test.skip : defaultLockTest)('a dev loop module asks Cargo for the dev profile, and every other module build does not', async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const dir = moduleFixture('profile'), bin = resolve(dir, 'bin'), log = resolve(dir, 'cargo.log');
+  try {
+    mkdirSync(bin);
+    writeFileSync(resolve(bin, 'cargo'), `#!/bin/sh
+sub=
+for a in "$@"; do case $a in +*) ;; *) sub=$a; break;; esac; done
+[ "$sub" = build ] || exec ${JSON.stringify(Bun.which('cargo'))} "$@"
+prev=; profile=; manifest=
+for a in "$@"; do
+  [ "$prev" = --profile ] && profile=$a
+  [ "$prev" = --manifest-path ] && manifest=$a
+  [ "$a" = --release ] && profile=release
+  prev=$a
+done
+name=$(sed -n 's/^name = "\\(.*\\)"$/\\1/p' "$manifest" | head -1 | tr - _)
+artifact="$CARGO_TARGET_DIR/wasm32-unknown-unknown/$profile/$name.wasm"
+echo "$artifact $*" >> ${JSON.stringify(log)}
+mkdir -p "$(dirname "$artifact")"
+printf '\\000asm\\001\\000\\000\\000' > "$artifact"
+`, { mode: 0o755 });
+    const generated = resolve(dir, 'tally');
+    createApp(generated, { rust: true, title: 'Tally' });
+    const built = spawnSync(process.execPath, ['--eval', `
+      import { buildModule, moduleGrants, DEV_PROFILE } from ${JSON.stringify(import.meta.resolve('../host/web-js/module.mjs'))};
+      import { existsSync, readFileSync } from 'node:fs';
+      const [out, apps, log] = ${JSON.stringify([resolve(dir, 'out'), [['caltrain', resolve(moduleRoot, 'apps/caltrain')], ['sparkline', resolve(moduleRoot, 'apps/sparkline')], ['tally', generated]], log])};
+      const builds = [];
+      for (const [app, at] of apps) for (const dev of [true, false]) {
+        const wasm = buildModule(app, out + '/' + app + dev, false, at, { dev });
+        const refused = await moduleGrants(wasm, { production: true }).then(() => '', e => e.message);
+        const [artifact, ...args] = readFileSync(log, 'utf8').trim().split('\\n').at(-1).split(' ');
+        builds.push([app, dev, args, existsSync(artifact.replace(/\\.wasm$/, '.optimized.wasm')), refused.includes("a dev loop's Rust module")]);
+      }
+      console.log(JSON.stringify({ DEV_PROFILE, builds }));
+    `], { cwd: dir, env: { ...moduleEnv(dir), PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', timeout: 240_000 });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const { DEV_PROFILE, builds } = JSON.parse(built.stdout.trim().split('\n').at(-1));
+    const dev = [`inherits=`, 'opt-level=1', 'lto=false', 'codegen-units=16', 'incremental=true'].map(setting => `profile.${DEV_PROFILE}.${setting}`);
+    const profile = args => args.includes('--release') ? 'release' : args[args.indexOf('--profile') + 1];
+    const settings = args => args.filter(a => a.startsWith(`profile.${DEV_PROFILE}.`)).map(a => a.replace(/=".*"$/, '='));
+    expect(builds.map(([app, isDev, args, optimized, refused]) => [app, isDev, profile(args), settings(args), optimized, refused])).toEqual([
+      ['caltrain', true, DEV_PROFILE, dev, false, true], ['caltrain', false, 'release', [], true, false],
+      ['sparkline', true, DEV_PROFILE, dev, false, true], ['sparkline', false, 'release', [], true, false],
+      ['tally', true, DEV_PROFILE, dev, false, true], ['tally', false, 'web', [], true, false],
+    ]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 300_000);
+
+// A mixed app's module, read as a native host composes it (`exact_data::Mixed::new` over `Placed::named`): its data's
+// app id is app.ts's, the selected variant's under one, or none. The module is real, carrying the sources section; its
+// `meta` answer is stood in for.
+test('a mixed app’s Rust module is refused an app id other than app.ts’s', async () => {
+  const { moduleSources } = await import('../host/web-js/module.mjs');
+  const dir = moduleFixture('sources'), path = resolve(dir, 'app.module.wasm');
+  const name = new TextEncoder().encode('exact.rust_sources'), names = new TextEncoder().encode('["note"]');
+  const section = [name.length, ...name, ...names];
+  writeFileSync(path, new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, section.length, ...section]));
+  const memory = new WebAssembly.Memory({ initial: 1 }), out = 1024;
+  const meta = (appId, kind = 0) => {
+    const bytes = [], u32 = n => bytes.push(n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255);
+    const string = s => { const b = new TextEncoder().encode(s); u32(b.length); bytes.push(...b); };
+    u32(12); bytes.push(kind); string(appId ?? ''); string('');
+    new Uint8Array(memory.buffer, out, bytes.length).set(bytes);
+    return { memory, exact_logic_abi: () => 12, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_call: () => appId === null ? 1 : 0, exact_logic_output: () => out, exact_logic_output_len: () => bytes.length };
+  };
+  const instantiate = WebAssembly.instantiate;
+  const sources = (appId, manifest, kind) => {
+    WebAssembly.instantiate = async bytes => ({ module: new WebAssembly.Module(bytes), instance: { exports: meta(appId, kind) } });
+    return moduleSources(path, manifest).then(list => list, error => error.message);
+  };
+  try {
+    const app = { app: { id: 'test.mixed' } }, variant = { app: { id: 'test.mixed.beta' }, variant: { name: 'beta', base: 'test.mixed' } };
+    expect(await sources('', app)).toEqual(['note']);
+    expect(await sources('test.mixed', app)).toEqual(['note']);
+    expect(await sources('', variant)).toEqual(['note']);
+    expect(await sources('test.mixed.beta', variant)).toEqual(['note']);
+    expect(await sources('test.other', app)).toBe('its Rust data\'s app_id is "test.other", but app.ts\'s is "test.mixed": the two halves of a mixed app declare one identity, so return the same id or an empty one');
+    expect(await sources('test.mixed', variant)).toStartWith('its Rust data\'s app_id is "test.mixed", but app.ts\'s is "test.mixed.beta" (variant beta)');
+    expect(await sources('\ufefftest.mixed', app)).toStartWith('its Rust data\'s app_id is "\ufefftest.mixed"');
+    for (const [appId, kind] of [[null, 0], ['', 1]]) expect(await sources(appId, app, kind)).toBe('its Rust module did not answer `meta`, the seam\'s first call');
+  } finally {
+    WebAssembly.instantiate = instantiate;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

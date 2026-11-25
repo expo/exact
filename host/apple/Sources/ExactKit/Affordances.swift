@@ -187,32 +187,46 @@ extension NodeView {
         }
     }
 
-    /// A continuing effect plays while set; a discrete one plays each time
-    /// `symbolEffectValue` changes (D12).
+    /// `symbolEffectValue`'s presence picks the effect's form, as SwiftUI's `value:` and `isActive:` do (D12): with
+    /// it, an effect with a discrete form plays once each time the value changes; without it, or with no discrete
+    /// form (scale), an effect with an indefinite form runs while set. The forms are the Symbols framework's
+    /// `DiscreteSymbolEffect` and `IndefiniteSymbolEffect` conformances.
     func applySymbolEffect(_ leaf: SymbolLeaf) {
         let effect = style["symbol_effect"]?.string ?? "none"
+        let value = props["symbolEffectValue"]
         let state = SymbolEffectState.of(leaf)
-        if state.effect != effect {
-            leaf.removeAllSymbolEffects(options: .default, animated: false)
-            state.effect = effect
-            switch effect {
+        let running = value != nil && Self.hasDiscreteForm(effect) ? "none" : effect
+        // A new effect ends the old one's play, a once-per-change play still in flight included. With default options
+        // UIKit plays bounce, wiggle, rotate and breathe once; their indefinite form is asked for as a repeat.
+        if state.effect != effect || state.running != running {
+            state.endEffect(on: leaf)
+            (state.effect, state.running) = (effect, running)
+            switch running {
             case "pulse": leaf.addSymbolEffect(.pulse)
             case "variable-color": leaf.addSymbolEffect(.variableColor.iterative)
             case "scale": leaf.addSymbolEffect(.scale.up)
-            case "breathe": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.breathe) }
-            case "rotate": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.rotate) }
+            case "bounce": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.bounce, options: .repeat(.periodic)) }
+            case "wiggle": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.wiggle, options: .repeat(.periodic)) }
+            case "breathe": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.breathe, options: .repeat(.continuous)) }
+            case "rotate": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.rotate, options: .repeat(.continuous)) }
             default: break
             }
         }
-        let value = props["symbolEffectValue"]
         defer { state.value = value }
-        guard state.value != nil, value != state.value else { return }
+        guard running == "none", state.value != nil, value != state.value else { return }
         switch effect {
         case "bounce": leaf.addSymbolEffect(.bounce, options: .nonRepeating)
+        case "pulse": leaf.addSymbolEffect(.pulse, options: .nonRepeating)
+        case "variable-color": leaf.addSymbolEffect(.variableColor.iterative, options: .nonRepeating)
         case "wiggle": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.wiggle, options: .nonRepeating) }
+        case "breathe": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.breathe, options: .nonRepeating) }
+        case "rotate": if #available(iOS 18.0, macOS 15.0, tvOS 18.0, *) { leaf.addSymbolEffect(.rotate, options: .nonRepeating) }
         default: break
         }
     }
+
+    /// Whether the effect has a discrete form: every one but scale and replace.
+    static func hasDiscreteForm(_ effect: String) -> Bool { !["none", "scale", "replace"].contains(effect) }
 
     /// `-exact-press-haptic` (D14): host-owned, at the press, as `-exact-press-scale`.
     func pressHaptic() {
@@ -227,11 +241,15 @@ typealias SymbolLeaf = UIImageView
 typealias SymbolLeaf = NSImageView
 #endif
 
-/// Which effect a symbol view runs and the value its discrete one last
-/// played on, kept on the view.
+/// A symbol view's effect, the one it runs while set, and the last
+/// `symbolEffectValue` it saw, kept on the view.
 final class SymbolEffectState {
-    var effect = "none"
+    var effect = "none", running = "none"
     var value: String?
+    func endEffect(on leaf: SymbolLeaf) {
+        leaf.removeAllSymbolEffects(options: .default, animated: false)
+        (effect, running, value) = ("none", "none", nil)
+    }
     var pathTemplate: SymbolImage?
     var pathTemplateGeometry: (size: CGSize, crop: CGRect)?
     func clearPathTemplate() {

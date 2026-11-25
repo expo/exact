@@ -263,10 +263,12 @@ fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() 
             } else {
                 "https://public.test/plain"
             };
+            let mut preload = Request::get(url);
+            preload.reach.origin = CallOrigin::App;
             let set = Preloads::start(
                 vec![Definition {
                     name: "feed".into(),
-                    request: Request::get(url),
+                    request: preload,
                     deadline_ms: None,
                     secrets: vec![],
                 }],
@@ -306,7 +308,8 @@ fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() 
                 assert!(matches!(outcome, Outcome::Response(_)));
                 assert_eq!(*seen.0.lock().unwrap(), [url, url]);
             }
-            let app = super::super::cache::tests::job(2, Request::get(url));
+            let mut app = super::super::cache::tests::job(2, Request::get(url));
+            app.request.reach.origin = CallOrigin::App;
             core.run(app, None).unwrap();
             assert!(collect(&core, &woke).2.cached);
         }

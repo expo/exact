@@ -128,6 +128,59 @@ impl PropList {
         self.get(id).and_then(PropValue::as_bool)
     }
 
+    /// The HTML elements that a semantic tag selects ahead of the node's usual element.
+    pub const SEMANTIC_ELEMENTS: &[&str] = &[
+        // HTML grouping and phrasing content.
+        "p",
+        "strong",
+        "em",
+        "blockquote",
+        "ol",
+        "ul",
+        "li",
+        // Landmarks, time and dialog.
+        "time",
+        "main",
+        "header",
+        "nav",
+        "section",
+        "footer",
+        "article",
+        "aside",
+        "dialog",
+        // @ref LLP 1021 D1 — HTML's separator, void: the kernel gives it no
+        // children, and its UA rows are the node's own.
+        "hr",
+        // @ref LLP 1153 D7 — HTML's own elements, laid out by the browser's
+        // table algorithm and its UA sheet (`display: table` and the rest);
+        // the plan carries no grid rows for them.
+        "table",
+        "caption",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "th",
+        "td",
+        "dl",
+        "dt",
+        "dd",
+    ];
+
+    /// The HTML element selected by a semantic tag, when it overrides the node type.
+    pub fn semantic_element(&self) -> Option<&'static str> {
+        let tag = self.str(PropId::SemanticTag)?;
+        Self::SEMANTIC_ELEMENTS
+            .iter()
+            .copied()
+            .find(|&element| element == tag)
+    }
+
+    /// Panel links have an anchor's box even on hosts that refuse the press.
+    pub fn has_link_destination(&self) -> bool {
+        self.str(PropId::Href).is_some() || self.str(PropId::PanelHref).is_some()
+    }
+
     /// Where the node links to: its `href`, unless that turns out empty.
     /// @ref LLP 1115 §3 — an empty `href` is no link on any host: no link
     /// colour, role or pointer, and nothing to follow. It is HTML's `<a>`

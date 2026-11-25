@@ -227,6 +227,7 @@ const PERSON_EVENTS: &[&str] = &[
     "pointerdown",
     "pointermove",
     "pointerup",
+    "pointercancel",
     "pan",
     "panrelease",
     "wheel",
@@ -236,6 +237,7 @@ const PERSON_EVENTS: &[&str] = &[
     "scrolldragend",
     "swipeleft",
     "swiperight",
+    "swipe",
     "key",
     "keyup",
     "keycapture",
@@ -311,6 +313,9 @@ fn attr_moves(name: &str) -> Option<&'static str> {
         "navigationPresentation",
         "navigationDetent",
         "navigationInitialDetent",
+        "navigationSelectedDetent",
+        "navigationSizing",
+        "navigationEdgeAttachedInCompactHeight",
         "navigationSource",
         "sharedElement",
         "popover",
@@ -345,7 +350,7 @@ fn attr_moves(name: &str) -> Option<&'static str> {
 /// of which acts when the node mounts.
 fn mounted_moves(name: &str) -> Option<&'static str> {
     match name {
-        "navigationGrabber" => None,
+        "navigationGrabber" | "navigationScrollExpands" | "navigationUndimmedDetent" => None,
         _ if name.starts_with("navigation") => Some(ROUTE),
         "toolbarPlacement" => Some(TOOLBAR),
         "autofocus" => Some(FOCUS),

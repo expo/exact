@@ -744,7 +744,7 @@ test('same-clock rebegin rejects stale completion and delayed release holds its 
 });
 
 test('motion destroy/remount/reset cancel only owned animations', async()=>{
-  const result=await evaluate(`(() => {const f=(${motionFixture})();const m=f.motion,n=f.node; m.animate({id:2,property:'scale',values:[1,2],delay:0,duration:10000}); const old=n.getAnimations()[0];m.destroy(2);m.animate({id:2,property:'scale',values:[1,2],delay:0,duration:10000});const next=n.getAnimations()[0];m.reset();return {old:old.playState,next:next.playState,remaining:n.getAnimations().length};})()`);
+  const result=await evaluate(`(() => {const f=(${motionFixture})();const m=f.motion,n=f.node; m.animate({id:2,property:'scale',values:[[1,1],[2,2]],delay:0,duration:10000}); const old=n.getAnimations()[0];m.destroy(2);m.animate({id:2,property:'scale',values:[[1,1],[2,2]],delay:0,duration:10000});const next=n.getAnimations()[0];m.reset();return {old:old.playState,next:next.playState,remaining:n.getAnimations().length};})()`);
   expect(result).toEqual({old:'idle',next:'idle',remaining:0});
 });
 
@@ -832,7 +832,7 @@ test('signed swipe resistance and caught indicators stay continuous across both 
     m.style(2,'translate:'+base+'px');m.style(6,'height:10px;width:10px;opacity:'+indicator+';scale:'+indicator);
     m.attachSwipe(n,2,(name,fn)=>events[name]=fn);const event=(type,x)=>({type,isPrimary:true,button:0,pointerId:7,clientX:x,clientY:0,target:n,preventDefault(){},stopPropagation(){}});
     events.pointerdown(event('pointerdown',0));events.pointermove(event('pointermove',10));
-    const samples=offsets.map(offset=>{f.advance(20);events.pointermove(event('pointermove',10+offset));return f.calls.filter(c=>c.op==='move').slice(-3).map(c=>c.x);});
+    const samples=offsets.map(offset=>{f.advance(20);events.pointermove(event('pointermove',10+offset));const moves=f.calls.filter(c=>c.op==='move').slice(-3); const s=getComputedStyle(companion).scale.split(/\s+/).map(Number);if(moves[2].x!==moves[2].y || (s[1]??s[0])!==s[0]) throw Error('swipe indicator lost its height');return moves.map(c=>c.x);});
     events.pointercancel(event('pointercancel',10));return samples;};
     return {positive:run(100,1,[0,-180,-212,-244,-308,-318,-308]),negative:run(-100,0.5,[0,20,180,244]),middle:run(32,0.6,[0,-16,-32,16,32]),zero:run(0,0.5,[0,32,64])};})()`);
   expect(result.positive).toEqual([[100,1,1],[64,1,1],[32,0.5,0.5],[0,0,0],[-64,0,0],[-66,0,0],[-64,0,0]]);
@@ -1026,14 +1026,14 @@ function photoFixture(native=false) {
     if(r.op==='transform-invalidate') {return {accepted:true,batch:{ops:[]}};}
     if(r.op==='transform-begin') {
       const [x,y,s]=r.values;
-      const translateToken=start('translate',[x,y]),scaleToken=start('scale',[s,0]);
+      const translateToken=start('translate',[x,y]),scaleToken=start('scale',[s,s]);
       return {accepted:true,runtime:r.runtime,geometrySequence:r.geometrySequence,translateToken,scaleToken,value:[x,y,s],batch:{ops:f.beginOps??[]}};
     }
     if(r.op==='transform-move'||r.op==='transform-action') {
       if(!held.has(r.translateToken)||!held.has(r.scaleToken))return {accepted:false};
-      const [x,y,s]=r.values;held.get(r.translateToken).value=[x,y];held.get(r.scaleToken).value=[s,0];
+      const [x,y,s]=r.values;held.get(r.translateToken).value=[x,y];held.get(r.scaleToken).value=[s,s];
       if(r.op==='transform-action') {f.actions++;f.onAction?.(r);}
-      return {accepted:true,dispatched:r.op==='transform-action',committed:true,batch:{ops:[]}};
+      return {accepted:true,dispatched:r.op==='transform-action',committed:true,velocity:f.releaseVelocity,batch:{ops:[]}};
     }
     if(r.op==='begin') {const token=start(r.property,[r.x,r.y]);return {token,value:[r.x,r.y],batch:{ops:[]}};}
     if(!held.has(r.token))return {accepted:false};
@@ -1058,17 +1058,17 @@ test('photo geometry reports fractional untransformed dimensions and ignores own
 });
 
 test('photo catch adopts current Translate and Scale at zero displacement and preserves latest controls',async()=>{
-  const result=await evaluate(`(async()=>{const f=(${photoFixture})();await f.settle();const m=f.motion,e=f.events;
+  const result=await evaluate(`(async()=>{const f=(${photoFixture})();await f.settle();const m=f.motion,e=f.events;f.releaseVelocity=[30,-10,2];
     const t=f.target.animate([{translate:'0px 0px'},{translate:'80px 0px'}],{duration:1000,fill:'both'}),s=f.target.animate([{scale:1},{scale:2}],{duration:1000,fill:'both'});
     t.pause();s.pause();t.currentTime=250;s.currentTime=250;e.pointerdown(f.event('pointerdown',100));t.currentTime=500;s.currentTime=500;e.pointermove(f.event('pointermove',110));
     const began=f.calls.find(c=>c.op==='transform-begin'),caught={t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale};
     f.advance(20);e.pointermove(f.event('pointermove',130,112));const moved={t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale};
     m.style(2,'width:100%;height:100%;box-sizing:border-box;padding:0;border:0;translate:100px 20px;scale:2;opacity:.7;transition:none');
     const held={t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale};f.advance(20);e.pointerup(f.event('pointerup',130,112));
-    const action=f.calls.find(c=>c.op==='transform-action');return {began:began.values.slice(0,3),caught,moved,held,action:action.values.slice(0,3),end:{t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale,opacity:getComputedStyle(f.target).opacity},tokens:f.held.size,actions:f.actions};})()`);
+    const action=f.calls.find(c=>c.op==='transform-action'),release=f.calls.find(c=>c.op==='release'&&c.property==='scale');return {began:began.values.slice(0,3),caught,moved,held,action:action.values.slice(0,3),velocity:[release.x,release.y],end:{t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale,opacity:getComputedStyle(f.target).opacity},tokens:f.held.size,actions:f.actions};})()`);
   expect(result.began).toEqual([40,0,1.5]);expect(result.caught).toEqual({t:'40px',s:'1.5'});
   expect(result.moved).toEqual({t:'60px 12px',s:'1.5'});expect(result.held).toEqual(result.moved);
-  expect(result.action).toEqual([60,12,1.5]);expect(result.end).toEqual({t:'100px 20px',s:'2',opacity:'0.7'});expect(result.tokens).toBe(0);expect(result.actions).toBe(1);
+  expect(result.action).toEqual([60,12,1.5]);expect(result.velocity).toEqual([2,2]);expect(result.end).toEqual({t:'100px 20px',s:'2',opacity:'0.7'});expect(result.tokens).toBe(0);expect(result.actions).toBe(1);
 });
 
 test('photo eligibility refuses 3D, nonuniform, offcenter, perspective and pending ancestor curves',async()=>{
@@ -1113,7 +1113,7 @@ test('photo resize publishes latest fractional dimensions once and becomes idle 
 
 test('photo token-qualified retirement cannot erase a replacement or unrelated animation',async()=>{
   const result=await evaluate(`(async()=>{const f=(${photoFixture})();await f.settle();f.events.pointerdown(f.event('pointerdown',100));f.events.pointermove(f.event('pointermove',110));
-    const began=f.calls.find(c=>c.op==='transform-begin');const old=[...f.held.keys()];const replacement=f.motion.begin(2,'scale');f.motion.move(replacement,[1.8,0]);
+    const began=f.calls.find(c=>c.op==='transform-begin');const old=[...f.held.keys()];const replacement=f.motion.begin(2,'scale');f.motion.move(replacement,[1.8,1.8]);
     const opacity=f.target.animate([{opacity:1},{opacity:.5}],{duration:10000});f.motion.retire(2,'scale',old[1],began.runtime);f.motion.commit();
     return {scale:getComputedStyle(f.target).scale,newHeld:f.held.has(replacement.token),oldHeld:f.held.has(old[0]),opacity:opacity.playState,actions:f.actions};})()`);
   expect(result.scale).toBe('1.8');expect(result.newHeld).toBe(true);expect(result.oldHeld).toBe(false);expect(result.opacity).not.toBe('idle');expect(result.actions).toBe(0);
@@ -1306,24 +1306,24 @@ test('Arrange pointer-up during unaccepted geometry cancels once without losing 
   await evaluate('f.arrange.reset()');
   expect(r).toEqual({cancel:1,drop:0,rebase:1,finish:1,pin:0});
 });
-// habits F10: a touch is implicitly captured by the grip's child it lands on; taking capture to the grip bubbles that child's loss.
 test('Arrange touch on a grip\'s child drops once: the child\'s lost capture is not the release',async()=>{
   const at=await evaluate(`(()=>{const f=(${arrangeFixture})(),g=document.createElement('div'),c=document.createElement('span');g.dataset.view='5';c.textContent='row';g.append(c);f.grip.replaceWith(g);f.views.set(5,f.grip=g);f.arrange.binding(f.binding);const r=c.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
   await protocol('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
-  for(const [type,dy] of [['touchStart',0],['touchMove',-10],['touchMove',-30]])await protocol('Input.dispatchTouchEvent',{type,touchPoints:[{x:at.x,y:at.y+dy}]});
+  await protocol('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[at]});
+  await evaluate(`new Promise(resolve=>{const begin=f.calls.push.bind(f.calls);f.calls.push=r=>{const n=begin(r);if(r.op==='reorder-begin')resolve();return n;};})`);
+  for(const dy of [-10,-30])await protocol('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:at.x,y:at.y+dy}]});
   await protocol('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
   const r=await evaluate(`(()=>{f.flush();return {drop:f.calls.filter(r=>r.op==='reorder-terminal').length,cancel:f.calls.filter(r=>r.op==='reorder-cancel').length};})()`);
   await protocol('Emulation.setTouchEmulationEnabled',{enabled:false});await evaluate('f.arrange.reset()');
   expect(r).toEqual({drop:1,cancel:0});
 });
-test('Arrange destruction retires its binding listener and touch policy without waiting for reset',async()=>{
+test('Arrange destruction retires its binding listener and preserves authored touch policy without waiting for reset',async()=>{
   const r=await evaluate(`(()=>{const f=(${arrangeFixture})();f.arrange.reset();f.grip.style.touchAction='pan-y';f.arrange.binding(f.binding);
     const attached=f.grip.style.touchAction;
-    // Destruction removes the binding before the element leaves the DOM.
     let contacts=0;f.controller.reorderContact=()=>contacts++;
     f.arrange.destroy(5);f.grip.dispatchEvent(new PointerEvent('pointerdown',{isPrimary:true,button:0,pointerId:7}));f.grip.remove();f.views.delete(5);
     const retired=f.grip.style.touchAction;f.arrange.reset();return {attached,retired,contacts};})()`);
-  expect(r).toEqual({attached:'none',retired:'pan-y',contacts:0});
+  expect(r).toEqual({attached:'pan-y',retired:'pan-y',contacts:0});
 });
 test('Arrange edge speed follows elapsed time across 60 and 120Hz, bounds stalls and resets idle time',async()=>{
   const r=await evaluate(`(()=>{

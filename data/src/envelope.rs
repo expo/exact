@@ -284,6 +284,7 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         module: None,
         surface: None,
         // The runner stamps who asked when the request goes out.
+        mutation_ticket: None,
         reach: Default::default(),
         listen: None,
         continuation: json["continuation"].as_u64(),

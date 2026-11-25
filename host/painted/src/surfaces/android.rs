@@ -66,6 +66,7 @@ impl<D: DataSource> Presenter<D> {
 
     pub(crate) fn begin_display_frame(&mut self) {
         for window in self.surfaces.windows.values_mut() {
+            window.awaiting_tick = false;
             window.retry.begin();
         }
     }
@@ -155,6 +156,7 @@ pub(crate) struct Window {
     window: usize,
     size: (u32, u32),
     attached: bool,
+    awaiting_tick: bool,
     retry: super::retry::Retry,
     rest: super::retry::Rest,
 }
@@ -372,20 +374,20 @@ impl Surfaces {
 impl<D: DataSource> Presenter<D> {
     /// The stream's decision uses the same fitted window and canvas instances
     /// as this paint; the reader does no geometry or module queries.
-    pub(crate) fn direct_canvases(&mut self) {
+    pub(crate) fn sync_canvas_views(&mut self) {
         let frame = self.chrome().frame;
         let full = self
             .window()
             .is_some_and(|w| frame == [0.0, 0.0, w.size.0, w.size.1]);
-        let direct = self
+        let canvases = self
             .surfaces
             .canvases
             .keys()
             .copied()
-            .filter(|id| full && self.surfaces.opaque(*id))
+            .map(|id| (id, full && self.surfaces.opaque(id)))
             .collect();
-        if self.brush.direct_canvases != direct {
-            self.brush.direct_canvases = direct;
+        if self.brush.gpu_canvases != canvases {
+            self.brush.gpu_canvases = canvases;
             self.repaint();
         }
     }
@@ -393,7 +395,13 @@ impl<D: DataSource> Presenter<D> {
     /// A reader's window for canvas `view` (an `ANativeWindow` of `size`
     /// pixels, alive until [`Presenter::detach_window`]). Whether the view is
     /// a GPU canvas (a 2D canvas's window is never used).
-    pub(crate) fn attach_window(&mut self, view: u32, window: usize, size: (u32, u32)) -> bool {
+    pub(crate) fn attach_window(
+        &mut self,
+        view: u32,
+        window: usize,
+        size: (u32, u32),
+        live: bool,
+    ) -> bool {
         self.surfaces.detach(view);
         PRESENTED
             .lock()
@@ -405,6 +413,7 @@ impl<D: DataSource> Presenter<D> {
                 window,
                 size,
                 attached: false,
+                awaiting_tick: live,
                 retry: Default::default(),
                 rest: Default::default(),
             },
@@ -418,24 +427,41 @@ impl<D: DataSource> Presenter<D> {
         self.surfaces.detach(view);
     }
 
-    /// Render every attached canvas at `now` and present them; whether any
+    /// Tick queued input and present the canvases that need a frame; whether any
     /// wants another frame.
-    pub(crate) fn render_surfaces(&mut self, now: f64) -> bool {
-        for surface in self.surfaces.drain_sensors() {
-            let line = format!("sensor input {surface}: no live canvas took its samples");
-            self.host_mut().log(line);
-        }
-        let scale = self.brush.scale;
-        let views: Vec<_> = self.surfaces.windows.keys().copied().collect();
-        for view in views {
-            if let Some((_, _, w, h)) = self.rect_of(view) {
-                self.surfaces.windows.get_mut(&view).unwrap().retry.frame =
-                    Some((w, h, scale, now));
-            } else {
-                self.surfaces.windows.get_mut(&view).unwrap().retry.frame = None;
+    pub(crate) fn render_surfaces(&mut self, now: f64, vsync: bool) -> bool {
+        if vsync {
+            for surface in self.surfaces.drain_sensors() {
+                let line = format!("sensor input {surface}: no live canvas took its samples");
+                self.host_mut().log(line);
             }
         }
-        let wants = self.render_windows(false);
+        let scale = self.brush.scale;
+        let mut pending = self.surfaces.owes_records();
+        let views: Vec<_> = self.surfaces.windows.keys().copied().collect();
+        for view in views {
+            let rect = self.rect_of(view);
+            let window = self.surfaces.windows.get_mut(&view).unwrap();
+            if vsync || rect.is_none() {
+                window.retry.frame = rect.map(|(_, _, w, h)| (w, h, scale, now));
+            } else if let Some((_, _, w, h)) = rect.filter(|_| window.attached) {
+                // An input or UI turn can request the display callback. Only that
+                // callback starts a frame, including the one a late drawable finishes.
+                if let Some(c) = self.surfaces.canvases.get(&view) {
+                    let abi = &self.surfaces.abis[&c.artifact];
+                    pending |= window
+                        .rest
+                        .due(c.id, (w, h, scale), || abi.frame_pending(c.id))
+                        || (window.window == 0
+                            && unsafe { abi.symbol::<Read>(b"gpu_unpublished")(c.id) } != 0);
+                }
+            }
+        }
+        let wants = if vsync {
+            self.render_windows(false)
+        } else {
+            pending
+        };
         // A placement or opacity change repaints even while the page rests
         // (expo/exact#50; LLP 1133.039 D8).
         if self
@@ -449,6 +475,7 @@ impl<D: DataSource> Presenter<D> {
 
     fn render_windows(&mut self, retry: bool) -> bool {
         let mut wants = false;
+        let mut service = false;
         let mut flush = BTreeSet::new();
         let mut submitted = BTreeMap::<String, Vec<u32>>::new();
         let mut recorded = BTreeSet::new();
@@ -462,6 +489,11 @@ impl<D: DataSource> Presenter<D> {
         let (vw, vh) = self.viewport();
         for (view, buffered) in views {
             let window = &self.surfaces.windows[&view];
+            // Attaching a target wakes an idle owner between ticks. Its first draw needs its own display facts.
+            if window.awaiting_tick {
+                wants = true;
+                continue;
+            }
             let Some((w, h, scale, now)) = window.retry.frame else {
                 continue;
             };
@@ -498,13 +530,14 @@ impl<D: DataSource> Presenter<D> {
                 continue;
             };
             let abi = &self.surfaces.abis[&c.artifact];
-            let dirty = unsafe { abi.symbol::<Read>(b"gpu_dirty")(c.id) } != 0;
-            let lost =
-                unsafe { abi.symbol::<unsafe extern "C" fn() -> bool>(b"gpu_device_is_lost")() };
             if !self.surfaces.windows[&view]
                 .rest
-                .due(c.id, (w, h, scale), dirty, lost)
+                .due(c.id, (w, h, scale), || {
+                    service |= abi.frame_pending(c.id);
+                    abi.frame_dirty(c.id, now)
+                })
             {
+                wants |= abi.frame_pending(c.id);
                 continue;
             }
             // Under its frame-rate cap (`Surface::max_fps`), a canvas skips
@@ -518,6 +551,7 @@ impl<D: DataSource> Presenter<D> {
                 abi.symbol::<unsafe extern "C" fn(u32, f32, f32, f32, f64) -> u32>(b"gpu_render")
             };
             let result = unsafe { render(c.id, w, h, scale, now) };
+            service |= result == 0;
             match result {
                 1 => wants = true,
                 2 => self.surfaces.error = abi.error(),
@@ -527,6 +561,9 @@ impl<D: DataSource> Presenter<D> {
             let window = self.surfaces.windows.get_mut(&view).unwrap();
             window.retry.recorded((w, h, scale, now), starved);
             window.rest.rendered(c.id, (w, h, scale), result);
+            if result == 0 {
+                self.surfaces.drawn_sizes.insert(view, (w, h));
+            }
             if result != 2 && !starved {
                 recorded.insert(view);
             }
@@ -558,6 +595,18 @@ impl<D: DataSource> Presenter<D> {
         // its canvas's first presented one.
         self.surfaces
             .owe_records(recorded.iter().copied().chain(handed));
+        if service && !retry {
+            self.sync_surfaces();
+            wants |= self.surfaces.windows.iter().any(|(view, window)| {
+                window.attached
+                    && window.retry.frame.is_some()
+                    && self
+                        .surfaces
+                        .canvases
+                        .get(view)
+                        .is_some_and(|c| self.surfaces.abis[&c.artifact].frame_pending(c.id))
+            });
+        }
         wants || owed || self.surfaces.owes_records()
     }
 }

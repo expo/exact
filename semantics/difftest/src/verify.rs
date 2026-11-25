@@ -80,10 +80,16 @@ pub fn run(file: &Path, options: &Options) -> Result<bool, String> {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
         };
-        match contract::tests(&text)
-            .and_then(|tests| contract::properties(&text).map(|p| (tests, p)))
-        {
-            Ok((tests, mut declarations)) => {
+        match contract_syntax::parse(&text) {
+            Ok(parsed) => {
+                if let Err(errors) = contract::check_test_substitutes(&file, &parsed, Some(&plan)) {
+                    for e in errors {
+                        println!("SCRIPT {}:{e}", show(path));
+                    }
+                    ok = false;
+                }
+                let tests = contract::tests_with_defaults(parsed.tests, &parsed.launch);
+                let mut declarations = parsed.properties;
                 for test in &tests {
                     if let Err(e) = crate::script::check_answers(&plan, test) {
                         println!("SCRIPT {}:{e}", show(path));

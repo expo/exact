@@ -12,6 +12,7 @@ use exact_runner::{
 };
 
 pub mod draw;
+pub mod sources;
 
 /// Seam version, independent of the plan format version.
 pub const ABI: u32 = 12;
@@ -824,6 +825,7 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
         preload: None,
         prefetch: false,
         held: false,
+        mutation_ticket: None,
         reach: Default::default(),
         listen: None,
         due_ms: None,

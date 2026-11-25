@@ -74,6 +74,35 @@ final class FrameHealthMacTests: XCTestCase {
         overlay.setVisible(false)
     }
 
+    /// Share gives one text, the summary and then the agent report, and its picker offers Copy first: AppKit's picker
+    /// offers no Copy for text
+    func testShareGivesTheSummaryThenTheAgentReportAndOffersCopy() throws {
+        _ = NSApplication.shared
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlayMac(health: health)
+        var shared: String?
+        overlay.shareText { shared = $0 }
+        waitFor("the report is encoded") { shared != nil }
+        let text = try XCTUnwrap(shared)
+        let parts = text.components(separatedBy: "\n\nAgent report, Exact's frame clock (\(health.source)):\n")
+        XCTAssertEqual(parts.count, 2, text)
+        XCTAssertTrue(parts[0].hasPrefix("Frame health, idle\nA summary, then the full data for an AI agent as one JSON report.\n"
+            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\n"
+            + "What was measured\nExact's frames\n"), "what it holds, then the summary: \(text)")
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(parts[1].utf8)) as? [String: Any])
+        XCTAssertEqual(report["format"] as? String, FrameHealthReport.format)
+        XCTAssertEqual(report["source"] as? String, health.source)
+        let pasteboard = NSPasteboard(name: .init("exact-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        overlay.pasteboard = pasteboard
+        let copy = try XCTUnwrap(overlay.sharingServicePicker(NSSharingServicePicker(items: [text]), sharingServicesForItems: [text],
+            proposedSharingServices: []).first)
+        XCTAssertEqual(copy.title, "Copy")
+        copy.perform(withItems: [text])
+        waitFor("Copy writes the text") { pasteboard.string(forType: .string) == text }
+    }
+
     func testDesktopCardUsesHostSlotTakesClicksWithinItsBoundsAndClampsWithoutResizingTheApp() throws {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "desktop-frame-health")

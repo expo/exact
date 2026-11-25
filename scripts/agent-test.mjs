@@ -8,7 +8,7 @@ import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { ROOT, contractTool } from './tools.mjs';
-import { faultRequest as rawFaultRequest, preferGroups } from './agent-prefer.mjs';
+import { faultRequest as rawFaultRequest, packageClock, preferExtension, preferGroups } from './agent-prefer.mjs';
 import { open } from './agent.mjs';
 import { duringOp } from './agent-drag.mjs';
 import { dragExpectation } from './agent-drag-out.mjs';
@@ -695,6 +695,8 @@ export function propertyHolds(line, state, previous) {
 async function propertyFailure(p, line, state, previous, s, file, test, step, index, host) {
   const label = ['boot', 'reload'].includes(step.op) ? step.op
     : step.op === 'clock' ? `clock ${step.arg}`
+    : step.op === 'rotate' ? `rotate ${step.orientation}`
+    : step.op === 'fold' ? `fold ${step.degrees}`
     : step.op === 'presence' ? `presence ${step.answer}`
     : `${step.op} ${JSON.stringify(step.target)}${step.op === 'type' ? ` ${JSON.stringify(step.text)}` : ''}`;
   const location = at => `${at.file}:${at.line}:${at.col}`;
@@ -758,7 +760,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   try { schema = readFileSync(resolve(selected.dir, '../snapback/schema.q'), 'utf8'); } catch { /* No schema beside this app. */ }
   // What `fresh` resets: every loopback origin the app's web build fetches (its net.fetch grants).
   const backends = url ? [] : loopbackOrigins(resolve(webDist));
-  const compiler = contractTool();
+  const compiler = contractTool({ targetDir: process.env.CARGO_TARGET_DIR });
   if (!compiler) throw new Error('cannot compile the authored tests without the Contract compiler');
   const c = spawnSync(compiler.cmd, [...compiler.pre, 'test', resolve(file)], { cwd: ROOT, env: compiler.env, encoding: 'utf8' });
   if (c.status !== 0) throw new Error(c.stderr?.trim() || c.error?.message || 'contract test compiler failed');
@@ -804,6 +806,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // A test's launch lines lead its steps and override the drive's flags (habits F7).
     // The drive's `--fail-fetch` is every test's, with its own leading `fail fetch` lines added (LLP 1103 D3).
     const facts = { size, seed, locale, formatLocale, timeZone, epoch, failFetch };
+    const substitutes = {};
+    const retainSubstitute = ({ key, value, clear }, table = substitutes) => {
+      if (clear) delete table[key]; else table[key] = value;
+    };
     const lines = [], preferences = [], stored = [], sessions = [];
     const media = {}, permissions = {}; // the latest of each, which a `reload` applies again
     let beforeData = false, leading = 0, reset = null, opensAt = null; // `at`'s location, where the app opens (LLP 1153 D5)
@@ -823,6 +829,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       else if (st.op === 'answer-fetch') facts.failFetch = [facts.failFetch, faultSpecOf([{prefix: st.prefix, method: st.method, hits: 0, armed: true, response: st.response}])].filter(Boolean).join('\n');
       else if (st.op === 'size') facts.size = [st.width, st.height];
       else if (st.op === 'at') opensAt = st.value;
+      else if (st.op === 'prefer-extension') retainSubstitute(st);
       else if (st.op === 'prefer') preferences.push(st);
       else if (LAUNCH[st.op]) facts[LAUNCH[st.op]] = st.value;
       else break;
@@ -832,6 +839,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     if (host === 'web' && opensAt && /^https?:\/\//.test(url ?? '')) opensAt = new URL(opensAt, url).href;
     // Replay uses the already-resolved facts, including an authored `epoch now` (LLP 1116.007 D3.4).
     if (replayLaunch) Object.assign(facts, replayLaunch);
+    facts.substitutes = substitutes;
+    delete facts.restoreSubstitutes;
     // A size the carrier cannot give: run at another, the test would fail on what that size was to show.
     if (apk && facts.size) { landed({ name: t.name, index: n, failures: [], notes, skipped: `size ${facts.size.join('x')}: the APK runs at the phone's size; --headless takes it` }); continue; }
     // A zone or locale the driver refuses fails this test at its line, not the run. `epoch now` is read here, once
@@ -884,8 +893,9 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       Object.assign(fresh, fixture, { EXACT_AGENT_STORED: JSON.stringify(stored) });
     }
     const heads = await Promise.all(shared.map((o) => backendHead(o)));
-    // An authored drag uses XCTest on iOS. Other taps opt in with `--touch platform` (LLP 1080.000 §11).
-    const drags = ['ios', 'host-ios'].includes(host) && t.steps.some((st) => st.op === 'drag');
+    // An authored drag uses XCTest on iOS, as does a swipe, a flick (LLP 1057.001 §8.3). Other taps opt in with `--touch platform` (LLP 1080.000 §11).
+    const dragged = (steps) => steps.some((st) => st.op === 'drag' || (st.op === 'tap' && st.form === 'swipe') || (st.steps && dragged(st.steps)));
+    const drags = ['ios', 'host-ios'].includes(host) && dragged(t.steps);
     const fingers = touch !== 'agent' ? touch : drags ? 'drag' : 'agent';
     // The date a relaunch starts at: this launch's date at the clock's zero plus the virtual time the test has reached
     // (every `clock +N`, settle and timer), as the runner reports it; whole milliseconds, which every host takes.
@@ -894,15 +904,15 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, reader, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port, ax });
     let s;
     try { s = await launch(fresh); } catch (e) {
-      if (!running || e.missingBuild) throw e; // no build: the next test would say the same
+      if ((!running && !e.retrySimulator) || e.missingBuild) throw e; // no build: the next test would say the same
       let why = e.message;
-      try { running.check(); } catch (dead) { why = dead.message; }
+      try { running?.check(); } catch (dead) { why = dead.message; }
       landed({ name: t.name, index: n, failures: [`${t.name}: ${why}`], notes });
       continue;
     }
     const prefer = async (st) => {
       const name = st.name.toLowerCase().replace(/[^a-z]/g, '').replace(/^prefers?/, '');
-      if (['posture', 'segments', 'gap', 'mode', 'extension'].includes(name)) throw new Error(`test prefer: ${st.name} is drive-only for now; authored tests cannot set folds (posture, segments, gap), mode pins or extension substitutes`);
+      if (['posture', 'segments', 'gap', 'mode'].includes(name)) throw new Error(`test prefer: ${st.name} is drive-only for now; authored tests cannot set folds (posture, segments, gap) or mode pins`);
       const parsed = preferGroups({ [st.name]: st.value });
       if (Object.keys(parsed.midi).length) throw new Error('test prefer: use prefer midi inside a test for MIDI facts');
       const facts = { ...parsed.media, ...parsed.page, ...Object.fromEntries(Object.entries(parsed.extension.permission ?? {}).map(([name, value]) => [`permission.${name}`, value])) };
@@ -925,6 +935,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // It asks what persists, so storage the app started and did not await finishes first, as `clock data` lands it
     // (LLP 1097 D9): a write lost at `reload` is what a crash does. The next `logs` begins with what it waited for.
     const reload = async () => {
+      facts.restoreSubstitutes = true;
       mutationClock.reset();
       const b = (await s.state().catch(() => ({}))).background, waiting = b ? b.queued + b.inFlight : 0;
       if (waiting) {
@@ -937,7 +948,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const now = await s.state().catch((e) => { throw new Error(`reload: could not read the fault table to carry: ${e.message}`); });
       const failFetch = now.faults ? faultSpecOf(now.faults) : undefined;
       facts.epoch = await reached();
-      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; s.contact = null; resetLogs(s); }
+      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, substitutes, epoch: facts.epoch }); s.now = 0; s.contact = null; resetLogs(s); }
       else {
         const environment = { ...(env ?? {}), ...fixture };
         if (now.store?.some(name => name.startsWith('exact.state.#window.'))) {
@@ -1020,7 +1031,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       };
       // Before an input while counted faults are outstanding: those that fired leave the check, so a press the app
       // answers with `close()` cannot take an unfired one's evidence with it (LLP 1103 D3).
-      const INPUTS = new Set(['tap', 'drag', 'type', 'key', 'pick', 'authorize', 'presence', 'clipboard', 'resize', 'back']);
+      const INPUTS = new Set(['tap', 'drag', 'type', 'key', 'pick', 'authorize', 'presence', 'clipboard', 'resize', 'fold', 'rotate', 'back']);
       const settleFired = async () => {
         if (!armed.size) return;
         const faults = (await s.state()).faults ?? [];
@@ -1039,6 +1050,21 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
         if (st.op === 'type') { typed.add(st.target); touched.add(st.target); } else if (INPUTS.has(st.op) || st.op === 'reload') typed.clear();
         switch (st.op) {
           case 'size': case 'at': case 'epoch': case 'time-zone': case 'locale': case 'seed': case 'before-data': case 'fresh': case 'stored': case 'signed-in': break; // the session opened with it
+          case 'prefer-extension':
+            if (n >= leading) {
+              const next = {...substitutes};
+              retainSubstitute(st, next);
+              // The package callback may itself open the next document.
+              await s.carrier.installSubstitutes?.(next, true);
+              try {
+                await preferExtension(s, { op: 'prefer', extension: { [st.key]: st.clear ? 'clear' : st.value }, ...(st.value === 'clear' ? { literal: true } : {}) });
+              } catch (e) {
+                await s.carrier.installSubstitutes?.(substitutes, true);
+                throw e;
+              }
+              retainSubstitute(st);
+            }
+            break;
           case 'prefer': if (n >= leading) await prefer(st); break;
           // A driver fault (LLP 1103): a leading one was a launch line; a later one arms (or re-arms) now, a `pass` stops it.
           case 'fail-fetch': {
@@ -1077,8 +1103,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'tap': {
             const opts = st.form === 'into' ? { into: { key: st.key } }
               : st.form === 'pinch' ? { pinch: st.scale, ...(st.at ? { at: st.at } : {}) }
+              : st.form === 'dblclick' && st.touch ? { dblclick: true, touch: true }
+              : st.form === 'swipe' ? { swipe: st.direction, ...(st.at ? { at: st.at } : {}) }
               : st.form === 'wheel' ? { wheel: st.wheel }
               : st.form === 'history' ? { history: st.history }
+              : st.form === 'drop' ? { drop: st.files.map((f) => resolve(dirname(file), f)), ...(st.text != null ? { text: st.text } : {}), ...(st.url != null ? { url: st.url } : {}) }
               : st.form === 'mediasession' ? { mediaSession: st.action, ...(st.seconds != null ? { seconds: st.seconds } : {}) }
               : st.form !== 'press' ? { [st.form]: true }
               : st.modifiers ? { modifiers: st.modifiers } : undefined;
@@ -1090,7 +1119,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'drag': {
             const drag = { ...(st.to != null ? { to: st.to, ...(st.at ? { at: st.at } : {}) } : { dx: st.dx, dy: st.dy }), ...(st.from ? { from: st.from } : {}), ...(st.mouse ? { mouse: true } : {}), ...(st.press != null ? { press: st.press } : {}), ...(st.over != null ? { over: st.over } : {}), ...(st.hold != null ? { hold: st.hold } : {}) };
             if (st.into != null) drag.into = st.into;
-            if (st.during?.length) drag.during = st.during.map((op) => () => duringOp(s, op));
+            if (st.modifiers) drag.modifiers = st.modifiers;
+            const reads = (ops) => ops.map((op) => () => duringOp(s, op));
+            if (st.during?.length) drag.during = reads(st.during);
+            if (st.path) drag.path = st.path.map(({ during, ...leg }) => ({ ...leg, ...(during ? { during: reads(during) } : {}) }));
             delivered(await s.tap(st.target, { drag })); input = st.line; break;
           }
           case 'type': {
@@ -1142,10 +1174,12 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           }
           case 'clipboard': delivered(await s.type(st.target, { clipboard: st.edit, text: st.text })); input = st.line; break;
           case 'background': await s.background(st.ms); input = null; break;
-          case 'clock': await s.clock(st.arg); input = null; loaded = true; if (/^\+?\d/.test(st.arg)) unpolled = null; break;
+          case 'clock': await packageClock(s, st.arg); input = null; loaded = true; if (/^\+?\d/.test(st.arg)) unpolled = null; break;
           // The driver writes through the app's server as another person (LLP 1116.006 D8), not the app: nothing it
           // shows changes until it reads again.
           case 'request': await serverRequest(server, st); unpolled = st.line; break;
+          case 'rotate': delivered(await s.rotate(st.orientation)); input = st.line; break;
+          case 'fold': delivered(await s.fold(st.degrees)); input = st.line; break;
           case 'resize': delivered(await s.resize(st.width, st.height)); input = st.line; break;
           // The window's close button (studio diary R17): a window a `beforeunload` keeps stays and the test goes on;
           // one that closed takes the session, so a step after it fails naming it.
@@ -1302,7 +1336,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           default: failures.push(`${at}: unknown step ${st.op}`);
         }
         if (closedAt == null) await mutationClock.advance(s, properties.length ? async (state, delta) => {
-          if (delta || ['tap', 'type', 'clock', 'key', 'reload', 'presence'].includes(st.op)) {
+          if (delta || ['tap', 'type', 'clock', 'key', 'reload', 'presence', 'fold', 'rotate'].includes(st.op)) {
             await checkProperties(state, delta ? { ...st, op: 'clock', arg: '+' + delta } : st, n);
           } else previous = state;
         } : undefined);

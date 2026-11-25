@@ -85,11 +85,12 @@ impl<D: DataSource> Runner<D> {
         why: &str,
     ) {
         let target = Target::Resource(i);
-        if !forced
-            && (self.pending.iter()).any(|p| {
-                p.target == target && p.reask_at.is_some() && p.args == args && p.reasks == reasks
-            })
-        {
+        let standing = (self.pending.iter()).find(|p| {
+            p.target == target && p.reask_at.is_some() && p.args == args && p.reasks == reasks
+        });
+        if let Some(ticket) = standing.map(|p| p.ticket).filter(|_| !forced) {
+            // It reads what this commit changed too (LLP 1133.023 D7a).
+            self.note_kept(target, ticket);
             return;
         }
         let after = REASK_MS[reasks];
@@ -253,8 +254,8 @@ impl<D: DataSource> Runner<D> {
         if p.launch {
             self.launch.push(i);
         }
-        let (origin, id) = (self.ticket_origin(ticket), self.ticket_id(ticket));
-        let result = self.as_invocation(origin, id, |r| {
+        let cause = self.ticket_cause(ticket);
+        let result = self.as_cause(cause, |r| {
             let before = r.overrun.reasking.replace((i, reasks + 1, args));
             let result = r.commit_again(vec![i], "a turn over its budget, asked again");
             r.overrun.reasking = before;
@@ -294,7 +295,7 @@ impl<D: DataSource> Runner<D> {
                 // The commit that fails it is what the host must see: the
                 // refusal is in the journal and in the failure's reason.
                 // (under its ask's origin and invocation, as each re-ask was)
-                let released = self.as_invocation(origin, id, |r| {
+                let released = self.as_cause(cause, |r| {
                     r.release_failed(ticket, Target::Resource(i), failure)
                 });
                 return released.map(|r| r.expect("release_failed commits"));
@@ -316,9 +317,9 @@ impl<D: DataSource> Runner<D> {
             .find(|p| p.ticket == ticket)
             .expect("a wait")
             .target;
-        let (origin, id) = (self.ticket_origin(ticket), self.ticket_id(ticket));
+        let cause = self.ticket_cause(ticket);
         match outcome {
-            Outcome::Failed { message, .. } => self.as_invocation(origin, id, |r| {
+            Outcome::Failed { message, .. } => self.as_cause(cause, |r| {
                 r.release_failed(ticket, target, Failure::error(message))
             }),
             _ => {

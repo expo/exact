@@ -903,7 +903,7 @@ fn box_transform_transitions_play_without_sampling_and_reclaim_for_the_agent() {
         text "Go"
       box testId="move" width=100 height=40 translate=(on ? "50% 10px" : "0px 0px") transition="translate 1s linear"
       box testId="turn" width=40 height=40 rotate=(on ? 180 : 0) transition="rotate 1s linear"
-      box testId="grow" width=40 height=40 scale=(on ? 2 : 1) transition="scale -exact-spring(200, 20, 1)"
+      box testId="grow" width=40 height=40 scale=(on ? "2 0.25" : "1 0.5") transition="scale -exact-spring(200, 20, 1)"
       box testId="hit" width=40 height=40 press=go translate=(on ? "40px 0px" : "0px 0px") transition="translate 1s linear"
       box testId="invoker-parent" width=100 height=40 translate=(on ? "40px 0px" : "0px 0px") transition="translate 1s linear"
         button popovertarget="more"
@@ -930,7 +930,7 @@ fn box_transform_transitions_play_without_sampling_and_reclaim_for_the_agent() {
     for (name, property, path) in [
         ("move", Property::Translate, "transform.translation.x"),
         ("turn", Property::Rotate, "transform.rotation.z"),
-        ("grow", Property::Scale, "transform.scale"),
+        ("grow", Property::Scale, "transform.scale.x"),
     ] {
         // LLP 1126 D10: watchOS has no render server, so they stay sampled.
         assert_eq!(
@@ -947,6 +947,24 @@ fn box_transform_transitions_play_without_sampling_and_reclaim_for_the_agent() {
             spec(&batch, id(&host, "move"))["v"],
             serde_json::json!([0, 50])
         );
+        let ops: serde_json::Value = serde_json::from_str(&batch).unwrap();
+        let grow = id(&host, "grow");
+        let tracks = ops["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["op"] == "animations" && op["id"] == grow)
+            .unwrap()["specs"]
+            .as_array()
+            .unwrap();
+        let y = tracks
+            .iter()
+            .find(|track| track["k"] == "transform.scale.y")
+            .unwrap()["v"]
+            .as_array()
+            .unwrap();
+        assert_eq!(y.first().unwrap(), 0.5);
+        assert_eq!(y.last().unwrap(), 0.25);
         let radians = spec(&batch, id(&host, "turn"))["v"][1].as_f64().unwrap();
         assert!((radians - std::f64::consts::PI).abs() < 1e-5);
     }

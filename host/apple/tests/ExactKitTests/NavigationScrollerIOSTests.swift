@@ -17,7 +17,7 @@ final class NavigationScrollerIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func fixture(_ scene: UIWindowScene) throws -> ExactSession {
+    private func fixture(_ scene: UIWindowScene, plan: String = "NAVIGATION_SCROLLER") throws -> ExactSession {
         let session = ExactApp.shared.makeSession(label: "navigation-scroller")
         self.session = session
         let view = ExactView(session: session), host = UIViewController()
@@ -29,7 +29,7 @@ final class NavigationScrollerIOSTests: XCTestCase {
         view.frame = host.view.bounds
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         host.view.addSubview(view)
-        XCTAssertNil(session.boot(plan: try fixturePlan("NAVIGATION_SCROLLER"), size: view.bounds.size).error)
+        XCTAssertNil(session.boot(plan: try fixturePlan(plan), size: view.bounds.size).error)
         view.layoutIfNeeded()
         settle(session)
         return session
@@ -51,6 +51,231 @@ final class NavigationScrollerIOSTests: XCTestCase {
     private func press(_ session: ExactSession, _ name: String) throws {
         session.presenter.press(try node(session, name).id)
         settle(session)
+    }
+
+    func testBottomToolbarFollowsTheLiveRowsOnScreen() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit places the route toolbar in a window") }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR_LIVE"), navigation = session.presenter.navigationHost
+        let route = try XCTUnwrap(navigation.activeRoute), nav = try XCTUnwrap(route.navigationController)
+        func tap(_ name: String) throws {
+            let id = try node(session, name).id
+            XCTAssertNil(Agent(session: session).tap(["id": Int(id)])["error"], name)
+        }
+        XCTAssertNil(navigation.split)
+        XCTAssertTrue(try node(session, "load-tools").isHidden)
+        let initial = try XCTUnwrap(route.toolbarItems)
+        XCTAssertEqual(initial.count, 2)
+        XCTAssertNil(initial.first?.action, "a spacer with a button role still makes a flexible space")
+        XCTAssertNotNil(initial.last?.frame(in: route.view))
+        try tap("load")
+        let line = "route \(route.key) has multiple bottom toolbars"
+        func notices() -> Int { session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: line).count - 1 }
+        for (name, rows) in [("equal", 1), ("unequal", 1), ("filtered", 1), ("unequal", 2)] {
+            waitFor("one toolbar item for \(name)") {
+                route.toolbarItems?.count == 1 && route.toolbarItems?.first?.accessibilityIdentifier == name
+            }
+            let item = try XCTUnwrap(route.toolbarItems?.first)
+            XCTAssertNotNil(item.frame(in: route.view), "UIKit presents the route's item")
+            XCTAssertEqual(route.liftedBottomRows.count, rows)
+            XCTAssertEqual(notices(), rows == 2 ? 1 : 0)
+            if rows == 2 {
+                XCTAssertEqual(route.liftedBottomRows.map { $0.props["testId"] }, ["unequal-tools", "loop-tools"])
+                XCTAssertTrue(route.liftedBottomRows.allSatisfy(\.isHidden))
+            }
+            try tap(name)
+        }
+        waitFor("only the spacer row is live") { route.liftedBottomRows.first?.props["testId"] == "space-tools" }
+        let space = try XCTUnwrap(route.bottomToolbar?.barSpaces.values.first)
+        XCTAssertEqual(route.toolbarItems?.count, 1)
+        XCTAssertTrue(route.toolbarItems?.first === space)
+        XCTAssertFalse(nav.isToolbarHidden)
+        XCTAssertEqual(notices(), 1)
+        try tap("advance")
+        waitFor("removing the final row clears its items") { route.liftedBottomRows.isEmpty && (route.toolbarItems ?? []).isEmpty }
+        XCTAssertTrue(nav.isToolbarHidden)
+    }
+
+    func testBottomToolbarBelongsToItsRouteAndClearsItsLastRow() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit places the tab bar and toolbar in a window") }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR"), navigation = session.presenter.navigationHost
+        let route = try XCTUnwrap(navigation.activeRoute), nav = try XCTUnwrap(route.navigationController)
+        let items = try XCTUnwrap(route.toolbarItems)
+        XCTAssertFalse(nav.isToolbarHidden)
+        XCTAssertEqual(items.count, 3)
+        let star = try XCTUnwrap(items.first), add = try XCTUnwrap(items.last)
+        XCTAssertEqual(star.accessibilityIdentifier, "favorite")
+        XCTAssertEqual(star.accessibilityLabel, "Favorite")
+        XCTAssertNotNil(star.image)
+        XCTAssertEqual(add.accessibilityIdentifier, "add")
+        XCTAssertEqual(add.title, "Add")
+        let traits = route.traitCollection
+        XCTAssertEqual(try XCTUnwrap(add.tintColor).resolvedColor(with: traits), try XCTUnwrap(route.node.ownAccent).resolvedColor(with: traits))
+        for item in [star, add] {
+            XCTAssertTrue(UIApplication.shared.sendAction(try XCTUnwrap(item.action), to: item.target, from: item, for: nil))
+        }
+        let counts = try node(session, "counts")
+        waitFor("both toolbar actions reach the route") { counts.accessibleText == "Favorites 1, additions 1" && route.toolbarItems?.last?.isEnabled == false && route.toolbarItems?.first?.menu != nil }
+        XCTAssertTrue(try node(session, "tools").isHidden)
+        XCTAssertTrue(try XCTUnwrap(route.toolbarItems?.last).accessibilityTraits.contains(.notEnabled))
+        let scroll = try XCTUnwrap(try node(session, "content").scrollView)
+        let last = try node(session, "row-30")
+        scroll.setContentOffset(CGPoint(x: 0, y: max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)), animated: false)
+        let starBox = try XCTUnwrap(route.toolbarItems?.first?.frame(in: route.view)), addBox = try XCTUnwrap(route.toolbarItems?.last?.frame(in: route.view))
+        if route.traitCollection.userInterfaceIdiom == .pad {
+            XCTAssertGreaterThan(min(starBox.midY, addBox.midY), route.view.bounds.midY)
+            XCTAssertLessThan(starBox.midX, route.view.bounds.width / 4)
+            XCTAssertGreaterThan(addBox.midX, route.view.bounds.width * 3 / 4)
+        } else if !nav.navigationBar.traitCollection.placesVerticalBar {
+            let tabs = try XCTUnwrap(navigation.tabController?.tabBar)
+            let agent = Agent(session: session)
+            for item in try XCTUnwrap(tabs.items) {
+                let control = try XCTUnwrap(agent.drawnTabControl(item, in: tabs))
+                let button = control.convert(control.bounds, to: route.view)
+                XCTAssertGreaterThan(button.midX, starBox.maxX)
+                XCTAssertLessThan(button.midX, addBox.minX)
+                XCTAssertEqual(button.midY, starBox.midY, accuracy: 2)
+            }
+        }
+        let lastBox = last.convert(last.bounds, to: route.view)
+        // On the Duo one item can be in the rail beside the list.
+        let overList = [starBox, addBox].filter { $0.minX < lastBox.maxX && lastBox.minX < $0.maxX }
+        let visibleBottom = try XCTUnwrap(overList.map(\.minY).min())
+        let lastBottom = lastBox.maxY
+        XCTAssertLessThanOrEqual(lastBottom, visibleBottom + 1)
+        XCTAssertEqual(lastBottom, route.view.safeAreaLayoutGuide.layoutFrame.maxY, accuracy: 1, "the last row scrolls to UIKit's safe area")
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top), animated: false)
+        try press(session, "detail-link")
+        XCTAssertNil(nav.topViewController?.toolbarItems)
+        XCTAssertTrue(nav.isToolbarHidden)
+        nav.popViewController(animated: true)
+        settle(session)
+        XCTAssertTrue(nav.topViewController === route)
+        XCTAssertFalse(nav.isToolbarHidden)
+        XCTAssertEqual(route.toolbarItems?.map(\.accessibilityIdentifier), ["favorite", nil, "add"])
+        XCTAssertNotNil(route.toolbarItems?.first?.menu)
+        XCTAssertEqual(route.toolbarItems?.last?.isEnabled, false)
+    }
+
+    func testThreeTabsPlaceAndCoverTheRouteToolbarAsUIKitDoes() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit places the toolbar and tabs in a window") }
+        let size = scene.coordinateSpace.bounds.size
+        // Portrait, default text size, iOS 26.5 (23F77). Each stock tab holds a navigation
+        // controller. The selected one pushes a route with flexible spaces between the titled items.
+        typealias Button = (name: String, x: CGFloat, width: CGFloat, centerHits: Bool)
+        let cases: [[Button]], y: CGFloat, height: CGFloat
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        let traits = scene.traitCollection
+        let measured = (os.majorVersion, os.minorVersion) == (26, 5) && traits.preferredContentSizeCategory == .large
+            && traits.layoutDirection == .leftToRight && !UIAccessibility.isBoldTextEnabled
+        switch measured ? size : .zero {
+        case CGSize(width: 402, height: 874): // iPhone 17
+            (y, height) = (803, 38)
+            cases = [[("reshape", 33, 89.67, false), ("widget", 290.67, 78.33, false)],
+                     [("reshape", 21.33, 89.67, false), ("animate", 127.33, 147.33, false), ("widget", 302.33, 78.33, true)],
+                     [("widget", 162, 78.33, false)]]
+        case CGSize(width: 440, height: 956): // iPhone 17 Pro Max
+            (y, height) = (885, 38)
+            cases = [[("reshape", 33, 89.67, true), ("widget", 328.67, 78.33, true)],
+                     [("reshape", 33, 89.67, true), ("animate", 146.33, 147.33, false), ("widget", 328.67, 78.33, true)],
+                     [("widget", 181, 78.33, false)]]
+        case CGSize(width: 820, height: 1180): // iPad (A16)
+            (y, height) = (1115, 36)
+            cases = [[("reshape", 14, 92, true), ("widget", 725.5, 80.5, true)],
+                     [("reshape", 14, 92, true), ("animate", 335.5, 149.5, true), ("widget", 725.5, 80.5, true)],
+                     [("widget", 370, 80.5, true)]]
+        default: (cases, y, height) = ([], 0, 0)
+        }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR_TABS")
+        let window = try XCTUnwrap(window), agent = Agent(session: session)
+        let home = try XCTUnwrap(session.presenter.navigationHost.activeRoute)
+        var pressed: [UInt32] = []
+        let send = session.presenter.onPress
+        session.presenter.onPress = { pressed.append($0); send?($0) }
+        let routes = [("open-type", ["reshape", "widget"]), ("open-swift", ["reshape", "animate", "widget"]), ("open-single", ["widget"])]
+        for (index, (link, names)) in routes.enumerated() {
+            let buttons = cases.isEmpty ? [] : cases[index]
+            try press(session, link)
+            let route = try XCTUnwrap(session.presenter.navigationHost.activeRoute)
+            let items = try XCTUnwrap(route.toolbarItems).filter { $0.action != nil }
+            if !buttons.isEmpty {
+                waitFor("UIKit places the measured toolbar items") {
+                    route.transitionCoordinator == nil && !agent.nativeInFlight()
+                        && items.allSatisfy { $0.frame(in: window)?.isEmpty == false && $0.projectedControl(in: window) != nil }
+                }
+            }
+            XCTAssertEqual(items.compactMap(\.accessibilityIdentifier), names)
+            for (i, item) in items.enumerated() {
+                let name = try XCTUnwrap(item.accessibilityIdentifier), node = try node(session, name)
+                guard let control = item.projectedControl(in: window), let frame = item.frame(in: window), !frame.isEmpty else {
+                    XCTAssertTrue(buttons.isEmpty, name)
+                    XCTAssertNotNil(agent.tap(["id": Int(node.id)])["error"], name)
+                    continue
+                }
+                if !buttons.isEmpty, i < buttons.count {
+                    let expected = buttons[i]
+                    XCTAssertEqual(name, expected.name)
+                    XCTAssertEqual(frame.minX, expected.x, accuracy: 1, name)
+                    XCTAssertEqual(frame.minY, y, accuracy: 1, name)
+                    XCTAssertEqual(frame.width, expected.width, accuracy: 1, name)
+                    XCTAssertEqual(frame.height, height, accuracy: 1, name)
+                }
+                let box = try XCTUnwrap(agent.drawnBarBoxes()[node.id], "layout must include an item that the tab bar covers")
+                let measured = box.view.convert(box.region, to: window)
+                XCTAssertEqual(measured.midX, frame.midX, accuracy: 1)
+                XCTAssertEqual(measured.midY, frame.midY, accuracy: 1)
+                node.handlers.formUnion(["pointerdown", "pointerup"])
+                var samples: [PointerSample] = []
+                session.presenter.onPointer = { _, _, sample in samples.append(sample) }
+                func checkTap(at offset: [Double]? = nil, stockHits: Bool? = nil, file: StaticString = #filePath, line: UInt = #line) {
+                    let at = offset ?? [Double(frame.width / 2), Double(frame.height / 2)]
+                    let point = CGPoint(x: frame.minX + at[0], y: frame.minY + at[1])
+                    let hit = window.hitTest(point, with: nil)
+                    let hits = hit === control || hit?.isDescendant(of: control) == true
+                    if let stockHits { XCTAssertEqual(hits, stockHits, name, file: file, line: line) }
+                    pressed.removeAll()
+                    samples.removeAll()
+                    var request: [String: Any] = ["id": Int(node.id)]
+                    request["at"] = offset
+                    let error = agent.tap(request)["error"] as? String
+                    if hits { XCTAssertNil(error, name, file: file, line: line) }
+                    else {
+                        let reason = offset != nil ? "covers the requested point" : "covers its middle"
+                        XCTAssertTrue(error?.contains(reason) == true, "\(name): \(String(describing: error))", file: file, line: line)
+                    }
+                    XCTAssertEqual(pressed, hits ? [node.id] : [], file: file, line: line)
+                    XCTAssertEqual(samples.count, hits ? 2 : 0, file: file, line: line)
+                    let client = session.presenter.client(point)
+                    for sample in samples {
+                        XCTAssertEqual(sample.clientX, client.x, accuracy: 1, file: file, line: line)
+                        XCTAssertEqual(sample.clientY, client.y, accuracy: 1, file: file, line: line)
+                    }
+                }
+                checkTap(stockHits: i < buttons.count ? buttons[i].centerHits : nil)
+                let left = name == "reshape"
+                let width = Double(frame.width), middle = Double(frame.height / 2)
+                let flank = names.count > 1 && name != "animate"
+                checkTap(at: [left ? 8 : width - 8, middle], stockHits: !buttons.isEmpty && flank ? true : nil)
+                checkTap(at: [left ? width - 8 : 8, middle], stockHits: !buttons.isEmpty && flank && size.width == 402 ? false : nil)
+                session.presenter.onPointer = nil
+            }
+            route.navigationController?.popViewController(animated: false)
+            waitFor("back at the tab root") { session.presenter.navigationHost.activeRoute === home && !agent.nativeInFlight() }
+        }
+    }
+
+    func testToolbarPointerDeliveryDoesNotWaitForGlassToFadeIn() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit draws the toolbar button in its window") }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR"), agent = Agent(session: session)
+        let button = try node(session, "favorite")
+        guard case .success(let place)? = agent.barItem(button) else { return XCTFail("favorite needs a projected button") }
+        let glass = try XCTUnwrap(place.bar.superview)
+        let alpha = glass.alpha
+        glass.alpha = 0
+        defer { glass.alpha = alpha }
+        var nextTurn = false
+        DispatchQueue.main.async { glass.alpha = alpha; nextTurn = true }
+        XCTAssertTrue(agent.nativePointer(button, request: ["id": Int(button.id)]))
+        XCTAssertFalse(nextTurn, "pointer delivery must stay in the turn that checked the target")
     }
 
     func testACompletedProjectedTransitionDoesNotMakeContentUpdatesOweNavigation() throws {
@@ -180,9 +405,20 @@ final class NavigationScrollerIOSTests: XCTestCase {
         XCTAssertTrue(field.becomeFirstResponder())
         waitFor("the search keyboard appears") { p.keyboardTop != nil && field.isFirstResponder }
         let column = nav.view.convert(nav.view.bounds, to: window)
-        let bar = search.searchBar.convert(search.searchBar.bounds, to: window)
-        XCTAssertGreaterThanOrEqual(bar.minX, column.minX - 1)
-        XCTAssertLessThanOrEqual(bar.maxX, column.maxX + 1)
+        XCTAssertIdentical(try XCTUnwrap(field.window), window)
+        // On iPad Pro 13-inch (M5), iPadOS 26.5 scales the focused bar to x=22…358 inside a column at x=24…344.
+        var visible = field.convert(field.bounds, to: window)
+        for parent in sequence(first: field as UIView, next: \.superview).dropFirst() where parent.clipsToBounds {
+            visible = visible.intersection(parent.convert(parent.bounds, to: window))
+        }
+        let center = field.convert(CGPoint(x: field.bounds.midX, y: field.bounds.midY), to: window)
+        XCTAssertTrue(visible.contains(center))
+        let layoutCenter = nav.view.convert(center, from: window)
+        XCTAssertGreaterThanOrEqual(layoutCenter.x - field.bounds.width / 2, nav.view.bounds.minX - 1)
+        XCTAssertLessThanOrEqual(layoutCenter.x + field.bounds.width / 2, nav.view.bounds.maxX + 1)
+        XCTAssertLessThanOrEqual(visible.maxY, try XCTUnwrap(p.keyboardTop) + 1)
+        XCTAssertGreaterThanOrEqual(visible.minX, column.minX - 1)
+        XCTAssertLessThanOrEqual(visible.maxX, column.maxX + 1)
         XCTAssertEqual(nav.view.bounds.width, 320, accuracy: 0.5)
         search.isActive = false
         field.resignFirstResponder()

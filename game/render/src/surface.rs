@@ -101,6 +101,8 @@ pub struct WorldSurface<G: Game, P: Executor = (), const ASSETS: bool = false, H
     resting: bool,
     /// The last frame asked for no next one: the canvas draws again only on a change.
     still: bool,
+    poll_input: bool,
+    idle_picture: Option<crate::world::IdlePicture>,
     /// The tick the world was first seen idle at, while it stays idle.
     idle_tick: Option<u64>,
     /// The scene samples the renderer was made with (`Game::samples`).
@@ -574,6 +576,14 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         // Natively the module draws an incomplete frame again (gpu/src/frame.rs);
         // the web's host draws only what the surface asks for.
         self.still = !wants && (cfg!(target_arch = "wasm32") || self.frame_ready);
+        self.idle_picture = if self.poll_input && self.still {
+            self.render
+                .as_ref()
+                .zip(self.sim.as_ref())
+                .map(|((_, feed), sim)| feed.idle_picture(sim.world()))
+        } else {
+            None
+        };
         self.perf.rendering = false;
         if self.encoded.is_some() && self.perf.reporting.is_some() {
             let scale = self.raster_scale();
@@ -643,26 +653,18 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.sim.as_ref().is_some_and(Sim::reads_pads)
     }
     fn input(&mut self, event: &InputEvent) {
-        self.reported = false;
-        use exact_gpu::PointerPhase as Q;
-        let Some(sim) = &mut self.sim else {
-            return;
-        };
-        if matches!(
-            event,
-            InputEvent::Key { down: true, .. }
-                | InputEvent::Pointer { phase: Q::Down, .. }
-                | InputEvent::Control { phase: Q::Down, .. }
-        ) || matches!(event, InputEvent::Pad { buttons, .. } if buttons.iter().any(|b| *b >= 0.5))
-        {
-            self.presentation.unlock();
-        }
-        let e = input::engine_event(event);
-        if let Err(error) = sim.validate_input(&e) {
-            self.refusal = Some(SurfaceError(error));
-            return;
-        }
-        sim.input(e);
+        self.queue_input(event);
+    }
+    fn poll_input_before_draw(&mut self) {
+        self.poll_input = true;
+    }
+    fn input_pending(&self) -> bool {
+        self.sim().is_some_and(|s| {
+            self.poll_input && self.still && !G::paused(s.args()) && s.input_pending()
+        })
+    }
+    fn redraw_for_input(&mut self, now_ms: f64, period_ms: f64) -> std::task::Poll<bool> {
+        self.tick_resting_input(now_ms, period_ms)
     }
     fn set_performance_reporting(&mut self, enabled: bool) {
         // A reader's timing goes with it; the agent's starts the next window fresh.

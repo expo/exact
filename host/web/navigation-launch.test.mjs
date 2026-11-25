@@ -7,7 +7,7 @@ import { agentPage, launchFacts, suiteBrowser } from '../../scripts/agent-launch
 import { renderedPages } from '../web-js/rendered-pages.mjs';
 
 // A drive's launch parameters (scripts/agent-launch.mjs) are the carrier's, not the app's: none reaches the launch
-// route, and every History entry keeps them, so a reload relaunches with them: `formatLocale` (#952), the auth
+// route, and every History entry keeps them, so a reload relaunches with them: `formatLocale`, the auth
 // fixture (LLP 1146 D4) and the hatches switch among them.
 // One module serves both web hosts: the wasm glue and the JS target (rt.js) navigate through it.
 const DRIVE = 'agent=1&seed=3&locale=en-US&formatLocale=en-KR&timeZone=UTC&authFixture=http%3A%2F%2F127.0.0.1%3A4400&hatches=off';

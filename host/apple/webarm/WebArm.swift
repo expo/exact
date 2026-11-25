@@ -361,7 +361,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// A bundled page's origin: loopback HTTP, a secure context (as the web
     /// dev loop's `http://127.0.0.1` page is) that WebKit holds to no
     /// mixed-content blocking. Under an `https:` origin WebKit refuses every
-    /// `http:` sub-resource, loopback included, which Chrome loads (#135).
+    /// `http:` sub-resource, loopback included, which Chrome loads.
     static let localOrigin = "http://exact.localhost"
     static let template: WKWebViewConfiguration = {
         let template = WKWebViewConfiguration()
@@ -403,8 +403,8 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         #if EXACT_DEVELOPMENT
         // Safari's platform inspector sees only this guest, not Exact's
         // native tree. Unasked, only a development arm makes a frame
-        // inspectable (#101); any arm does when the app calls
-        // `openDevTools` (LLP 1020.002 D11, which supersedes #101 there).
+        // inspectable; any arm does when the app calls
+        // `openDevTools` (LLP 1020.002 D11).
         web.isInspectable = true
         #endif
         #if os(macOS)
@@ -416,7 +416,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         applied = []
         applyOptions(to: web)
         // Preload scripts are a partitioned frame's: an unpartitioned one may be a wrapper's child.
-        if partition != nil { automation?.attached(controller) }
+        if partition != nil { automation?.attached(web) }
         ownScripts = controller.userScripts.count
         return web
     }
@@ -510,14 +510,18 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             guard let self, let web = self.built else { return }
             self.ui?.confirmExternal(url, from: web, byApp: true)
         }
+        let driver = automation ?? FrameAutomation(arm: self)
+        automation = driver
         browser.install(on: controller)
         self.browser = browser
         configuring(configuration)
+        driver.installPageSeed(configuration.userContentController)
         #if os(macOS)
         let webView: WKWebView = ExactWebView(frame: .zero, configuration: configuration)
         #else
         let webView = WKWebView(frame: .zero, configuration: configuration)
         #endif
+        driver.seedInitialDocument(webView)
         browser.attach(webView)
         return webView
     }
@@ -540,6 +544,16 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         // displayed frame after a zoom unobservable (LLP 1020.002 D6).
         if said("zoom") { web.pageZoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1) }
         if said("allowsBackForwardNavigationGestures") { web.allowsBackForwardNavigationGestures = options["allowsBackForwardNavigationGestures"] as? Bool ?? false }
+        #if os(iOS)
+        // How much of the guest lies under its owner's bars and band, top left bottom right (LLP 1123
+        // D15): WebKit lays the page's fixed and sticky content and its visible rect out clear of it, as
+        // in a web view pinned under a navigation bar
+        if #available(iOS 26.0, *), said("obscured") {
+            let o = (options["obscured"] as? [NSNumber])?.map(\.doubleValue) ?? [0, 0, 0, 0]
+            let insets = o.count == 4 ? UIEdgeInsets(top: o[0], left: o[1], bottom: o[2], right: o[3]) : .zero
+            if web.obscuredContentInsets != insets { web.obscuredContentInsets = insets }
+        }
+        #endif
         #if os(macOS)
         if said("allowsMagnification") { web.allowsMagnification = options["allowsMagnification"] as? Bool ?? false }
         #endif
@@ -595,18 +609,20 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         session = values["session"] as? String ?? ""
         handlesNewWindow = values["newwindow"] as? Bool ?? false
         hatched = values["hatched"] as? Bool ?? false
-        element = values["element"] as? String ?? ""
+        let newElement = values["element"] as? String ?? ""
         owner = values["owner"] as? String ?? ""
         Automations.arms.add(self)
         let name = values["partition"] as? String
         options = values
         pdf?.view.zoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1)
         guard name != partition || (built == nil && pdf == nil) else {
+            element = newElement
             if let built { applyOptions(to: built) }
             return
         }
         let replacing = built != nil || pdf != nil
         if replacing { teardown() }
+        element = newElement
         partition = name
         if replacing {
             // A local PDF's frame losing its partition shows the PDF's view, and makes no web view for `serve` to drop.
@@ -888,7 +904,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// A non-HTML local file (plain text, a PDF, an image) is the web view's
     /// own document under its content type, as Chrome shows such
     /// a frame by the type its server sent: WebKit's PDF view for a PDF, not
-    /// its bytes as HTML text (#115, @ref LLP 1020 §10).
+    /// its bytes as HTML text (@ref LLP 1020 §10).
     func serveFile(_ bytes: Data, type: String) {
         let url = URL(string: "\(WebArm.localOrigin)/frame/\(id)/index.html")!
         wrapperURL = url
@@ -1108,6 +1124,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard !invalidated, webView === built else { return }
+        automation?.terminated()
         if let browser {
             emit(kind: 2)
             return browser.crashed()
@@ -1190,8 +1207,9 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         ui?.committed(webView)
-        guard !invalidated, !isBlank(navigation) else { return }
+        guard !invalidated, webView === built else { return }
         automation?.committed()
+        guard !isBlank(navigation) else { return }
         browser?.committed(navigation)
     }
 
@@ -1442,24 +1460,26 @@ public func exactWebAnswer(_ handle: UnsafeMutableRawPointer?, _ bytes: UnsafePo
 
 public typealias ClearFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32) -> Void
 
+public typealias AutomationMessage = @convention(block) (NSDictionary) -> Void
+
 /// A call of `@exact/browser-automation` (@ref LLP 1020.002 D9), its options
 /// with `op`, `id` and `owner` (the session's module folder): `done` receives
 /// the answer's JSON, `{error, message}` when it failed.
 @_cdecl("exact_web_automation")
 public func exactWebAutomation(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32, _ context: UnsafeMutableRawPointer?, _ done: ClearFn?) {
-    let request = json(bytes, length)
+    // Byte 2 selects the message-capable ABI. Its context retains [completion, message block].
+    // A plain JSON request keeps its opaque context, even when its JSON is malformed.
+    let extended = length > 0 && bytes?.pointee == 2
+    let request = extended ? json(bytes?.advanced(by: 1), length - 1) : json(bytes, length)
+    let message: AutomationMessage? = extended ? context.map {
+        let callbacks = Unmanaged<NSArray>.fromOpaque($0).takeUnretainedValue()
+        return unsafeBitCast(callbacks.object(at: 1) as AnyObject, to: AutomationMessage.self)
+    } : nil
     let finish: ([String: Any]) -> Void = { answer in
         let data = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data("{}".utf8)
         data.withUnsafeBytes { done?(context, $0.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count)) }
     }
-    let run = {
-        let id = request["id"] as? String ?? ""
-        let found = Automations.find(owner: request["owner"] as? String ?? "", id: id)
-        guard found.count == 1, let arm = found.first else { return finish(["error": "NotFoundError", "message": "no unique live iframe with id \(id)"]) }
-        let automation = arm.automation ?? FrameAutomation(arm: arm)
-        arm.automation = automation
-        automation.run(request, reply: finish)
-    }
+    let run = { Automations.run(request, message: message, finish: finish) }
     if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
 }
 

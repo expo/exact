@@ -18,8 +18,23 @@ pub const SWIPE_EDGE: f64 = 20.0;
 /// before a drag it could start is recognized (UIKit's pans keep their own).
 pub const SLOP: f64 = 4.0;
 
+/// A finger lifts where it last was. A lift within this many seconds of a
+/// hold's newest sample that moves nothing left the glass moving: it is no
+/// sample, so the release velocity is the motion's, as UIKit's
+/// `velocity(in:)` at `.ended` is. A later one had stopped, and its sample
+/// says so (Android's `VelocityTracker` takes a pointer still for 40 ms to
+/// have stopped). The input decides, not the held value: a display that
+/// CSS stops (`max-height`) repeats its value while the finger moves.
+pub const LIFT_STILL: f64 = 0.04;
+
+/// Whether a lift `dt` seconds after a hold's newest sample is a sample of
+/// its own: it `moved` the input, or it came after [`LIFT_STILL`].
+pub fn lift_samples(moved: bool, dt: f64) -> bool {
+    moved || dt > LIFT_STILL
+}
+
 /// In the order the hosts' `gesture` lookups index them.
-pub const CONSTANTS: [f64; 4] = [SWIPE_KNEE, SWIPE_RESISTANCE, SWIPE_EDGE, SLOP];
+pub const CONSTANTS: [f64; 5] = [SWIPE_KNEE, SWIPE_RESISTANCE, SWIPE_EDGE, SLOP, LIFT_STILL];
 
 /// Presentation after `delta` of finger travel from a hold caught at `base`:
 /// the caught value is inverted through the resistance first, so zero travel

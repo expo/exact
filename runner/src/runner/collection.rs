@@ -59,7 +59,9 @@ impl<D: DataSource> Runner<D> {
                     break;
                 }
                 let first_ticket = self.next_ticket;
-                match self.arrived(|r| r.dispatch_edge(view, event)) {
+                let shown = !self.page.hidden;
+                let edge = |r: &mut Self| r.arrived(|r| r.dispatch_edge(view, event));
+                match self.as_shown(shown, edge) {
                     Ok((receipt, changed)) => {
                         result.receipts.push(Timed {
                             at_ms: self.now_ms,

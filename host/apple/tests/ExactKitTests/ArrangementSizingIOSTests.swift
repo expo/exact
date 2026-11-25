@@ -2,14 +2,19 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 final class ArrangementSizingIOSTests: XCTestCase {
     private var session: ExactSession?
     private var window: UIWindow?
+    /// What a hatch does when it hears its words change.
+    nonisolated(unsafe) private static var changed: (() -> Void)?
 
     override func tearDown() {
         session?.destroy(); session = nil
         window?.isHidden = true; window = nil
+        Self.changed = nil
+        NativeViews.uninstallTable()
         super.tearDown()
     }
 
@@ -37,6 +42,17 @@ final class ArrangementSizingIOSTests: XCTestCase {
         XCTAssertTrue(session.presenter.arrangements.set(try node("arrangement").id, controller: controller))
         let pane = try XCTUnwrap(controller.viewController(for: .primary)?.view)
         return (session, controller, pane)
+    }
+
+    /// Put the fixture in `scene`'s window, its panes side by side. UIKit hides one in a closed iPhone Duo's scene.
+    @available(iOS 27.1, *)
+    private func showAcross(_ controller: UIArrangementViewController, in scene: UIWindowScene) throws {
+        window?.windowScene = scene
+        controller.updateArrangement(across(.automatic))
+        window?.layoutIfNeeded(); controller.view.layoutIfNeeded()
+        guard controller.viewController(for: .secondary)?.viewIfLoaded?.window != nil else {
+            throw XCTSkip("this scene cannot show two horizontal panes; an open iPhone Duo's can")
+        }
     }
 
     private func node(_ name: String) throws -> NodeView {
@@ -69,6 +85,129 @@ final class ArrangementSizingIOSTests: XCTestCase {
     private func fitted(_ pane: UIView, width: CGFloat) -> CGSize {
         pane.systemLayoutSizeFitting(CGSize(width: width, height: 800),
                                     withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+    }
+
+    func testWithoutNavigationAPaneTakenOutIsCoveredWholeUntilItIsPutBack() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let make = NavigationLink.make, makeModals = NavigationLink.makeModals
+        NavigationLink.make = nil; NavigationLink.makeModals = nil
+        defer { NavigationLink.make = make; NavigationLink.makeModals = makeModals }
+        try takeOutAndPutBack(navigation: false)
+    }
+
+    func testAPaneTakenOutStaysCoveredWholeThroughANavigationReset() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        try takeOutAndPutBack(navigation: true)
+    }
+
+    @available(iOS 27.1, *)
+    private func takeOutAndPutBack(navigation linked: Bool) throws {
+        let (session, controller, _) = try fixture()
+        let p = session.presenter
+        XCTAssertEqual(p.navigation is NoNavigation, !linked)
+        XCTAssertEqual(p.modals is NoModals, !linked)
+        let holder = try XCTUnwrap(controller.viewController(for: .secondary) as? ArrangementPaneController), id = holder.node.id
+        waitForMainQueue("the arrangement's setup pass")
+        var told: [HostCover?] = [], tell = p.onCovers
+        p.onCovers = { changes in told += changes.filter { $0.0 == id }.map(\.1); tell?(changes) }
+        controller.setViewController(nil, for: .secondary)
+        waitFor("the pane taken out is told covered whole") { told.last == .whole && holder.node.bounds.isEmpty }
+        if linked {
+            // A batch on a root without `navigationBack` resets the navigation host, which tells nothing of the pane
+            p.apply(facesBatch())
+            waitForMainQueue("the batch's work")
+            XCTAssertEqual(told, [.whole])
+        }
+        controller.setViewController(holder, for: .secondary)
+        waitFor("the pane put back is told uncovered and laid out") { told.last == .some(nil) && !holder.node.bounds.isEmpty }
+        waitForMainQueue("a pass still queued")
+        XCTAssertEqual(told, [.whole, nil], "each change is told once, and a pane shown is never told covered")
+    }
+
+    /// A batch can draw a pane whose arrangement just went as a bare layer, as it draws any inert box: a cover its
+    /// arrangement left it goes all the same.
+    func testAPaneDrawnAsALayerIsUncovered() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let p = Presenter(), host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        self.window = window
+        p.viewport.frame = host.view.bounds
+        host.view.addSubview(p.viewport)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["hatch": "arrangement"]],
+            ["op": "create", "id": 2, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [0, 0, 255, 255]]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 600.0, "h": 800.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 600.0, "h": 400.0],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 400.0, "w": 600.0, "h": 400.0],
+        ]))
+        let controller = UIArrangementViewController()
+        XCTAssertTrue(p.arrangements.set(1, controller: controller))
+        let holder = try XCTUnwrap(controller.viewController(for: .secondary) as? ArrangementPaneController), id = holder.node.id
+        waitForMainQueue("the arrangement's setup pass")
+        var told: [HostCover?] = []
+        p.onCovers = { changes in told += changes.filter { $0.0 == id }.map(\.1) }
+        controller.setViewController(nil, for: .secondary)
+        waitFor("the pane taken out is told covered whole") { told == [.whole] }
+        XCTAssertTrue(p.arrangements.set(1, controller: nil))
+        p.apply(wireBatch([["op": "style", "id": Int(id), "style": ["background_color": [0, 255, 0, 255]]]]))
+        XCTAssertTrue(p.flats.isFlat(id), "the pane is drawn as a layer before the next pass")
+        waitFor("and is told uncovered") { told == [.whole, nil] }
+    }
+
+    /// A popover's or dialog's cover is the menus' to tell, as the kernel opens one told uncovered: a native arrangement
+    /// tells none for a pane that is one, with navigation and without, and uncovers none that became one while hidden.
+    func testAPaneThatIsAPopoverOrDialogIsToldNoCover() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let make = NavigationLink.make, makeModals = NavigationLink.makeModals
+        defer { NavigationLink.make = make; NavigationLink.makeModals = makeModals }
+        let popover = ["popover": "auto"], cases: [(created: [String: String], becomes: [String: String])] =
+            [(popover, [:]), (["semanticTag": "dialog"], [:]), ([:], popover)]
+        for linked in [true, false] {
+            NavigationLink.make = linked ? make : nil; NavigationLink.makeModals = linked ? makeModals : nil
+            for (created, becomes) in cases { try takeOutAndPutBack(created: created, becomes: becomes, linked: linked) }
+        }
+    }
+
+    @available(iOS 27.1, *)
+    private func takeOutAndPutBack(created: [String: String], becomes: [String: String], linked: Bool) throws {
+        let what = "\(created) \(becomes), navigation \(linked)"
+        let p = Presenter(), host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        self.window = window
+        defer { window.isHidden = true }
+        XCTAssertEqual(p.navigation is NoNavigation, !linked)
+        p.viewport.frame = host.view.bounds
+        host.view.addSubview(p.viewport)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["hatch": "arrangement"]],
+            ["op": "create", "id": 2, "kind": "view"], ["op": "create", "id": 3, "kind": "view", "props": created],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 600.0, "h": 800.0],
+        ]))
+        let controller = UIArrangementViewController()
+        XCTAssertTrue(p.arrangements.set(1, controller: controller), what)
+        let holder = try XCTUnwrap(controller.viewController(for: .secondary) as? ArrangementPaneController)
+        XCTAssertEqual(holder.node.id, 3, what)
+        waitForMainQueue("the arrangement's setup pass")
+        var told: [HostCover?] = []
+        p.onCovers = { changes in told += changes.filter { $0.0 == 3 }.map(\.1) }
+        controller.setViewController(nil, for: .secondary)
+        waitFor("a pass reads the pane hidden") { p.arrangements.hidden.contains(3) }
+        waitForMainQueue("its report")
+        let hidden: [HostCover?] = becomes.isEmpty ? [] : [.whole]
+        XCTAssertEqual(told, hidden, what)
+        p.apply(wireBatch([["op": "props", "id": 3, "set": becomes]]))
+        controller.setViewController(holder, for: .secondary)
+        controller.view.layoutIfNeeded()
+        waitFor("a pass reads the pane shown") { !p.arrangements.hidden.contains(3) }
+        waitForMainQueue("its report")
+        XCTAssertEqual(told, hidden, what)
     }
 
     func testProposalsMeasureAuthoredTextWithoutChangingItsAllocation() throws {
@@ -249,6 +388,81 @@ final class ArrangementSizingIOSTests: XCTestCase {
         controller.view.layoutIfNeeded()
         pane.invalidateIntrinsicContentSize()
         XCTAssertEqual(pane.intrinsicContentSize.width, room.width, accuracy: 1, "an overlay that stacks the panes sizes no axis: the room's")
+    }
+
+    /// As a Duo folds, UIKit lays the panes out again inside an animation: a pane's content takes its new box in that layout,
+    /// so that the animation moves it with the pane.
+    func testAPanesContentMovesInTheAnimationUIKitLaysThePaneOutIn() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a frame that shows the pane needs a scene") }
+        let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
+        let primary = try node("primary")
+        try showAcross(controller, in: scene)
+        controller.updateArrangement(across(.absolute(300)))
+        waitFor("a frame shows the pane's content 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded()
+            return abs(primary.bounds.width - 300) < 1 && session.presenter.showed(primary)
+        }
+        UIView.animate(withDuration: 0.5) {
+            controller.updateArrangement(self.across(.absolute(400)))
+            controller.view.layoutIfNeeded()
+        }
+        XCTAssertEqual(pane.bounds.width, 400, accuracy: 1)
+        XCTAssertEqual(primary.bounds.width, pane.bounds.width, accuracy: 1, "laid out with the pane")
+        XCTAssertNotNil(primary.layer.animation(forKey: "bounds.size") ?? primary.layer.animation(forKey: "bounds"), "and moved with it")
+    }
+
+    /// UIKit's animated update says no duration (`Presenter.inPaneLayout`): a view no frame has shown takes its place in it
+    /// all the same.
+    func testWhatNoFrameShowedTakesItsPlaceAsAnArrangementMovesItsPanes() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a frame that shows the pane needs a scene") }
+        let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
+        let primary = try node("primary"), message = try node("message")
+        try showAcross(controller, in: scene)
+        controller.updateArrangement(across(.absolute(300)))
+        waitFor("a frame shows the pane's content 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded()
+            return abs(primary.bounds.width - 300) < 1 && session.presenter.showed(message)
+        }
+        message.isHidden = true
+        waitFor("a frame hides the text") { message.layer.presentation()?.isHidden == true }
+        message.isHidden = false
+        controller.updateArrangement(across(.absolute(400)), animated: true)
+        XCTAssertEqual(primary.bounds.width, 400, accuracy: 1, "laid out with the pane")
+        waitFor("a frame draws the pane's content on its way") { (primary.layer.presentation()?.bounds.width).map { $0 > 301 && $0 < 399 } ?? false }
+        XCTAssertEqual(message.layer.presentation()?.bounds.width ?? 0, message.bounds.width, accuracy: 1, "the text shown again is where it is laid out")
+    }
+
+    /// A hatch that hears its words change and animates its arrangement: the panes' content has its new box before UIKit's
+    /// animation ends its block.
+    func testAPanesContentMovesInTheAnimationAHatchStarts() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
+        let primary = try node("primary")
+        controller.updateArrangement(across(.absolute(300)))
+        waitFor("the pane's content is 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded(); return abs(primary.bounds.width - 300) < 1
+        }
+        waitForActivation(session)
+        waitFor("the session's own work lands") { !session.ownerInFlight && !session.hasPublished() }
+        let natives = try XCTUnwrap(session.nativeViews)
+        natives.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
+        natives.hatchesConnected = true
+        var widths: [CGFloat] = []
+        let wide = across(.absolute(400))
+        natives.elementCall = { _, event, _, _, _, _ in
+            if event == RouteHatchEvent.changed.rawValue { ArrangementSizingIOSTests.changed?() }
+            return 0
+        }
+        Self.changed = {
+            controller.updateArrangement(wide, animated: true)
+            widths.append(primary.bounds.width)
+        }
+        session.apply(wireBatch([["op": "create", "id": 9_000, "kind": "view", "props": ["hatch": "arranged", "dataset": #"{"layout":"narrow"}"#]]]))
+        session.apply(wireBatch([["op": "props", "id": 9_000, "set": ["dataset": #"{"layout":"wide"}"#]]]))
+        XCTAssertEqual(widths.count, 1, "the hatch hears the change as the batch is applied")
+        XCTAssertEqual(widths.first ?? 0, 400, accuracy: 1, "laid out inside the animation")
     }
 
     func testIntrinsicAllocationFollowsContentAndOtherDimensionsStillWork() throws {

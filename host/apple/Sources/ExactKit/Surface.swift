@@ -142,6 +142,7 @@ extension NodeView {
         setNeedsDisplay()
         #else
         syncEllipticalClip()
+        syncScrollCorner()
         needsDisplay = true
         #endif
     }
@@ -158,7 +159,11 @@ extension NodeView {
         let sizes = BorderPaint.radii(style, in: box)
         let radii = sizes.map { $0.width }
         let authored = channels("background_color").map { CGColor(srgbRed: $0[0] / 255, green: $0[1] / 255, blue: $0[2] / 255, alpha: $0[3] / 255) }
+        #if os(macOS)
+        let fill = standsOnPanelGround ? nil : (authored ?? fieldGround)
+        #else
         let fill = authored ?? fieldGround
+        #endif
         let gradients = GradientLink.layers(style["background_image"], tint: gradientTint)
         let radius = radii.max() ?? 0
         let shape = CornerShape(style["corner_shape"])

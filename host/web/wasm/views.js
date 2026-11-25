@@ -1,7 +1,7 @@
 import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
-import { downForDrag, elementOf, observeDragInput, pressedAt } from "../drag-input.js";
-import { picker, track, iframeLoading, localAssetURL, host, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
-import { pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue } from "../navigation.js";
+import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from "../drag-input.js";
+import { picker, track, iframeLoading, localAssetURL, host, agentMode, pageFacts, pageNative, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
+import { resolveShortcuts, pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
 import { send } from "./commit.js";
 import { attach } from "./input.js";
 export function appSource(el, name, value, then) {
@@ -84,6 +84,9 @@ export function syncMedia(el, set = {}, clear = []) {
   // Attached once the data executor settles (a report before then is dropped), reporting what the element has then; `clock settle` waits for it, not `inflight`, which a module replacement drains during activation. A load or a seek in flight then holds a settle too, as on the JS target (media-glue.js `mediaHold`; `removeMedia` lets it go).
 }
 export function nativeCreate(el, id) {
+  const pkg = HAS_PACKAGE_VIEWS && Object.hasOwn(PACKAGE_VIEW_OWNERS, el.localName)
+    && PACKAGE_VIEW_OWNERS[el.localName] === host.packageViewOwners?.[el.localName];
+  const generation = pkg && host.incarnation;
   const st = el.exactNative = {
     id,
     name: el.localName,
@@ -97,10 +100,27 @@ export function nativeCreate(el, id) {
     },
     destroy() {
       this.destroyed = true;
-      host.nativeHost?.then((h) => h.destroy(el));
+      if (pkg) host.packageNative?.then(h => h.destroy(el), () => {});
+      else host.nativeHost?.then((h) => h.destroy(el));
     }
   };
-  (host.nativeHost ??= afterNativePaint().then(() => loadAfterPaint("./native-glue.js", "nativeHost")).then((make) => make({
+  const owners = host.packageViewOwners;
+  if (owners && Object.hasOwn(owners, st.name)) {
+    const owner = owners[st.name] || "the declaring package";
+    st.missingFactory = `the web wasm target cannot load the view factory for <${st.name}> from ${owner}`;
+    // A bare plan can name a package the page did not build. An app artifact may supply that tag (LLP 1024 D2).
+    if (!pageNative && !pkg) {
+      st.state = "error";
+      st.error = st.missingFactory;
+      log(`native ${st.name} #${id}: error: ${st.error}`);
+      return;
+    }
+  }
+  (host[pkg ? "packageNative" : "nativeHost"] ??= afterNativePaint().then(() => pkg
+    ? loadAfterPaint("./packages/views.js", "wasmViewHost").then(bind => options => bind({
+      host, generation, agentMode, now, foreground: () => !(pageFacts.bits() & 1), changed: topic => send(host.wasm.exact_changed(writeIn(topic)))
+    }, options))
+    : loadAfterPaint("./native-glue.js", "nativeHost")).then((make) => make({
     log,
     dispatch(el, kind, text) {
       const id = Number(el.dataset.view);
@@ -109,10 +129,12 @@ export function nativeCreate(el, id) {
       }
     }
   }))).then((h) => h.attach(el), (e) => {
-    host.nativeHost = null;
-    st.state = "unavailable";
-    st.error = String(e?.message ?? e);
-    log(`native ${st.name} #${id}: unavailable: ${st.error}`);
+    if (pkg && host.incarnation !== generation) return;
+    if (pkg) host.packageNative = null;
+    else host.nativeHost = null;
+    st.state = st.missingFactory ? "error" : "unavailable";
+    st.error = pkg ? `${st.missingFactory}: ${e?.message ?? e}` : st.missingFactory ?? String(e?.message ?? e);
+    log(`native ${st.name} #${id}: ${st.state}: ${st.error}`);
   });
 }
 // A virtualized list has logical rows; its (`collection`) feedback is navigation.js's.
@@ -378,10 +400,13 @@ export function loadDragOut() {
   });
 }
 
-/** Whether the nearest node the app made draggable at or above `el` waits: another script's draggable nearer to it
- * keeps its own drag. An SVG element's `draggable` is read as the listener reads it, not at all (drag-out.js). */
-function waits(el) {
-  for (let at = elementOf(el); at; at = at.parentElement) {
+function* ancestorElements(el) {
+  for (let at = elementOf(el); at; at = at.parentElement) yield at;
+}
+
+/** Whether the nearest draggable in `ancestors` waits. The listener also ignores SVG draggable marks. */
+function waits(ancestors) {
+  for (const at of ancestors) {
     if (waitingView(at)) return true;
     if (at.namespaceURI !== "http://www.w3.org/2000/svg" && at.matches('[draggable="true" i]')) return false;
   }
@@ -394,10 +419,17 @@ function waitingDrag(event) {
   if (event.isTrusted === false) return;
   const target = event.target;
   if (target.matches?.('[draggable="true" i]') && !waitingView(target)) return;
+  if (target.localName === "img") {
+    const path = lightDomDragPath(event);
+    if (path.length) {
+      if (waits(path)) event.preventDefault();
+      return;
+    }
+  }
   const element = elementOf(target);
   const down = downForDrag(waitingInput, event, element);
   const at = (element && pressedAt(down, event, element)) ?? document.elementFromPoint?.(event.clientX, event.clientY);
-  if (waits(target) || (at && target.contains?.(at) && waits(at))) event.preventDefault();
+  if (waits(ancestorElements(target)) || (at && target.contains?.(at) && waits(ancestorElements(at)))) event.preventDefault();
 }
 
 /** Writes `el`'s `draggable` through the drag-out glue, which keeps the app's value on the node (drag-out.js). Until
@@ -541,6 +573,10 @@ export function applyProps(el, set, clear, adopting = false) {
           });
         });
       }
+    } else if (name === "aria-keyshortcuts") {
+      const chord = resolveShortcuts(value);
+      if (chord == null) el.removeAttribute(name);
+      else el.setAttribute(name, chord);
     } else if (name === "data-action") {
       el.setAttribute(name, value);
       el.style.touchAction = "none";
@@ -635,6 +671,5 @@ export function syncViewportFit() {
   if (meta && meta.content !== want) {
     meta.content = want;
   }
-  const vv = globalThis.visualViewport;
-  root.style.height = widget === "resizes-content" && vv && vv.scale === 1 && !document.documentElement.hasAttribute("data-scrolldocument") ? `${Math.min(innerHeight, vv.height)}px` : "";
+  fitVisualViewport(root, widget === "resizes-content");
 }

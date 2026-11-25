@@ -35,6 +35,45 @@ package final class ContributionsIOS {
         case safeAreaPadding = 1
         case barReservation = 2
         case keyboardInsets = 3
+        case containerClearance = 4
+    }
+
+    /// What `identity` adds, as last recorded, and its effect, as last measured; zero where it adds
+    /// nothing.
+    package func insets(of identity: Identity) -> UIEdgeInsets {
+        entries.first { $0.identity == identity }?.insets ?? .zero
+    }
+    package func effect(of identity: Identity) -> UIEdgeInsets {
+        entries.first { $0.identity == identity }?.effect ?? .zero
+    }
+
+    /// Record that `identity` adds `insets`, none where they are zero, at a generation newer than its
+    /// last, and write the contributions, unless that is what it adds already: a write the host makes
+    /// of its own accord.
+    package func write(_ identity: Identity, _ insets: UIEdgeInsets) {
+        guard insets != self.insets(of: identity) else { return }
+        set(identity, insets == .zero ? nil : insets, generation: generation(after: identity))
+        apply()
+    }
+
+    /// Write the owner's root's own contributions (LLP 1123 D11, D3): its additional insets, then its
+    /// safe-area padding, each apart and none where zero; activation supplies them from
+    /// `Kernel::owner_writes` (stage 5), and tests set them directly.
+    package func writeRoot(_ node: UInt32, additional: UIEdgeInsets, padding: UIEdgeInsets) {
+        let inset = Identity(node: node, operation: .additionalInsets), pad = Identity(node: node, operation: .safeAreaPadding)
+        guard additional != insets(of: inset) || padding != insets(of: pad) else { return }
+        // Record the padding again after a new inset, which stands before it
+        if additional != .zero, insets(of: inset) == .zero, insets(of: pad) != .zero {
+            set(pad, nil, generation: generation(after: pad))
+        }
+        set(inset, additional == .zero ? nil : additional, generation: generation(after: inset))
+        set(pad, padding == .zero ? nil : padding, generation: generation(after: pad))
+        apply()
+    }
+
+    /// A generation newer than `identity`'s last, recorded or taken away.
+    private func generation(after identity: Identity) -> UInt64 {
+        (entries.first { $0.identity == identity }?.generation ?? retired[identity] ?? 0) + 1
     }
 
     package struct Entry: Equatable {
@@ -139,10 +178,14 @@ package final class ContributionsIOS {
         // A call from a callback a write raises is owed, not dropped: the pass runs again once the
         // writes end, from what the call recorded
         guard !writing else { return owed = true }
-        repeat {
-            owed = false
-            measure()
-        } while owed
+        // One stepping holds Exact's reactions through the owed passes too, so they read only the
+        // settled insets
+        SafeAreaSteps.stepping {
+            repeat {
+                owed = false
+                measure()
+            } while owed
+        }
     }
 
     private func measure() {
@@ -240,15 +283,22 @@ package final class ContributionsIOS {
 
 /// Exact's reactions to a safe-area change, held while a ledger writes in steps (LLP 1123 D11), so
 /// each reads only the settled result. The stepping's end releases them: each held reaction runs
-/// once, in the order first held, with what its last call carried.
+/// once, in the order first held, with what its last call carried. A reaction is its owner's at
+/// one call site, so an owner's reactions to different changes are held apart.
 package enum SafeAreaSteps {
+    private struct Reaction: Hashable {
+        var owner: ObjectIdentifier
+        var file: String
+        var line: UInt
+    }
+
     nonisolated(unsafe) private static var depth = 0
-    nonisolated(unsafe) private static var held: [(ObjectIdentifier, () -> Void)] = []
+    nonisolated(unsafe) private static var held: [(Reaction, () -> Void)] = []
 
     /// Run `reaction` for `owner` now, or once when the stepping under way ends.
-    package static func react(_ owner: AnyObject, _ reaction: @escaping () -> Void) {
+    package static func react(_ owner: AnyObject, file: StaticString = #fileID, line: UInt = #line, _ reaction: @escaping () -> Void) {
         guard depth > 0 else { return reaction() }
-        let id = ObjectIdentifier(owner)
+        let id = Reaction(owner: ObjectIdentifier(owner), file: "\(file)", line: line)
         if let i = held.firstIndex(where: { $0.0 == id }) {
             held[i].1 = reaction
         } else {

@@ -1,3 +1,5 @@
+import { reorderPress } from './motion-glue.js';
+
 // Dropping across lists on the web (LLP 1094 D5–D9): a grip whose list has
 // a `reorderGroup`, for `arrangeController` (motion-glue.js). The page draws
 // the lifted row as a ghost in the top layer. The pointer picks the grouped
@@ -46,6 +48,15 @@ export function groupController({ views, collections, request, applyBatch, now, 
   const reduced = () => !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   let cur = null, pending = null, pump = null, pumpTime = null;
   const lists = group => [...(root ?? doc).querySelectorAll('[data-reordergroup]')].filter(el => el.dataset.reordergroup === group && views.get(viewOf(el)) === el);
+  function mapping(b, view, y) {
+    if (!b.section) return collections.reorderMapping(view, y);
+    const port = views.get(view), card = b.row.parentElement;
+    if (!port?.contains(card)) return null;
+    const rect = port.getBoundingClientRect(), box = card.getBoundingClientRect();
+    return { revision: 0, scrollSequence: 0, scrollTop: rect.top - box.top, rowWidth: card.clientWidth,
+      portWidth: port.clientWidth, portHeight: port.clientHeight, totalExtent: card.clientHeight,
+      port, portTop: rect.top, contentY: y - box.top };
+  }
   const binding = b => ({ runtime: b.runtime, handleKey: b.handleKey, listKey: b.listKey, wrapperKey: b.wrapperKey, rootKey: b.rootKey, rowEpoch: b.rowEpoch });
   const geometry = m => ({ revision: m.revision, scrollSequence: m.scrollSequence, scrollTop: m.scrollTop, portWidth: m.portWidth,
     portHeight: m.portHeight, rowWidth: m.rowWidth, totalExtent: m.totalExtent, contentY: m.contentY });
@@ -65,18 +76,32 @@ export function groupController({ views, collections, request, applyBatch, now, 
   // The pointer picks the list. The row's centre gives its insertion height there (D7).
   function over(d) {
     const c = centre(d), point = contact(d);
-    for (const el of lists(d.group)) {
-      const m = collections.reorderMapping(viewOf(el), c[1]);
+    for (const el of d.b.section ? [views.get(d.b.list)] : lists(d.group)) {
+      const m = mapping(d.b, viewOf(el), c[1]);
       if (m && inside(m.port, point)) return { view: viewOf(el), el, m };
     }
     return null;
   }
   // Outside every grouped port the last certified gap stands.
+  const layoutTop = el => {
+    let y = 0;
+    for (; el; el = el.offsetParent) y += el.offsetTop + el.clientTop;
+    return y;
+  };
   function sample(d) {
     if (cur !== d || d.phase !== 'active') return;
     const t = over(d);
     if (!t) return;
-    const r = call(d, 'reorder-preview-into', { targetView: t.view, ...geometry(t.m) });
+    const facts = { targetView: t.view, ...geometry(t.m) };
+    if (d.b.section) {
+      const row = d.b.row, card = row.parentElement;
+      const y = layoutTop(card) + t.m.contentY;
+      const before = [...card.children].find(el => el !== row && views.has(viewOf(el))
+        && el.offsetHeight && y < layoutTop(el) + el.offsetHeight / 2);
+      facts.rows = [{ key: t.view, value: [0, row.offsetHeight] }];
+      if (before) facts.rows.push({ key: viewOf(before), value: [0, 0] });
+    }
+    const r = call(d, 'reorder-preview-into', facts);
     if (r.accepted === true) d.target = r.target ?? d.target;
     else if (r.accepted === false && !r.error) cancel(d);
   }
@@ -89,7 +114,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
   function scrollers(d) {
     const target = views.get(d.target), out = [];
     if (!target) return out;
-    const m = collections.reorderMapping(d.target, centre(d)[1]);
+    const m = mapping(d.b, d.target, centre(d)[1]);
     if (m?.port) out.push([m.port, 'y']);
     for (let el = (m?.port ?? target).parentElement; el && el !== doc.documentElement; el = el.parentElement) {
       const cs = getComputedStyle(el);
@@ -129,17 +154,18 @@ export function groupController({ views, collections, request, applyBatch, now, 
     });
   }
 
-  // The lift: past the slop in any direction (D6), the ghost made before
-  // the begin's batch hides the row, the pin retained as the in-list drag's.
+  // Make the ghost before the begin's batch hides the row, retaining
+  // the pin as the in-list drag does (D6).
   function lift(b, e, g, v) {
-    const m = collections.reorderMapping(b.list, v.clientY);
-    const lease = m && collections.retainInteraction(b.el, e.pointerId);
+    if (!ready() || !b.el.isConnected || inert(b.el) || b.el.closest('[disabled]')) return null;
+    const m = mapping(b, b.list, v.clientY);
+    const lease = m && (b.section || collections.retainInteraction(b.el, e.pointerId));
     if (!m || !lease) return null;
     const ghost = ghostOf(b.row, reduced());
     const d = { b, group: g.group, pointer: e.pointerId, lease, ghost, grab: [e.clientX, e.clientY], phase: 'active', target: b.list, keys: false };
     cur = d;
     const r = call(d, 'reorder-begin', { ...geometry(m), flags: 1 });
-    if (r.accepted !== true) { cur = null; ghost.el.remove(); collections.releaseRetainedInteraction(lease); return null; }
+    if (r.accepted !== true) { cur = null; ghost.el.remove(); if (!b.section) collections.releaseRetainedInteraction(lease); return null; }
     d.token = r.token;
     b.el.setPointerCapture?.(e.pointerId);
     // The ghost follows the contact by where it went down on the grip (D6):
@@ -147,19 +173,22 @@ export function groupController({ views, collections, request, applyBatch, now, 
     return d;
   }
   function move(d, v) {
+    if (cur !== d || d.phase !== 'active') return;
     d.ghost.dx = v.clientX - d.grab[0]; d.ghost.dy = v.clientY - d.grab[1];
     d.ghost.el.style.translate = `${d.ghost.dx}px ${d.ghost.dy}px`;
     sample(d); edges(d);
   }
   function drop(d) {
     if (cur !== d || d.phase !== 'active') return;
+    d.clearPress?.();
     stopPump();
-    const view = d.target ?? d.b.list, m = collections.reorderMapping(view, centre(d)[1]);
+    const view = d.target ?? d.b.list, m = mapping(d.b, view, centre(d)[1]);
     const r = m ? call(d, 'reorder-terminal', { targetView: view, ...geometry(m) }) : call(d, 'reorder-cancel');
     after(d, r);
   }
   function cancel(d) {
     if (cur !== d || d.phase !== 'active') return;
+    d.clearPress?.();
     stopPump();
     after(d, call(d, 'reorder-cancel'));
   }
@@ -193,9 +222,10 @@ export function groupController({ views, collections, request, applyBatch, now, 
     if (cur !== d) return;
     cur = null; mark();
     d.ghost?.el.remove();
+    d.clearPress?.();
     for (const [el, name, fn] of d.listeners ?? []) el.removeEventListener(name, fn);
     const f = request({ ...binding(d.b), op: 'reorder-finish', token: d.token, now: now() });
-    collections.releaseRetainedInteraction(d.lease);
+    if (!d.b.section) collections.releaseRetainedInteraction(d.lease);
     if (f?.batch) applyBatch(f.batch);
     // Focus follows the keys (D9): the moved row's grip where it landed,
     // else back to the grip it started from.
@@ -218,44 +248,33 @@ export function groupController({ views, collections, request, applyBatch, now, 
   const refused = () => {
     log('reorder: a drag refused: the last drop is held until its move shows (LLP 1094 D8); a person waits for the card to land; a drive waits with `clock settle` before the next drag');
   };
-  // The scroll container under the contact, short of the grip, where `touch-action` stops.
-  const scroller = (el, grip) => {
-    for (let n = el; n && n !== grip; n = n.parentElement) {
-      const s = getComputedStyle(n);
-      if (/(auto|scroll|hidden)/.test(s.overflowX + s.overflowY)) return n;
-    }
-    return null;
-  };
   function down(b, e, g) {
     if (cur?.phase === 'landing') cur.landNow();
     if (cur && !inert(b.el)) refused();
     if (cur || inert(b.el)) return; // no lift while a session holds (D8)
     pending?.();
-    collections.reorderContact(b.el, e.pointerId);
+    if (!b.section) collections.reorderContact(b.el, e.pointerId);
     const start = [e.clientX, e.clientY], events = [];
-    let d = null;
+    let d = null, press;
     const on = (el, name, fn) => { el.addEventListener(name, fn); events.push([el, name, fn]); };
-    const cleanup = () => { for (const [el, name, fn] of events.splice(0)) el.removeEventListener(name, fn); if (pending === cleanup) pending = null; if (!d) collections.releaseInteraction(e.pointerId); };
-    pending = cleanup;
-    on(doc, 'pointermove', v => {
-      if (v.pointerId !== e.pointerId) return;
+    const cleanup = () => { press?.clear(); for (const [el, name, fn] of events.splice(0)) el.removeEventListener(name, fn); if (pending === cleanup) pending = null; if (!d) collections.releaseInteraction(e.pointerId); };
+    cleanup.handle = b.id; pending = cleanup;
+    const moved = (v, held = false) => {
+      if (v.pointerId !== e.pointerId || !held && !press.move(v)) return;
       if (!d) {
-        if (Math.hypot(v.clientX - start[0], v.clientY - start[1]) < SLOP) return;
-        d = lift(b, e, g, v);
+        if (!held && Math.hypot(v.clientX - start[0], v.clientY - start[1]) < SLOP) return;
+        d = lift(b, held ? v : e, g, v);
         if (!d) { cleanup(); return; }
-        d.listeners = events; pending = null;
+        d.listeners = events; d.clearPress = () => press.clear(); pending = null;
       }
       v.preventDefault(); v.stopPropagation(); move(d, v);
-    });
+    };
+    b.press = press = reorderPress(e, b.el, v => { moved(v, true); return !!d; }, cleanup);
+    on(doc, 'pointermove', moved);
     // A child's capture loss while the grip takes capture is no cancel (habits F10).
     const up = v => {
       if (v.pointerId !== e.pointerId || v.type === 'lostpointercapture' && v.target !== b.el) return;
       if (!d) {
-        // The browser took a finger before the lift (LLP 1102 §3.17): say why, as the pan glue does.
-        if (v.type === 'pointercancel' && e.pointerType !== 'mouse') {
-          const s = scroller(e.target, b.el), named = s?.dataset?.testid ? ` ("${s.dataset.testid}")` : '';
-          log(`reorder: the browser took the ${e.pointerType || 'pointer'} contact on a grip to scroll before it lifted${s ? `: a scroll container under the grip${named} (overflow-x or overflow-y hidden, as an ellipsis title) ends touch-action there; give it touch-action="none", or start the grip off it` : '; give the grip touch-action="none"'}`);
-        }
         cleanup(); return;
       }
       // A lifted drag is no press: the click its release makes is swallowed.
@@ -263,7 +282,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
     };
     for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) on(doc, name, up);
     on(doc, 'keydown', k => { if (d && k.key === 'Escape' && d.phase === 'active') { k.preventDefault(); cancel(d); } });
-    on(doc.defaultView ?? globalThis, 'blur', () => { if (d) cancel(d); });
+    on(doc.defaultView ?? globalThis, 'blur', () => { cleanup(); if (d) cancel(d); });
   }
 
   // The keys (D9): one listener on the document while a key session lives,
@@ -274,15 +293,15 @@ export function groupController({ views, collections, request, applyBatch, now, 
     if (cur) { if (!e.defaultPrevented) refused(); return; } // the key session's own Space drop is no refusal
     // The keys' contact takes the row's interaction pin as a finger's does;
     // the mapping reports it before the pin is retained.
-    collections.reorderContact(b.el, -1);
-    const r0 = b.el.getBoundingClientRect(), m = collections.reorderMapping(b.list, r0.top + r0.height / 2);
-    const lease = m && collections.retainInteraction(b.el, -1);
+    if (!b.section) collections.reorderContact(b.el, -1);
+    const r0 = b.el.getBoundingClientRect(), m = mapping(b, b.list, r0.top + r0.height / 2);
+    const lease = m && (b.section || collections.retainInteraction(b.el, -1));
     if (!m || !lease) { collections.releaseInteraction(-1); return; }
     e.preventDefault();
     const d = { b, group: b.group, lease, ghost: null, phase: 'active', target: b.list, keys: true, listeners: [] };
     cur = d;
     const r = call(d, 'reorder-begin', { ...geometry(m), flags: 2 });
-    if (r.accepted !== true) { cur = null; collections.releaseRetainedInteraction(lease); return; }
+    if (r.accepted !== true) { cur = null; if (!b.section) collections.releaseRetainedInteraction(lease); return; }
     d.token = r.token; mark();
     const key = k => {
       if (k.exactFlowCapture) return;
@@ -291,9 +310,20 @@ export function groupController({ views, collections, request, applyBatch, now, 
         k.preventDefault();
         const s = call(d, 'reorder-step', { flags: STEPS[k.key] });
         if (s.accepted === true) d.target = s.target ?? d.target;
+        // On the wasm target the runner selects the row and the browser lays it out.
+        if (s.alignView != null) {
+          const anchor = views.get(s.alignView), row = b.row;
+          if (anchor?.parentElement !== row.parentElement) return;
+          const distance = layoutTop(anchor) + (s.after ? anchor.offsetHeight : 0) - layoutTop(row);
+          const offset = distance > 0 ? distance - row.offsetHeight : distance;
+          const rows = [{ key: b.list, value: [offset, row.offsetHeight] }];
+          if (!s.after) rows.push({ key: s.alignView, value: [0, 0] });
+          call(d, 'reorder-preview-into', { targetView: b.list, ...geometry(mapping(b, b.list, 0)), rows });
+          row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
       } else if (k.key === ' ' || k.key === 'Enter') {
         k.preventDefault();
-        const t = views.get(d.target), m2 = t && collections.reorderMapping(d.target, 0);
+        const t = views.get(d.target), m2 = t && mapping(d.b, d.target, 0);
         after(d, m2 ? call(d, 'reorder-terminal', { targetView: d.target, ...geometry(m2) }) : call(d, 'reorder-cancel'));
       } else if (k.key === 'Escape') { k.preventDefault(); after(d, call(d, 'reorder-cancel')); }
     };
@@ -306,13 +336,15 @@ export function groupController({ views, collections, request, applyBatch, now, 
     /** A grouped grip's group and key admission (D1, D9). */
     bind(b, g) {
       b.group = g.group;
-      if (!g.group || !g.keys || b.keyed) return;
+      b.section = !!g.section;
+      if (!(g.group || b.section) || !g.keys || b.keyed) return;
       b.keyed = e => keydown(b, e);
       if (!b.el.hasAttribute('tabindex')) { b.el.tabIndex = 0; b.tabbed = true; }
       if (!b.el.hasAttribute('role')) { b.el.setAttribute('role', 'button'); b.roled = true; }
       b.el.addEventListener('keydown', b.keyed);
     },
     release(b) {
+      if (pending?.handle === b.id) pending();
       if (!b.keyed) return;
       b.el.removeEventListener('keydown', b.keyed); b.keyed = null;
       if (b.tabbed) b.el.removeAttribute('tabindex');
@@ -328,8 +360,10 @@ export function groupController({ views, collections, request, applyBatch, now, 
       // registers the ghost's return with the commit's own animations.
       if (op.phase === 'settling' || op.phase === 'cancelling') land(d, op);
     },
+    cancel(id) { if (cur && views.get(cur.b.list)?.id === id) cancel(cur); },
     commit() { if (cur?.phase === 'active' && cur.ghost) edges(cur); },
     reset() {
+      pending?.();
       const d = cur;
       if (!d) return;
       stopPump();

@@ -62,6 +62,7 @@ fn boot_app(source: &str, reduced_motion: bool) -> Presenter<()> {
     let phone = Device {
         night: false,
         font_scale: 1.0,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         format_locale: String::new(),

@@ -780,6 +780,7 @@
     try {
       return JSON.parse(host(6, "call", JSON.stringify(request)));
     } catch (e) {
+      if (e && /^NotSupportedError: /.test(e.message)) e.name = "NotSupportedError";
       // at bake, no module: storage's refusal (LLP 1067 D4)
       throw e && e.message === "bake"
         ? storageError("native.call() is unavailable during bake: the build links no native module", "bake")
@@ -792,8 +793,9 @@
   // outcomeJson)` resolves that fetch; drain and settle again. `__exact_settle(id, "final")` refuses an answer still
   // waiting on nothing of its own.
   // A handler a module calls back (LLP 1133.016 D9): the `tools` export's, its value as JSON text.
-  function tool(name, args) {
-    var handlers = global.exact.tools,
+  function tool(source, args) {
+    var name = source.slice(source.indexOf(":") + 1),
+      handlers = name !== "script.message" || source === "event:script.message" ? global.exact.tools : undefined,
       f = handlers && Object.prototype.hasOwnProperty.call(handlers, name) ? handlers[name] : undefined,
       text = function (v) {
         return JSON.stringify(v === undefined ? null : v);
@@ -875,6 +877,15 @@
                   .then(function (r) {
                     return r.text().then(function (t) {
                       if (r.status === 200) return JSON.parse(t);
+                      if ((r.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase() === "application/json") {
+                        var refusal;
+                        try { refusal = JSON.parse(t); } catch (_) {}
+                        if (refusal && typeof refusal.error === "string") {
+                          var error = new Error(refusal.message || refusal.error);
+                          error.name = refusal.error;
+                          throw error;
+                        }
+                      }
                       throw new Error(t || "native call failed");
                     });
                   });
@@ -884,7 +895,7 @@
       try {
         result =
           mutation === "tool"
-            ? tool(source.slice(5), JSON.parse(JSON.parse(argsJson)[0]))
+            ? tool(source, JSON.parse(JSON.parse(argsJson)[0]))
             : global.exact.answer(source, JSON.parse(argsJson), store, storage, native);
       } finally {
         call.sync = false;

@@ -114,15 +114,7 @@ pub(super) fn determine_flex_base_size(
             child_known_dimensions
         };
 
-        let container_width = constants.node_inner_size.main(dir);
-        let box_sizing_adjustment = if child_style.box_sizing() == BoxSizing::ContentBox {
-            let padding = child_style.padding().resolve_or_zero(container_width, |val, basis| tree.calc(val, basis));
-            let border = child_style.border().resolve_or_zero(container_width, |val, basis| tree.calc(val, basis));
-            (padding + border).sum_axes()
-        } else {
-            Size::ZERO
-        }
-        .main(dir);
+        let box_sizing_adjustment = child.box_sizing_adjustment(&child_style).main(dir);
         // Percentage flex basis values resolve against the container's inner main size, but only
         // if that size is definite. A known main size which is derived from the container's own
         // content is treated as indefinite here.
@@ -163,6 +155,7 @@ pub(super) fn determine_flex_base_size(
                 child.size_style.cross(dir),
                 cross_axis_available_space.maybe_sub(cross_axis_margin_sum).into_option(),
                 cross_axis_parent_size,
+                |val, basis| tree.calc(val, basis),
             )
         } else {
             None
@@ -215,7 +208,8 @@ pub(super) fn determine_flex_base_size(
             // Note: `child.size` has already been resolved against aspect_ratio in generate_anonymous_flex_items
             // So B will just work here by using main_size without special handling for aspect_ratio
             let main_size = child.size.main(dir);
-            let main_stretch_size = percent_resolution_main_size.maybe_sub(child.margin.main_axis_sum(dir));
+            let main_stretch_size =
+                percent_resolution_main_size.maybe_sub(child.margin.main_axis_sum(dir)).maybe_max(0.0);
 
             // A flex basis that is a sizing keyword (min-content, max-content, fit-content,
             // fit-content(...), stretch) is used in place of the main size property: `stretch`
@@ -228,7 +222,12 @@ pub(super) fn determine_flex_base_size(
                 // default constraint below
                 None
             } else if flex_basis_style.is_sizing_keyword() {
-                match resolve_sizing_keyword(flex_basis_style, main_stretch_size, percent_resolution_main_size) {
+                match resolve_sizing_keyword(
+                    flex_basis_style,
+                    main_stretch_size,
+                    percent_resolution_main_size,
+                    |val, basis| tree.calc(val, basis),
+                ) {
                     Some(SizingKeywordResolution::Exact(size)) => {
                         child.flex_basis_is_definite = true;
                         child.used_flex_basis_is_definite = true;
@@ -250,37 +249,42 @@ pub(super) fn determine_flex_base_size(
                     None => None,
                 }
             } else {
-                if let Some(flex_basis) = flex_basis.or(main_size) {
+                if let Some(flex_basis) = flex_basis.or(main_size.filter(|_| flex_basis_style.is_auto())) {
                     child.flex_basis_is_definite = true;
                     break 'flex_basis flex_basis;
                 };
 
                 // A main size that is a sizing keyword either resolves to an exact size or
                 // determines the available space constraint the item is measured under
-                match resolve_sizing_keyword(
-                    child.size_style.main(dir),
-                    main_stretch_size,
-                    percent_resolution_main_size,
-                ) {
-                    Some(SizingKeywordResolution::Exact(size)) => {
-                        child.flex_basis_is_definite = true;
-                        child.used_flex_basis_is_definite = flex_basis_style.is_auto();
-                        break 'flex_basis size;
+                if flex_basis_style.is_auto() {
+                    match resolve_sizing_keyword(
+                        child.size_style.main(dir),
+                        main_stretch_size,
+                        percent_resolution_main_size,
+                        |val, basis| tree.calc(val, basis),
+                    ) {
+                        Some(SizingKeywordResolution::Exact(size)) => {
+                            child.flex_basis_is_definite = true;
+                            child.used_flex_basis_is_definite = true;
+                            break 'flex_basis size;
+                        }
+                        Some(SizingKeywordResolution::Fit(stretch)) if dir.is_row() => {
+                            let known = known_for_probe(tree);
+                            break 'flex_basis crate::compute::common::fit_content_width(
+                                tree,
+                                child.node,
+                                known,
+                                known.map(|d| d.is_some()),
+                                child_parent_size,
+                                stretch,
+                                SizingMode::ContentSize,
+                            );
+                        }
+                        Some(resolution) => Some(resolution.block_axis().available()),
+                        None => None,
                     }
-                    Some(SizingKeywordResolution::Fit(stretch)) if dir.is_row() => {
-                        let known = known_for_probe(tree);
-                        break 'flex_basis crate::compute::common::fit_content_width(
-                            tree,
-                            child.node,
-                            known,
-                            known.map(|d| d.is_some()),
-                            child_parent_size,
-                            stretch,
-                            SizingMode::ContentSize,
-                        );
-                    }
-                    Some(resolution) => Some(resolution.block_axis().available()),
-                    None => None,
+                } else {
+                    None
                 }
             };
 
@@ -358,8 +362,7 @@ pub(super) fn determine_flex_base_size(
         // The hypothetical main size is the item’s flex base size clamped according to its
         // used min and max main sizes (and flooring the content box size at zero).
 
-        child.inner_flex_basis =
-            child.flex_basis - child.padding.main_axis_sum(constants.dir) - child.border.main_axis_sum(constants.dir);
+        child.inner_flex_basis = child.flex_basis - padding_border_sum;
 
         let padding_border_axes_sums = (child.padding + child.border).sum_axes().map(Some);
 
@@ -510,6 +513,15 @@ pub(super) fn collect_flex_lines<'a>(
                 let available = if constants.has_definite_main_size { available } else { available.min(max_size) };
                 available.maybe_max(constants.min_size.main(constants.dir))
             }),
+            // A column container's automatic main size is content-based, so definite available space
+            // handed down by an ancestor does not constrain where its lines wrap. Automatic widths
+            // resolve against available space, so rows do wrap against it.
+            None if !constants.dir.is_row()
+                && !constants.has_definite_main_size
+                && available_space.main(constants.dir).is_definite() =>
+            {
+                AvailableSpace::MaxContent
+            }
             None => available_space.main(constants.dir),
         };
 
@@ -593,6 +605,15 @@ pub(super) fn collect_balanced_flex_lines<'a>(
                 let available = if constants.has_definite_main_size { available } else { available.min(max_size) };
                 available.maybe_max(constants.min_size.main(constants.dir))
             }),
+            // A column container's automatic main size is content-based, so definite available space
+            // handed down by an ancestor does not constrain where its lines wrap. Automatic widths
+            // resolve against available space, so rows do wrap against it.
+            None if !constants.dir.is_row()
+                && !constants.has_definite_main_size
+                && available_space.main(constants.dir).is_definite() =>
+            {
+                AvailableSpace::MaxContent
+            }
             None => available_space.main(constants.dir),
         }
     } else {
@@ -1086,8 +1107,24 @@ pub(super) fn resolve_flexible_lengths(line: &mut FlexLine, constants: &AlgoCons
     loop {
         // a. Check for flexible items. If all the flex items on the line are frozen,
         //    free space has been distributed; exit this loop.
+        //    The space used by the items and the sums of the unfrozen items' flex factors
+        //    (both needed for step b) are computed in the same pass.
 
-        if line.items.iter().all(|child| child.frozen) {
+        let mut all_frozen = true;
+        let mut items_space: f32 = 0.0;
+        let mut sum_flex_grow: f32 = 0.0;
+        let mut sum_flex_shrink: f32 = 0.0;
+        for child in line.items.iter() {
+            if child.frozen {
+                items_space += child.outer_target_size.main(constants.dir);
+            } else {
+                all_frozen = false;
+                items_space += child.flex_basis + child.margin.main_axis_sum(constants.dir);
+                sum_flex_grow += child.flex_grow;
+                sum_flex_shrink += child.flex_shrink;
+            }
+        }
+        if all_frozen {
             break;
         }
 
@@ -1097,25 +1134,7 @@ pub(super) fn resolve_flexible_lengths(line: &mut FlexLine, constants: &AlgoCons
         //    value is less than the magnitude of the remaining free space, use this
         //    as the remaining free space.
 
-        let used_space: f32 = total_main_axis_gap
-            + line
-                .items
-                .iter()
-                .map(|child| {
-                    if child.frozen {
-                        child.outer_target_size.main(constants.dir)
-                    } else {
-                        child.flex_basis + child.margin.main_axis_sum(constants.dir)
-                    }
-                })
-                .sum::<f32>();
-
-        // EXACT PATCH 3: iterate the unfrozen set without allocating it.
-
-        let (sum_flex_grow, sum_flex_shrink): (f32, f32) =
-            line.items.iter().filter(|child| !child.frozen).fold((0.0, 0.0), |(flex_grow, flex_shrink), item| {
-                (flex_grow + item.flex_grow, flex_shrink + item.flex_shrink)
-            });
+        let used_space: f32 = total_main_axis_gap + items_space;
 
         // EXACT PATCH 76: the initial free space already excludes the gaps.
         let free_space = if growing && sum_flex_grow < 1.0 {

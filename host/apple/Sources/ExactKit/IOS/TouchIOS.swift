@@ -17,8 +17,8 @@ public final class ExactWindow: UIWindow {
         // Read before UIKit delivers the event: which lifts lost the view their touch began on (`TouchLog.viewGone`),
         // and when the window had the event, on the mach clock of `UITouch.timestamp`
         #if EXACT_AGENT
-        let gone = ExactEnv.agentCarried && event.type == .touches ? TouchLog.viewGone(event) : []
-        let dispatched = ExactEnv.agentCarried ? CACurrentMediaTime() : 0
+        let gone = TouchLog.recording && event.type == .touches ? TouchLog.viewGone(event) : []
+        let dispatched = TouchLog.recording ? CACurrentMediaTime() : 0
         #endif
         // Inspect mode takes every touch and press (InspectIOS.swift), and
         // knows the touches down when it begins. (It reached this window,
@@ -27,7 +27,7 @@ public final class ExactWindow: UIWindow {
         InspectHost.see(event)
         if Inspect.on || InspectHost.owning, InspectHost.take(event, in: self) {
             #if EXACT_AGENT
-            if ExactEnv.agentCarried, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+            if TouchLog.recording, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
             #endif
             return
         }
@@ -41,14 +41,15 @@ public final class ExactWindow: UIWindow {
             for session in owners.isEmpty ? sessions : owners { session.presenter.supersedePress() }
             HeldState.input(at: touch.view) // a contact on a held node, or in it, lets its hold go (HeldState.swift)
         }
+        // An input a control takes inside this dispatch happened at the event
+        // (NavigationMarks.inputHappened), a native control's included.
+        let marks = NavigationMarks.shared, outer = marks.dispatching
+        if event.type == .touches || event.type == .presses { marks.dispatching = event.timestamp }
+        defer { marks.dispatching = outer }
         super.sendEvent(event)
         #if EXACT_AGENT
-        if ExactEnv.agentCarried, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+        if TouchLog.recording, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
         #endif
-        // A navigation is timed from its input: a finger lifting or a press.
-        if event.type == .presses || (event.allTouches ?? []).contains(where: { $0.phase == .ended }) {
-            ExactLaunch.shared.input(at: event.timestamp)
-        }
     }
 }
 
@@ -81,6 +82,20 @@ enum TouchLog {
     /// read inside a held touch waits for that (`touches.mjs`).
     nonisolated(unsafe) static var reached: Set<Int> = []
     static let capacity = 256
+    /// Whether the window logs touches: under the agent or `--live`, and while an attached session holds the input
+    /// grant (LLP 1012.000 D3), whose touches the touch runner plays and the log checks.
+    nonisolated(unsafe) static var attached = false
+    /// The attached session, which no driver routes (`Agent.routes`): a touch in it is in it.
+    nonisolated(unsafe) static weak var attachedSession: ExactSession?
+    static var recording: Bool { ExactEnv.agentCarried || attached }
+    /// The touches down in the window's last touch event.
+    nonisolated(unsafe) static var down = 0
+    /// Whether a touch is down in the window now: a person's, while no runner gesture is in flight. A touch a system
+    /// gesture cancels never reaches the window as cancelled, so one can be counted down until the next touch: input
+    /// is then refused until the person touches the app again, never let through under a resting finger.
+    static var touching: Bool { down > 0 }
+    /// The entries go; their numbering goes on, so a reader's cursor still means what it did.
+    static func forget() { entries.removeAll() }
     /// The touches down that began on a view (`viewGone`), held weakly: a cancelled touch never lifts here
     nonisolated(unsafe) static let viewed = NSHashTable<UITouch>.weakObjects()
 
@@ -116,6 +131,7 @@ enum TouchLog {
     }
 
     static func record(_ event: UIEvent, in window: UIWindow, gone: Set<UITouch>, dispatched: TimeInterval) {
+        down = (event.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }.count
         for touch in event.allTouches ?? [] {
             let phase: String
             switch touch.phase {
@@ -160,6 +176,10 @@ enum TouchLog {
                 out["session"] = label
                 out["generation"] = session.generation
                 break
+            }
+            if out["session"] == nil, let session = attachedSession, Agent.shows(session, v) {
+                out["session"] = session.label
+                out["generation"] = session.generation
             }
         }
         return out
@@ -277,6 +297,7 @@ extension Agent {
         }
         // A plain tap's aim: the target's own press (`AgentAddressedTap.swift`).
         let press = (req["aim"] as? [String: Any])?["press"] as? Bool == true
+        if press, at["at"] == nil, at["x"] == nil, at["y"] == nil, let refusal = inertDialogTap(req) { return refusal }
         // A row a grouped list draws, or its toggle's or detail button's
         // control (LLP 1084 D5): the finger aims at UIKit's cell or
         // accessory, never the hidden authored node beneath it.
@@ -303,6 +324,10 @@ extension Agent {
             }
             target = field; barred = true
         }
+        #if os(iOS)
+        // A header's pressable group the bar's title stands for: the title.
+        if flat == nil, target === v, let title = presenter.navigation.titleSurface(for: v) { target = title; barred = true }
+        #endif
         // A tab a tab bar shows, UIKit's or the one its tablist is drawn as: its item there.
         if flat == nil, target === v, let item = tabItem(v) {
             switch item {
@@ -338,7 +363,7 @@ extension Agent {
                          native: ["kind": "contextMenuDismissal", "label": "Dismiss context menu"])
         }
         #endif
-        if let why = obscured(inBar ? barItemTarget(v, bar: target, hit: seen!) : target, at: p, hit: seen!)
+        if let why = obscured(target, at: p, hit: seen!, barItem: inBar, request: at)
             ?? flat.flatMap({ flatObscured($0, at: p, hit: seen!) }) { return ["error": "tap #\(v.id): \(why)"] }
         // Named, it presses what it names, as the activation's tap does.
         var avoided: PressReach?

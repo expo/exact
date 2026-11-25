@@ -84,6 +84,18 @@ impl Tree {
         parent: impl Fn(ViewId) -> Option<ViewId>,
         scanned: &mut usize,
     ) -> Option<(NodesId, Vec<Frame>)> {
+        let mut frames = Vec::new();
+        let node = self.find_instance(view, parent, &mut frames, scanned)?;
+        Some((node.node, frames))
+    }
+
+    fn find_instance(
+        &self,
+        view: ViewId,
+        parent: impl Fn(ViewId) -> Option<ViewId>,
+        frames: &mut Vec<Frame>,
+        scanned: &mut usize,
+    ) -> Option<&NodeInst> {
         let mut chain = vec![view];
         // A moved view's path runs through its declaration (LLP 1013.002 D1).
         let up = |at| self.declared_parent(at).or_else(|| parent(at));
@@ -91,12 +103,11 @@ impl Tree {
             chain.push(next);
         }
         let mut targets = chain.into_iter().rev().peekable();
-        let mut frames = Vec::new();
         let mut here: &[Child] = &self.children;
         while let Some(target) = targets.next() {
-            let n = locate(here, target, &mut frames, scanned)?;
+            let n = locate(here, target, frames, scanned)?;
             if target == view {
-                return Some((n.node, frames));
+                return Some(n);
             }
             match n.list() {
                 Some(list)
@@ -112,5 +123,44 @@ impl Tree {
             }
         }
         None
+    }
+}
+
+impl Tree {
+    /// Only regions inside the card identify its rows. An outer region may
+    /// repeat the whole section while the card itself holds static rows.
+    pub(crate) fn keyed_children(
+        &self,
+        card: ViewId,
+        parent: impl Fn(ViewId) -> Option<ViewId>,
+    ) -> Vec<(ViewId, &str)> {
+        fn visit<'a>(
+            children: &'a [Child],
+            key: Option<&'a str>,
+            out: &mut Vec<(ViewId, &'a str)>,
+        ) {
+            for child in children {
+                match child {
+                    Child::Node(node) => {
+                        if let Some(key) = key {
+                            out.push((node.view, key));
+                        }
+                    }
+                    Child::Region(region) => match &region.active {
+                        Active::Arm { roots, .. } => visit(roots, key, out),
+                        Active::Rows { rows } => {
+                            for row in rows {
+                                visit(&row.roots, row.key.as_str(), out);
+                            }
+                        }
+                    },
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(node) = self.find_instance(card, parent, &mut Vec::new(), &mut 0) {
+            visit(&node.children, None, &mut out);
+        }
+        out
     }
 }

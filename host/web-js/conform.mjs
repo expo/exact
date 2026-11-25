@@ -74,7 +74,8 @@
 //   compares its state and not its tree), and the comparison stops at the
 //   first step the Linux host fails or has no delivery for (a pointer's
 //   phases, a wheel, a list's `into`, the browser's history) or that
-//   `LINUX_APART` names; a `drag` it takes.
+//   `LINUX_APART` names; a `drag` it takes. A target whose `LINUX_APART`
+//   names a step fails when Linux cannot run it, or errs before that step.
 //   --browser runs a cross-browser comparison of the JS target instead:
 //   Chrome is the oracle and each named engine takes the identical steps.
 //   --browser firefox,webkit shares one live Chrome drive between both engines;
@@ -522,7 +523,8 @@ async function drive(t, report, targetFail, dir, ws, js) {
       return session;
     };
     if (linux?.why) {
-      if (storageParity) fail('linux', linux.why);
+      // A target that names where Linux parts expects Linux to take the steps before it
+      if (storageParity || typeof LINUX_APART[t.name]?.[0] === 'string') fail('linux', linux.why);
       recordStep({ target: t.name, step: 'linux', skipped: linux.why });
     }
     else if (linux) {
@@ -547,7 +549,8 @@ async function drive(t, report, targetFail, dir, ws, js) {
         recordStep({ target: t.name, step, linux: 'stopped', skipped: `linux: ${apart[1]}` }); await L.close?.().catch(() => {}); L = null; return;
       }
       try { await fn(L); } catch (e) {
-        if (storageParity) fail(step, `linux: ${e.message.split('\n')[0]}`);
+        // A target that names the step where Linux parts takes every step before it on Linux
+        if (storageParity || typeof apart?.[0] === 'string') fail(step, `linux: ${e.message.split('\n')[0]}`);
         recordStep({ target: t.name, step, linux: 'stopped', skipped: `linux: ${e.message.split('\n')[0]}` }); await L?.close?.().catch(() => {}); L = null;
       }
     };
@@ -1020,6 +1023,7 @@ const LINUX_APART = {
   'synthetic-decorations': { slots: ['sizes'], why: "rangeFrame's sizes are each host's fonts' (wasm and JS compare them; Linux's are pinned in host/painted's range_frame_tests.rs)" },
   'synthetic-user-select-all': ['tap path', "The Linux agent's addressed tap activates the target directly. Reader selection starts on a mouse down.", { slot: 'path', value: '' }],
   'synthetic-native-buttons': ['tap open-dialog', 'the Linux host does not present dialogs (LLP 1001, LLP 1021 D2): it refuses a `commandfor` press, so the opener keeps the focus'],
+  'synthetic-file-drag': ['type composer paste --image scripts/fixtures/assets/tint.png', 'the Linux host pastes text only'],
 };
 const linuxCrate = app => { const f = resolve(root, 'apps', app, 'linux', 'Cargo.toml'); return existsSync(f) ? /^name\s*=\s*"([^"]+)"/m.exec(readFileSync(f, 'utf8'))?.[1] : null; };
 function linuxFor(t) {

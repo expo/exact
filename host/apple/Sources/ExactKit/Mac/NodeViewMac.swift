@@ -65,7 +65,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// Its runs' elements, kept until the runs change, and what else made
     /// them (`textAccessibilityChildren`).
     var inlineKeyViews: [UInt32: InlineKeyView] = [:]
-    var inlineAccessibility: (key: String?, elements: [NSAccessibilityElement])?
+    var hasAssignedCustomActions = false
+    var inlineAccessibility: (key: String?, actionRuns: [UInt32], elements: [NSAccessibilityElement])?
     var inlinePressed: (id: UInt32, down: NSPoint)?
     /// An SVG element a click in this `svg` went down on (LLP 1055.000 D17).
     var svgPressed: UInt32?
@@ -127,7 +128,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package var arrangeShift = CGPoint.zero
     /// How far its scroller's scroll moves a sticky box (LLP 1083, `Sticky.swift`).
     package var stickyOffset = CGPoint.zero
-    package var scale: CGFloat = 1
+    package var scale = CGPoint(x: 1, y: 1)
     package var rotate: CGFloat = 0
     var rotationAxis: [Double] = [0, 0, 0]
     weak package var presenter: Presenter?
@@ -164,7 +165,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// raster, symbol, surface).
     var layerPaintCache: Bool?
     /// What the host last wrote to AppKit accessibility (props and form state).
-    struct AccessibilityWrite: Equatable { var enabled = true; var identifier: String?; var label: String?; var help: String?; var required = false; var formInitialized = false; var text: TextAccessibilityWrite? }
+    struct AccessibilityWrite: Equatable { var actionGroup = false; var enabled = true; var identifier: String?; var label: String?; var help: String?; var required = false; var formInitialized = false; var text: TextAccessibilityWrite? }
+    var hadFormActionRefs = false
     var lastAccessibilityWrite = AccessibilityWrite()
     var boxGradient: CAGradientLayer?
     var boxPattern: (any GradientPatterning)?
@@ -200,10 +202,13 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// then its depth (larger nearer); `nil` is the kernel's frame.
     /// Hit-testing inverts it, nearest child first; accessibility reports the
     /// mapped box.
-    package var placement: [Double]?
+    package var placement: [Double]? {
+        didSet { notePlacement(wasPlaced: oldValue != nil || placementHidden) }
+    }
     private var hiddenBeforePlacement = false
     package var placementHidden = false {
         didSet {
+            notePlacement(wasPlaced: placement != nil || oldValue)
             if placementHidden && !oldValue { hiddenBeforePlacement = hostHidden }
             if placementHidden { isHidden = true }
             else if oldValue { isHidden = hiddenBeforePlacement }
@@ -277,6 +282,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
 
     /// A native button's command is its own too (a confirmation's close row, LLP 1069.011.000 D9).
     package var pressable: Bool { handlers.contains("press") || defaultLink != nil || presenter?.invocation(of: self) != nil }
+    package var panelRouteRoot = false { didSet { if oldValue != panelRouteRoot { applyBoxLayer(); needsDisplay = true; materialContent?.needsDisplay = true } } }
     /// Whether the focus here matches `:focus-visible`, so its ring shows (`FocusMac.swift`).
     var focusVisible = false { didSet { if focusVisible != oldValue { noteFocusRingMaskChanged(); lookState(focus: focusVisible) } } }
     /// A focused field whose ring Exact draws (LLP 1104 D6; `showFieldFocus`).
@@ -303,7 +309,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             activateNative()
             return
         }
-        if pressable, props["href"] == nil ? presses : name == "Enter" {
+        if pressable, linkDestination == nil ? presses : name == "Enter" {
             if name == " " { keyboardPressed = true; pressed = true }
             let canvas = inputCanvas, ownerWindow = window
             presenter?.press(id)
@@ -563,7 +569,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
 
     func updateMaterial() {
         let requested = props["backgroundMaterial"]
-        defer { applyBackdrop(); syncGlassSlot(); syncGlassGroup(); syncMenuPanelScroll() }
+        defer { applyBackdrop(); syncGlassSlot(); syncGlassGroup(); syncScrollCorner() }
         let kind = requested ?? (needsSheetMaterial ? "sheet" : paintedMenuRadius != nil && !unevenCorners ? "glass" : nil)
         if materialKind != kind {
             releaseGlassIsolation()
@@ -697,16 +703,11 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
                                port.width, port.height].map(Double.init))
     }
 
-    /// The direct child of a canvas this node is under, when that child is
-    /// placed by the surface: the node whose `placement` maps this subtree.
-    var placedAncestor: NodeView? {
-        var v: NSView? = self
-        while let n = v {
-            if let node = n as? NodeView, (node.placement != nil || node.placementHidden) { return node }
-            if n.superview?.canvasOverlayOwner != nil { return nil }
-            v = n.superview
-        }
-        return nil
+    private func notePlacement(wasPlaced: Bool) {
+        let placed = placement != nil || placementHidden
+        guard placed != wasPlaced else { return }
+        if placed { Self.placedViews.add(self) }
+        else { Self.placedViews.remove(self) }
     }
 
     /// A homography applied to a point (row major, projective).
@@ -1012,7 +1013,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         props = next
         if set["listMarker"] != nil || clear.contains("listMarker") { layoutProseMarker() }
         if set["groupedSeparator"] != nil || clear.contains("groupedSeparator") { applyGroupedSeparator() }
-        if set["symbolEffectValue"] != nil || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
+        if set["symbolEffectValue"] != nil || clear.contains("symbolEffectValue") || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
             || set["symbolFillRule"] != nil || clear.contains("symbolFillRule") { updateSymbol() }
         applyTextArea()
         remakeFieldIfNeeded()
@@ -1143,11 +1144,12 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         // scroll view to hold; one there (CSS computes `overflow-x: hidden`'s
         // other axis to `auto`, an ellipsis's usual pair) only took the
         // clicks a button around the label should hear (files diary F15).
-        // Its overflow clips instead, as the box it paints in.
-        let paragraph = kind == "text"
-        let ox = paragraph ? "visible" : s["overflow_x"]?.string ?? "visible", oy = paragraph ? "visible" : s["overflow_y"]?.string ?? "visible"
+        // Its overflow clips instead, as the box it paints in. A text
+        // control's editor scrolls itself (`isTextControl`).
+        let ownScroller = kind == "text" || isTextControl
+        let ox = ownScroller ? "visible" : s["overflow_x"]?.string ?? "visible", oy = ownScroller ? "visible" : s["overflow_y"]?.string ?? "visible"
         if ((ox == "scroll" || ox == "auto") || (oy == "scroll" || oy == "auto")) && scroll == nil {
-            let sv = ChainingScrollView(frame: bounds)
+            let sv = ChainingScrollView(frame: bounds, everyWheelEvent: needsEveryWheelEvent)
             sv.pointerOwner = self
             sv.collectionWillScroll = { [weak self] in
                 guard let self else { return }
@@ -1305,9 +1307,9 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if let row = superview as? NodeView, row.style["appearance"] != nil { row.needsLayout = true } // its bezel (FormRowsMac.swift)
         if focusVisible { noteFocusRingMaskChanged() } // the ring follows the box
         layerPaintCache = nil
-        if hasBoxPaint || clipsToBounds || clipBox != nil { applyClipRadius() }
+        if hasBoxPaint || clipsToBounds || clipBox != nil || scroll != nil { applyClipRadius() } // a scroller's corner is its scroll view's
         syncEllipticalClip()
-        if materialView != nil { applyMaterialRadius(); syncMenuPanelScroll() }
+        if materialView != nil { applyMaterialRadius() }
         if !backdropOperations.isEmpty { applyBackdrop() }
         // Border, gradient and image sublayers follow the new size.
         if layerBoxEligible && (hasBoxPaint || kind == "image") { needsDisplay = true }

@@ -25,9 +25,10 @@ pub(super) struct Slots {
     /// removing a node removes those slots, not a probe for every property
     /// there is.
     held: Map<u64, u32>,
-    /// The two identities a bit stands for, for readers that borrow a slot.
+    /// The three identities a bit stands for, for readers that borrow a slot.
     zero: Slot,
     one: Slot,
+    scale: Slot,
 }
 
 impl Default for Slots {
@@ -37,6 +38,7 @@ impl Default for Slots {
             held: Map::default(),
             zero: Slot::settled(Value::ZERO),
             one: Slot::settled(Value::scalar(1.0)),
+            scale: Slot::settled(Value::new(1.0, 1.0)),
         }
     }
 }
@@ -45,7 +47,7 @@ impl Slots {
     /// The settled slot a bit stands for, for `property`.
     fn identity(&self, property: Property) -> Option<&Slot> {
         let identity = property.identity()?;
-        [&self.zero, &self.one]
+        [&self.zero, &self.one, &self.scale]
             .into_iter()
             .find(|slot| same(slot.target, identity))
     }

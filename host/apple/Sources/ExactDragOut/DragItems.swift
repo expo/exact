@@ -28,9 +28,11 @@ enum DragItems {
     }
 
     /// One item per file, its type read from its extension and its name the
-    /// file's own; `url`, then `text`, on the first item after its file, since
-    /// a provider lists its higher-fidelity types first (Document:
-    /// `NSItemProvider.h`), or on one item of their own when there is no file.
+    /// file's own, then `url` and `text` each an item of its own: a
+    /// destination usually takes one of an item's representations, so on a
+    /// file's item they would be hidden behind it. With no file one item carries
+    /// `url` and then `text`, since a provider lists its higher-fidelity
+    /// types first (Document: `NSItemProvider.h`).
     /// An empty `url` or `text` is none, as `tree` reads it, and so is a
     /// `url` Foundation cannot read (`URL(string:)`), which the sources
     /// journal as it arrives.
@@ -50,10 +52,17 @@ enum DragItems {
                                                 loadHandler: entry.hasPrefix("app:/") ? appFile(entry, scratch, journal, open: open) : shipped(entry, session?.app.resolver, journal))
             return provider
         }
-        if providers.isEmpty, url != nil || text != nil { providers = [NSItemProvider()] }
-        if let first = providers.first {
-            if let url { first.registerObject(url as NSURL, visibility: .all) }
-            if let text { first.registerObject(text as NSString, visibility: .all) }
+        let words = ([url.map { $0 as NSURL }, text.map { $0 as NSString }] as [NSItemProviderWriting?]).compactMap { $0 }
+        if providers.isEmpty, !words.isEmpty {
+            let provider = NSItemProvider()
+            words.forEach { provider.registerObject($0, visibility: .all) }
+            providers = [provider]
+        } else {
+            providers += words.map { word in
+                let provider = NSItemProvider()
+                provider.registerObject(word, visibility: .all)
+                return provider
+            }
         }
         let lifted = Lifted(node)
         return providers.map { provider in

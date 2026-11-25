@@ -5,9 +5,9 @@
 //
 // - A viewfinder is a consumer of its track while it is displayed and its
 //   `srcObject` names the track (D3). The runner says when either changes and
-//   by whose commit (`displayed`, `bound`); the viewfinder joins the track
-//   with that origin, so a lease is taken only for the person's input or the
-//   app's own code (§14), and a viewfinder a tool showed shows nothing.
+//   by whose commits. The runner joins those origins and reports
+//   the result with the bound track. Only a view shown and bound by the app
+//   can start capture (§14).
 // - The photo output is the process's, one per capture (D3): an
 //   `AVCapturePhotoOutput` attached to the capture's session at the first
 //   photo, which takes every session's photos in turn. A photo in flight holds
@@ -74,27 +74,22 @@ public final class CameraModule: ExactPackage {
         weak var view: Viewfinder?
         /// Its `srcObject`: nil until its props arrive.
         var src: String?
-        /// Values of `srcObject` seen, and the runner's reports of them: a
-        /// value not yet reported is not yet the commit's, so its origin is unknown.
-        var changes = 0, reports = 0
-        var shown = false, madeBy = "app"
+        var presentation: ExactSubscription?
         var sub: Sub?
     }
 
     /// A viewfinder's place among its track's consumers.
     final class Sub: ExactTrackConsumer {
-        let track: String, origin: String
+        let track: String
         var live = false, isMuted = false
         var subscription: ExactSubscription?
-        var onLive: (ExactVideoSource?) -> Void = { _ in }
-        var onBlank: () -> Void = {}
-        var onMuted: () -> Void = {}
-        var onUnmuted: () -> Void = {}
-        init(track: String, origin: String) { self.track = track; self.origin = origin }
-        func live(video source: ExactVideoSource?) { live = true; onLive(source) }
-        func muted(_ reason: String) { isMuted = true; onMuted() }
-        func unmuted() { isMuted = false; onUnmuted() }
-        func ended() { live = false; onBlank() }
+        var source: ExactVideoSource?
+        var changed: () -> Void = {}
+        init(track: String) { self.track = track }
+        func live(video source: ExactVideoSource?) { live = true; self.source = source; changed() }
+        func muted(_ reason: String) { isMuted = true; changed() }
+        func unmuted() { isMuted = false; changed() }
+        func ended() { live = false; source = nil; changed() }
         func leave() { subscription?.cancel(); subscription = nil }
     }
 
@@ -136,9 +131,7 @@ public final class CameraModule: ExactPackage {
         picture = next; clipPath = path; agentClip = decoded
         if let decoded { say("clip \(path!) (\(decoded.duration) ms, sha256 \(decoded.sha256))") }
         cancelFrame?(); cancelFrame = nil
-        for (id, v) in views where v.sub?.live == true {
-            v.sub?.leave(); v.sub = nil; reconcile(id)
-        }
+        for v in views.values { render(v) }
     }
 
     private func elapsed(_ track: String) -> Double {
@@ -166,7 +159,7 @@ public final class CameraModule: ExactPackage {
 
     public func destroy(_ done: @escaping () -> Void) {
         cancelFrame?(); cancelFrame = nil; agentClip = nil
-        for v in views.values { v.sub?.leave() }
+        for v in views.values { v.presentation?.cancel() }
         views = [:]
         if cameraAppUp { endCameraApp("the session ended") }
         done()
@@ -177,84 +170,50 @@ public final class CameraModule: ExactPackage {
     public func view(_ tag: String, id: String, props: [String: String], events: ExactPackageEvents) throws -> ExactPackageView {
         guard tag == "exact-camera" else { throw ExactPackageRefusal("no view \(tag)") }
         let v = Viewfinder(id: id, module: self, events: events)
-        state(id).view = v
+        views[id]?.presentation?.cancel()
+        let state = ViewState()
+        state.view = v
+        views[id] = state
         try v.setProps(props)
         Self.viewfinderHatch?(v.view)
         return v
     }
 
-    public func displayed(_ id: String, _ shown: Bool, origin: String) {
-        let v = state(id)
-        v.shown = shown
-        if shown { v.madeBy = origin }
-        reconcile(id)
-    }
-
-    public func bound(_ id: String, _ prop: String, origin: String) {
-        guard prop == "srcObject" else { return }
-        let v = state(id)
-        v.reports += 1
-        v.madeBy = origin
-        reconcile(id)
-    }
-
-    private func state(_ id: String) -> ViewState {
-        if let v = views[id] { return v }
-        let v = ViewState()
-        views[id] = v
-        return v
-    }
-
-    /// A viewfinder's props: a new `srcObject` waits for the runner's report of it.
-    func props(_ id: String, _ props: [String: String]) {
-        let v = state(id)
-        if let src = props["srcObject"] {
-            if src != v.src { v.src = src; v.changes += 1 }
-        } else {
-            v.src = ""
+    func props(_ view: Viewfinder, _ props: [String: String]) {
+        guard let v = views[view.id], v.view === view else { return }
+        let track = props["srcObject"]
+        guard v.src != track || v.sub == nil else { return }
+        v.src = track
+        v.presentation?.cancel()
+        v.presentation = context.tracks.present("exact-camera", id: view.id, prop: "srcObject", value: track, kind: "video") {
+            Sub(track: $0.value)
+        } show: { [weak self, weak v] reader in
+            guard let self, let v else { return }
+            v.sub?.changed = {}
+            v.sub = reader as? Sub
+            v.sub?.changed = { [weak self, weak v] in if let v { self?.render(v) } }
+            self.render(v)
         }
-        reconcile(id)
     }
 
-    func gone(_ id: String) {
-        views[id]?.sub?.leave()
-        views[id] = nil
+    func gone(_ view: Viewfinder) {
+        guard let v = views[view.id], v.view === view else { return }
+        v.presentation?.cancel()
+        views[view.id] = nil
     }
 
-    /// Viewfinder `id` consumes its track while it is made, displayed and bound to a video track (D3).
-    private func reconcile(_ id: String) {
-        guard let v = views[id] else { return }
-        let src = v.src ?? ""
-        let want = v.view != nil && v.shown && !src.isEmpty && v.reports >= v.changes && context.tracks.lookup(src)?.kind == "video"
-        if let sub = v.sub, !want || sub.track != src { sub.leave(); v.sub = nil; v.view?.blank() }
-        // Shown again by the person or the app, a viewfinder that took no lease takes one (§14).
-        if want, let sub = v.sub, !sub.live, v.madeBy == "app", sub.origin != "app" { sub.leave(); v.sub = nil }
-        guard want, v.sub == nil else { return }
-        let sub = Sub(track: src, origin: v.madeBy)
-        var source: ExactVideoSource?
-        let show = { [weak self, weak v, weak sub] in
-            guard let self, let v, let sub, v.sub === sub, sub.live else { return }
-            let facing = (self.context.tracks.lookup(sub.track)?.state?()["settings"] as? [String: Any])?["facingMode"] as? String
-            if self.context.agent {
-                let picture = self.agentPicture(sub.track)
-                v.view?.show(picture: picture, mirrored: facing == "user")
-                // The track's frame is the picture drawn, unmirrored, as a sensor's is (LLP 1133.027 D17 item 2).
-                self.context.tracks.lookup(sub.track)?.picture = picture
-                self.refreshClip()
-            } else if let source { v.view?.show(source: source) }
-        }
-        sub.onLive = { s in source = s; show() }
-        sub.onUnmuted = show
-        sub.onMuted = { [weak v] in v?.view?.mute() }
-        sub.onBlank = { [weak v] in v?.view?.blank() }
-        v.sub = sub
-        do {
-            sub.subscription = try context.tracks.subscribe(src, sub, start: false, origin: v.madeBy)
-            say("viewfinder \(id) consumes \(src) (\(v.madeBy) origin)")
-        } catch {
-            v.sub = nil
-            say("viewfinder \(id): \(error)")
-        }
+    private func render(_ v: ViewState) {
+        guard let view = v.view else { return }
+        guard let sub = v.sub, sub.live else { return view.blank() }
+        if sub.isMuted { return view.mute() }
+        if context.agent {
+            let entry = context.tracks.lookup(sub.track)
+            let facing = (entry?.state?()["settings"] as? [String: Any])?["facingMode"] as? String
+            let picture = agentPicture(sub.track)
+            view.show(picture: picture, mirrored: facing == "user")
+            entry?.picture = picture
+            refreshClip()
+        } else if let source = sub.source { view.show(source: source) }
     }
 
     // MARK: photos (D1, D2)
@@ -279,10 +238,10 @@ public final class CameraModule: ExactPackage {
         }
         guard let source = entry.video?() else { return reply(["error": "InvalidStateError"]) }
         // A photo in flight is a consumer: its lease holds until the file is written (D3).
-        let holder = Sub(track: id, origin: "app")
-        holder.subscription = try? context.tracks.subscribe(id, holder, start: false, origin: "app")
+        let holder = Sub(track: id)
+        holder.subscription = try? context.tracks.subscribe(id, holder, start: false, origin: origin)
         let output = source.shared("camera.photo") { PhotoOutput(source) }
-        output.capture(args: args, source: source) { [self] result in
+        output.capture(args: args, source: source) { result in
             switch result {
             case .failure(let failure):
                 holder.leave()

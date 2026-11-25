@@ -131,7 +131,7 @@ struct Light {
 }
 #[derive(Default)]
 pub(super) struct Scene {
-    versions: Option<[u64; 7]>,
+    pub(super) versions: Option<[u64; 7]>,
     pub(super) attachments: Attachments,
     camera: Option<(History, Camera)>,
     pub(super) pointer: CameraPointer,

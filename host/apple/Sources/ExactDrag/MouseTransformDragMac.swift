@@ -117,7 +117,7 @@ final class MouseTransformDrag {
     private func end(_ event: NSEvent, cancel: Bool) {
         guard let t = trackpad else { return }
         trackpad = nil
-        t.hold.finish(to: t.hold.current, time: event.timestamp, cancel: cancel)
+        t.hold.finish(to: nil, time: event.timestamp, cancel: cancel)
     }
     func magnify(_ node: NodeView, event: NSEvent) -> Bool {
         switch event.phase {

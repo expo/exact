@@ -37,9 +37,9 @@ fn android_agent_contextmenu_matches_a_long_press_on_a_handler_above_a_canvas() 
     let target = find(&p, "target");
     let (x, y, w, h) = p.rect_of(target).unwrap();
     let point = (x + w / 2., y + h / 2.);
-    p.reader_touch(0, point.0, point.1, 0.).unwrap();
-    p.reader_touch(4, point.0, point.1, 500.).unwrap();
-    p.reader_touch(1, point.0, point.1, 600.).unwrap();
+    p.reader_touch(0, point.0, point.1, 0., 0.).unwrap();
+    p.reader_touch(4, point.0, point.1, 500., 500.).unwrap();
+    p.reader_touch(1, point.0, point.1, 600., 600.).unwrap();
     assert_eq!(
         p.host.runner().slot("opened"),
         Some(&StateValue::Number(1.))

@@ -65,7 +65,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneOffset
 
-/** The plan has a date or time control: its picker is Compose Material 3's (LLP 1115.001.000 D1). */
+/** The Compose shell supplies Material 3 pickers (LLP 1115.001.000 D1). */
 internal val materialPickers: Pickers? = MaterialPickers
 
 /**
@@ -74,8 +74,8 @@ internal val materialPickers: Pickers? = MaterialPickers
  * `datetime-local` asks for the day, then the time.
  */
 private object MaterialPickers : Pickers {
-    /** The reader's activity is a plain Activity: Compose looks for a lifecycle and a saved state on the view tree.
-     * One for each picker, on its own view: resumed while it is up, destroyed as it closes, which disposes it. */
+    /** Each picker has its own content child and owner: resumed while it is up, destroyed as it closes,
+     * which disposes its composition independently of the page's module views. */
     private class Owner : SavedStateRegistryOwner {
         private val registry = LifecycleRegistry(this)
         private val saved = SavedStateRegistryController.create(this)
@@ -104,16 +104,17 @@ private object MaterialPickers : Pickers {
                 answer(chosen)
             }
         }
-        view.setContent { Theme(activity, picker.accent) { Picker(picker, first, close) } }
+        view.setContent { Theme(activity, picker.accent, picker.dark) { Picker(picker, first, close) } }
         activity.addContentView(view, FrameLayout.LayoutParams(1, 1))
         return { close(null) }
     }
 }
 
 @Composable
-private fun Theme(activity: Activity, accent: Int?, content: @Composable () -> Unit) {
+private fun Theme(activity: Activity, accent: Int?, scheme: Boolean?, content: @Composable () -> Unit) {
     // The activity keeps running across night mode (`configChanges`); the composition local is what recomposes then.
-    val dark = LocalConfiguration.current.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    val device = LocalConfiguration.current.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    val dark = scheme ?: device
     MaterialTheme(colorScheme = pickerColorScheme(activity, dark, accent), content = content)
 }
 

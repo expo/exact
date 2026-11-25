@@ -1,0 +1,59 @@
+// LLP 1127 D19. Library and Browse each keep a directory beside its detail on iPad.
+routes nav
+  tab library "/"
+    item "/book/:id"
+      notes "/book/:id/notes"
+  tab browse "/browse"
+    subject "/browse/:id"
+  tab profile "/profile"
+    account "/profile/account"
+
+component SplitTabs
+  state libraryVisible = true
+  action toggleLibrary
+    libraryVisible = not libraryVisible
+  action fileAndBrowse
+    let filed = push(nav, "/book/Shared")
+    nav = select(filed, "browse")
+  action follow(url: string)
+    nav = go(nav, url)
+  action pick(name: string)
+    nav = select(nav, name)
+  view
+    main navigationKey=`${top(nav).id}` navigate=follow display="flex" flex-direction="column" width="100%" height="100%"
+      column position="relative" flex=1 min-height=0
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack.filter(entry => t.name != "library" or libraryVisible) key=e.id
+              if e.name == "library" or e.name == "browse"
+                column navigationKey=`${e.id}` navigationSplit="split" position="absolute" inset=0 display="flex" flex-direction="column"
+                  header
+                    text (e.name == "library" ? "Library" : "Browse") role="heading" aria-level=1
+                  list appearance="auto" flex=1 min-height=0 testId=`list-${e.name}`
+                    section
+                      for name in ["North", "South"] key=name
+                        link href=(e.name == "library" ? path("item", name) : path("subject", name)) testId=`${e.name}-${name}`
+                          text name
+                      if e.name == "library"
+                        for label in ["First", "Second"] key=label
+                          button press=fileAndBrowse testId=label
+                            text label
+                  if e.name == "browse"
+                    button press=toggleLibrary testId="toggle-library"
+                      text "Show or hide Library routes"
+              else
+                column navigationKey=`${e.id}` position="absolute" inset=0
+                  header
+                    text (e.name == "notes" ? "Notes" : e.name == "profile" ? "Profile" : e.params.id) role="heading" aria-level=1
+                  if e.name == "item"
+                    link href=path("notes", e.params.id) testId="open-notes"
+                      text "Notes"
+                  if e.name == "profile"
+                    link href="/profile/account" testId="open-account"
+                      text "Account"
+                  if e.name == "notes"
+                    text e.params.id testId="notes"
+      row role="tablist"
+        for name in ["library", "browse", "profile"] key=name
+          button role="tab" aria-controls=`panel-${name}` aria-selected=(nav.tab == name) press=pick(name) testId=`tab-${name}`
+            text (name == "library" ? "Library" : name == "browse" ? "Browse" : "Profile")

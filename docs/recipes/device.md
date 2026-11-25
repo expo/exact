@@ -1,13 +1,9 @@
 # Recipe: the battery, the network and Low Power Mode
 
-`@exact/device` (LLP 1133.031) answers three live facts with the web's
-names. None asks permission or shows anything, and each is announced when
-it changes:
+`@exact/device` (LLP 1133.031) reports three live facts without permission:
 
 - `getBattery()`: the Battery Status API's `level` (0 to 1, in hundredths)
-  and `charging` (false only while discharging). A device with no battery
-  to report (a Mac mini, an Apple TV, the iOS simulator) answers what the
-  specification tells a browser to: `level` 1, `charging` true.
+  and `charging` (false only while discharging). A Mac mini, Apple TV or iOS simulator reports the API’s batteryless default, `level` 1 and `charging` true.
 - `connection()`: the Network Information API's `type` (`wifi`,
   `cellular`, `ethernet`, `none`, `other`, `unknown`, …) and Save Data's
   `saveData`, the person's own request to use less data: Low Data Mode on
@@ -45,9 +41,7 @@ to "reduce the use of animations, lower frame rates, … disable syncs"
 What the person presses wins over the device: a sky they pressed play on
 keeps playing.
 
-Whether there is a network is `exactPage().onLine`; `connection()` says
-what kind it is.
-How capable the GPU is, is `exactViewport().gpuTier`.
+Read connectivity from `exactPage().onLine` and GPU capability from `exactViewport().gpuTier`.
 
 Data code reads the same sources as Promises, as a wake does to decide
 whether to defer an upload:
@@ -58,6 +52,15 @@ const [net, power] = await Promise.all([connection({}), powerState({}).catch(() 
 if (net.saveData || power?.lowPowerMode) return { deferred: true };
 ```
 
-Under the agent the declaration answers (a full battery, `type`
-`unknown`); `prefer extension device.powerState={"lowPowerMode":true}` lays
-a fact over it, `=clear` restores it, and each `prefer` replaces the last.
+Under the agent the declaration supplies a full battery and network type
+`unknown`. In a Linux test, check the app's reaction after each change:
+
+```contract-test
+test "Low Power Mode" on linux
+  prefer extension device.powerState={"lowPowerMode":true}
+  clock settle
+  expect state power.lowPowerMode == true
+  prefer extension device.powerState=clear
+  clock settle
+  expect state power.lowPowerMode == false
+```

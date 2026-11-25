@@ -28,8 +28,7 @@ component App
             text p testId=`post-${i}`
 ```
 
-`empty()` sets `owner` to `""`; use nonempty IDs. The owner check hides A's rows
-while B loads or fails. A failed refresh keeps A's rows; an empty answer clears them.
+`empty().owner` is `""`. Use nonempty IDs. A [failed refresh](progressive-tabs.md) keeps the owner’s rows. Empty replies clear them.
 
 ```ts
 import type { Answer, Result } from './app.contract.d.ts';
@@ -43,13 +42,9 @@ function isPost(p: unknown): p is { title: string } {
 
 export const answer: Answer = async (_source, [owner]): Promise<Result<'loadFeed'>> => {
   const response = await fetch(`${API}/posts?_limit=10`, { exactTimeout: 10000 });
-  if (!response.ok) {
-    throw new Error('The feed request failed.');
-  }
+  if (!response.ok) throw new Error('The feed request failed.');
   const body: unknown = await response.json();
-  if (!Array.isArray(body) || !body.every(isPost)) {
-    throw new Error('The feed response is invalid.');
-  }
+  if (!Array.isArray(body) || !body.every(isPost)) throw new Error('Invalid feed');
   return { owner, posts: body.map((p): string => p.title) };
 };
 ```
@@ -69,16 +64,19 @@ test "a failed refresh retains rows and retries"
   expect tree missing "error"
 ```
 
-`fail fetch` rejects before `tap` returns. To assert loading, hold a reply with a
-[test server](rest-backend.md). For a status/body, use
+`fail fetch` rejects before `tap` returns. Test loading by holding a reply on a
+[test server](rest-backend.md). To supply a response, use
 `answer fetch "<prefix>" with 200 {"text":"Hello"}`.
 
-For private data, gate by principal and auth generation, including after an await
-before caching: A → B → A must reject the first A's answers. Await prerequisites
-in the source; dependencies do not sequence requests ([guide](../contract-for-agents.md#data-requests-and-side-effects)).
+For private data, check principal and auth generation again after an await before
+caching. A → B → A invalidates A's first answer. Await dependencies in the
+[source](../contract-for-agents.md#data-requests-and-side-effects).
 
-**Across launches:** reading `native.available` or calling `native.call` makes a
-resource read device state; its answer can be kept and shown before the next fetch.
-Keep native access out of fetch sources ([a native module](native-module.md)); an endpoint a
-launch gives is a setting (`contract vocab env`).
-`with` controls boot admission, not persistence. `state.resourceStatus` explains retained answers.
+Reading `native.available` or calling `native.call` can retain an answer across
+launches. Keep [native access](native-module.md) out of fetch sources. Inspect
+retention in `state.resourceStatus`. `with` controls boot admission. For a
+launch-supplied endpoint, see `contract vocab env`.
+
+On the web, `net.fetch self` admits `fetch('/_data/page.json', {credentials: 'omit'})`
+on each tenant. Pass its validated absolute page URL to the renderer, or set
+`app.origin` at build time. Native sources need absolute URLs and their own network grants.

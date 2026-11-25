@@ -4,10 +4,12 @@ import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 // refused, exactly as its own JSON round trip does, and what it converts to must pass the runtime's shape check
 // (rt.js `take`), which sees no `Date`, `NaN` or `-0`.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { localImports } from './glue.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 // Each source's plan type and its type code (shape.js `conforms`).
@@ -25,6 +27,7 @@ beforeAll(async () => {
   const app = resolve(dir, 'source.js');
   writeFileSync(app, `import { fetch as streamFetch } from './ts-fetch.js';
 export const appId = 'test.answer.json', grants = '';
+export const tools = { ping: () => 'pong', get 'script.message'() { throw new Error('read the host event receiver'); } };
 export function answer(name) {
   if (name === 'rows-stream') return streamFetch('https://example.test/', {
     exactStream(event) {
@@ -37,9 +40,9 @@ export function answer(name) {
 `);
   writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(root, 'host/web-js/ts-data.js'), 'utf8')
     .replace('__APP_TS__', pathToFileURL(app).href).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
-  writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/", "'./"));
+  writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
   writeFileSync(resolve(dir, 'admission-data.js'), "import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(null);\n");
   writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();\n');
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
@@ -57,6 +60,11 @@ export function answer(name) {
   ts.install(data);
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+test('web tool dispatch never looks up the script.message receiver', async () => {
+  expect(data.tool('script.message', {}, new Map(), 'tool')).toBeNull();
+  expect(await data.tool('ping', {}, new Map(), 'tool')).toBe('pong');
+});
 
 // What `source` answering `value` converts to, or the refusal's message; each target is its own, so no answer is
 // converted against another's.

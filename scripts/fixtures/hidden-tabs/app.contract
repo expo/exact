@@ -1,0 +1,26 @@
+routes nav
+  tab labs "/"
+    links "/links"
+    receiver "/open"
+    notfound
+  tab saved "/saved"
+
+component App
+  derive current = top(nav)
+  action follow(url: string)
+    let target = go(nav, url)
+    nav = top(target).name == "receiver" ? go(nav, searchParam(top(target), "u").slice(9)) : target
+  action pick(tab: string)
+    nav = select(nav, tab)
+  view
+    main navigate=follow navigationKey=`${current.id}` testId="app" width="100%" height="100%" display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}`
+                text e.url testId=`url-${e.name}`
+      row role="tablist" display=(current.name == "notfound" ? "none" : "flex") testId="tabs"
+        for t in nav.tabs key=t.name
+          button role="tab" aria-controls=`panel-${t.name}` aria-selected=(nav.tab == t.name) press=pick(t.name) testId=`tab-${t.name}`
+            text t.name

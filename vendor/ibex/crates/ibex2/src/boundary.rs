@@ -192,6 +192,21 @@ mod tests {
     use crate::grant::{Grant, Origin};
 
     #[test]
+    fn a_native_fetch_uses_its_named_grants_beside_self() {
+        let grants = GrantSet::parse("net.fetch self\nnet.fetch https://api.example").unwrap();
+        let fetch = |host| Operation::Fetch {
+            origin: Origin::new("https", host, 443),
+        };
+        assert!(admit(&grants, &fetch("api.example")).is_ok());
+        assert_eq!(
+            admit(&grants, &fetch("other.example")),
+            Err(HostError::Denied {
+                capability: "net.fetch"
+            })
+        );
+    }
+
+    #[test]
     fn admit_reports_the_capability_that_was_missing() {
         let grants = GrantSet::none();
         let op = Operation::Fetch {

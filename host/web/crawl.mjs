@@ -33,7 +33,9 @@ export function pageRoute(page, routes, parameter) {
   return page.notfound ? routes.find(r => r.notfound) : routes[at];
 }
 
-/** Choose every page file before either renderer writes one. Static lookup uses the same segment mapping. */
+/** Choose every page file before either renderer writes one. Static lookup uses the same segment mapping, so a page's
+ * file is also the one a host serves at another spelling of its path, its characters as they are or encoded: refuse a
+ * page whose other spelling is a literal route's that is not rendered per request (LLP 1048.000 D7). */
 export function buildPageFiles(dir, pages, routes, paths = path, platform = process.platform) {
   const chosen = new Map();
   const files = pages.map(page => {
@@ -47,6 +49,10 @@ export function buildPageFiles(dir, pages, routes, paths = path, platform = proc
       const file = page.notfound ? '404.html' : `${filePathOf(page.location).replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
       const relative = paths.relative(paths.resolve(dir), paths.resolve(dir, file));
       if (!relative || relative === '..' || relative.startsWith('..' + paths.sep) || paths.isAbsolute(relative)) throw new Error('page leaves the build directory');
+      for (const spell of page.notfound ? [] : [s => s.replace(/[%/\\?#]/g, encodeURIComponent), encodeURIComponent]) {
+        const spelled = canonical(page.location.split('/').map(s => spell(decodeURIComponent(s))).join('/')), other = routes[matchPattern(routes, spelled)];
+        if (other && other !== route && !other.pattern.includes('/:') && !['request', 'cached'].includes(other.render)) throw new Error(`its file ${file} is also served at ${JSON.stringify(spelled)}, which is route \`${other.name}\`'s. Give one of them another path`);
+      }
       const key = platform === 'darwin' ? relative.normalize('NFD').toLowerCase()
         : paths.sep === '\\' ? relative.toLowerCase() : relative;
       const prior = chosen.get(key);

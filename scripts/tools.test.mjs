@@ -3,9 +3,9 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { digest, lockClosure, workspaceManifest } from './kept.mjs';
 import { depInfoOf } from './cargo-dep-info.mjs';
@@ -302,6 +302,76 @@ test('a set match is rehashed before it can displace a fresh debug compiler', ()
     assert.equal(compilerFrom('contract', `${debug}-absent`, m.env, { rehash: true }), null);
   } finally { m.done(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('authored tests use the configured compiler target and preserve compiler and launch failures', () => {
+  const m = machine([], { rust: true }), dir = realpathSync(m.env.HOME);
+  const cargo = resolve(m.env.PATH, 'cargo' + EXE), source = resolve(dir, 'compiler-fixture.js');
+  const file = resolve(dir, 'suite.test.contract'), trace = resolve(dir, 'compiler.json');
+  const runner = resolve(dir, 'run.mjs');
+  const env = { ...process.env, ...m.env, COMPILER_TRACE: trace, EXACT_TOOLS_ORIGIN: 'none' };
+  const run = overrides => spawnSync(process.execPath, [runner], { cwd: dir, env: { ...env, ...overrides }, encoding: 'utf8' });
+  mkdirSync(resolve(ROOT, 'target'), { recursive: true });
+  const relativeTarget = mkdtempSync(resolve(ROOT, 'target/relative compiler '));
+  try {
+    // One host executable serves as Cargo and the compiler it installs, including on Windows.
+    writeFileSync(source, `import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+const args = process.argv.slice(2);
+if (args.includes('run') || args.includes('build')) {
+  const bin = resolve(process.env.CARGO_TARGET_DIR, 'debug', 'contract' + (process.platform === 'win32' ? '.exe' : ''));
+  mkdirSync(dirname(bin), { recursive: true });
+  copyFileSync(process.execPath, bin);
+  if (args.includes('build')) process.exit(0);
+  process.exit(spawnSync(bin, args.slice(args.indexOf('--') + 1), { stdio: 'inherit' }).status ?? 1);
+}
+writeFileSync(process.env.COMPILER_TRACE, JSON.stringify([process.execPath, ...args]));
+if (readFileSync(args[1], 'utf8') === 'refuse') { console.error('fixture.contract:7:3: invalid test step'); process.exit(2); }
+console.log('{"tests":[],"properties":[]}');`);
+    execFileSync(process.execPath, ['build', '--compile', source, '--outfile', cargo]);
+    writeFileSync(runner, `import { runTests } from ${JSON.stringify(new URL('./agent.mjs', import.meta.url).href)};
+try { console.log(JSON.stringify(await runTests({ host: 'linux', file: 'suite.test.contract' }))); }
+catch (error) { console.error(error.message); process.exitCode = 1; }`);
+    for (const target of [resolve(dir, 'absolute target'), relative(ROOT, relativeTarget)]) {
+      const bin = resolve(ROOT, target, 'debug', 'contract' + EXE);
+      writeFileSync(file, 'accept');
+      const good = run({ CARGO_TARGET_DIR: target });
+      assert.equal(good.status, 0, good.stderr);
+      assert.deepEqual(JSON.parse(good.stdout), { passed: 0, failed: 0, skipped: 0, results: [] });
+      const [launched, ...args] = JSON.parse(readFileSync(trace));
+      assert.equal(relative(realpathSync(bin), realpathSync(launched)), '');
+      assert.deepEqual(args, ['test', file]);
+      writeFileSync(file, 'refuse');
+      const cargoRefusal = run({ CARGO_TARGET_DIR: target });
+      assert.equal(cargoRefusal.status, 1);
+      assert.match(cargoRefusal.stderr, /fixture\.contract:7:3: invalid test step/);
+      const escape = path => path.replaceAll(' ', '\\ ');
+      writeFileSync(depInfoOf(bin), `${escape(bin)}: ${escape(source)}\n`);
+      // With Cargo unavailable the runner must find the fresh compiler in this same target.
+      const noCargo = { CARGO_TARGET_DIR: target, PATH: resolve(dir, 'absent') };
+      const bad = run(noCargo);
+      assert.equal(bad.status, 1);
+      assert.match(bad.stderr, /fixture\.contract:7:3: invalid test step/);
+      writeFileSync(file, 'accept');
+      const reused = run(noCargo);
+      assert.equal(reused.status, 0, reused.stderr);
+      assert.deepEqual(JSON.parse(reused.stdout), JSON.parse(good.stdout));
+    }
+    for (const absent of [{ PATH: resolve(dir, 'absent') }, { RUSTUP_HOME: resolve(dir, 'absent') }]) {
+      const missing = run({ ...absent, CARGO_TARGET_DIR: resolve(dir, 'empty target') });
+      assert.equal(missing.status, 1);
+      assert.match(missing.stderr, /rust-missing.*cargo/);
+      assert.doesNotMatch(missing.stderr, /TypeError/);
+    }
+    const target = resolve(dir, 'broken target'), broken = debugCompiler(target, 'contract', source, 'invalid executable');
+    if (process.platform !== 'win32') chmodSync(broken, 0o644);
+    const refusal = spawnSync(broken, ['test', file], { cwd: ROOT, env: { ...env, CARGO_TARGET_DIR: target }, encoding: 'utf8' });
+    assert.notEqual(refusal.status, 0);
+    const failed = run({ CARGO_TARGET_DIR: target });
+    assert.equal(failed.status, 1);
+    assert.equal(failed.stderr.trim(), refusal.stderr?.trim() || refusal.error?.message || 'contract test compiler failed');
+  } finally { rmSync(relativeTarget, { recursive: true, force: true }); m.done(); }
+}, 60_000);
 
 test('webCompiler and compilerSet select the same compiler', () => {
   const m = machine([{ source: 'built', inputs: ours }], { rust: true, crates: ['exact-web-js'] });

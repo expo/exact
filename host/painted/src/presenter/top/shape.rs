@@ -37,6 +37,10 @@ pub struct Row {
     pub node: ViewId,
     /// What it says.
     pub title: String,
+    /// A menu item's supporting text and its computed direction.
+    pub subtitle: Option<(String, Direction)>,
+    /// The menu item's accessible name when it differs from the painted title.
+    pub menu_label: Option<String>,
     /// The title's computed direction, from its text node or the button's label.
     pub direction: Direction,
     /// Its symbol role (`delete`), for a menu's leading symbol.
@@ -51,6 +55,12 @@ pub struct Row {
     pub checked: bool,
     /// What it opens, for a row that opens a submenu or a dialog.
     pub opens: Option<NodeKey>,
+}
+
+impl Row {
+    pub(in crate::presenter) fn menu_name(&self) -> String {
+        self.menu_label.as_ref().unwrap_or(&self.title).clone()
+    }
 }
 
 /// What the top layer shows for one authored subtree.
@@ -193,6 +203,8 @@ pub(in crate::presenter) fn row(kernel: &Kernel, node: &NodeRef<'_>, cancel: boo
     Row {
         node: node.id,
         title,
+        subtitle: None,
+        menu_label: None,
         direction: title_node
             .as_ref()
             .map_or_else(|| direction(node), direction),
@@ -202,6 +214,97 @@ pub(in crate::presenter) fn row(kernel: &Kernel, node: &NodeRef<'_>, cancel: boo
         cancel,
         checked: node.props.bool(PropId::AccessibilityChecked) == Some(true),
         opens: None,
+    }
+}
+
+impl<D: super::DataSource> super::Presenter<D> {
+    /// Native buttons have a subtitle slot. A custom button supplies it with two
+    /// stacked texts in flow. Side-by-side or positioned texts share one title.
+    pub(super) fn menu_row(&self, node: &NodeRef<'_>) -> Row {
+        let kernel = self.host.kernel();
+        let mut item = row(kernel, node, false);
+        let children: Vec<_> = node
+            .child_nodes()
+            .filter(|n| n.style.display != exact_kernel::Display::None)
+            .collect();
+        let texts: Vec<_> = children
+            .iter()
+            .filter(|n| n.node_type == NodeType::Text)
+            .collect();
+        let simple = children
+            .iter()
+            .all(|n| matches!(n.node_type, NodeType::Text | NodeType::Image));
+        let pair = match texts.as_slice() {
+            [title, detail] if simple && children.len() <= 3 => {
+                node.node_type != NodeType::Pressable || {
+                    let stacked = match node.style.display {
+                        exact_kernel::Display::Block => true,
+                        exact_kernel::Display::Flex => matches!(
+                            node.style.flex_direction,
+                            exact_kernel::FlexDirection::Column
+                                | exact_kernel::FlexDirection::ColumnReverse
+                        ),
+                        _ => false,
+                    };
+                    stacked
+                        && [title, detail]
+                            .iter()
+                            .all(|n| n.layout_position() != exact_kernel::PositionType::Absolute)
+                }
+            }
+            _ => false,
+        };
+        if simple {
+            let (titles, details) = texts.split_at(if pair { 1 } else { texts.len() });
+            let mut words = titles
+                .iter()
+                .filter_map(|n| Some((kernel.bar_text(n.id)?, direction(n))));
+            if let Some((first, dir)) = words.next() {
+                item.direction = dir;
+                item.title = std::iter::once(first)
+                    .chain(words.map(|(text, _)| text))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            } else {
+                item.title = node
+                    .props
+                    .str(PropId::AccessibilityLabel)
+                    .unwrap_or_default()
+                    .into();
+                item.direction = direction(node);
+            }
+            item.subtitle = details
+                .first()
+                .and_then(|n| Some((kernel.bar_text(n.id)?, direction(n))));
+        }
+        let name = self.access_label(node).unwrap_or_else(|| {
+            if !simple || texts.is_empty() {
+                return self.access_words(node, true);
+            }
+            texts
+                .iter()
+                .filter(|n| n.props.bool(PropId::AccessibilityElementsHidden) != Some(true))
+                .map(|n| {
+                    self.access_label(n)
+                        .unwrap_or_else(|| self.access_words(n, true))
+                })
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join(if pair { ", " } else { " " })
+        });
+        // The projected action has its own title even when all of its source
+        // text is decorative and the author supplied no other name.
+        let name = if name.is_empty() {
+            std::iter::once(item.title.as_str())
+                .chain(item.subtitle.as_ref().map(|(text, _)| text.as_str()))
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            name
+        };
+        item.menu_label = (name != item.title).then_some(name);
+        item
     }
 }
 
@@ -279,7 +382,12 @@ pub fn alert(
 
 /// The menu `pop` is, or `None` for a popover that is a confirmation or has
 /// no item. `pressed` says whether a node has a `press` handler.
-pub fn menu(kernel: &Kernel, pop: ViewId, pressed: &dyn Fn(ViewId) -> bool) -> Option<Plan> {
+pub fn menu(
+    kernel: &Kernel,
+    pop: ViewId,
+    pressed: &dyn Fn(ViewId) -> bool,
+    project: impl Fn(&NodeRef<'_>) -> Row,
+) -> Option<Plan> {
     let pop = kernel.node(pop)?;
     pop.props.str(PropId::Popover)?;
     if is_confirmation(&pop) {
@@ -290,7 +398,7 @@ pub fn menu(kernel: &Kernel, pop: ViewId, pressed: &dyn Fn(ViewId) -> bool) -> O
     let rows = |node: &NodeRef<'_>| -> Vec<ViewId> {
         let titles: Vec<&str> = (node.props.str(PropId::AccessibilityLabelledBy))
             .filter(|_| is_section(node))
-            .map_or_else(Vec::new, |refs| refs.split_whitespace().collect());
+            .map_or_else(Vec::new, |refs| refs.split_ascii_whitespace().collect());
         (node.children().into_iter())
             .filter(|id| {
                 kernel.node(*id).is_some_and(|n| {
@@ -313,7 +421,7 @@ pub fn menu(kernel: &Kernel, pop: ViewId, pressed: &dyn Fn(ViewId) -> bool) -> O
             .map(|i| i.target);
         (is_button(&node) && (pressed(node.id) || opens.is_some())).then(|| Row {
             opens,
-            ..row(kernel, &node, false)
+            ..project(&node)
         })
     };
     let rule = |entries: &mut Vec<Entry>| {
@@ -369,7 +477,7 @@ fn is_section(node: &NodeRef<'_>) -> bool {
 /// written, and is no row here.
 fn section_title(kernel: &Kernel, node: &NodeRef<'_>) -> Option<String> {
     let named = node.props.str(PropId::AccessibilityLabelledBy).map(|refs| {
-        (refs.split_whitespace())
+        (refs.split_ascii_whitespace())
             .filter_map(|name| kernel.find_by_id(name).into_iter().next())
             .filter_map(|key| kernel.node_by_key(key))
             .map(|n| match n.props.str(PropId::AccessibilityLabel) {

@@ -177,3 +177,13 @@ internal fun resolveMediaSource(props: JSONObject, assets: File) {
         is Source.Refused -> props.put("refused", source.why)
     }
 }
+
+/** Where a media element's player reports (LLP 1042.001 D3, D7): to exact2, keyed by the element's node. */
+interface MediaSink {
+    /** An event by HTML's name, with its payload ("" for none). */
+    fun event(name: String, payload: String)
+    /** The element's observed state, a JSON object: its row of `state.media`. */
+    fun state(json: String)
+    /** The current source's first frame is in the view. */
+    fun firstFrame()
+}

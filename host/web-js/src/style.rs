@@ -19,34 +19,39 @@ use exact_web::host::template::{self, Parts};
 mod bound;
 pub use bound::bound_tokens;
 
-/// A canvas's explicit bitmap size (LLP 1056 D6 r3) and getContext settings
+/// A canvas's literal bitmap size (LLP 1056 D6 r3) and getContext settings
 /// (LLP 1100 D12a) as the attributes canvas2d.js reads, as the runner reads
-/// the node's props; a dynamic one is refused.
+/// the node's props. A computed one is bound instead (`canvas_setting`).
 pub fn canvas_bitmap(
     plan: &Plan,
     row: &exact_plan::NodesRow,
 ) -> Result<Vec<(String, String)>, String> {
     let mut attrs = Vec::new();
     for b in row.bindings.iter().map(|b| plan.binding(b)) {
-        let name = match b.id {
-            _ if b.kind != BindingKind::Prop => continue,
-            id if id == PropId::BitmapWidth as u16 => "data-bitmap-width",
-            id if id == PropId::BitmapHeight as u16 => "data-bitmap-height",
-            id if id == PropId::ColorSpace as u16 => "data-color-space",
-            id if id == PropId::ColorType as u16 => "data-color-type",
-            _ => continue,
+        let Some(name) = canvas_setting(&b) else {
+            continue;
         };
         let value = match literal(plan, plan.code(b.expr)) {
             Some(exact_plan::Value::Number(n)) => Some((n.max(0.0) as u32).to_string()),
             Some(v) if name.starts_with("data-color") => v.as_str().map(str::to_string),
             _ => None,
         };
-        let Some(value) = value else {
-            return Err("a dynamic canvas bitmap size or setting is not in the JS target".into());
-        };
-        attrs.push((name.into(), value));
+        attrs.extend(value.map(|value| (name.into(), value)));
     }
     Ok(attrs)
+}
+
+/// The attribute canvas2d.js reads for a canvas's bitmap size or getContext
+/// setting, if the binding is one.
+pub fn canvas_setting(b: &exact_plan::BindingsRow) -> Option<&'static str> {
+    match b.id {
+        _ if b.kind != BindingKind::Prop => None,
+        id if id == PropId::BitmapWidth as u16 => Some("data-bitmap-width"),
+        id if id == PropId::BitmapHeight as u16 => Some("data-bitmap-height"),
+        id if id == PropId::ColorSpace as u16 => Some("data-color-space"),
+        id if id == PropId::ColorType as u16 => Some("data-color-type"),
+        _ => None,
+    }
 }
 
 /// A literal binding's value, if the code is one push and `Return`.
@@ -82,7 +87,7 @@ pub fn can_be(plan: &Plan, code: &[u8], used: &dyn Fn(&str) -> bool) -> bool {
 fn decides_tag(plan: &Plan, node: &exact_plan::NodesRow, p: PropId) -> bool {
     matches!(
         p,
-        PropId::Href | PropId::SemanticTag | PropId::Start | PropId::End
+        PropId::Href | PropId::PanelHref | PropId::SemanticTag | PropId::Start | PropId::End
     ) || p == PropId::Value
         && node.bindings.iter().any(|b| {
             let row = plan.binding(b);
@@ -321,18 +326,25 @@ pub fn project(
             continue;
         }
         let child_may_fold = matches!(tree[i].as_slice(), [c] if may_fold[*c as usize]);
-        let press_translate = node.bindings.iter().map(|b| plan.binding(b)).any(|b| {
-            b.kind == BindingKind::Style
-                && b.id == StyleId::PressTranslate as u16
-                && literal(plan, plan.code(b.expr)).is_none()
-        });
+        let mut bound_press = exact_kernel::StyleMask::default();
+        for binding in node.bindings.iter().map(|b| plan.binding(b)) {
+            if binding.kind == BindingKind::Style
+                && literal(plan, plan.code(binding.expr)).is_none()
+            {
+                for (id, _) in exact_web::css::PRESS_ROWS {
+                    if id as u16 == binding.id {
+                        bound_press.set(id);
+                    }
+                }
+            }
+        }
         let mut parts = template::parts_with(
             &kernel,
             plan,
             view(i),
             may_fold[i],
             child_may_fold,
-            press_translate,
+            bound_press,
         )
         .ok_or("a view the kernel lost")?;
         if kernel
@@ -701,15 +713,12 @@ fn ramp_rem(text: &str) -> Option<String> {
     ))
 }
 
-/// A computed `transition`'s entries as an author's (LLP 1081 D5), shared by
-/// the ordinary and the pressed mappers: comments go (CSS removes them, so a
-/// check must too); each entry is folded to ASCII lower case, as the native
-/// parser reads its words in any case (motion/src/word.rs); springs on
-/// non-physics properties become `linear()`; an entry naming the host's
-/// `--exact-*` or an old spelling is dropped, as the native parser refuses it.
-/// `-exact-tint-color` becomes the property the browser animates,
-/// `--exact-tint`.
-pub(super) fn transition_entries() -> String {
+/// The shared sampler for CSS transitions and press tracks.
+pub(super) fn transition_spring() -> String {
+    include_str!("../transition-spring.js").into()
+}
+
+fn spring_entries(sampler: &str) -> String {
     use exact_motion::Property;
     let mut properties: std::collections::BTreeMap<_, Vec<&str>> = Property::ALL
         .into_iter()
@@ -741,9 +750,15 @@ pub(super) fn transition_entries() -> String {
         })
         .filter(|n| !n.starts_with("border-") || *n == "border-color")
         .collect();
-    let spring = include_str!("../transition-spring.js")
+    include_str!("../transition-spring-entry.js")
+        .replace("SAMPLER", sampler)
         .replace("ALL_PROPERTIES", &serde_json::to_string(&all).unwrap())
-        .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
+        .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
+}
+
+/// Map computed CSS transitions, filtering private rows and lowering springs (LLP 1081 D5).
+pub(super) fn transition_entries(sampler: &str) -> String {
+    let spring = spring_entries(sampler);
     format!("v=>{{const spring={spring};return v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim().replace(/[A-Z]+/g,c=>c.toLowerCase())).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"))}}")
 }
 
@@ -1245,10 +1260,9 @@ pub fn style_row(id: u16, written: bool) -> Result<(String, String), String> {
     if row == StyleId::TranslateVelocity {
         return Ok(("--exact-translate-velocity".into(), String::new()));
     }
-    // `translate` is one declaration of the author's two lengths (css.rs
-    // `lowered`): written as the author wrote them.
-    if row == StyleId::Translate {
-        return Ok(("translate".into(), String::new()));
+    // Both pairs are one CSS declaration, written as the author wrote them.
+    if matches!(row, StyleId::Translate | StyleId::Scale) {
+        return Ok((css_property(row), String::new()));
     }
     // `line-height` is CSS's own (kernel `LineHeight::css`): a number is a
     // multiple of the font size, unitless; a length is written with its unit;
@@ -1459,7 +1473,7 @@ pub(super) fn transition_map(entries: &str, press: bool, shift: bool) -> String 
         .filter_map(|(yes, name)| yes.then_some(name))
         .collect();
     format!(
-        r#"v=>{{if(v==null)return v;const p=({entries})(v);let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
+        r#"v=>{{if(v==null)return v;const p=({entries})(v);let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale','--exact-scale-y']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
         serde_json::to_string(&names).unwrap()
     )
 }

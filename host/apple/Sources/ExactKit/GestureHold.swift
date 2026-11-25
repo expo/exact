@@ -9,6 +9,27 @@ package enum Gesture {
     static let resistance = exact_gesture_constant(1)
     static let edge = exact_gesture_constant(2)
     package static let slop = exact_gesture_constant(3)
+    /// Seconds (`exact_motion::gesture::LIFT_STILL`).
+    package static let liftStill = exact_gesture_constant(4)
+    /// Whether a lift `dt` seconds after a hold's newest sample is a sample
+    /// of its own: it `moved` the input, or it came after `liftStill`.
+    package static func liftSamples(moved: Bool, dt: Double) -> Bool {
+        moved || dt > liftStill
+    }
+}
+
+/// An input's own timestamps carried onto the session clock from where its
+/// hold began: the times a hold's samples are taken at, which its release
+/// velocity reads (LLP 1057.001 §3). The session clock is what moves the
+/// presentation; a driver may hold it still while a finger moves, or run it
+/// ahead, and the velocity is still the finger's.
+package struct InputTimeline {
+    let input: Double
+    let clock: Double
+    /// `input` is an event's timestamp in seconds (`UIEvent`'s or `NSEvent`'s),
+    /// `clock` the session's milliseconds at that event.
+    package init(input: Double, clock: Double) { self.input = input; self.clock = clock }
+    package func at(_ time: Double) -> Double { clock + (time - input) * 1000 }
 }
 
 package struct NativeHold {
@@ -107,14 +128,18 @@ final class SwipeHold {
     weak var view: NodeView?
     let generation: Int
     let primary: NativeHold
-    var indicators: [(NativeHold, Double)] = []
+    var indicators: [(NativeHold, Double, UInt32)] = []
     private(set) var ended = false
     private var finishing = false
     private var displacement = 0.0
+    /// The input's times, where the engine measures the release velocity (a
+    /// mouse); nil where the platform does (UIKit's pan).
+    private let timeline: InputTimeline?
+    private var time: Double?
     private var pin: UInt64?
     private var deliveryQueued = false
-    private var pendingMove: Double?
-    private var pendingEnd: (Double, Double?, Bool)?
+    private var pendingMove: (Double, Double?)?
+    private var pendingEnd: (Double, Double?, Bool, Double?)?
 
     // A recognizer can cancel synchronously while UIKit reparents or disables
     // a view. One queued delivery per gesture crosses the *session* boundary,
@@ -127,17 +152,22 @@ final class SwipeHold {
             if session?.isApplyingPresentation == true { scheduleDelivery(); return }
             let end = pendingEnd, sample = pendingMove
             pendingEnd = nil; pendingMove = nil
-            if let end { finish(displacement: end.0, fingerVelocity: end.1, cancel: end.2) }
-            else if let sample { _ = move(sample) }
+            if let sample, end?.2 != true { _ = move(sample.0, time: sample.1) }
+            if let end { finish(displacement: end.0, fingerVelocity: end.1, cancel: end.2, time: end.3) }
         }
     }
     var mapping: SwipeDisplacement { SwipeDisplacement(base: primary.x) }
 
-    init?(_ view: NodeView) {
+    /// `time`: the input's timestamp in seconds, where the engine measures the
+    /// release velocity.
+    init?(_ view: NodeView, time: Double? = nil) {
         guard let session = view.presenter?.session, !session.isApplyingPresentation,
               SwipeInput.allows(view), SwipeRecognition.hears(view.handlers) else { return nil }
         self.session = session; self.view = view; generation = session.generation
-        let (hold, batch) = session.runtime.holdBegin(view.id, property: 0, now: session.now())
+        let now = session.now()
+        timeline = time.map { InputTimeline(input: $0, clock: now) }
+        self.time = time
+        let (hold, batch) = session.runtime.holdBegin(view.id, property: 0, now: now)
         guard let hold else { session.apply(batch); return nil }
         primary = hold
         session.apply(batch)
@@ -146,7 +176,7 @@ final class SwipeHold {
         if let indicator = NodeView.committed(view.subviews).first(where: { $0.props["swipeIndicator"] == "true" }) {
             for property: UInt32 in [3, 1] {
                 let (token, batch) = session.runtime.holdBegin(indicator.id, property: property, now: session.now())
-                if let token { indicators.append((token, token.x)) }
+                if let token { indicators.append((token, token.x, property)) }
                 session.apply(batch)
             }
         }
@@ -175,10 +205,10 @@ final class SwipeHold {
         if !ended && !inputEligible { cancel() }
     }
 
-    @discardableResult func move(_ displacement: Double) -> Bool {
+    @discardableResult func move(_ displacement: Double, time: Double? = nil) -> Bool {
         guard displacement.isFinite, !ended, pendingEnd == nil, let session else { return false }
         if session.isApplyingPresentation || deliveryQueued {
-            pendingMove = displacement; scheduleDelivery(); return true
+            pendingMove = (displacement, time); scheduleDelivery(); return true
         }
         guard live else { return false }
         guard inputEligible else {
@@ -186,35 +216,42 @@ final class SwipeHold {
             return false
         }
         self.displacement = displacement
+        if let time { self.time = time }
         let value = mapping.value(displacement)
-        let batch = session.runtime.holdUpdate(primary.token, x: value, y: primary.y, now: session.now())
+        let batch = session.runtime.holdUpdate(primary.token, x: value, y: primary.y, now: session.now(), at: at)
         session.apply(batch)
         guard batch.error == nil, live else { return false }
         let (right, left) = directions
         let progress = SwipeRecognition.progress(value, right: right, left: left)
         let caught = SwipeRecognition.progress(primary.x, right: right, left: left)
-        for (hold, base) in indicators {
-            session.apply(session.runtime.holdUpdate(hold.token, x: SwipeIndicator(base: base, progressAtCatch: caught).value(progress), y: 0, now: session.now()))
+        for (hold, base, property) in indicators {
+            let value = SwipeIndicator(base: base, progressAtCatch: caught).value(progress)
+            session.apply(session.runtime.holdUpdate(hold.token, x: value, y: property == 1 ? value : 0, now: session.now()))
         }
         return live
     }
 
+    /// The session time of the newest sample, on the input's timeline.
+    private var at: Double? { time.flatMap { t in timeline?.at(t) } }
+
     /// `fingerVelocity` nil: the platform measured none (a mouse), so the
     /// engine's own estimate over the presented values releases it.
-    func finish(displacement: Double, fingerVelocity: Double?, cancel: Bool) {
+    func finish(displacement: Double, fingerVelocity: Double?, cancel: Bool, time: Double? = nil) {
         guard !ended, !finishing, pendingEnd == nil else { return }
         if session?.isApplyingPresentation == true || deliveryQueued {
-            pendingEnd = (displacement, fingerVelocity, cancel)
+            pendingEnd = (displacement, fingerVelocity, cancel, time)
             scheduleDelivery(); return
         }
         finishing = true
         // Apply the last pointer sample before checking eligibility for action.
-        let updated = move(displacement)
+        let lifted = Gesture.liftSamples(moved: displacement != self.displacement,
+                                         dt: time.flatMap { t in self.time.map { t - $0 } } ?? .infinity)
+        let updated = lifted ? move(displacement, time: time) : live && inputEligible
         guard let session else { ended = true; return }
         if updated && !cancel && fingerVelocity?.isFinite != false && armed(displacement),
            live, inputEligible, let view {
             let id = view.id, now = session.now()
-            session.applyInput(mapping.value(displacement) > 0 ? session.runtime.swiperight(id, now: now) : session.runtime.swipeleft(id, now: now), at: id)
+            session.applyInput(session.runtime.swipe(id, mapping.value(displacement) > 0 ? .right : .left, now: now), at: id)
         }
         ended = true
         session.retireInputHold(self)
@@ -225,15 +262,15 @@ final class SwipeHold {
                 let velocity = mapping.velocity(displacement: displacement, fingerVelocity: fingerVelocity)
                 session.apply(session.runtime.holdEnd(primary.token, cancel: refused || !velocity.isFinite, vx: velocity.isFinite ? velocity : 0, now: session.now()))
             } else {
-                session.apply(session.runtime.holdEnd(primary.token, cancel: refused, measured: true, now: session.now()))
+                session.apply(session.runtime.holdEnd(primary.token, cancel: refused, measured: true, now: session.now(), at: at))
             }
-            for (hold, _) in indicators {
+            for (hold, _, _) in indicators {
                 session.apply(session.runtime.holdEnd(hold.token, cancel: true, now: session.now()))
             }
             session.presenter.collections.releaseInteractionLater(ifCurrent: pin)
         }
     }
-    func cancel() { finish(displacement: pendingMove ?? displacement, fingerVelocity: 0, cancel: true) }
+    func cancel() { finish(displacement: pendingMove?.0 ?? displacement, fingerVelocity: 0, cancel: true) }
 }
 
 /// Recognition may have displacement but zero instantaneous velocity (notably

@@ -6,7 +6,7 @@
 // that did not build, or that this binary's native code is behind the
 // server's. Dev only (a connection to a dev URL; never in a release build),
 // drawn by the host outside the page and the kernel's tree, never under the
-// agent, and gone when there is nothing left to say.
+// agent or with EXACT_DEV_PILL=0, and gone when there is nothing left to say.
 #if os(macOS)
 import AppKit
 #else
@@ -22,12 +22,19 @@ private final class DevPillLabel: NSTextField {
 private final class DevPillLabel: UILabel {}
 #endif
 
+extension ExactEnv {
+    /// `EXACT_DEV_PILL=0`: a development launch draws no dev pill, for a capture that should show the page alone, such
+    /// as a simulator screenshot whose emulated clock overruns turn budgets a device keeps. Only the drawing goes: the
+    /// status, the budget warning, its console line and every other dev behaviour are as without it. Settable for tests.
+    nonisolated(unsafe) static package var devPill = environment["EXACT_DEV_PILL"] != "0"
+}
+
 extension Presenter {
     /// Show `text` in the pill, or take the pill away (nil). Kept on the app
     /// (`ExactApp.devStatusText`), so a window that opens or a view that
     /// moves meanwhile shows it too (`ExactView`'s window callbacks).
     func showDevStatus(_ text: String?, expanded: Bool = false) {
-        guard !ExactEnv.agentMode, !ExactEnv.releaseBuild, let text, let window = viewport.window else {
+        guard !ExactEnv.agentMode, !ExactEnv.releaseBuild, ExactEnv.devPill, let text, let window = viewport.window else {
             devPill?.removeFromSuperview()
             devPill = nil
             return

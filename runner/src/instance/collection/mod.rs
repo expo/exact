@@ -12,6 +12,7 @@ mod replacement;
 pub(super) use replacement::ListReading;
 mod rekey;
 mod reorder;
+pub(crate) use reorder::Offsets;
 mod reorder_group;
 #[cfg(test)]
 mod reorder_tests;
@@ -1139,12 +1140,23 @@ impl Collection {
             .map_or(feedback.port_main, |g| g.port_main);
         self.leave_end_if_moved(fill.velocity);
         let extent = self.index.total_height();
+        let first_measured = if changed_width {
+            Vec::new()
+        } else {
+            self.first_measured(&feedback, by_view)
+        };
         let anchor = Some(
             match self.restoring(&feedback, fill.gesture || fill.velocity != 0.0) {
                 Some(anchor) => anchor,
                 None => {
                     let resized = anchor_height != feedback.port_main && fill.velocity == 0.0;
-                    self.report_anchor(feedback.offset, anchor_height, padding, resized)?
+                    self.report_anchor(
+                        feedback.offset,
+                        anchor_height,
+                        padding,
+                        resized,
+                        &first_measured,
+                    )?
                 }
             },
         );
@@ -1189,6 +1201,24 @@ impl Collection {
             advance(&mut self.revision)?;
         }
         Ok((changed, self.edge_event(fill)?))
+    }
+    /// The rows `feedback` measures for the first time, whose height was the
+    /// list's estimate, as `measure` takes them: by a current token. One
+    /// measured at the estimate counts too: its place was the estimate's.
+    fn first_measured(
+        &self,
+        feedback: &CollectionFeedback,
+        by_view: &BTreeMap<ViewId, usize>,
+    ) -> Vec<Rc<str>> {
+        (feedback.measurements.iter())
+            .filter_map(|m| {
+                let row = self.mounted.get(*by_view.get(&m.view)?)?;
+                let first = self.fixed_side(m.view).is_none()
+                    && self.index.estimated(row.position)
+                    && self.index.measurement_token_at(row.position) == Some(row.token);
+                first.then(|| self.index.shared_key(row.position).cloned())?
+            })
+            .collect()
     }
     /// One mounted row's measured size into the index.
     fn measure(

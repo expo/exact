@@ -2,7 +2,8 @@
 //! call reaches the host as its own command, in order, even when two presses
 //! land between frames with the same text (Grow a Garden kept only the second
 //! through a live argument).
-use exact_runner::{DataError, DataSource, Runner, Value};
+use crate::source::{boxed, NoData};
+use exact_runner::{Runner, Value};
 
 const APP: &str = r#"component App
   state count = 0
@@ -16,18 +17,11 @@ const APP: &str = r#"component App
         text "Buy"
 "#;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.to_string()))
-    }
-}
-
 #[test]
 fn each_post_is_its_own_command_in_order() {
     let mut r = Runner::boot(
         contract::compile(APP).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -82,7 +76,7 @@ fn iframe_posts_use_live_ids_without_entering_the_canvas_queue() {
 "#;
     let mut runner = Runner::boot(
         contract::compile(source).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -126,7 +120,7 @@ fn an_unmounted_declared_canvas_keeps_the_existing_post_protocol() {
         + "\ncomponent Unused\n  view\n    canvas surface=world() width=200 height=200\n";
     let mut runner = Runner::boot(
         contract::compile(&source).unwrap(),
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",

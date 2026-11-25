@@ -3,22 +3,16 @@
 //! utility that keeps running puts its window away. `startViewTransition`
 //! cross-fades the whole window into the action's commit.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
+fn boot(src: &str) -> Runner<Source> {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -56,6 +50,75 @@ fn a_held_quit_s_window_commands() {
     ] {
         let error = contract::compile(&src.replace("exitFullscreen()", bad)).unwrap_err();
         assert!(format!("{error:?}").contains(id), "{bad}: {error:?}");
+    }
+}
+
+#[test]
+fn a_window_takes_one_rectangle_and_an_optional_animation() {
+    let src = r#"component App
+  action dock(x: number)
+    setBounds(DOMRect(x=x, y=12, width=480, height=302), true)
+    setAspectRatio(16 / 9)
+  view
+    button press=dock(12)
+      text "Dock"
+"#;
+    let mut r = boot(src);
+    r.act("dock", vec![Value::Number(-320.)]).unwrap();
+    let commands = r.take_commands();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0].name, "setBounds");
+    assert_eq!(
+        commands[0].args,
+        [
+            Value::Record([-320., 12., 480., 302.].map(Value::Number).to_vec().into()),
+            Value::Bool(true)
+        ]
+    );
+    assert_eq!(commands[1].name, "setAspectRatio");
+    assert_eq!(commands[1].args, [Value::Number(16. / 9.)]);
+    for bad in [
+        "setAspectRatio(-1)",
+        "setAspectRatio(true)",
+        "setBounds(12)",
+        "setBounds(DOMRect(x=0, y=0, width=1, height=1), 1)",
+    ] {
+        assert!(
+            contract::compile(&src.replace("setAspectRatio(16 / 9)", bad)).is_err(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn the_window_level_mouse_events_and_opacity_have_independent_arguments() {
+    let src = r#"component App
+  action overlay(flag: bool)
+    setWindowAlwaysOnTop(flag)
+    setWindowIgnoreMouseEvents(false)
+    setWindowOpacity(0.5, 180)
+  view
+    button press=overlay(true)
+      text "Overlay"
+"#;
+    let mut r = boot(src);
+    r.act("overlay", vec![Value::Bool(true)]).unwrap();
+    let commands = r.take_commands();
+    assert_eq!(commands.len(), 3);
+    assert_eq!(commands[0].args, [Value::Bool(true)]);
+    assert_eq!(commands[1].args, [Value::Bool(false)]);
+    assert_eq!(commands[2].args, [Value::Number(0.5), Value::Number(180.)]);
+    for bad in [
+        "setWindowAlwaysOnTop(1)",
+        "setWindowIgnoreMouseEvents()",
+        "setWindowOpacity(1, -1)",
+        "setWindowOpacity(1, true)",
+        "setWindowOpacity(1, 2, 3)",
+    ] {
+        assert!(
+            contract::compile(&src.replace("setWindowOpacity(0.5, 180)", bad)).is_err(),
+            "{bad}"
+        );
     }
 }
 

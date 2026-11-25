@@ -112,6 +112,7 @@ impl<D: DataSource> Presenter<D> {
         key: NodeKey,
         ways: Ways,
         now_ms: f64,
+        at_ms: f64,
     ) -> Result<Option<Hold>, String> {
         let node = self.host.kernel().node_by_key(key).unwrap();
         let view = node.id;
@@ -129,12 +130,14 @@ impl<D: DataSource> Presenter<D> {
             return Ok(None);
         };
         let mut held = Hold {
-            primary,
+            primary: Some(primary),
             kind: HeldKind::Swipe {
                 companions: [None, None],
                 ways,
             },
             velocity: VelocityTracker::new(),
+            sampled: None,
+            lifting: false,
         };
         if let Some(companion) = companion {
             for (i, property) in [Property::Opacity, Property::Scale].into_iter().enumerate() {
@@ -152,7 +155,7 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        held.velocity.push(now_ms / 1000., primary.value);
+        held.sample(at_ms, Value::ZERO, primary.value);
         self.set_collection_interaction(Some(view));
         self.dirty = true;
         Ok(Some(held))
@@ -163,27 +166,36 @@ impl<D: DataSource> Presenter<D> {
         held: &mut Hold,
         delta: f64,
         now_ms: f64,
+        at_ms: f64,
     ) -> Result<bool, String> {
         let value = Value::new(
-            displacement(held.primary.value.x, delta),
-            held.primary.value.y,
+            displacement(held.motion().value.x, delta),
+            held.motion().value.y,
         );
         if !self
             .host
-            .hold_update(held.primary.token, value, now_ms)
+            .hold_update(held.motion().token, value, now_ms)
             .map_err(|e| format!("hold: {e:?}"))?
         {
             return Ok(false);
         }
         // Tracking presentation after resistance produces displayed units/sec.
-        held.velocity.push(now_ms / 1000., value);
+        held.sample(at_ms, Value::scalar(delta), value);
         let HeldKind::Swipe { companions, ways } = &held.kind else {
             unreachable!()
         };
         let progress = ways.progress(value.x);
-        let caught = ways.progress(held.primary.value.x);
+        let caught = ways.progress(held.motion().value.x);
         for companion in companions.iter().flatten() {
-            let value = Value::scalar(indicator(companion.value.x, caught, progress));
+            let mapped = indicator(companion.value.x, caught, progress);
+            let value = Value::new(
+                mapped,
+                if companion.token.property() == Property::Scale {
+                    mapped
+                } else {
+                    0.
+                },
+            );
             self.host
                 .hold_update(companion.token, value, now_ms)
                 .map_err(|e| format!("hold: {e:?}"))?;
@@ -198,9 +210,9 @@ impl<D: DataSource> Presenter<D> {
         end: HoldEnd,
         now_ms: f64,
     ) -> Result<(), String> {
-        let ended = self.host.hold_end(held.primary.token, end, now_ms);
+        let ended = self.host.hold_end(held.motion().token, end, now_ms);
         if matches!(ended, Ok(true)) {
-            self.retained_motion_returned(held.primary.token);
+            self.retained_motion_returned(held.motion().token);
         }
         let mut error = ended.err();
         let HeldKind::Swipe { companions, .. } = &held.kind else {

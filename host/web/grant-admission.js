@@ -1,4 +1,4 @@
-import { address, isLocalNetwork } from "./navigation/network.js";
+import { address, hasPageOrigin, isLocalNetwork, matchesPage } from "./navigation/network.js";
 // Admission matches the sealed, typed output of the Rust grant parser (LLP 1047.002 D3).
 // App code is the page, so this is parity admission rather than a sandbox.
 const INVALID_GRANTS = "the grant set was not validated";
@@ -49,6 +49,7 @@ const grantTupleValid = (grant) => {
   if (!Array.isArray(grant) || typeof grant[0] !== "string") {
     return false;
   }
+  if (globalThis.__exactFetchSelf !== false && grant[0] === "fetch-self") return grant.length === 1;
   if (networkGrants.has(grant[0])) {
     const address = grant[2]?.startsWith("[") || /^(?:https?|wss?|ftp)$/.test(grant[1]) && /^[\d.]+$/.test(grant[2]);
     return grant.length === 4 && /^[a-z][a-z0-9+.-]*$/.test(grant[1]) && (grant[0] !== "websocket-subdomains" || /^(ws|wss)$/.test(grant[1])) && typeof grant[2] === "string" && grant[2] === grant[2].toLowerCase() && grant[2].length > 0 && Number.isInteger(grant[3]) && grant[3] >= 0 && grant[3] <= 65535 && (!grant[0].endsWith("-subdomains") || !address && !grant[2].endsWith(".") && grant[2].split(".").filter(Boolean).length >= 2);
@@ -172,6 +173,7 @@ const sourceTuple = (source) => {
     return schemeGrants[kind].includes(scheme) ? [kind, scheme] : null;
   }
   if (capability === "net.fetch") {
+    if (globalThis.__exactFetchSelf !== false && target === "self") return ["fetch-self"];
     return networkTuple(target.includes("://*.") ? "fetch-subdomains" : "fetch", target);
   }
   if (capability === "net.websocket") {
@@ -197,7 +199,7 @@ const sourceTuple = (source) => {
   }
   return null;
 };
-const exactOnly = (source) => /^(#|surface\.read |surface\.write |device\.|runtime\.|auth\.|net\.dns-sd |process\.spawn |secret\.hold |env\.read login:|env\.launch |doc\.keep$|browser\.automation$|payment\.google-pay$|payment\.apple-pay )/.test(source);
+const exactOnly = (source) => /^(#|surface\.read |surface\.write |device\.|runtime\.|auth\.|net\.dns-sd |process\.spawn |secret\.hold |env\.read login:|env\.launch |doc\.keep$|clipboard\.read$|browser\.automation$|payment\.google-pay$|payment\.apple-pay )/.test(source);
 const entryMatchesSource = ([, source, grant, error]) => {
   if (grant === null) {
     return error !== null || exactOnly(source);
@@ -324,8 +326,17 @@ const grantPort = (url) => Number(url.port || {
   "wss:": 443,
   "ftp:": 21
 }[url.protocol]);
+// A packaged file is host I/O. A redirect still qualifies only inside the same site's assets directory.
+export function bundledAsset(path, initial, target) {
+  if (target !== undefined) {
+    const prefix = initial.slice(0, -path.length);
+    if (!initial.endsWith(path) || !target.startsWith(prefix + '/assets/')) return false;
+    path = target.slice(prefix.length);
+  }
+  return typeof path === 'string' && /^\/assets\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(path);
+}
 // The line that admits a request to `value`, or null: `state.streams` names it.
-export function admittingGrant(set, value, operation = "fetch") {
+export function admittingGrant(set, value, operation = "fetch", render = globalThis.__exactRender, allowSelf = true) {
   if (grantError(set)) {
     return null;
   }
@@ -337,9 +348,32 @@ export function admittingGrant(set, value, operation = "fetch") {
   }
   const kind = operation === "websocket" ? "websocket" : "fetch";
   const scheme = target.protocol.slice(0, -1).toLowerCase(), host = target.hostname.toLowerCase(), port = grantPort(target);
-  return set.entries.find(([, , grant]) => grant?.[0] === kind + "-local-network" && schemeGrants[kind + "-scheme"].includes(scheme) && isLocalNetwork(host, grant[1] === "development") || grant && grant[1] === scheme && (grant[0] === kind + "-scheme" || grant[3] === port && (grant[0] === kind && grant[2] === host || grant[0] === kind + "-subdomains" && host.length > grant[2].length + 1 && host.endsWith("." + grant[2]))))?.[1] ?? null;
+  // A render holds only the HTTP origins and subdomains named by the source (LLP 1016 D6).
+  const other = set.entries.find(([, , grant]) => {
+    if (!grant) return false;
+    if (render && grant[0] !== 'fetch' && grant[0] !== 'fetch-subdomains') return false;
+    if (grant[0] === kind + "-local-network") return schemeGrants[kind + "-scheme"].includes(scheme) && isLocalNetwork(host, grant[1] === "development");
+    return grant[1] === scheme && (grant[0] === kind + "-scheme" || grant[3] === port &&
+      (grant[0] === kind && grant[2] === host || grant[0] === kind + "-subdomains" && host.endsWith("." + grant[2]) && host.length > grant[2].length + 1));
+  });
+  if (other) return other[1];
+  const page = allowSelf && kind === 'fetch' && selfEntry(set);
+  return page && matchesPage(target) ? page[1] : null;
 }
-export const admitsNetwork = (set, value, operation) => admittingGrant(set, value, operation) !== null;
+const selfEntry = set => globalThis.__exactFetchSelf !== false && set?.entries?.find(([, , grant]) => grant?.[0] === 'fetch-self');
+export const isSelfGrant = (set, line) => !!line && selfEntry(set)?.[1] === line;
+// A browser cannot inspect intermediate redirects. Only a request confined to the page from the start may use self for its reply.
+export function admitsFetchHop(set, url, self, render, initial) {
+  // On a render's refusal, the reader can retry with a grant (such as https:) that only it holds.
+  if (self && !(globalThis.__exactRender && render === false && admittingGrant(set, initial, 'fetch', false, false)))
+    return !!selfEntry(set) && !grantError(set) && matchesPage(new URL(url));
+  return admittingGrant(set, url, 'fetch', render, false) !== null;
+}
+export const sameOriginRequest = request => new Request(request, {
+  mode: 'same-origin', referrer: request.referrer, referrerPolicy: request.referrerPolicy
+});
+export const selfWithoutPage = (set, url) => selfEntry(set) && /^https?:\/\//i.test(url) && !hasPageOrigin();
+export const admitsNetwork = (set, value, operation, render) => admittingGrant(set, value, operation, render) !== null;
 export function admitsSecret(set, name) {
   return !String(name).startsWith("exact.kept.") && !grantError(set) && set.entries.some(([, , grant]) => grant?.[0] === "secret-keep" && grant[1] === String(name));
 }

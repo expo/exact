@@ -14,11 +14,11 @@
 //   surface's published record, decoded against each reader's shape.
 import { data, Resources, commit, R, Refusal, Kept, say, Sounds } from "./rt.js";
 import * as rt from "./rt.js";
-import { environment, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode } from "./navigation.js";
+import { environment, screenOrientation, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode } from "./navigation.js";
 
-const again = (source, why) => {
+const again = (source, why, snaps) => {
   const changed = () => {
-    if (!rt.deferForReplacement(changed)) return commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why);
+    if (!rt.deferForReplacement(changed)) return commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why, undefined, snaps?.());
   };
   return changed;
 };
@@ -29,12 +29,13 @@ const CONTRAST = ["no-preference", "more", "less", "custom"];
 const GAMUT = ["srgb", "p3", "rec2020", "rec2020"];
 /** Every viewport fact, by the runner's names, as the page reads them now. */
 export function viewportFacts(geometry = false) {
-  const p = preferences(), f = fold();
+  const p = preferences(), f = fold(), orientation = screenOrientation();
   const env = geometry && globalThis.document?.body ? environment() : {};
   const [safeAreaTop, safeAreaRight, safeAreaBottom, safeAreaLeft] = ["top", "right", "bottom", "left"].map(edge => env[`safe-area-inset-${edge}`] ?? 0);
   const segments = (f.cols === 1 && f.rows === 1 ? [[0, 0, innerWidth, innerHeight]] : f.rects ?? [])
     .map(([x, y, width, height]) => ({ x, y, width, height }));
   return { width: innerWidth, height: innerHeight, safeAreaTop, safeAreaRight, safeAreaBottom, safeAreaLeft, segments, devicePixelRatio: Number.isFinite(globalThis.devicePixelRatio) && globalThis.devicePixelRatio > 0 ? globalThis.devicePixelRatio : null, prefersReducedMotion: !!(p & 1), prefersReducedTransparency: !!(p & 2),
+    orientationType: orientation.type, orientationAngle: orientation.angle,
     displayMode: displayMode(),
     update: UPDATES[updateCode()], // @ref LLP 1101.003 D6
     prefersContrast: CONTRAST[(p >> 2) & 3], prefersColorScheme: p & 16 ? "dark" : "light",
@@ -53,7 +54,10 @@ export function viewport(readers) {
     return shape ? shaped(shape, facts, "viewport", name) : byName(readers, name, facts);
   };
   if (typeof addEventListener !== "function") return;
-  const changed = again("exactViewport", "viewport");
+  // @ref LLP 1063 D6 — a resize takes new boxes without animating, what the app commits to answer it included
+  const size = () => `${innerWidth}x${innerHeight}`;
+  let told = size();
+  const changed = again("exactViewport", "viewport", () => told !== (told = size()));
   addEventListener("resize", changed);
   globalThis.visualViewport?.addEventListener("resize", changed);
   onKeyboard(changed); // LLP 1039 D9
@@ -105,7 +109,8 @@ export function page(readers) {
   });
 }
 
-// Physical output and a sequence need the freeze edge even if the plan reads no page fields.
+// Page fields' readers, and with `freezes` the freeze edge, which physical output and a sequence need even if the
+// plan reads no page fields (output.js `watchOutput`).
 export function watchPage(freezes = false) {
   pageFreezes ||= freezes;
   const facts = reporter();

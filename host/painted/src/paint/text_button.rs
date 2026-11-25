@@ -51,7 +51,7 @@ impl Painter {
         shape: &Shape,
         kind: MaterialButton,
         accent: [u8; 4],
-        pressed_background: Option<[u8; 4]>,
+        pressed_background: super::PressBackground,
         ts: Transform,
     ) -> [u8; 4] {
         let dark = self.dark;
@@ -73,7 +73,7 @@ impl Painter {
             (_, false) => (None, variant),
             (_, true) => (None, faded(variant, label)),
         };
-        if let Some(fill) = pressed_background.or(container) {
+        if let Some(fill) = pressed_background.mix(container) {
             self.backend.fill(shape, fill, ts);
         }
         if kind == MaterialButton::Outlined {

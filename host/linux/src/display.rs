@@ -302,6 +302,13 @@ pub fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i3
     };
     let (pw, ph) = display.size();
     config.output_rotation = display.rotation;
+    config
+        .preferences
+        .get_or_insert_with(Default::default)
+        .orientation = Some(exact_runner::ScreenOrientation::rotated(
+        ph >= pw,
+        (display.rotation.degrees() / 90) as u8,
+    ));
     let [lw, lh] = display.rotation.size([pw, ph]);
     let viewport = (lw as f32 / config.scale, lh as f32 / config.scale);
     exact_painted::desktop::install_displays(std::rc::Rc::new(

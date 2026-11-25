@@ -149,8 +149,8 @@ fn a_haptic_links_the_page_freeze_watcher() {
     .unwrap();
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
     assert!(
-        js.contains("import{watchPage as $watchPage}from\"./facts.js\";")
-            && js.contains("$watchPage(true);"),
+        js.contains("import{watchOutput as $watchOutput}from\"./output.js\";")
+            && js.contains("$watchOutput();"),
         "{js}"
     );
 }
@@ -1280,11 +1280,11 @@ fn a_table_and_a_description_list_are_their_elements() {
     assert!(!out.css.contains("display:grid"), "{}", out.css);
 }
 
-/// @ref LLP 1047.002 D1 — a commit reads bound exits and layout transitions
-/// through presence-bindings.js, which only a plan that binds one links, and
-/// which is handed over before the first commit builds the view.
+/// @ref LLP 1047.002 D1 — install presence probes before mounting a plan
+/// with an exit or a bound layout transition.
 #[test]
-fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
+fn presence_probes_link_for_exits_and_bound_layout_transitions() {
+    exact_web::link(exact_web_capabilities::ALL);
     let emitted = |view: &str| {
         let source = format!("keyframes leave\n  to opacity=0\n\ncomponent App\n  state calm = false\n  view\n    column\n      {view}\n");
         crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
@@ -1292,6 +1292,7 @@ fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
             .js
     };
     for view in [
+        "text \"Card\" -exact-exit-animation=\"leave 200ms linear both\"",
         "text \"Card\" -exact-exit-animation=(calm ? \"none\" : \"leave 200ms linear both\")",
         "text \"Card\" -exact-layout-transition=(calm ? \"none\" : \"200ms linear\")",
     ] {
@@ -1301,7 +1302,6 @@ fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
     }
     for view in [
         "text \"Card\"",
-        "text \"Card\" -exact-exit-animation=\"leave 200ms linear both\"",
         "text \"Card\" -exact-layout-transition=\"200ms linear\"",
     ] {
         let js = emitted(view);
@@ -1404,7 +1404,7 @@ fn a_record_field_named_proto_is_an_own_descriptor_field() {
 }
 
 #[test]
-fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
+fn press_transforms_compose_and_bound_transitions_write_press_timing() {
     let plan = contract::compile(
         r#"component App
   state shown = false
@@ -1414,6 +1414,8 @@ fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
     column
       view scale=(shown ? 1 : 0.01) press=toggle -exact-press-scale=0.92 transition="scale 200ms ease"
       view scale=(shown ? 1 : 0.01)
+      view press=toggle -exact-press-scale=(shown ? 1 : 0.9) transition="scale 300ms linear"
+      view press=toggle -exact-press-opacity=0.7 transition=(shown ? "none" : "opacity 250ms")
 "#,
     )
     .unwrap();
@@ -1424,6 +1426,15 @@ fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
         output.js
     );
     assert!(output.js.contains(",\"scale\",\"\",()=>"), "{}", output.js);
+    assert!(
+        output.css.contains("scale 0s,--exact-scale 0.3s linear 0s"),
+        "{}",
+        output.css
+    );
+    assert!(output
+        .js
+        .contains(r#"--exact-press-timing:{\"scale\":[300.0,0.0,\"linear\"]}"#));
+    assert!(output.js.contains(",\"--exact-press-timing\",\"\",()=>"));
 }
 
 /// LLP 1094.000 D2: a bound drag's files and `url` reach the page by the

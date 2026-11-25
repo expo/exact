@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { fileURLToPath } from 'node:url';
 import { pathWithin } from '../../scripts/paths.mjs';
 import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
-import { lockBlocks, lockChanges, memberRefusal, mergeLockBlocks, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
+import { lockBlocks, lockChanges, memberRefusal, mergeLockBlocks, outsideSdkLock, series, seriesId, staleLock, takenFromExact2 } from '../../scripts/app-shells.mjs';
 
 // Resolve authored keys in memory before writing the resolved manifest.
 const merge = (base, overrides) => {
@@ -204,6 +204,10 @@ export function gameShells(dir, game, workspace, {env = process.env, updateLock 
   const authoredLogic = existsSync(resolve(dir, 'logic/Cargo.toml'));
   cargo.workspace.members = ['bake','gpu','web','apple','linux','windows','android', authoredLogic ? '../logic' : 'logic', ...(data ? ['../data'] : []), ...(render ? ['../render'] : [])];
   delete cargo.workspace.exclude;
+  // Its members take exact2's crates from it, which names the checkout by its real path (scripts/paths.mjs `cargoCheckout`).
+  const taken = takenFromExact2([...(authoredLogic ? ['logic'] : []), ...(data ? ['data'] : []), ...(render ? ['render'] : [])]
+    .map(member => resolve(dir, member, 'Cargo.toml')).filter(existsSync), Object.keys(cargo.workspace.dependencies));
+  for (const { name, dir: crate, defaults } of taken.entries()) cargo.workspace.dependencies[name] = { path: crate, ...(defaults ? {} : { 'default-features': false }) };
   // Engine crates are dependencies here: the wildcard already optimizes them.
   // Retain member overrides and any settings distinct from that wildcard.
   const members = shellMembers(app.game, name);
@@ -762,7 +766,7 @@ export function bakeGameArt(dir, env = process.env) {
   return true;
 }
 
-if (import.meta.main) {
+async function main() {
   const args = process.argv.slice(2), requested = args.find(arg => !arg.startsWith('--'));
   if (args.includes('--check')) {
     try { console.log(checkGame(resolve(requested ?? '.'))); }
@@ -806,6 +810,9 @@ if (import.meta.main) {
       const { lockSwiftPackages } = await import('../../host/apple/compose.mjs');
       const swift = lockSwiftPackages({ dir, manifest: gameDefaults(dir) });
       if (swift) console.log(swift);
+      const { reportAndroidLock } = await import('../../scripts/app-cli.mjs');
+      const android = await reportAndroidLock(dir);
+      if (android) console.log(android);
     }
     catch (error) { console.error(error.message); process.exitCode = 1; }
   } else {
@@ -820,3 +827,5 @@ if (import.meta.main) {
     }
   }
 }
+
+if (import.meta.main) main().catch(error => { console.error(error); process.exitCode = 1; });

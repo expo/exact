@@ -45,6 +45,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         stream::reader_replaced();
         layer::ALIVE.with(|a| a.borrow_mut().clear());
         self.tracks = Default::default();
+        self.told = None;
         // The last paint is the last reader's: nothing moves it, and the
         // next frame is a paint.
         self.painted = None;
@@ -57,7 +58,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // The device's colours as the new reader read them: a wallpaper
         // changed while the last one was stopped is a new palette (D4).
         if let Some(palette) = colors::palette() {
-            self.p.set_palette(&palette);
+            self.p.set_reader_palette(&palette);
         }
         match device::windowed(size, scale) {
             Some(told) => self.set_window(told),
@@ -78,7 +79,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     #[cfg(target_os = "android")]
     pub fn attach_window(&mut self, view: u32, window: usize, size: (u32, u32)) -> bool {
         self.surfaces = true;
-        self.p.attach_window(view, window, size)
+        self.p
+            .attach_window(view, window, size, super::agent::clock(&self.p).is_none())
     }
     /// The window of canvas `view` is going.
     #[cfg(target_os = "android")]

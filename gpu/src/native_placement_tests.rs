@@ -210,7 +210,26 @@ fn retiring_each_releases_textures_and_zero_frame_releases_a_capture() {
             with(|m| m.instances[&id].each.iter().filter(|t| t.is_some()).count()),
             Some(1)
         );
+        let rect = [0., 0., 20., 20.];
+        assert_eq!(child(id, 0, "", rect, [0, 0], &[]), 0);
+        with(|m| {
+            assert!(
+                m.instances[&id].each[0].is_none(),
+                "the host now composites this child"
+            );
+            m.instances.get_mut(&id).unwrap().dirty = false;
+            assert!(m.child(id, 0, "", rect, [0, 0], &[]));
+            assert!(!m.instances[&id].dirty);
+        });
         assert_eq!(child(id, 0, "", [0.; 4], [0, 0], &[]), 0);
+        with(|m| m.instances.get_mut(&id).unwrap().dirty = false);
+        assert_eq!(child(id, 0, "", [0.; 4], [0, 0], &[]), 0);
+        with(|m| {
+            assert!(m.children_count(id, 1));
+            assert!(!m.instances[&id].dirty, "unchanged child geometry");
+            assert!(m.child(id, 0, "label", [2., 0., 4., 4.], [0, 0], &[]));
+            assert!(m.instances[&id].dirty, "moved child");
+        });
         assert_eq!(
             with(|m| m.instances[&id].each.iter().filter(|t| t.is_some()).count()),
             Some(0)

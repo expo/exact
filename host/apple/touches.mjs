@@ -7,12 +7,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { iosTriple } from './build.mjs';
-import { claimLive } from '../../scripts/app.mjs';
-import { decodeProfile, identity, installedProfiles, phoneBridge, profile } from './devices.mjs';
+import { claimLive, readManifest } from '../../scripts/app.mjs';
+import { chooseSimulator, decodeProfile, identity, installedProfiles, phoneBridge, profile, simulatorTempDirectory } from './devices.mjs';
 import { watchCloak } from './cloak.mjs';
-import { retainCleanupError, simulatorDisplay } from '../../scripts/agent-launch.mjs';
+import { lockHeld, takeLock } from '../web/build-lock.mjs';
+import { retainCleanupError, simulatorDisplay, simulatorDisplayLockPath } from '../../scripts/agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -147,6 +148,9 @@ async function within(promise, ms, onTimeout) {
 }
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const touchLockPath = (udid, directory = simulatorTempDirectory()) => resolve(directory, `exact-touches-${udid}.lock`);
+// Older tokens name just the pid; newer claims also detect pid reuse.
+const touchOwnerLive = token => /^\d+:[0-9a-f]+$/.test(token) ? alive(Number(token.split(':')[0])) : claimLive(token);
 
 /**
  * The lock that makes one session the device's only toucher (D2). Taken
@@ -159,8 +163,7 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { retu
  * dead token, and they are serialized, so a live owner's lock is never
  * removed. Released only while it still holds this session's token.
  */
-function lock(udid) {
-  const path = resolve(tmpdir(), `exact-touches-${udid}.lock`);
+function lock(path) {
   // The holder by its pid and start time, as a build's claim is (`claimLive`): a reused pid is no holder.
   const token = JSON.stringify({ pid: process.pid, started: new Date().toISOString(), id: randomBytes(8).toString('hex') });
   const create = () => { try { writeFileSync(path, token, { flag: 'wx' }); return true; } catch (e) { if (e.code === 'EEXIST') return false; throw e; } };
@@ -168,12 +171,11 @@ function lock(udid) {
   const owner = (t) => { try { return JSON.parse(t).pid; } catch { return Number(t.split(':')[0]); } };
   // Live unless shown dead: a holder whose start `ps` cannot read, or a lock that does not parse, is live (claimLive);
   // a lock written before the start time was recorded is its pid's.
-  const live = (t) => /^\d+:[0-9a-f]+$/.test(t) ? alive(owner(t)) : claimLive(t);
   for (let attempt = 0; !create(); attempt++) {
     if (attempt > 20) throw new Error(`the device's touch lock keeps changing hands (${path})`);
     const seen = holder();
     if (seen == null) continue; // released between the create and the read: create again
-    if (live(seen)) throw new Error(`the device's touches are held by PID ${owner(seen)}${owner(seen) === process.pid ? ' (another session in this process)' : ''}`);
+    if (touchOwnerLive(seen)) throw new Error(`the device's touches are held by PID ${owner(seen)}${owner(seen) === process.pid ? ' (another session in this process)' : ''}`);
     const takeover = path + '.takeover';
     try { writeFileSync(takeover, token, { flag: 'wx' }); } catch (e) {
       if (e.code === 'EEXIST') throw new Error(`another process is taking over the device's touch lock; if none is, remove ${takeover}`);
@@ -266,7 +268,7 @@ const AX = 'com.apple.Accessibility', AX_KEYS = ['AutomationEnabled', 'Accessibi
 const accessibilityLocks = new AsyncLocalStorage();
 // Launch failure can close its touch session while still holding the display lock.
 // Work deferred past that launch must acquire the lock again.
-function withAccessibilityLock(udid, fn) {
+export function withAccessibilityLock(udid, fn) {
   const held = accessibilityLocks.getStore() ?? [];
   if (held.some(owner => owner.udid === udid && owner.active)) return fn();
   return simulatorDisplay(udid, () => {
@@ -278,41 +280,117 @@ function withAccessibilityLock(udid, fn) {
   });
 }
 /** `defaults <args>` in simulator `udid`, asynchronously: each spawn costs about 0.35 s, so a session runs them
- * together. One that has not answered in 10 s is killed, and fails: the device's lock waits on it. */
-const simDefaults = (udid, args) => new Promise((done) => {
+ * together. A required operation gets 10 s; an advisory read has a shorter bound. */
+const simDefaults = (udid, args, timeout = 10000) => new Promise((done) => {
   const p = spawn('xcrun', ['simctl', 'spawn', udid, 'defaults', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, 10000);
+  const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, timeout);
   let out = '', err = '';
   p.stdout.on('data', (d) => { out += d; });
   p.stderr.on('data', (d) => { err += d; });
   p.on('error', (e) => { clearTimeout(timer); done({ status: -1, out, err: String(e) }); });
-  p.on('close', (status, signal) => { clearTimeout(timer); done({ status: signal ? -1 : status, out, err: signal ? 'no answer in 10 s' : err }); });
+  p.on('close', (status, signal) => { clearTimeout(timer); done({ status: signal ? -1 : status, out, err: signal ? `no answer in ${timeout / 1000} s` : err }); });
 });
+const accessibilityRecord = udid => resolve(homedir(), '.cache/exact/simulator-accessibility', `${udid}.json`);
+const hostedAccessibilityLock = udid => resolve(simulatorTempDirectory(), `exact-hosted-accessibility-${udid}.lock`);
+/** A hosted XCTest holds this while its temporary ApplicationAccessibilityEnabled is on, including between launches. */
+export function markHostedAccessibility(udid, before) {
+  const path = hostedAccessibilityLock(udid);
+  const release = takeLock(path, { shared: true, noFollow: true });
+  try { writeFileSync(path, before ?? ''); } catch (error) { release(); throw error; }
+  return release;
+}
+function hostedAppAccessibility(udid) {
+  const path = hostedAccessibilityLock(udid);
+  return lockHeld(path, { exclusive: true }) ? { ApplicationAccessibilityEnabled: readFileSync(path, 'utf8') || undefined } : null;
+}
+
+const checkedAccessibility = new Map((process.env.EXACT_IOS_TEST_CHECKED || '').split(',').filter(Boolean).map(entry => entry.split(':')));
+
+/** Read the domain once, before a launch changes any key. A missing domain means all three are unset. */
+async function accessibilityKeys(udid, run = simDefaults, timeout) {
+  const r = await run(udid, ['read', AX], timeout);
+  if (r.status !== 0 && !/does not exist|not found|Could not find key/.test(r.err)) throw new Error(`simulator accessibility: ${r.err}`);
+  // defaults indents domain keys four spaces; a nested dictionary may contain the same names.
+  return Object.fromEntries(AX_KEYS.flatMap(key => {
+    const match = new RegExp(`^    ${key} = (.*)`, 'm').exec(r.out);
+    return match ? [[key, match[1].trimEnd() === '1;' ? '1' : '0']] : [];
+  }));
+}
+
+/** Only a live touch session owns temporary settings. A stale recovery record is for restoration alone. */
+function reportAccessibility(udid, current, startsTouches = false) {
+  if (checkedAccessibility.get(udid) === 'warned') return;
+  let baseline = current, hosted = false, touching = false;
+  try {
+    touching = touchOwnerLive(readFileSync(touchLockPath(udid), 'utf8'));
+    if (touching) baseline = JSON.parse(readFileSync(accessibilityRecord(udid), 'utf8'));
+  }
+  catch (error) { if (error.code !== 'ENOENT') return; }
+  if (current.ApplicationAccessibilityEnabled === '1') {
+    try { hosted = !!hostedAppAccessibility(udid); }
+    catch { return; } // Unknown ownership: skip the advice.
+  }
+  const on = AX_KEYS.filter(key => current[key] === '1' && baseline?.[key] === '1'
+    && !(hosted && key === 'ApplicationAccessibilityEnabled'));
+  const status = on.length ? 'warned' : 'checked';
+  if (checkedAccessibility.get(udid) !== status) {
+    checkedAccessibility.set(udid, status);
+    if (process.env.EXACT_IOS_TEST_CHECKED !== undefined && process.connected) process.send({ checkedSimulatorAccessibility: udid, status }, () => {});
+  }
+  if (!on.length) return;
+  console.warn([
+    `warning: ${AX} settings already on for simulator ${udid}: ${on.join(', ')}. This Exact run did not enable them.`,
+    "Loading UIKit's accessibility runtime can add about 1.5 seconds to every app launch on iOS 27.2 (about 0.3 seconds on iOS 26.5).",
+    touching || startsTouches ? 'To clear these settings, wait for the Exact touch session to end, then run:' : 'If you want to clear these settings, run:',
+    ...on.map(key => `  xcrun simctl spawn ${udid} defaults delete ${AX} ${key}`),
+  ].join('\n'));
+}
+
+/** Setup inspects only the simulator a drive would use if it is already booted and its display is free. */
+export async function checkSimulatorAccessibility(dir, app) {
+  let release;
+  try {
+    app ??= dir && readManifest(dir, basename(dir)).app.id;
+    const dev = chooseSimulator(undefined, { app, dir, rememberChoice: false });
+    if (dev.state !== 'Booted' || !dev.runtime.includes('.iOS-') || checkedAccessibility.has(dev.udid)) return;
+    // setup --check can share the drive's flock before the Rust launch helper has been built.
+    const path = simulatorDisplayLockPath(dev.udid);
+    mkdirSync(dirname(path), { recursive: true });
+    release = takeLock(path, { shared: true, waitMs: 0, noFollow: true });
+    reportAccessibility(dev.udid, await accessibilityKeys(dev.udid, simDefaults, 1500));
+  } catch { /* a busy or unavailable simulator does not affect the SDK check */ }
+  finally { release?.(); }
+}
+
 /** Hold the simulator's shared launch lock through AX setup, launch and restoration.
- * The loaded runtime stays with the process. Ordinary drives perform no defaults reads or writes.
+ * The loaded runtime stays with the process. An ordinary drive only reads the defaults on its first launch.
  * `enabled` is `'try'` for a launch that reads the tree if it can (verify, LLP 1156.006.000 D15): a simulator that
  * will not say or take the setting is launched without the runtime, with a note, where `true` refuses. */
-export async function withAccessibilityRuntime(udid, enabled, launch, run = simDefaults) {
+export async function withAccessibilityRuntime(udid, enabled, launch, { run = simDefaults, check = true, touches = false } = {}) {
   return withAccessibilityLock(udid, async () => {
-    if (!enabled) return launch();
+    const status = checkedAccessibility.get(udid);
+    const inspect = check && status !== 'warned';
+    if (!enabled && (!inspect || (!touches && status))) return launch();
     const key = 'ApplicationAccessibilityEnabled', args = [AX, key];
     const refuse = (message) => {
       if (enabled !== 'try') throw new Error(message);
       console.error(`note: ${message}; launched without UIKit's accessibility runtime, so the accessibility tree is not read`);
       return launch();
     };
-    const before = await run(udid, ['read', ...args]);
-    // An unset key is no failure. `defaults` words it three ways: macOS's "does not exist", and iOS 27's "Domain … not
-    // found" and "Could not find key … in domain …", which a simulator no session has touched answers.
-    if (before.status !== 0 && !/does not exist|not found|Could not find key/.test(before.err)) return refuse(`simulator accessibility: ${before.err}`);
-    if (before.status === 0 && before.out.trim() === '1') return launch();
+    let before;
+    try { before = await accessibilityKeys(udid, run, enabled || touches ? undefined : 1500); }
+    catch (error) {
+      return enabled ? refuse(error.message) : launch(null);
+    }
+    if (inspect) reportAccessibility(udid, before, touches);
+    if (!enabled || before[key] === '1') return launch(before);
     const set = await run(udid, ['write', ...args, '-bool', 'true']);
     if (set.status !== 0) return refuse(`simulator accessibility: ${set.err}`);
     let carrier;
     try { carrier = await launch(); return carrier; }
     finally {
       try {
-        const restored = await run(udid, before.status === 0 ? ['write', ...args, '-bool', 'false'] : ['delete', ...args]);
+        const restored = await run(udid, before[key] != null ? ['write', ...args, '-bool', 'false'] : ['delete', ...args]);
         if (restored.status !== 0) throw new Error(`simulator accessibility could not be restored: ${restored.err}`);
       } catch (error) {
         try { await carrier?.close(); } catch (failure) { retainCleanupError(error, failure); }
@@ -321,28 +399,22 @@ export async function withAccessibilityRuntime(udid, enabled, launch, run = simD
     }
   });
 }
-/** The three keys as simulator `udid` has them (`'1'`, `'0'`, or undefined when unset), or null when it could not say. */
-async function accessibilityKeys(udid) {
-  const r = await simDefaults(udid, ['read', AX]);
-  if (r.status !== 0 && !/does not exist|not found/.test(r.err)) return null;
-  return Object.fromEntries(AX_KEYS.map((k) => [k, new RegExp(`^\\s*${k} = (\\d+);`, 'm').exec(r.out)?.[1]]));
-}
 /** The keys as a session finds them: the record a session killed before its end left of what it found, else read
  * now and recorded (`record`, a file; under the device's lock, so no other session's). Null when they could not be read. */
-export async function foundAccessibility(udid, record, read = accessibilityKeys) {
+export async function foundAccessibility(udid, record, read = udid => accessibilityKeys(udid).catch(() => null)) {
   try { return JSON.parse(readFileSync(record, 'utf8')); } catch { /* none: this session reads them */ }
-  const keys = await read(udid);
+  const current = await read(udid);
+  const keys = current && { ...current, ...hostedAppAccessibility(udid) };
   if (keys) { mkdirSync(dirname(record), { recursive: true }); writeFileSync(record, JSON.stringify(keys)); }
   return keys;
 }
-/** The keys put back as a session `found` them. AutomationEnabled already on means an earlier session's XCTest left
- * all three on (a person sets ApplicationAccessibilityEnabled alone, for `tree --ax`), so they go back to unset.
- * Resolves with what failed, or null. */
+/** Restore the recorded values, including automation that was on before Exact. Resolves with what failed, or null. */
 export async function restoreAccessibility(udid, found, run = simDefaults) {
   return withAccessibilityLock(udid, async () => {
-    const left = found.AutomationEnabled === '1';
+    const hosted = hostedAppAccessibility(udid);
     const failed = (await Promise.all(AX_KEYS.map(async (k) => {
-      const v = left ? undefined : found[k];
+      if (hosted && k === 'ApplicationAccessibilityEnabled') return null;
+      const v = found[k];
       const r = await run(udid, v == null ? ['delete', AX, k] : ['write', AX, k, '-bool', v === '1' ? 'true' : 'false']);
       // Deleting a key or domain that is not there fails, and leaves what was wanted.
       return r.status === 0 || (v == null && /Could not find key|not found/.test(r.err)) ? null : `${k}: ${r.err.trim() || `exit ${r.status}`}`;
@@ -365,11 +437,13 @@ export async function restoreAccessibility(udid, found, run = simDefaults) {
  * ends (`AX_KEYS`). `handoff` awaits this connection's close and returns the port and token
  * for a hosted XCTest to connect; ownership and accessibility stay held until `close` or `end`.
  */
-export async function openTouches({ udid, appId, foldable, device = false, installApp }) {
-  const lockRelease = lock(udid);
+export async function openTouches({ udid, appId, foldable, device = false, installApp, accessibility }) {
+  const lockRelease = lock(touchLockPath(udid, device ? tmpdir() : undefined));
   const started = Date.now();
   const cloak = device ? null : watchCloak(udid, foldable);
-  const axRecord = resolve(homedir(), '.cache/exact/simulator-accessibility', `${udid}.json`), axFound = device ? Promise.resolve(null) : foundAccessibility(udid, axRecord);
+  const axRecord = accessibilityRecord(udid);
+  const axFound = device ? Promise.resolve(null) : withAccessibilityLock(udid, () =>
+    foundAccessibility(udid, axRecord, accessibility === undefined ? undefined : () => accessibility));
   let restored = null;
   // Unread keys were never turned on: the session ends before a write or a runner's start (`readKeys`).
   const putBack = () => (restored ??= axFound.then(async (keys) => {
@@ -530,10 +604,11 @@ export const DRAG_BOUNDS = { press: 10000, hold: 10000, over: 2000, total: 10000
  * asked delta) — else an error that says what the log saw. `drag` is
  * `{dx, dy, press, over, hold, into, during, tick}`, points and ms; `during` are thunks
  * run while the finger is down after the move, each bracketed by the log:
- * begun before the first, not lifted after the last; `tick(until, down)`
- * moves the app's clock after them, given the local time to stop moving on
- * real time and whether the finger is still down. `ask` is the app's carrier; `touches`
- * the runner's.
+ * begun before the first, not lifted after the last; `tick(ms)` is the step
+ * of the app's clock toward `ms` into the gesture, `(until, down)`, given the
+ * local time to stop moving on real time and whether the finger is still down,
+ * taken at the end of each press, move and hold. `ask` is the app's carrier;
+ * `touches` the runner's.
  */
 /** A drag's endpoint in viewport coordinates. `into keyboard` extends its bottom to the screen's safe edge;
  * the page origin (`screen.y`) must be subtracted before comparing points. */
@@ -549,7 +624,7 @@ const SETTLE_FIRST = 'a real touch played while native work still moves (a push,
 export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
   // A failure of the runner or of the app's carrier: no diagnostic read follows it (`tapRefusal`).
   const transport = (message) => Object.assign(new Error(message), { transport: true });
-  const legs = drag?.path ? [drag, ...drag.path].map(({ dx, dy, press = 0, over = 250, hold = 0, during = [], tick }) => ({ dx, dy, press, over, hold, during, tick })) : null;
+  const legs = drag?.path ? [drag, ...drag.path].map(({ dx, dy, press = 0, over = 250, hold = 0, during = [] }) => ({ dx, dy, press, over, hold, during })) : null;
   let net = drag ? [drag.dx, drag.dy] : [0, 0];
   const what = drag ? `drag #${id}` : `tap #${id}`;
   // A plain tap aims at the target's own press (LLP 1012 §1: never a control inside it its middle reaches);
@@ -596,16 +671,20 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
     const [[rx, ry], [ux, uy]] = a.fixedAxes;
     let x = 0, y = 0, offset = 0;
     request.path = legs.map((leg) => {
-      offset += leg.press + (leg.dx || leg.dy ? leg.over : 0);
+      const pressed = offset + leg.press;
+      offset = pressed + (leg.dx || leg.dy ? leg.over : 0);
       x += leg.dx; y += leg.dy;
       const point = [a.at[0] + x, a.at[1] + y];
       if (!reaches(a, point, drag.into)) throw new Error(`${what}: path waypoint (${point}) is ${outside(a, drag.into)}`);
-      checkpoints.push({ offset, end: offset + leg.hold, ops: leg.during, tick: leg.tick });
+      checkpoints.push({ pressed, offset, end: offset + leg.hold, ops: leg.during });
       offset += leg.hold;
       return { to: [a.fixed[0] + x * rx + y * ux, a.fixed[1] + x * ry + y * uy], over: (leg.dx || leg.dy ? leg.over : 0) / 1000, hold: leg.hold / 1000 };
     });
     net = [x, y]; ms = offset;
     moves = legs.some(l => l.dx || l.dy);
+  } else if (drag) {
+    const offset = drag.press + (moves ? drag.over : 0);
+    checkpoints.push({ pressed: drag.press, offset, end: offset + drag.hold, ops: drag.during ?? [] });
   }
   const injecting = touches.ask(request, RUNNER_MS + ms);
   let finished = false;
@@ -621,10 +700,10 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
   // Whatever fails, the gesture is let finish first, and the runner's error
   // wins. Requests and touch dispatch share the main run loop, so a read
   // that finds no `ended` came before the window dispatched the lift.
-  // A hold's clock (`drag.tick`) is moved the same way, after the ops, only while the touch is known to be down: a
+  // The app's clock (`drag.tick`) follows the gesture the same way, only while the touch is known to be down: a
   // gesture with no ops whose touch the log does not show down is left to the barrier below, its clock unmoved.
-  const ops = legs ? checkpoints.flatMap(c => c.ops) : drag?.during ?? [];
-  if (ops.length || drag?.tick || legs?.some(l => l.tick)) {
+  const ops = checkpoints.flatMap(c => c.ops);
+  if (ops.length || drag?.tick) {
     const over = Symbol('over');
     const gestureEnd = injecting.then(() => new Promise((r) => setTimeout(r, 1000))).then(() => over);
     const raced = async (promise, label, hint = '') => {
@@ -693,12 +772,35 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
         if (touch.lifted) throw new Error(`${early} began; lengthen hold`);
         if (initialReads && initialStill && touch.reports) reachedIn = touch.reached ? Date.now() - seen : false;
         if ((drag.reach || legs && initialReads && initialStill) && reachedIn === false) throw new Error(`${what}: the touch did not reach the view it landed on within ${legs ? Math.min(REACH_MS, checkpoints[0].end) : REACH_MS} ms (a recognizer kept it), so nothing inside it ran`);
+        const down = async () => {
+          if (finished) return false;
+          const touch = ours(await entries());
+          return !finished && touch != null && !touch.lifted;
+        };
+        // The clock's step toward `ms` into the gesture: from when the touch reaches its phase's start (`from`, local
+        // time), on real time until a margin before it reaches `ms` (`at`), or until half way through a phase shorter
+        // than the margin, then the rest at once. So a phase's events read no less than its start's time, as a move's
+        // first reads the press's end, and the lift the whole gesture's (#1333).
+        const step = async (ms, from, at, held = down) => {
+          if (!drag.tick) return;
+          await new Promise((r) => setTimeout(r, Math.max(0, from - Date.now())));
+          await ticked(drag.tick(ms), Math.max(at - TICK_MARGIN, (from + at) / 2), held);
+        };
+        // Where `ms` into the gesture falls in local time, from the touch's `began` on the host's clock where the
+        // log gives it, else from when a read first saw the touch.
+        const began = (await entries()).find(e => e.phase === 'began');
+        const local = async (ms) => {
+          if (!Number.isFinite(hostNow) || !began) return seen + ms;
+          await entries();
+          return Date.now() + (began.t + ms / 1000 - hostNow) * 1000;
+        };
         if (legs) {
-          const began = (await entries()).find(e => e.phase === 'began');
           if (!Number.isFinite(hostNow)) throw new Error(`${what}: rebuild the iOS app for checkpoint timestamps`);
-          for (let i = 0; i < checkpoints.length; i++) {
+          for (let i = 0, from = 0; i < checkpoints.length; from = checkpoints[i++].end) {
             const checkpoint = checkpoints[i];
-            if (!checkpoint.ops.length && !checkpoint.tick) continue;
+            if (checkpoint.pressed > from) await step(checkpoint.pressed, await local(from), await local(checkpoint.pressed));
+            if (checkpoint.offset > checkpoint.pressed) await step(checkpoint.offset, await local(checkpoint.pressed), await local(checkpoint.offset));
+            if (!checkpoint.ops.length && !(drag.tick && checkpoint.end > checkpoint.offset)) continue;
             const start = began.t + checkpoint.offset / 1000, end = began.t + checkpoint.end / 1000;
             const held = async () => {
               const touch = ours(await entries());
@@ -713,29 +815,28 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
               during.push(await raced(op(), 'an operation during the hold', '; lengthen hold'));
               await held();
             }
-            if (checkpoint.tick) await ticked(checkpoint.tick, Date.now() + (end - hostNow) * 1000 - TICK_MARGIN, async () => {
+            if (checkpoint.end > checkpoint.offset) await step(checkpoint.end, await local(checkpoint.offset), await local(checkpoint.end), async () => {
               if (finished) return false;
               const touch = ours(await entries());
               return !!touch && !touch.lifted && !finished && hostNow < end;
             });
           }
         } else {
+          const { pressed, offset, end } = checkpoints[0];
+          if (pressed > 0) await step(pressed, await local(0), await local(pressed));
+          if (offset > pressed) await step(offset, await local(pressed), await local(offset));
           // Reads follow the move, inside its hold.
-          await new Promise((r) => setTimeout(r, Math.max(0, drag.press + (moves ? drag.over : 0) - (Date.now() - seen))));
+          const moved = await local(offset);
+          await new Promise((r) => setTimeout(r, Math.max(0, moved - Date.now())));
           for (const op of ops) {
             const lifted = ours(await entries()).lifted;
             if (lifted || finished) throw new Error(`${early} finished; lengthen hold`);
             during.push(await raced(op(), 'an operation during the hold', '; lengthen hold'));
           }
           if (ops.length && ours(await entries()).lifted) throw new Error(`${early} finished; lengthen hold`);
+          // Until shortly before the lift, asking before each step that the finger is still down (`heldTick`).
+          await step(end, await local(offset), await local(end));
         }
-        const down = async () => {
-          if (finished) return false;
-          const touch = ours(await entries());
-          return !finished && touch != null && !touch.lifted;
-        };
-        // Until shortly before the lift, asking before each step that the finger is still down (`heldTick`).
-        if (drag.tick && !legs) await ticked(drag.tick, seen + drag.press + (moves ? drag.over : 0) + drag.hold - TICK_MARGIN, down);
       })();
     } catch (error) {
       const done = await injecting;
@@ -812,13 +913,13 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
 }
 
 /**
- * Two real touches on view `id` from one aim, the tap's, taken twice: a
- * two-finger pinch (`realPinch`) or a finger's double tap
- * (`realDoubleTap`). `request(aim)` is the runner's request; the window's
- * dispatch log must show exactly two new touches, both in the session, each
- * beginning and ending.
+ * `count` real touches on view `id` from one aim, the tap's, taken twice: a
+ * two-finger pinch (`realPinch`), a finger's double tap (`realDoubleTap`) or
+ * fingers tapped together (`realFingers`). `request(aim)` is the runner's
+ * request; the window's dispatch log must show exactly `count` new touches,
+ * all in the session, each beginning and ending.
  */
-async function twoTouches({ ask, touches, id, at, what, request, reply, ms, abandon }) {
+async function severalTouches({ ask, touches, id, at, what, request, reply, ms, abandon, count = 2 }) {
   const transport = (message) => Object.assign(new Error(message), { transport: true });
   const aimReq = { op: 'tap', id, aim: at ? { at } : true };
   await touches.cloak?.clear();
@@ -850,9 +951,9 @@ async function twoTouches({ ask, touches, id, at, what, request, reply, ms, aban
     if (page.log.length) cursor = page.log[page.log.length - 1].seq;
     if (page.truncated) continue;
     const ids = [...new Set(seen.map((e) => e.touch))];
-    if (ids.length > 2) throw new Error(`${what}: ${ids.length} touches after seq ${a.seq}, not two: ${JSON.stringify(seen.slice(0, 8))}`);
+    if (ids.length > count) throw new Error(`${what}: ${ids.length} touches after seq ${a.seq}, not ${count}: ${JSON.stringify(seen.slice(0, 8))}`);
     const fingers = ids.map((t) => ({ began: seen.find((e) => e.touch === t && e.phase === 'began'), ended: seen.find((e) => e.touch === t && e.phase === 'ended') }));
-    if (ids.length === 2 && fingers.every((f) => f.began && f.ended)) {
+    if (ids.length === count && fingers.every((f) => f.began && f.ended)) {
       for (const { began } of fingers) {
         if (began.session !== a.session || began.generation !== a.generation) throw new Error(`${what}: a touch landed ${began.session == null ? `on ${began.view}, outside every session` : `in session ${began.session}`}, not in ${a.session}`);
       }
@@ -862,7 +963,7 @@ async function twoTouches({ ask, touches, id, at, what, request, reply, ms, aban
         injected: injected.injected,
       };
     }
-    if (Date.now() >= deadline) throw new Error(`${what}: the dispatch log did not show two touches begin and end within 1 s (log: ${JSON.stringify(seen.slice(0, 8))}); ${SETTLE_FIRST}`);
+    if (Date.now() >= deadline) throw new Error(`${what}: the dispatch log did not show ${count} touches begin and end within 1 s (log: ${JSON.stringify(seen.slice(0, 8))}); ${SETTLE_FIRST}`);
     await new Promise((r) => setTimeout(r, 16));
   }
 }
@@ -875,7 +976,7 @@ async function twoTouches({ ask, touches, id, at, what, request, reply, ms, aban
  */
 export function realPinch({ ask, touches, id, at, scale, abandon }) {
   const what = `pinch #${id}`, from = 40, to = 40 * scale;
-  return twoTouches({ ask, touches, id, at, what, abandon, ms: 500, reply: { pinch: scale }, request: (a) => {
+  return severalTouches({ ask, touches, id, at, what, abandon, ms: 500, reply: { pinch: scale }, request: (a) => {
     for (const half of [from, to]) {
       for (const side of [-1, 1]) {
         const point = [a.at[0] + side * half, a.at[1]];
@@ -891,10 +992,24 @@ export function realPinch({ ask, touches, id, at, scale, abandon }) {
 /** A finger's double tap on view `id`, at its middle or `at` in it (LLP 1057.001.000 §6): two taps, the second
  *  down 150 ms after the first. */
 export function realDoubleTap({ ask, touches, id, at, abandon }) {
-  return twoTouches({ ask, touches, id, at, what: `dblclick touch #${id}`, abandon, ms: 300, reply: { dblclick: 'touch' },
+  return severalTouches({ ask, touches, id, at, what: `dblclick touch #${id}`, abandon, ms: 300, reply: { dblclick: 'touch' },
     request: (a) => ({ op: 'tap', double: true, point: a.point, screen: a.fixed, display: a.display }) });
 }
 
+
+/** `fingers` fingers tapped together on view `id`, level about its middle or `at` in it, 50 points apart: down
+ *  together, lifted together 50 ms later, as a window's recognizers read several fingers (four open the dev menu). */
+export function realFingers({ ask, touches, id, at, fingers, abandon }) {
+  const what = `tap #${id} fingers ${fingers}`, offsets = Array.from({ length: fingers }, (_, i) => (i - (fingers - 1) / 2) * 50);
+  return severalTouches({ ask, touches, id, at, what, abandon, count: fingers, ms: 300, reply: { fingers }, request: (a) => {
+    for (const dx of offsets) {
+      const point = [a.at[0] + dx, a.at[1]];
+      if (!reaches(a, point)) throw new Error(`${what}: a finger would be at (${point}), ${outside(a)}`);
+    }
+    const [[rx, ry]] = a.fixedAxes;
+    return { op: 'tap', point: a.point, display: a.display, screen: offsets.map((dx) => [a.fixed[0] + dx * rx, a.fixed[1] + dx * ry]) };
+  } });
+}
 
 /** Route a complete XCTest gesture on either iOS carrier. Other input stays with the app. */
 export function iosTouchInput({ ask, touches, touch, id, kind, opts, guest, abandon }) {
@@ -909,5 +1024,6 @@ export function iosTouchInput({ ask, touches, touch, id, kind, opts, guest, aban
   }
   if (kind === 'dblclick' && opts.touch) return realDoubleTap({ ...target, at: opts.at });
   if (kind === 'pinch') return realPinch({ ...target, at: opts.at, scale: opts.pinch });
+  if (kind === 'fingers') return realFingers({ ...target, at: opts.at, fingers: opts.fingers });
   return null;
 }

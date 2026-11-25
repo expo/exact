@@ -41,17 +41,27 @@ pub(super) fn group_binding<D: DataSource>(
         Some(g) => crate::batch::quote(&g, &mut out),
         None => out.push_str("null"),
     }
-    out.push_str(&format!(",\"keys\":{keys}}}"));
+    let section = binding.is_some_and(|b| b.unwrapped());
+    out.push_str(&format!(",\"section\":{section},\"keys\":{keys}}}"));
     out
 }
 
 impl<D: DataSource> Host<D> {
     pub(super) fn group_input(&mut self, i: &Input) -> Result<String, &'static str> {
+        let section = i.binding.unwrapped();
+        let geometry = if section && !matches!(i.op, 18 | 20) {
+            let Some(g) = self.runner.reorder_geometry(i.binding.list) else {
+                return Ok(stale());
+            };
+            g
+        } else {
+            i.geometry.clone()
+        };
         if i.op == 15 {
             if i.token != 0
                 || self.reorder_drags.active.is_some()
                 || self.runner.reorder_binding(i.binding.handle) != Some(i.binding)
-                || self.runner.reorder_geometry(i.binding.list).as_ref() != Some(&i.geometry)
+                || self.runner.reorder_geometry(i.binding.list).as_ref() != Some(&geometry)
             {
                 return Ok(stale());
             }
@@ -81,7 +91,7 @@ impl<D: DataSource> Host<D> {
             let list = kernel.node(i.rows.first()?.key.index)?.key;
             Some(ReorderGeometry {
                 list,
-                ..i.geometry.clone()
+                ..geometry.clone()
             })
         };
         let failed = |e: exact_runner::RunnerError| {
@@ -92,7 +102,7 @@ impl<D: DataSource> Host<D> {
             15 => {
                 let Some(start) = self
                     .runner
-                    .begin_group_reorder(i.binding, i.geometry.clone(), i.flags == 1)
+                    .begin_group_reorder(i.binding, geometry.clone(), i.flags == 1)
                     .map_err(failed)?
                 else {
                     return Ok(stale());
@@ -108,6 +118,26 @@ impl<D: DataSource> Host<D> {
                     velocity: Value::ZERO,
                 });
                 (true, false, start.receipt.into_iter().collect())
+            }
+            21 if section => {
+                if target(i).is_none_or(|g| g.list != i.binding.list) {
+                    return Ok(stale());
+                }
+                let progress = self
+                    .runner
+                    .preview_section_before(
+                        token.unwrap(),
+                        i.rows.get(1).map(|s| s.key.index),
+                        i.rows[0].value.y,
+                        i.rows[0].value.x,
+                    )
+                    .map_err(failed)?;
+                match progress {
+                    ReorderProgress::Accepted { receipt } => {
+                        (true, false, receipt.into_iter().collect())
+                    }
+                    _ => return Ok(stale()),
+                }
             }
             16 | 21 => {
                 let g = if i.op == 21 {
@@ -193,8 +223,14 @@ impl<D: DataSource> Host<D> {
         } else {
             self.batch_for(&prior, clock_error.as_deref())
         };
+        let anchor = (i.op == 22 && section)
+            .then(|| self.runner.section_step_anchor(token.unwrap()))
+            .flatten()
+            .map_or_else(String::new, |(view, after)| {
+                format!(",\"alignView\":{view},\"after\":{after}")
+            });
         Ok(format!(
-            "{{\"accepted\":true,\"certified\":{certified},\"dispatched\":{dispatched},{},\"batch\":{batch}}}",
+            "{{\"accepted\":true{anchor},\"certified\":{certified},\"dispatched\":{dispatched},{},\"batch\":{batch}}}",
             self.group_fields()
         ))
     }

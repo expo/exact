@@ -2,10 +2,13 @@
 //! one request in flight, each asked in a `next` commit of its own after
 //! the reply before it and its `then`.
 
+mod replacement_limits;
+
+use crate::source::{boxed, Read, Source};
 use exact_kernel::Kernel;
 use exact_runner::{
-    Answer, DataError, DataSource, FailureKind, Outcome, Request, Response, Runner, RunnerError,
-    Value,
+    Answer, DataError, DataSource, FailureKind, Outcome, Overlaid, Request, Response, Runner,
+    RunnerError, Value, Write,
 };
 
 const APP: &str = r#"
@@ -68,6 +71,7 @@ component App
 #[derive(Default)]
 struct Desk {
     later: bool,
+    replace_queue_tail: bool,
     fail_parse: bool,
     fail_now: bool,
     malformed: bool,
@@ -81,6 +85,87 @@ fn ack(op: &str, n: usize) -> Value {
 }
 
 impl DataSource for Desk {
+    fn queued_send_replacer(
+        &mut self,
+        _: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        self.replace_queue_tail.then_some(|source, previous, next| {
+            match source {
+                "append" => {
+                    let text = [previous[0].text(), next[0].text()].concat();
+                    return Some(vec![Value::str(&text)]);
+                }
+                "appendNested" => {
+                    let oversized = "x".repeat(exact_runner::vm::MAX_STRING + 1);
+                    let nested = (0..4).fold(Value::str(&oversized), |child, _| {
+                        Value::list(vec![child; 1024])
+                    });
+                    return Some(vec![nested]);
+                }
+                "saveNumber" => return Some(vec![Value::Number(3.0)]),
+                "increment" => {
+                    let delta = |arg: &Value| {
+                        let Value::Record(fields) = arg else {
+                            panic!("increment record");
+                        };
+                        assert!(fields[1].text().len() <= exact_runner::vm::MAX_STRING);
+                        fields[0].as_number().unwrap()
+                    };
+                    return Some(vec![Value::record(vec![
+                        Value::Number(delta(&previous[0]) + delta(&next[0])),
+                        Value::str(""),
+                    ])]);
+                }
+                _ => {}
+            }
+            let scope = |args: &[Value]| match args.first().and_then(Value::as_str) {
+                Some(text) if text.starts_with("room:") => Some("room"),
+                Some(text) if text.starts_with("thread:") => Some("thread"),
+                _ => None,
+            };
+            if source != "save" || scope(previous).is_none() || scope(previous) != scope(next) {
+                return None;
+            }
+            match next[0].as_str() {
+                Some("room:invalid-merge") => Some(vec![Value::Number(f64::NAN)]),
+                Some("room:empty-merge") => Some(vec![]),
+                Some("room:wrong-type-merge") => Some(vec![Value::Number(42.0)]),
+                Some("room:shared-list-merge") => {
+                    let mut value = Value::Number(42.0);
+                    for _ in 0..40 {
+                        value = Value::list(vec![value.clone(), value]);
+                    }
+                    Some(vec![value])
+                }
+                Some("room:append") => Some(vec![Value::str(&format!(
+                    "{}+room:append",
+                    previous[0].as_str().unwrap()
+                ))]),
+                _ => Some(next.to_vec()),
+            }
+        })
+    }
+
+    fn overlay(
+        &mut self,
+        source: &str,
+        _: &[Value],
+        _: &Value,
+        writes: &[Write<'_>],
+    ) -> Result<Option<Overlaid>, DataError> {
+        Ok((source == "preview").then(|| Overlaid {
+            value: Value::str(
+                &writes
+                    .iter()
+                    .filter(|w| !w.answered)
+                    .map(|w| w.args[0].as_str().unwrap_or("<invalid>"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            keep: vec![],
+        }))
+    }
+
     fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
         match source {
             "check" => {
@@ -90,6 +175,7 @@ impl DataSource for Desk {
                 }
                 Ok(Value::Number(self.checks as f64))
             }
+            "preview" => Ok(Value::str("")),
             "big" if args[0].as_number() == Some(0.0) => Ok(Value::list(vec![])),
             // Doubled by a row key, past the runner's longest string: a trap
             // in a key poisons the runner (LLP 1017.003 D3).
@@ -106,16 +192,45 @@ impl DataSource for Desk {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
+        if matches!(
+            source,
+            "append" | "appendNested" | "saveNumber" | "increment"
+        ) {
+            let op = match source {
+                "append" => args[0].text().len().to_string(),
+                "appendNested" => {
+                    let Value::List(items) = &args[0] else {
+                        panic!("appendNested list");
+                    };
+                    items.len().to_string()
+                }
+                "increment" => {
+                    let Value::Record(fields) = &args[0] else {
+                        panic!("increment record");
+                    };
+                    format!(
+                        "{}:{}",
+                        fields[0].as_number().unwrap(),
+                        fields[1].text().len()
+                    )
+                }
+                _ => args[0].as_number().unwrap().to_string(),
+            };
+            self.asks.push(format!("{source}:{op}"));
+            return Ok(Answer::Now(ack(&op, self.asks.len())));
+        }
         let op = args
             .first()
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        if matches!(source, "save" | "two" | "broken") {
+        if matches!(source, "save" | "post" | "two" | "broken") {
             self.asks.push(format!("{source}:{op}"));
         }
         match source {
-            "broken" => Err(DataError::Unavailable("broken refuses".into())),
+            // A source the desk does not answer: the runner refuses the send.
+            // (`Unavailable` would commit it with its receipt failed.)
+            "broken" => Err(DataError::UnknownSource(source.into())),
             "two" => Ok(Answer::Later(Request::post_json(
                 "https://desk.test/step1",
                 &op,
@@ -125,11 +240,11 @@ impl DataSource for Desk {
                 "no seats left".into(),
                 "FULL".into(),
             )),
-            "save" if self.later => Ok(Answer::Later(Request::post_json(
+            "save" | "post" if self.later => Ok(Answer::Later(Request::post_json(
                 "https://desk.test/save",
                 &op,
             ))),
-            "save" => Ok(Answer::Now(ack(&op, self.asks.len()))),
+            "save" | "post" => Ok(Answer::Now(ack(&op, self.asks.len()))),
             _ => self.query(source, args).map(Answer::Now),
         }
     }
@@ -163,11 +278,11 @@ impl DataSource for Desk {
     }
 }
 
-fn boot_with(src: &str, desk: Desk) -> Runner<Desk> {
-    let baked = contract::bake(contract::compile(src).unwrap(), Desk::default()).unwrap();
+fn boot_with(src: &str, desk: Desk) -> Runner<Source> {
+    let baked = contract::bake(contract::compile(src).unwrap(), boxed(Desk::default())).unwrap();
     Runner::boot(
         baked,
-        desk,
+        boxed(desk),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -175,7 +290,7 @@ fn boot_with(src: &str, desk: Desk) -> Runner<Desk> {
     .unwrap()
 }
 
-fn boot(later: bool) -> Runner<Desk> {
+fn boot(later: bool) -> Runner<Source> {
     boot_with(
         APP,
         Desk {
@@ -193,14 +308,14 @@ fn reply(body: &str) -> Outcome {
     })
 }
 
-fn slot(r: &Runner<Desk>, name: &str) -> String {
+fn slot(r: &Runner<Source>, name: &str) -> String {
     r.slot(name)
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
 }
 
-fn busy(r: &Runner<Desk>) -> bool {
+fn busy(r: &Runner<Source>) -> bool {
     let k = r.kernel();
     let key = k.find_by_test_id("busy")[0];
     k.node_by_key(key)
@@ -210,8 +325,17 @@ fn busy(r: &Runner<Desk>) -> bool {
         == Some("busy")
 }
 
-fn tickets(r: &mut Runner<Desk>) -> Vec<u64> {
+fn tickets(r: &mut Runner<Source>) -> Vec<u64> {
     r.take_requests().iter().map(|q| q.ticket).collect()
+}
+
+fn previewing_queue() -> String {
+    APP.replace("refreshes probe then afterWrote", "refreshes probe")
+        .replace("check() as shape number", "preview() as shape string")
+}
+
+fn preview(r: &Runner<Source>) -> Option<&str> {
+    r.shown_resource("probe").and_then(Value::as_str)
 }
 
 #[test]
@@ -220,13 +344,13 @@ fn two_sends_in_one_action_answered_now_run_in_order_each_with_its_then() {
     r.act("pair", vec![]).unwrap();
     // The first is asked in the action; the second waits for its reply's
     // `then`, which reads the slot as that reply set it.
-    assert_eq!(r.data().asks, ["save:a"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a"]);
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
     assert!(busy(&r), "a waiting send is pending");
     assert_eq!(r.timer_due_ms(), Some(0.0));
     let commits = r.advance(0.0).unwrap();
     assert_eq!(commits.len(), 3, "then a, next b, then b");
-    assert_eq!(r.data().asks, ["save:a", "save:b"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a", "save:b"]);
     assert_eq!(slot(&r, "log"), " a b");
     assert!(!busy(&r));
     assert_eq!(r.timer_due_ms(), None);
@@ -241,7 +365,7 @@ fn two_sends_answered_later_ask_one_at_a_time_with_send_time_arguments() {
     r.act("tap", vec![]).unwrap();
     let first = tickets(&mut r);
     assert_eq!(first.len(), 1, "one request in flight");
-    assert_eq!(r.data().asks, ["save:x"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:x"]);
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
     assert_eq!(
         r.timer_due_ms(),
@@ -253,7 +377,7 @@ fn two_sends_answered_later_ask_one_at_a_time_with_send_time_arguments() {
     // Its `then` first, then the waiting send, asked with `y`.
     r.advance(0.0).unwrap();
     assert_eq!(slot(&r, "log"), " x");
-    assert_eq!(r.data().asks, ["save:x", "save:y"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:x", "save:y"]);
     let second = tickets(&mut r);
     assert_eq!(second.len(), 1);
     assert!(busy(&r));
@@ -261,6 +385,372 @@ fn two_sends_answered_later_ask_one_at_a_time_with_send_time_arguments() {
     r.advance(0.0).unwrap();
     assert_eq!(slot(&r, "log"), " x y");
     assert!(!busy(&r));
+}
+
+#[test]
+fn replaceable_queue_tail_preserves_first_write_and_barriers() {
+    let src = previewing_queue().replace(
+        "  view\n",
+        "  action post(op: string)\n    send wrote = post(op)\n  view\n",
+    );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            later: true,
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    let send = |r: &mut Runner<Source>, body: &str| {
+        r.act("one", vec![Value::str(body)]).unwrap();
+    };
+    send(&mut r, "room:first");
+    let first = tickets(&mut r);
+    assert_eq!(r.source::<Desk>().asks, ["save:room:first"]);
+    for i in 0..160 {
+        send(&mut r, &format!("room:https://example.org/{i}"));
+    }
+    assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
+    // A different scope and then a foreign operation stand between the
+    // two runs of edits. Neither can be passed by the newest body.
+    send(&mut r, "thread:other");
+    r.act("post", vec![Value::str("room:send-post")]).unwrap();
+    send(&mut r, "room:new");
+    send(&mut r, "room:append");
+    assert_eq!(r.queued(), [("wrote".to_string(), 4)]);
+    assert_eq!(r.writes().len(), 5);
+    assert_eq!(
+        preview(&r),
+        Some("room:first room:https://example.org/159 thread:other room:send-post room:new+room:append")
+    );
+
+    let mut ticket = first[0];
+    for expected in [
+        "save:room:https://example.org/159",
+        "save:thread:other",
+        "post:room:send-post",
+        "save:room:new+room:append",
+    ] {
+        r.fulfill(ticket, reply("ok")).unwrap();
+        r.advance(0.0).unwrap();
+        assert_eq!(r.source::<Desk>().asks.last().unwrap(), expected);
+        ticket = tickets(&mut r)[0];
+    }
+    r.fulfill(ticket, reply("ok")).unwrap();
+    r.advance(0.0).unwrap();
+    assert_eq!(
+        r.source::<Desk>().asks,
+        [
+            "save:room:first",
+            "save:room:https://example.org/159",
+            "save:thread:other",
+            "post:room:send-post",
+            "save:room:new+room:append"
+        ]
+    );
+    assert!(r.queued().is_empty());
+    assert!(!busy(&r));
+}
+
+#[test]
+fn failure_from_the_replacement_surfaces_and_a_later_save_recovers() {
+    let src = APP
+        .replace("refreshes probe then afterWrote", "refreshes probe")
+        .replace(
+            "  derive last =",
+            concat!(
+            "  derive why = match failure(wrote) { case some(f) => f.code, case none => \"ok\" }\n",
+            "  derive last =",
+        ),
+        );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            later: true,
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    for body in ["room:in-flight", "room:obsolete", "room:latest"] {
+        r.act("one", vec![Value::str(body)]).unwrap();
+    }
+    let first = tickets(&mut r)[0];
+    r.fulfill(first, reply("ok")).unwrap();
+    r.advance(0.0).unwrap();
+    let newest = tickets(&mut r)[0];
+    r.source::<Desk>().fail_parse = true;
+    r.fulfill(newest, reply("ok")).unwrap();
+    assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
+    assert!(r.queued().is_empty());
+    r.source::<Desk>().fail_parse = false;
+    r.act("one", vec![Value::str("room:retry")]).unwrap();
+    let retry = tickets(&mut r)[0];
+    r.fulfill(retry, reply("ok")).unwrap();
+    assert_eq!(r.derive("why"), Some(&Value::str("ok")));
+    assert_eq!(
+        r.source::<Desk>().asks,
+        ["save:room:in-flight", "save:room:latest", "save:room:retry"]
+    );
+}
+
+#[test]
+fn replacement_leaves_the_previous_tail_if_the_action_refuses() {
+    let src = previewing_queue().replace(
+        "  view\n",
+        concat!(
+            "  state refuseNow = false\n",
+            "  task watch key=refuseNow ? 0 / 0 : 1\n",
+            "    after(100000, bump)\n",
+            "  action replaceAndRefuse\n",
+            "    send wrote = save(\"room:rejected\")\n",
+            "    refuseNow = true\n",
+            "  view\n",
+        ),
+    );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            later: true,
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    r.act("one", vec![Value::str("room:first")]).unwrap();
+    let first = tickets(&mut r)[0];
+    r.act("one", vec![Value::str("room:previous")]).unwrap();
+    let writes = r.writes().iter().map(|w| w.0).collect::<Vec<_>>();
+    assert!(matches!(
+        r.act("replaceAndRefuse", vec![]),
+        Err(RunnerError::TaskKey { task }) if task == "watch"
+    ));
+    assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
+    assert_eq!(r.writes().iter().map(|w| w.0).collect::<Vec<_>>(), writes);
+    assert_eq!(preview(&r), Some("room:first room:previous"));
+    r.fulfill(first, reply("ok")).unwrap();
+    r.advance(0.0).unwrap();
+    assert_eq!(
+        r.source::<Desk>().asks.last().unwrap(),
+        "save:room:previous"
+    );
+}
+
+#[test]
+fn invalid_replacement_preserves_both_sends_and_their_optimistic_writes() {
+    assert_replacement_refused("room:invalid-merge");
+}
+
+#[test]
+fn an_empty_replacement_preserves_both_sends_and_their_optimistic_writes() {
+    assert_replacement_refused("room:empty-merge");
+}
+
+#[test]
+fn a_wrong_type_replacement_preserves_both_sends_and_their_optimistic_writes() {
+    assert_replacement_refused("room:wrong-type-merge");
+}
+
+#[test]
+fn an_oversized_queue_operand_keeps_both_sends() {
+    let src = format!(
+        "shape Increment\n  delta: number\n  note: string\n\n{}",
+        APP.replace(
+            "  view\n",
+            concat!(
+                "  action countPair(earlier: Increment, later: Increment)\n",
+                "    send rec = save(\"first\")\n",
+                "    send rec = increment(earlier)\n",
+                "    send rec = increment(later)\n",
+                "  view\n",
+            ),
+        )
+    );
+    let too_long = exact_runner::vm::MAX_STRING + 1;
+    let oversized = Value::record(vec![Value::Number(1.0), Value::str(&"x".repeat(too_long))]);
+    let valid = Value::record(vec![Value::Number(1.0), Value::str("")]);
+    let mut r = boot_with(
+        &src,
+        Desk {
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    let oversized_ask = format!("increment:1:{too_long}");
+    for (inputs, expected) in [
+        (
+            [&oversized, &valid],
+            [oversized_ask.as_str(), "increment:1:0"],
+        ),
+        ([&valid, &oversized], ["increment:1:0", &oversized_ask]),
+    ] {
+        r.act("countPair", inputs.into_iter().cloned().collect())
+            .unwrap();
+        r.advance(0.0).unwrap();
+        assert_eq!(
+            r.source::<Desk>().asks,
+            ["save:first", expected[0], expected[1]]
+        );
+        r.source::<Desk>().asks.clear();
+    }
+}
+
+#[test]
+fn a_replacement_past_the_worker_codec_limit_keeps_both_sends() {
+    let src = APP.replace(
+        "  view\n",
+        "  action appendPair(body: string)\n    send rec = append(\"x\")\n    send rec = append(body)\n    send rec = append(body)\n  view\n",
+    );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    let bytes = 33 << 20;
+    r.act("appendPair", vec![Value::str(&"x".repeat(bytes))])
+        .unwrap();
+    r.advance(0.0).unwrap();
+    let append = format!("append:{bytes}");
+    assert_eq!(r.source::<Desk>().asks, ["append:1", &append, &append]);
+}
+
+#[test]
+fn a_pending_write_to_a_shared_resource_keeps_the_overlay_in_send_order() {
+    let src = previewing_queue().replace(
+        "mutation rec as shape Ack queue",
+        "mutation rec as shape Ack queue refreshes probe",
+    );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            later: true,
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    for (action, body) in [
+        ("one", "room:in-flight"),
+        ("one", "room:a"),
+        ("record", "room:b"),
+        ("one", "room:append"),
+    ] {
+        r.act(action, vec![Value::str(body)]).unwrap();
+    }
+    assert_eq!(
+        preview(&r),
+        Some("room:in-flight room:a room:b room:append")
+    );
+    assert_eq!(r.queued(), [("wrote".to_string(), 2)]);
+}
+
+#[test]
+fn a_non_finite_queue_tail_reaches_its_ordinary_ask_refusal() {
+    assert_non_finite_send_keeps_fifo(["notFinite", "finite"]);
+}
+
+#[test]
+fn a_non_finite_new_send_reaches_its_ordinary_ask_refusal() {
+    assert_non_finite_send_keeps_fifo(["finite", "notFinite"]);
+}
+
+fn assert_non_finite_send_keeps_fifo(actions: [&str; 2]) {
+    let src = APP.replace(
+        "  view\n",
+        concat!(
+            "  action finite\n    send rec = saveNumber(2)\n",
+            "  action notFinite\n    send rec = saveNumber(0 / 0)\n",
+            "  view\n",
+        ),
+    );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            later: true,
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    r.act("record", vec![Value::str("first")]).unwrap();
+    let first = tickets(&mut r)[0];
+    for action in actions {
+        r.act(action, vec![]).unwrap();
+    }
+    assert_eq!(r.queued(), [("rec".to_string(), 2)]);
+    r.fulfill(first, reply("ok")).unwrap();
+    let first_advance = r.advance(0.0);
+    if actions[0] == "notFinite" {
+        assert!(matches!(
+            first_advance,
+            Err(RunnerError::Data {
+                error: DataError::BadArguments(_),
+                ..
+            })
+        ));
+    } else {
+        first_advance.unwrap();
+    }
+    assert!(r.journal().any(|line| line.contains("non-finite number")));
+    r.advance(0.0).unwrap();
+    assert_eq!(r.source::<Desk>().asks, ["save:first", "saveNumber:2"]);
+}
+
+fn assert_replacement_refused(last: &str) {
+    let mut r = boot_with(
+        &previewing_queue(),
+        Desk {
+            later: true,
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    for body in ["room:first", "room:previous", last] {
+        r.act("one", vec![Value::str(body)]).unwrap();
+    }
+    assert_eq!(r.queued(), [("wrote".to_string(), 2)]);
+    assert_eq!(r.writes().len(), 3);
+    assert_eq!(
+        preview(&r),
+        Some(format!("room:first room:previous {last}").as_str())
+    );
+    for _ in 0..3 {
+        let ticket = tickets(&mut r)[0];
+        r.fulfill(ticket, reply("ok")).unwrap();
+        r.advance(0.0).unwrap();
+    }
+    assert_eq!(
+        r.source::<Desk>().asks,
+        [
+            "save:room:first".to_string(),
+            "save:room:previous".to_string(),
+            format!("save:{last}")
+        ]
+    );
+    assert!(r.writes().is_empty());
+}
+
+#[test]
+fn a_source_without_a_merger_keeps_waiting_sends_in_fifo_order() {
+    let mut r = boot_with(
+        &previewing_queue(),
+        Desk {
+            later: true,
+            ..Desk::default()
+        },
+    );
+    for body in ["room:first", "room:older", "room:newer"] {
+        r.act("one", vec![Value::str(body)]).unwrap();
+    }
+    assert_eq!(r.queued(), [("wrote".to_string(), 2)]);
+    assert_eq!(preview(&r), Some("room:first room:older room:newer"));
+    for _ in 0..3 {
+        let ticket = tickets(&mut r)[0];
+        r.fulfill(ticket, reply("ok")).unwrap();
+        r.advance(0.0).unwrap();
+    }
+    assert_eq!(
+        r.source::<Desk>().asks,
+        ["save:room:first", "save:room:older", "save:room:newer"]
+    );
 }
 
 #[test]
@@ -275,7 +765,7 @@ fn a_send_while_one_is_in_flight_waits_and_a_queue_without_then_is_due_alone() {
     assert_eq!(r.timer_due_ms(), Some(0.0));
     r.advance(0.0).unwrap();
     assert_eq!(tickets(&mut r).len(), 1);
-    assert_eq!(r.data().asks, ["save:p", "save:q"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:p", "save:q"]);
 }
 
 #[test]
@@ -295,7 +785,10 @@ fn a_next_refused_by_its_own_ask_is_dropped_and_its_successor_goes_before_a_time
     assert_eq!(r.queued(), [("rec".to_string(), 1)]);
     assert_eq!(r.timer_due_ms(), Some(0.0), "the successor is due");
     r.advance(1000.0).unwrap();
-    assert_eq!(r.data().asks, ["save:p", "broken:z", "save:after"]);
+    assert_eq!(
+        r.source::<Desk>().asks,
+        ["save:p", "broken:z", "save:after"]
+    );
     assert_eq!(slot(&r, "log"), " t:after", "asked before the timer");
 }
 
@@ -303,7 +796,7 @@ fn a_next_refused_by_its_own_ask_is_dropped_and_its_successor_goes_before_a_time
 fn a_next_refused_by_settlement_stalls_until_a_commit_changes_state() {
     let mut r = boot(false);
     r.act("pair", vec![]).unwrap();
-    r.data().fail_check = true;
+    r.source::<Desk>().fail_check = true;
     // The `then` stands; the `next` re-reads `probe`, whose source refuses.
     assert!(r.advance(0.0).is_err());
     assert_eq!(slot(&r, "log"), " a");
@@ -314,17 +807,81 @@ fn a_next_refused_by_settlement_stalls_until_a_commit_changes_state() {
     assert_eq!(r.timer_due_ms(), None, "a stall wakes no host");
     assert!(busy(&r));
     // A commit that changes nothing leaves it stalled.
-    let checks = r.data().checks;
+    let checks = r.source::<Desk>().checks;
     r.act("nothing", vec![]).unwrap();
     assert_eq!(r.timer_due_ms(), None);
     assert!(r.advance(10.0).unwrap().is_empty());
-    assert_eq!(r.data().checks, checks, "not retried");
+    assert_eq!(r.source::<Desk>().checks, checks, "not retried");
     // One that changes a slot asks it again.
-    r.data().fail_check = false;
+    r.source::<Desk>().fail_check = false;
     r.act("bump", vec![]).unwrap();
     assert_eq!(r.timer_due_ms(), Some(10.0));
     r.advance(10.0).unwrap();
     assert_eq!(slot(&r, "log"), " a b");
+    assert!(r.queued().is_empty());
+}
+
+#[test]
+fn a_restored_queue_head_is_retried_before_a_send_from_act() {
+    assert_restored_head_is_retried(false);
+}
+
+#[test]
+fn a_restored_queue_head_is_retried_after_a_then_sends_to_its_queue() {
+    assert_restored_head_is_retried(true);
+}
+
+fn assert_restored_head_is_retried(send_from_then: bool) {
+    let src = APP
+        .replace("refreshes probe then afterWrote", "refreshes probe")
+        .replace("save(\"a\")", "save(\"room:a\")")
+        .replace("save(\"b\")", "save(\"room:b\")")
+        .replace(
+            "mutation rec as shape Ack queue",
+            "mutation rec as shape Ack queue then sendAgain",
+        )
+        .replace(
+            "  view\n",
+            "  action sendAgain\n    send wrote = save(\"room:c\")\n  view\n",
+        );
+    let mut r = boot_with(
+        &src,
+        Desk {
+            replace_queue_tail: true,
+            ..Desk::default()
+        },
+    );
+    let wake = send_from_then.then(|| {
+        r.source::<Desk>().later = true;
+        r.act("record", vec![Value::str("wake")]).unwrap();
+        r.source::<Desk>().later = false;
+        tickets(&mut r)[0]
+    });
+    r.act("pair", vec![]).unwrap();
+    r.source::<Desk>().fail_check = true;
+    assert!(r.advance(0.0).is_err());
+    assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
+    assert_eq!(r.timer_due_ms(), None);
+
+    r.source::<Desk>().fail_check = false;
+    if let Some(wake) = wake {
+        r.fulfill(wake, reply("ok")).unwrap();
+    } else {
+        r.act("bump", vec![]).unwrap();
+        assert_eq!(r.timer_due_ms(), Some(0.0));
+        r.act("sendAgain", vec![]).unwrap();
+    }
+    assert_eq!(r.timer_due_ms(), Some(0.0));
+    r.advance(0.0).unwrap();
+    assert_eq!(
+        r.source::<Desk>()
+            .asks
+            .iter()
+            .filter(|ask| ask.starts_with("save:room:"))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["save:room:a", "save:room:b", "save:room:b", "save:room:c"]
+    );
     assert!(r.queued().is_empty());
 }
 
@@ -338,17 +895,17 @@ fn frame_tasks_fire_every_frame_while_a_next_is_stalled() {
         let mut r = boot_with(&src, Desk::default());
         r.present_frames(true);
         r.act("pair", vec![]).unwrap();
-        r.data().fail_check = true;
+        r.source::<Desk>().fail_check = true;
         for k in 1..=5 {
             let a = r.frame(k as f64 * 16.0);
             // Each frame's own frame task fires, whatever its prelude met.
             assert!(!a.receipts.is_empty(), "frame {k} ({task}): {:?}", a.error);
         }
-        let checks = r.data().checks;
+        let checks = r.source::<Desk>().checks;
         r.frame(100.0);
         // A frame task that changes nothing never clears the stall; one
         // that changes a slot lets the `next` try again on the next wake.
-        assert_eq!(r.data().checks > checks, retried, "{task}");
+        assert_eq!(r.source::<Desk>().checks > checks, retried, "{task}");
         assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
     }
 }
@@ -363,7 +920,10 @@ fn a_refused_then_does_not_stall_its_queue() {
     assert!(r.advance(0.0).is_err());
     assert_eq!(r.timer_due_ms(), Some(0.0));
     r.advance(0.0).unwrap();
-    assert_eq!(r.data().asks, ["save:boom", "broken:then", "save:after"]);
+    assert_eq!(
+        r.source::<Desk>().asks,
+        ["save:boom", "broken:then", "save:after"]
+    );
     assert_eq!(slot(&r, "log"), " after");
 }
 
@@ -385,16 +945,16 @@ fn a_failure_that_brings_no_answer_frees_the_queue() {
     let mut r = boot(true);
     r.act("pair", vec![]).unwrap();
     let t = tickets(&mut r);
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     let _ = r.fulfill(t[0], reply("ok"));
-    r.data().fail_parse = false;
+    r.source::<Desk>().fail_parse = false;
     assert!(r
         .journal()
         .any(|l| l.contains("failed and is no longer pending: it is not retried")));
     assert_eq!(slot(&r, "log"), "", "no `then` for no answer");
     assert_eq!(r.timer_due_ms(), Some(0.0));
     r.advance(0.0).unwrap();
-    assert_eq!(r.data().asks, ["save:a", "save:b"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a", "save:b"]);
     let t = tickets(&mut r);
     r.fulfill(t[0], reply("ok")).unwrap();
     r.advance(0.0).unwrap();
@@ -417,11 +977,11 @@ fn a_two_step_send_completes_behind_a_second_send() {
     let step2 = tickets(&mut r);
     assert_eq!(step2.len(), 1, "one more round, same send");
     assert_eq!(r.timer_due_ms(), None, "not a reply: no `then`, no `next`");
-    assert_eq!(r.data().asks, ["two:m"]);
+    assert_eq!(r.source::<Desk>().asks, ["two:m"]);
     r.fulfill(step2[0], reply("done")).unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(slot(&r, "log"), " m");
-    assert_eq!(r.data().asks, ["two:m", "save:n"]);
+    assert_eq!(r.source::<Desk>().asks, ["two:m", "save:n"]);
     let t = tickets(&mut r);
     r.fulfill(t[0], reply("ok")).unwrap();
     r.advance(0.0).unwrap();
@@ -443,7 +1003,7 @@ fn the_sixty_fifth_waiter_refuses_its_action() {
         Err(RunnerError::QueueFull { mutation }) if mutation == "wrote"
     ));
     assert_eq!(r.queued(), [("wrote".to_string(), 64)]);
-    assert_eq!(r.data().asks.len(), 1);
+    assert_eq!(r.source::<Desk>().asks.len(), 1);
 }
 
 #[test]
@@ -461,14 +1021,14 @@ fn poison_and_reload_forget_waiting_sends_without_asking() {
         .any(|l| l.ends_with(" forgot 2 waiting sends (wrote)")));
     assert!(r.queued().is_empty());
     assert_eq!(r.timer_due_ms(), None);
-    assert_eq!(r.data().asks, ["save:a"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a"]);
     // A reload carries the slot, never the queue, and says so once.
     let again = Runner::boot_carrying(
         contract::compile(APP).unwrap(),
-        Desk {
+        boxed(Desk {
             later: true,
             ..Desk::default()
-        },
+        }),
         Kernel::with_monospace(),
         &carried,
         Default::default(),
@@ -542,7 +1102,7 @@ fn a_shaped_failure_is_an_answer_and_runs_then() {
     .unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(slot(&r, "log"), " offline");
-    assert_eq!(r.data().asks, ["save:a", "save:b"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:a", "save:b"]);
 }
 
 /// LLP 1092 D3, D8: a `next` whose answer makes a task's key no key is
@@ -569,7 +1129,7 @@ fn a_next_refused_by_a_task_key_keeps_its_head_and_stalls() {
     // A change asks it again; it is refused the same way and waits again.
     r.act("bump", vec![]).unwrap();
     assert!(r.advance(0.0).is_err());
-    assert_eq!(r.data().asks, ["save:ok", "save:nan", "save:nan"]);
+    assert_eq!(r.source::<Desk>().asks, ["save:ok", "save:nan", "save:nan"]);
     assert_eq!(r.queued(), [("rec".to_string(), 1)]);
 }
 
@@ -616,7 +1176,7 @@ fn a_task_key_refuses_a_reply_and_a_commit_made_again() {
     );
     r.act("arm", vec![]).unwrap();
     let t = tickets(&mut r);
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     assert!(matches!(
         r.fulfill(t[0], reply("ok")),
         Err(RunnerError::TaskKey { .. })
@@ -667,16 +1227,16 @@ impl DataSource for Shelf {
 #[test]
 fn a_next_answered_at_once_forces_what_it_refreshes() {
     let src = "shape Ack\n  op: string\n  n: number\ncomponent App\n  resource items = items() as shape number\n  mutation save as shape Ack queue refreshes items\n  action pair\n    send save = save(\"a\")\n    send save = save(\"b\")\n  view\n    text `${items}`\n";
-    let baked = contract::bake(contract::compile(src).unwrap(), Shelf::default()).unwrap();
+    let baked = contract::bake(contract::compile(src).unwrap(), boxed(Shelf::default())).unwrap();
     let mut r = Runner::boot(
         baked,
-        Shelf::default(),
+        boxed(Shelf::default()),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let items = |r: &mut Runner<Shelf>| {
+    let items = |r: &mut Runner<Source>| {
         r.take_requests()
             .iter()
             .filter(|q| q.target == "items")
@@ -730,9 +1290,9 @@ fn data_ready_s_sends_open_a_gate_and_a_bad_key_refuses_them() {
         let loaded = std::rc::Rc::new(std::cell::Cell::new(false));
         let r = Runner::boot(
             contract::compile(src).unwrap(),
-            Late {
+            boxed(Late {
                 loaded: loaded.clone(),
-            },
+            }),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -804,7 +1364,7 @@ fn mutation_failures_are_readable_clear_on_send_and_do_not_run_then() {
     );
     r.act("one", vec![Value::str("a")]).unwrap();
     let t = tickets(&mut r);
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     r.fulfill(t[0], reply("ok")).unwrap();
     assert_eq!(r.derive("broken"), Some(&Value::Bool(true)));
     assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
@@ -815,13 +1375,13 @@ fn mutation_failures_are_readable_clear_on_send_and_do_not_run_then() {
         Some(&Value::str("ok")),
         "assignment clears a queued mutation failure"
     );
-    r.data().fail_parse = false;
-    r.data().malformed = true;
+    r.source::<Desk>().fail_parse = false;
+    r.source::<Desk>().malformed = true;
     r.act("one", vec![Value::str("bad")]).unwrap();
     let t = tickets(&mut r);
     r.fulfill(t[0], reply("ok")).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("shape")));
-    r.data().malformed = false;
+    r.source::<Desk>().malformed = false;
     r.act("one", vec![Value::str("b")]).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("ok")));
     assert_eq!(r.derive("broken"), Some(&Value::Bool(false)));
@@ -844,11 +1404,11 @@ fn a_queue_next_clears_failure_for_immediate_and_deferred_answers() {
         );
         r.act("pair", vec![]).unwrap();
         let first = tickets(&mut r)[0];
-        r.data().fail_parse = true;
+        r.source::<Desk>().fail_parse = true;
         r.fulfill(first, reply("ok")).unwrap();
         assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
-        r.data().fail_parse = false;
-        r.data().later = deferred;
+        r.source::<Desk>().fail_parse = false;
+        r.source::<Desk>().later = deferred;
         r.advance(0.0).unwrap();
         assert_eq!(
             r.derive("why"),
@@ -875,15 +1435,15 @@ fn a_refused_queue_next_restores_the_previous_failure() {
     );
     r.act("pair", vec![]).unwrap();
     let first = tickets(&mut r)[0];
-    r.data().fail_parse = true;
+    r.source::<Desk>().fail_parse = true;
     r.fulfill(first, reply("ok")).unwrap();
-    r.data().fail_parse = false;
-    r.data().later = false;
-    r.data().fail_check = true;
+    r.source::<Desk>().fail_parse = false;
+    r.source::<Desk>().later = false;
+    r.source::<Desk>().fail_check = true;
     assert!(r.advance(0.0).is_err());
     assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
     assert_eq!(r.queued(), [("wrote".to_string(), 1)]);
-    r.data().fail_check = false;
+    r.source::<Desk>().fail_check = false;
     r.act("bump", vec![]).unwrap();
     r.advance(0.0).unwrap();
     assert_eq!(r.derive("why"), Some(&Value::str("ok")));
@@ -915,7 +1475,7 @@ fn immediate_mutation_refusals_expose_domain_failures_and_clear_on_retry() {
         assert_eq!(r.derive("why"), Some(&Value::str("FULL")));
         assert_eq!(slot(&r, "log"), "");
         assert!(!busy(&r));
-        r.data().fail_now = false;
+        r.source::<Desk>().fail_now = false;
         r.act("one", vec![Value::str("b")]).unwrap();
         assert_eq!(r.derive("broken"), Some(&Value::Bool(false)));
         assert_eq!(r.derive("why"), Some(&Value::str("ok")));

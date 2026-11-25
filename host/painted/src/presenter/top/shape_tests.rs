@@ -163,3 +163,106 @@ fn the_reader_crosses_an_alerts_part_boxes_only_when_they_hold_their_parts() {
         None
     );
 }
+
+#[test]
+fn menu_items_read_native_faces_and_stacked_custom_texts() {
+    let source = r#"component App
+  state picked = false
+  action pick
+    picked = true
+  view
+    main
+      button id="dice" role="menuitemradio" aria-checked=true
+        image "symbol:settings"
+        text "Dice"
+        text "Any dice, any rule"
+      button id="stack" appearance="none" display="flex" flex-direction="column"
+        text "First"
+        text "Second" direction="rtl"
+        text "Debug" display="none"
+      button id="hidden-detail" appearance="none" display="flex" flex-direction="column"
+        text "Dice"
+        text "Debug" display="none"
+      button id="decorative-label" appearance="none" aria-label="Choose Dice"
+        text "Dice" aria-hidden=true
+      button id="directed" appearance="none"
+        text "ABC 123 (אב)" direction="rtl"
+        text "Debug" display="none"
+      button id="all-hidden" appearance="none" aria-label="Choose board" press=pick
+        text "Dice" aria-hidden=true
+        text "Current board" display="flex" aria-hidden=true
+      button id="unlabelled" appearance="none" press=pick
+        text "Dice" aria-hidden=true
+        text "Current board" aria-hidden=true
+      button id="rtl-inline" appearance="none" display="flex" flex-direction="row" direction="ltr" press=pick
+        text "ABC 123 (אב)" direction="rtl"
+        text "דה!" direction="rtl"
+      button id="hidden-from-reader" appearance="none" press=pick
+        text "Dice"
+        text "Current board" aria-hidden=true
+      button id="inline" appearance="none" display="flex" flex-direction="row"
+        text "First"
+        text "Second"
+      button id="decorated" appearance="none" aria-label="Manage boards"
+        column
+          text "Boards"
+        image "symbol:settings" aria-hidden=true
+      button id="badge" appearance="none"
+        text "First"
+        text "Second" position="absolute"
+"#;
+    let (p, error) = crate::presenter::Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (300., 600.),
+        1.,
+        Default::default(),
+        crate::presenter::PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let kernel = p.host.kernel();
+    let dice = kernel.node_by_key(kernel.find_by_id("dice")[0]).unwrap();
+    let dice = p.menu_row(&dice);
+    assert_eq!(dice.title, "Dice");
+    assert_eq!(dice.subtitle.as_ref().unwrap().0, "Any dice, any rule");
+    assert_eq!(dice.menu_name(), "Dice, Any dice, any rule");
+    assert_eq!(dice.symbol.as_deref(), Some("settings"));
+    assert!(dice.checked);
+    let read = |id| p.menu_row(&kernel.node_by_key(kernel.find_by_id(id)[0]).unwrap());
+    let labelled = read("all-hidden");
+    assert_eq!(labelled.title, "Dice");
+    assert_eq!(labelled.subtitle.as_ref().unwrap().0, "Current board");
+    assert_eq!(labelled.menu_name(), "Choose board");
+    assert_eq!(read("unlabelled").menu_name(), "Dice, Current board");
+    let rtl = read("rtl-inline");
+    assert_eq!(rtl.title, "ABC 123 (אב) דה!");
+    assert_eq!(rtl.direction, Direction::Rtl);
+    let decorated = read("hidden-from-reader");
+    assert_eq!(decorated.subtitle.as_ref().unwrap().0, "Current board");
+    assert_eq!(decorated.menu_name(), "Dice");
+    for (id, title, subtitle) in [
+        (
+            "stack",
+            "First",
+            Some(("Second".to_owned(), Direction::Rtl)),
+        ),
+        ("decorative-label", "Dice", None),
+        ("directed", "ABC 123 (אב)", None),
+        ("hidden-detail", "Dice", None),
+        ("inline", "First Second", None),
+        ("badge", "First Second", None),
+        ("decorated", "Manage boards", None),
+    ] {
+        let node = kernel.node_by_key(kernel.find_by_id(id)[0]).unwrap();
+        let row = p.menu_row(&node);
+        if id == "directed" {
+            assert_eq!(row.direction, Direction::Rtl);
+        }
+        assert_eq!(
+            (row.title.as_str(), row.subtitle),
+            (title, subtitle),
+            "{id}"
+        );
+    }
+}

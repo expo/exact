@@ -84,6 +84,61 @@ final class NotificationOriginTests: XCTestCase {
         return (session, { activations })
     }
 
+    func testOnlyAPresentedLocalPostRaisesShow() throws {
+        let (session, activations) = session()
+        let args = #"["lab",{"tag":"lab","title":"Reminder","body":null,"data":null,"action":"discard","reply":"discard"}]"#
+        let info = ["exact": ["session": session.label, "owner": session.notificationOwnerID,
+                              "extension": "notifications", "event": "notificationclick", "args": args, "navigate": "/lab"]]
+        let presenter = NotificationPresenter.shared
+        let push = response(info, push: true).notification
+        XCTAssertTrue(push.request.trigger is UNPushNotificationTrigger)
+        let center = class_createInstance(UNUserNotificationCenter.self, 0) as! UNUserNotificationCenter
+        let pushed = expectation(description: "push completion on the delegate queue")
+        DispatchQueue.global().async {
+            presenter.userNotificationCenter(center, willPresent: push) { options in
+                XCTAssertFalse(Thread.isMainThread)
+                XCTAssertTrue(options.contains(.banner))
+                pushed.fulfill()
+            }
+        }
+        wait(for: [pushed], timeout: 5)
+        let unrelated = response([:], push: false).notification
+        let returned = expectation(description: "unrelated local post completes on the delegate queue")
+        DispatchQueue.global().async {
+            presenter.userNotificationCenter(center, willPresent: unrelated) { _ in
+                XCTAssertFalse(Thread.isMainThread)
+                returned.fulfill()
+            }
+        }
+        wait(for: [returned], timeout: 5)
+        let local = response(info, push: false).notification
+        ExactApp.shared.presentNotification(local, options: []) { XCTAssertTrue($0.isEmpty) }
+        ExactApp.shared.presentNotification(local, options: [.sound, .badge]) { XCTAssertEqual($0, [.sound, .badge]) }
+        XCTAssertTrue(session.heldModuleEvents.isEmpty)
+        let shown = expectation(description: "local presentation and visibility on main")
+        DispatchQueue.global().async {
+            presenter.userNotificationCenter(center, willPresent: local) { options in
+                XCTAssertTrue(Thread.isMainThread)
+                XCTAssertTrue(options.contains(.banner))
+                shown.fulfill()
+            }
+        }
+        wait(for: [shown], timeout: 5)
+        let held = try XCTUnwrap(session.heldModuleEvents.first)
+        let event = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(held.utf8)) as? [String: Any])
+        XCTAssertEqual(event["event"] as? String, "notificationshow")
+        XCTAssertEqual(event["activation"] as? Bool, false)
+        XCTAssertEqual((event["args"] as? [Any])?.first as? String, "lab")
+        let payload = try XCTUnwrap((event["args"] as? [Any])?.last as? [String: Any])
+        XCTAssertEqual(Set(payload.keys), ["tag", "title", "body", "data"])
+        XCTAssertEqual(session.heldModuleEvents.count, 1)
+        let old = response(["session": session.label, "owner": session.notificationOwnerID, "navigate": "/old"], push: false)
+        ExactApp.shared.presentNotification(old.notification, options: [.banner]) { XCTAssertEqual($0, [.banner]) }
+        XCTAssertEqual(session.heldModuleEvents.count, 2)
+        XCTAssertNil(session.launchLocation)
+        XCTAssertEqual(activations(), 0)
+    }
+
     func testAForgedPushOpensOnlyItsTopLevelNavigate() {
         for (index, opened) in [nil, "/forged", nil].enumerated() {
             let (session, activations) = self.session()

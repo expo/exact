@@ -54,7 +54,7 @@ test.each([false, true])('a view validates and delivers its agent vocabulary (su
       const prefer = extension => exact.extensions.prefer({ extension });
       const before = prefer({ 'words.heard': 'hello' });
       if (before.error) throw new Error(before.error);
-      await exact.packageViews.make('words-panel', {});
+      await exact.packageViews.make('words-panel', {element:document.createElement('div')});
       const initial = seen.at(-1);
       const errors = [
         prefer({ 'words.heard': 7 }), prefer({ 'words.levels': [1, 'two'] }),
@@ -89,6 +89,76 @@ test.each([false, true])('a view validates and delivers its agent vocabulary (su
   } finally { await browser?.close(); server.stop(true); }
 });
 
+test('a missing view factory names its package, extension and web target', async () => {
+  const server = moduleServer();
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    await expect(page.evaluate(async () => {
+      const { modules } = await import('/host/web-js/modules.js');
+      const loader = async () => ({ implementation: () => ({}), roster: {} });
+      modules({}, { words: loader }, { 'words-panel': ['words', false, [], {}, '@fixture/words'] });
+      await exact.packageViews.make('words-panel', {});
+    })).rejects.toThrow('the words extension of @fixture/words has no view factory for <words-panel> on the web JS target');
+  } finally { await browser?.close(); server.stop(true); }
+});
+
+test('a drive acknowledges the table while package callbacks and later calls keep their order', async () => {
+  const server = moduleServer(), browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      const sub = {implementation:true, agent:{outcome:'string'}};
+      const entered = Promise.withResolvers(), initial = Promise.withResolvers(), later = Promise.withResolvers();
+      let outcome;
+      modules({
+        apple:['store.apple',false,{...sub,owner:'@fixture/store/apple',implementationTargets:['ios']},'s'],
+        buy:['store.purchase',true,sub,'s'],
+        status:['store.status',false,{...sub, admission:'none', permission:{name:'p',field:'state',status:'status'},
+          default:{available:false,state:'unknown'}},{available:'b',state:'s'}],
+        optional:['other.optional',false,{default:'original'},['?', 's']],
+        browse:['network.browse',false,{network:'browse',unsupported:['web']},{services:['[','s']}],
+      }, {store:async () => ({implementation:() => ({
+        async preferred(values) {
+          if (!values.outcome) { entered.resolve(); await initial.promise; }
+          if (values.outcome === 'cancel') await later.promise;
+          outcome = values.outcome ?? 'idle';
+        },
+        purchase() { return outcome; },
+        status() { return {available:true,state:'unknown'}; }
+      })})});
+      const e = exact.extensions, buy = () => e.call({extension:'store',send:'purchase'});
+      const set = (key, value) => e.prefer({extension:{[key]:value}}, 'drive');
+      const startup = buy();
+      await entered.promise;
+      const acknowledged = set('store.outcome', 'success');
+      initial.resolve();
+      await acknowledged;
+      await startup;
+      const first = await buy();
+      const changes = set('store.outcome', 'cancel');
+      const immediate = !(changes instanceof Promise);
+      const second = buy();
+      later.resolve();
+      await changes;
+      set('other.optional', null);
+      const absent = await e.call({extension:'other',source:'optional'});
+      set('other.optional', 'clear');
+      const cleared = await e.call({extension:'other',source:'optional'});
+      const network = e.prefer({extension:{'network.browse':[]}}, 'launch');
+      const status = await e.call({extension:'store',source:'status'});
+      return {first, second:await second, immediate, absent, cleared, network, status};
+    });
+    expect(result).toEqual({first:'success', second:'cancel', immediate:true, absent:null, cleared:'original', network:{}, status:{available:true,state:'unknown'}});
+  } finally { await browser.close(); server.stop(true); }
+});
+
 test.each(['cleared', 'conflicting'])('%s preferences cancel the camera clip during module initialization', async change => {
   const server = moduleServer(), browser = await suiteBrowser('chromium', { needs: ['hevc'] });
   try {
@@ -117,7 +187,7 @@ test.each(['cleared', 'conflicting'])('%s preferences cancel the camera clip dur
       window.fetch = async (...args) => { started(); await held; return fetch(...args); };
       prefer({ 'camera.clip': { path: 'packages/camera/fixture/frames.mp4' } });
       let made = false;
-      const loading = exact.packageViews.make('exact-camera', {}).then(view => { made = true; return view; });
+      const loading = exact.packageViews.make('exact-camera', {element:document.createElement('div')}).then(view => { made = true; return view; });
       await fetching;
       prefer(change === 'cleared' ? { 'camera.clip': 'clear' }
         : { 'camera.picture': { path: 'packages/camera/fixture/card.jpg' } });
@@ -300,7 +370,10 @@ test('screen fixtures publish through one file transaction and preserve old file
       });
       await exact.extensions.call({ extension:'capture', source:'ready' });
       const directory = 'app:/tmp/My Captures';
-      const paths = [0, 1].map(n => directory + '/screen-' + n + '.png');
+      // Each capture names its images by a random id (screen-capture/web `captureId`): pinned here, so the test
+      // knows the paths before a capture writes them.
+      crypto.getRandomValues = bytes => bytes.fill(0);
+      const paths = [0, 1].map(n => directory + '/screen-' + '0'.repeat(32) + '-' + n + '.png');
       await files.write(paths[0], new Uint8Array([7]));
       await files.mkdir(paths[1]);
       const screens = [{left:0, top:0, width:64, height:40, devicePixelRatio:1.25},
@@ -319,13 +392,13 @@ test('screen fixtures publish through one file transaction and preserve old file
         const image = await createImageBitmap(new Blob([await files.read(path)]));
         const size = [image.width, image.height]; image.close(); return size;
       }));
-      return {failed, preserved, aborted, afterAbort, count:answer.captures.length, sizes};
+      return {failed, preserved, aborted, afterAbort, written:answer.captures.map(c => c.path), paths, sizes};
     });
     expect(result.failed.error).toBe('EncodingError');
     expect(result.preserved).toEqual([7]);
     expect(result.aborted).toBe('AbortError');
     expect(result.afterAbort).toEqual([[7], [8]]);
-    expect(result.count).toBe(2);
+    expect(result.written).toEqual(result.paths);
     expect(result.sizes).toEqual([[80, 50], [160, 80]]);
   } finally { await browser.close(); server.stop(true); }
 });
@@ -736,4 +809,54 @@ test('a clock move runs what an implementation registered, never its own names',
     await page.waitForFunction(() => fixture.read() === 1);
     expect(await page.evaluate(() => { fixture.advance(100); return fixture.seen; })).toEqual(['clocked']);
   } finally { await browser.close(); server.stop(true); }
+});
+
+test('an input-gated read requires the calling source’s grant in a mixed app', async () => {
+  const server = moduleServer(), browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const refused = await page.evaluate(async () => {
+      const { clock, data, Origin } = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      const { unionGrantSets } = await import('/host/web-js/admission.js');
+      clock.agent = true;
+      data.grants = 'clipboard.read';
+      const row = ['clipboard.readText', true, { origin: 'input', implementation: true, nameGrants: ['clipboard.read'] }, 's'];
+      modules({ readText: row }, { clipboard: async () => { throw new Error('ungranted read reached the implementation'); } });
+      return Origin.callData({ extension: 'clipboard', send: 'readText', args: {} }, () => true, true, unionGrantSets());
+    });
+    expect(refused).toEqual({ error: 'NotAllowedError' });
+  } finally { await browser.close(); server.stop(true); }
+});
+
+test('the agent clock delivers a show posted by a click at the same instant', async () => {
+  const server = moduleServer();
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      const heard = [];
+      const list = { state: 'notifications', key: 'tag', launch: 'notification', tap: { event: 'click' }, show: { event: 'show' } };
+      modules({ post: ['lab.post', true, { list, effect: true }] }, {}, {}, {
+        'lab.click': [() => () => { heard.push('click'); rt.Hosts.post('app', { tag: 'lab' }); }, 'activation', 16, [], 'clicked'],
+        'lab.show': [() => () => heard.push(rt.clock.now), 'emit', 16, [], 'shown'],
+      });
+      exact.extensions.launch({ launch: 'notification', entry: { tag: 'initial' } });
+      await Promise.resolve();
+      // Cross a browser task boundary with the agent clock frozen.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const before = heard.slice();
+      exact.extensions.launch({ launch: 'notification', entry: { tag: 'second' } });
+      await Promise.resolve();
+      rt.advance(0);
+      return { before, after: heard };
+    });
+    expect(result).toEqual({ before: ['click'], after: ['click', 0, 'click', 0] });
+  } finally { await browser?.close(); server.stop(true); }
 });

@@ -544,11 +544,11 @@ test('compact reports expose measured stages and preserve unknown evidence', () 
   const shared = { ...report, coreSinceReload: { callbacks: '600', frameIntervals: '599', missedFrames: '2', lateFrames: '3',
       frameTimeBoundsNs: { median: [16500000, 17000000], p99: [33000000, 33500000], maximum: [48000000, null] },
       workBoundsNs: { median: [4000000, 4500000], p99: [17000000, 17500000], maximum: [20000000, 20500000] } },
-    otherSources: [{ source: 'ui-update', retainedEvents: 16 }], selection: "one-source; the card's Share gives ui-update as a report of its own" };
+    otherSources: [{ source: 'ui-update', retainedEvents: 16 }], selection: "one-source; the card's Share gives ui-update's report beside it" };
   const sharedText = renderFrameHealthReport(shared);
   expect(sharedText).toContain('since reset: 600 callbacks · frame intervals 599 · missed 2 · late 3');
   expect(sharedText).toContain('frame time median 16.50–17.00 ms, p99 33.00–33.50 ms, maximum 48.00–∞ ms · work median 4.00–4.50 ms, p99 17.00–17.50 ms, maximum 20.00–20.50 ms');
-  expect(sharedText).toContain("other sources: ui-update (16 retained) · one-source; the card's Share gives ui-update as a report of its own");
+  expect(sharedText).toContain("other sources: ui-update (16 retained) · one-source; the card's Share gives ui-update's report beside it");
   const powered = structuredClone(report);
   powered.hitches[0][4] += 2 ** 23 + 2 ** 16 + 2 ** 33 + 2 ** 34 + 2 ** 36;
   expect(renderFrameHealthReport(powered)).toContain('workload motion · thermal serious · low power true');
@@ -751,8 +751,9 @@ test('state world events uses the world seam and an optional type filter', async
 // A target covered by what may leave on a timer the frozen clock never reaches (euxy FRICTION 9): the refusal names the
 // tasks still waiting and the step that runs them; with none waiting it is as it was.
 test('a covered target\'s refusal names the tasks waiting on the clock', async () => {
-  const covered = (tasks, clock = 0) => tapRefusal({ state: async () => ({ clock, tasks }), tree: async () => ({ nodes: [] }) }, 'go', new Error('tap #333: node #6 covers its middle'));
+  const covered = (tasks, clock = 0, location = 'its middle') => tapRefusal({ state: async () => ({ clock, tasks }), tree: async () => ({ nodes: [] }) }, 'go', new Error(`tap #333: node #6 covers ${location}`));
   expect((await covered({ boot: 1, splash: 900, charge: null })).message).toBe('tap #333: node #6 covers its middle; the agent\'s clock stands at 0 ms, and the app\'s tasks wait on it (`boot` at 1 ms, `splash` at 900 ms): if what covers it leaves on a timer, `clock +900` runs them');
+  expect((await covered({ splash: 900 }, 0, 'the requested point')).message).toContain('clock +900');
   expect((await covered({ splash: 900 }, 1000)).message).toBe('tap #333: node #6 covers its middle');
   expect((await covered({})).message).toBe('tap #333: node #6 covers its middle');
 });
@@ -844,8 +845,8 @@ test('perf deltas match list members through reordering and removal', () => {
 });
 
 test('layout shows what a pressed paint shows, beside the computed base', () => {
-  const lines = render('layout', { viewport: { w: 400, h: 300 }, clock: 0, nodes: [], node: { id: 3, type: 'View', style: {}, press_shown: { paint: 1, opacity: '0.4', backgroundColor: 'rgb(0, 0, 255)', color: 'rgb(255, 0, 0)' } } });
-  expect(lines).toContain('press shows opacity=0.4 background="rgb(0, 0, 255)" color="rgb(255, 0, 0)" (paint 1)');
+  const lines = render('layout', { viewport: { w: 400, h: 300 }, clock: 0, nodes: [], node: { id: 3, type: 'View', style: {}, press_shown: { opacity: '0.4', backgroundColor: 'rgb(0, 0, 255)', color: 'rgb(255, 0, 0)' } } });
+  expect(lines).toContain('press shows opacity=0.4 background="rgb(0, 0, 255)" color="rgb(255, 0, 0)"');
 });
 
 test('a scroll track starts on a node, keeps its cursor, and its stop joins the last page', async () => {

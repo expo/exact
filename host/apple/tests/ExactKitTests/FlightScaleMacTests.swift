@@ -135,8 +135,8 @@ final class FlightScaleMacTests: XCTestCase {
         let card = NodeView(id: 2, kind: "view", presenter: p)
         p.views[2] = card; content.addSubview(card)
         card.frame = NSRect(x: 0, y: 62, width: 402, height: 714)
-        let key = "pulse#0#transform.scale"
-        p.apply(wireBatch([["op": "animations", "id": 2, "specs": [["id": key, "k": "transform.scale", "s": 0.0, "dl": 0.0,
+        let key = "pulse#0#transform.scale.x"
+        p.apply(wireBatch([["op": "animations", "id": 2, "specs": [["id": key, "k": "transform.scale.x", "s": 0.0, "dl": 0.0,
             "d": 1.0, "n": -1.0, "t": [0.0, 1.0], "v": [0.5, 1.5], "c": [], "fill": 0.0]]]]))
         let cardLayer = try XCTUnwrap(card.layer)
         XCTAssertNotNil(cardLayer.animation(forKey: key))

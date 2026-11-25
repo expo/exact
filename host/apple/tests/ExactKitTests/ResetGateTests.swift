@@ -1,6 +1,8 @@
 #if os(iOS) || os(macOS)
 #if os(iOS)
 import UIKit
+import ExactCollections
+@testable import ExactGroupedLists
 #else
 import AppKit
 #endif
@@ -40,14 +42,14 @@ final class ResetGateTests: XCTestCase {
         XCTAssertTrue(done(), what)
     }
 
-    private func boot(_ fixture: String = "RESET_GATE", postsTimers: Bool = ExactEnv.postsLiveWork) throws -> (ExactSession, Data) {
+    private func boot(_ fixture: String = "RESET_GATE", postsTimers: Bool = ExactEnv.postsLiveWork, editing: Bool = false) throws -> (ExactSession, Data) {
         let plan = try fixturePlan(fixture)
         let session = ExactApp.shared.makeSession(label: "reset-gate")
         self.session = session
         session.postsTimerAdvances = postsTimers
-        let size = CGSize(width: 400, height: 600)
         #if os(iOS)
         let scene = hostedWindowScene()
+        let size = CGSize(width: 400, height: editing ? (scene?.coordinateSpace.bounds.height ?? 600) : 600)
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(origin: .zero, size: size))
         window.frame = CGRect(origin: .zero, size: size)
         let host = UIViewController()
@@ -57,6 +59,7 @@ final class ResetGateTests: XCTestCase {
         view.frame = host.view.bounds
         host.view.addSubview(view)
         #else
+        let size = CGSize(width: 400, height: 600)
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -121,11 +124,77 @@ final class ResetGateTests: XCTestCase {
         XCTAssertEqual(ResetGate.replays(["focus(_:now:)", "change(_:_:selection:now:)", "unlisted(_:)"]), [], "dropped, and an unlisted call with them")
     }
 
+    #if os(iOS)
+    func testAQueuedGroupedRowDropIsDiscardedAtRestart() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit moves a row in a visible collection") }
+        ExactCollections.install()
+        ExactGroupedLists.install()
+        let (session, plan) = try boot("GROUPED_SETTINGS")
+        waitForActivation(session)
+        let host = try XCTUnwrap(session.presenter.groupedLists as? GroupedListHost)
+        let old = try XCTUnwrap(host.lists.values.first)
+        func order(_ list: GroupedListView) -> [String] {
+            list.source.snapshot().itemIdentifiers.compactMap { list.rows[$0]?.reorderKey }
+        }
+        func moveFirst(_ list: GroupedListView, to item: Int) throws {
+            let collection = list.collection
+            collection.layoutIfNeeded()
+            let target = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: item, section: 0)))
+            XCTAssertTrue(collection.beginInteractiveMovementForItem(at: IndexPath(item: 0, section: 0)))
+            collection.updateInteractiveMovementTargetPosition(target.center)
+            waitFor("UIKit proposes the move") { list.proposedMove }
+            collection.endInteractiveMovement()
+        }
+
+        let original = ["Account", "Privacy", "Notifications", "Display", "Sound", "Network", "Language", "Storage"]
+        let moved = ["Privacy", "Notifications", "Account"] + original.dropFirst(3)
+        XCTAssertEqual(order(old), original)
+        var seen: [ResetGate.Seen] = []
+        ResetGate.spy = { seen.append($0) }
+        let since = CACurrentMediaTime()
+        try moveFirst(old, to: 2)
+        XCTAssertEqual(order(old), moved, "UIKit finished its move")
+        let committed = "Account in settings to settings"
+        XCTAssertFalse(try words(session).contains(committed), "the drop reached the old runtime")
+        weak var movement = old.movement
+        XCTAssertNotNil(movement, "the drop is still queued")
+        XCTAssertNil(session.boot(plan: plan, size: session.presenter.viewport.bounds.size).error)
+        XCTAssertNil(movement, "the queued callback retained the retired drag")
+        waitForMainQueue()
+        let call = "drop(before:)"
+        guard case let .reset(entered, calls)? = seen.first else { return XCTFail("no reset: \(seen)") }
+        XCTAssertEqual(entered, 0)
+        XCTAssertEqual(calls.filter { $0 == call }, [call])
+        let replayed = seen.flatMap { entry -> [ResetGate.Replay] in
+            if case let .replayed(kinds, _) = entry { return kinds }
+            return []
+        }
+        XCTAssertEqual(replayed, ResetGate.replays(calls.filter { $0 != call }))
+        XCTAssertEqual(session.runtime.heldCalls, [])
+        XCTAssertNil(old.movement)
+        XCTAssertNil(old.movingRow)
+        XCTAssertFalse(session.presenter.reorders.groupActive)
+        let journal = ExactJournal.shared.events.filter { $0.at >= since && $0.kind == "reset.drop" && $0.fields["call"] as? String == call }
+        XCTAssertEqual(journal.compactMap { $0.fields["reason"] as? String }, [try XCTUnwrap(ResetGate.dropped[call])])
+
+        let replacement = try XCTUnwrap(host.lists.values.first)
+        XCTAssertFalse(replacement === old)
+        XCTAssertEqual(order(replacement), original)
+        try moveFirst(replacement, to: original.count - 1)
+        let atEnd = Array(original.dropFirst()) + ["Account"]
+        waitFor("the next drag commits") {
+            replacement.movement == nil && replacement.model.sections.first?.rows.compactMap(\.reorderKey) == atEnd
+        }
+        XCTAssertEqual(order(replacement), atEnd)
+        XCTAssertTrue(try words(session).contains(committed))
+    }
+    #endif
+
     /// The spy test: over a real restart nothing reaches the runtime, every held call is listed, and what is replayed
     /// is replayed once, in order, after the committed batch, reaching the new runtime; the timer due over the reset
     /// fires after it, and the edit the teardown ended never reaches the runtime.
     func testARestartReachesNoRuntimeAndReplaysWhatItHeldOnceInOrder() throws {
-        let (session, plan) = try boot()
+        let (session, plan) = try boot(editing: true)
         try edit(session, try id(session, "field"))
         until("the timer runs: \((try? words(session)) ?? [])") { (try? ticks(session)) ?? 0 > 2 }
         // A native switch, laid out at the size its control measures and reports (not the kernel's fallback).
@@ -145,7 +214,12 @@ final class ResetGateTests: XCTestCase {
         }
         var seen: [ResetGate.Seen] = []
         ResetGate.spy = { seen.append($0) }
+        #if os(macOS)
+        // A compatible live update keeps the Mac editor. Reload the plan to exercise a complete reset.
+        XCTAssertNil(session.boot(plan: plan, size: session.presenter.viewportSize).error)
+        #else
         XCTAssertTrue(session.apply(plan, label: "generation"))
+        #endif
         ResetGate.spy = nil
         guard case let .reset(entered, held)? = seen.first else { return XCTFail("no reset seen: \(seen)") }
         XCTAssertEqual(entered, 0, "a call reached the runtime inside the reset")
@@ -157,7 +231,7 @@ final class ResetGateTests: XCTestCase {
         if case let (r, entered)? = replayed.first {
             XCTAssertEqual(r, replays)
             XCTAssertEqual(r, Array(Set(r)).sorted { $0.rawValue < $1.rawValue }, "each once, in order")
-            XCTAssertGreaterThan(entered, 0, "the replay reached the new runtime")
+            XCTAssertGreaterThan(entered, 0, "the replay reached the new runtime: \(seen)")
         }
         XCTAssertEqual(session.runtime.heldCalls, [], "nothing left held")
         XCTAssertFalse(session.runtime.held)
@@ -252,7 +326,7 @@ final class ResetGateTests: XCTestCase {
     }
 
     /// A timer coming due while held, and the list's report and the covers: the report and the covers are the new
-    /// runtime's, replayed once, in order. The 50 ms `every` is a task's native timer (#1144): its firing held is kept
+    /// runtime's, replayed once, in order. The 50 ms `every` is a task's native timer: its firing held is kept
     /// by its own queue and fires after the hold, not in the replay.
     func testWorkTheNewRuntimeMustSeeIsReplayedOnce() throws {
         let (session, _) = try boot()
@@ -309,7 +383,7 @@ final class ResetGateTests: XCTestCase {
     }
 
     /// The clock's other two calls, a timer's advance sent to the owner and a display frame, held: replayed as the
-    /// tick is. (#1141 and #1144 renamed all three; each fell out of `replayed`, and was dropped.)
+    /// tick is. (A call renamed without `replayed` following it is dropped.)
     func testAnAdvanceAndAFrameSentWhileHeldAreReplayed() throws {
         let (session, _) = try boot()
         let landed = expectation(description: "the held advance is answered on the owner")
@@ -325,7 +399,7 @@ final class ResetGateTests: XCTestCase {
 
     /// A task's native firing held is kept by its own queue, which delivers it after (no replay), on the synchronous
     /// path and the one posted to the owner; a firing queued when a real restart commits is dropped with
-    /// its generation, whose rows re-arm the task's timer (#1144; ResetGate.dropped). Each delivery is the queue's own.
+    /// its generation, whose rows re-arm the task's timer (ResetGate.dropped). Each delivery is the queue's own.
     func testANativeFiringHeldIsDeliveredAfterAndARestartReArmsIt() throws {
         for asynchronous in [false, true] {
             let (session, plan) = try boot(postsTimers: asynchronous)
@@ -370,7 +444,7 @@ final class ResetGateTests: XCTestCase {
         }
     }
 
-    /// A timer admission check held (#1144's `wait=update`), on both paths, leaves nothing pending; after a real
+    /// A timer admission check held (`wait=update`), on both paths, leaves nothing pending; after a real
     /// restart the new generation's next update check admits the firing (ResetGate.dropped). (An update-wait is
     /// admitted on an update by design: the check this test makes is the one the next update callback makes.)
     func testAnAdmissionCheckHeldLeavesNothingPendingAndARestartAdmits() throws {

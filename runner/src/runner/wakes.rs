@@ -51,7 +51,7 @@
 //!   op), which then lets the platform suspend the app; when the platform's
 //!   time runs out first the host expires it ([`Runner::expire_action`]).
 
-use super::provenance::CallOrigin;
+use super::provenance::{CallOrigin, Cause};
 use super::{CommitReceipt, DataSource, Runner, RunnerError};
 use crate::request::{FailureKind, Outcome, Reply};
 use serde_json::{json, Value as Json};
@@ -62,6 +62,7 @@ use std::collections::VecDeque;
 const REFUSED: &[&str] = &[
     "copyText",
     "openURL",
+    "panel",
     "playSound",
     "playSounds",
     "requestFullscreen",
@@ -502,7 +503,7 @@ impl<D: DataSource> Runner<D> {
             page.hidden = !self.wakes.shown;
         }
         page.background = page.background.map(|_| hidden);
-        self.set_page(page)
+        self.set_page_as(page)
     }
 
     /// Run invocation `i` of the current wake: its event's action, under
@@ -541,7 +542,8 @@ impl<D: DataSource> Runner<D> {
         let name = self.plan.str(action.name).to_owned();
         let (event_name, tag) = self.invocation_words(i);
         self.log(format!("{word} {event_name} {tag}: heard by {name}"));
-        let result = self.as_invocation(origin, id, |r| r.run_action(event.action, args, &[]));
+        let cause = Cause::wake_event(origin, id);
+        let result = self.as_cause(cause, |r| r.run_action(event.action, args, &[]));
         match result {
             Ok(receipt) => Ok(Some(receipt)),
             Err(e) => {
@@ -585,6 +587,22 @@ impl<D: DataSource> Runner<D> {
         (wake.invocations.iter())
             .find(|i| i.state == State::Running)
             .map(|i| i.id)
+    }
+
+    /// Whether invocation `id` is the current wake's running invocation, a
+    /// wake's event or a background action: its grants hold only while it
+    /// is (LLP 1133.023 D7a).
+    /// An expired wake's is not, from its deadline on.
+    pub(in crate::runner) fn wake_invocation_live(&self, id: u64) -> bool {
+        let before = |at: f64| self.now_ms < at;
+        self.running_wake() == Some(id) && self.wake_deadline().is_some_and(before)
+    }
+
+    /// Whether invocation `id` is the running background action or a
+    /// control's press, which owns a native statement until its reply.
+    pub(in crate::runner) fn action_owns(&self, id: u64) -> bool {
+        let action = (self.wakes.current.as_ref()).is_some_and(|w| w.origin == CallOrigin::Action);
+        (action && self.running_wake() == Some(id)) || self.press_running(id)
     }
 
     /// Whether a wake runs.
@@ -720,7 +738,12 @@ impl<D: DataSource> Runner<D> {
         self.abort_held_of(id, "the wake expired");
         self.drop_invocation_thens(id);
         if self.drop_queued_of(id) {
-            let result = self.as_invocation(CallOrigin::Wake, id, |r| {
+            let origin = self
+                .wakes
+                .current
+                .as_ref()
+                .map_or(CallOrigin::Wake, |w| w.origin);
+            let result = self.as_cause(Cause::wake_event(origin, id), |r| {
                 r.commit_again(Vec::new(), "an expired wake's queued sends")
             });
             match result {
@@ -755,13 +778,16 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Take off this commit's host commands from `first` that a wake may
-    /// not run, when the commit is the wake's or a background action's
-    /// (origin `action`: the person's act, but nothing is shown).
+    /// not run, when a wake or a background action (origin `action`: the
+    /// person's act, but nothing is shown) is among the commit's causes.
     pub(in crate::runner) fn refuse_in_wake(&mut self, first: usize) {
-        let during = match self.call_origin() {
-            CallOrigin::Wake => "during a wake",
-            CallOrigin::Action => "during a background action",
-            _ => return,
+        let causes = self.cause().causes();
+        let during = if causes.has(CallOrigin::Wake) {
+            "during a wake"
+        } else if causes.has(CallOrigin::Action) {
+            "during a background action"
+        } else {
+            return;
         };
         let mut i = first;
         while i < self.commands.len() {

@@ -243,7 +243,7 @@ for (const target of ['wasm', 'js']) for (const origin of ['fragment', 'route'])
   }
 }), 60000);
 
-// The wasm host's key wire, and the early queue's copy of it (#140): the chord, its code, repeat and isComposing.
+// The wasm host's key wire, and the early queue's copy of it: the chord, its code, repeat and isComposing.
 test('the key wire carries isComposing on its fourth line',()=>{
   for (const file of ['../glue.js','../document-glue.js']) {
     const keyChord=Function(`${glueDeclarations(readFileSync(new URL(file,import.meta.url),'utf8'),['keyChord'])}; return keyChord;`)();
@@ -507,28 +507,42 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
 }, 30000);
 
 // #282: the real HTML dialog path, reached through the JS target's commands.
+function dialogServer(html) {
+  return Bun.serve({port: 0, hostname: '127.0.0.1', async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === '/') return new Response(html, {headers: {'Content-Type': 'text/html'}});
+    if (path === '/host/web-js/names.js') return new Response('export const sourceTypes = [];', {headers: {'Content-Type': 'text/javascript'}});
+    if (!path.startsWith('/host/')) return new Response(null, {status: 404});
+    const local = Bun.file(new URL(`../../..${path}`, import.meta.url));
+    const file = await local.exists() ? local : Bun.file(new URL(`../../..${path.replace('/web-js/', '/web/')}`, import.meta.url));
+    return await file.exists() ? new Response(readFileSync(file.name), { headers: { 'content-type': 'text/javascript' } }) : new Response(null, {status: 404});
+  }});
+}
+
 engineTest.chromium('action dialog commands keep modal focus and preserve bare close as window close', async () => {
   const browser = await suiteBrowser();
+  let server;
   try {
+    server = dialogServer('<div id="exact-root"><button id="opener">Open</button><button id="outside">Outside</button><dialog id="form"><button id="first">First</button><button id="last">Last</button></dialog><div id="box"></div></div><dialog id="other"></dialog>');
     const page = await browser.newPage();
-    await page.setContent('<div id="exact-root"><button id="opener">Open</button><button id="outside">Outside</button><dialog id="form"><button id="first">First</button><button id="last">Last</button></dialog><div id="box"></div></div><dialog id="other"></dialog>');
-    const source = readFileSync(new URL('../../web-js/commands.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '').replace(/^export /gm, '');
-    // Of commands.js's imports the dialog commands reach only navigation.js's `liveById`; nothing leaves here, so
-    // finding by id is enough. Inside a function, its `close` and `postMessage` leave the window's alone.
-    await page.addScriptTag({content: `window.journal=[];window.quit=0;window.close=()=>quit++;window.hostCommands=(() => {const liveById = id => document.getElementById(id);\n${source}\nconst say = line => journal.push(line); return {showModal: showModal(say), close: close(say)};})();`});
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      const {showModal, close} = await import('/host/web-js/commands.js');
+      const {on, scope} = await import('/host/web-js/rt.js');
+      window.journal = []; window.quit = 0; window.close = () => quit++;
+      const say = line => journal.push(line);
+      window.hostCommands = {showModal: showModal(say), close: close(say)};
+      window.jsClosed = [];
+      scope(() => on(document.querySelector('#form'), 'close', () => jsClosed.push(document.activeElement.id)));
+    });
     const glue = readFileSync(new URL('../glue.js', import.meta.url), 'utf8');
-    const runtime = readFileSync(new URL('../../web-js/events.js', import.meta.url), 'utf8');
     await page.addScriptTag({content: `(() => {
       const el = document.querySelector('#form'), views = new Map([[1, el]]), retiredViews = new Set(), inputReady = true, page = null;
-      window.wasmClosed = []; window.jsClosed = [];
+      window.wasmClosed = [];
       const now = () => 0, send = () => {}, wasm = {exact_dispatch: (id, kind) => wasmClosed.push([id, kind])};
       const host = { inputReady, page, wasm };
       ${glueDeclarations(glue, ['attach'])}
       attach(el, 1, ['close']);
-      const clock = {agent: true, now: 0, timers: []}, start = 0, Mutations = [], OnHooks = {}, Owner = null;
-      const onEnd = () => {}; let Propagating = null;
-      ${runtime.slice(runtime.indexOf('export function on('), runtime.indexOf('// Each event family')).replace('export function', 'function')}
-      on(el, 'close', () => jsClosed.push(document.activeElement.id));
     })();`});
     const closed = async n => {
       await page.waitForFunction(n => wasmClosed.length === n && jsClosed.length === n, n);
@@ -571,21 +585,14 @@ engineTest.chromium('action dialog commands keep modal focus and preserve bare c
     await page.evaluate(() => { hostCommands.showModal('box'); hostCommands.showModal('missing'); hostCommands.close(); });
     expect(await page.evaluate(() => [journal.length, quit])).toEqual([2, 1]);
     expect(await page.evaluate(() => journal.every(line => line.includes('refused')))).toBe(true);
-  } finally { await browser.close(); }
+  } finally { server?.stop(true); await browser.close(); }
 }, 60000);
 
 engineTest.chromium('a queued dialog close cannot act after its conditional scope ends', async () => {
-  const server = Bun.serve({port: 0, hostname: '127.0.0.1', async fetch(req) {
-    const path = new URL(req.url).pathname;
-    if (path === '/') return new Response('<div id="exact-root"><button id="opener">Open</button><div id="branch"></div></div>', {headers: {'Content-Type': 'text/html'}});
-    if (path === '/host/web-js/names.js') return new Response('export const sourceTypes = [];', {headers: {'Content-Type': 'text/javascript'}});
-    if (!path.startsWith('/host/')) return new Response(null, {status: 404});
-    const local = Bun.file(new URL(`../../..${path}`, import.meta.url));
-    const file = await local.exists() ? local : Bun.file(new URL(`../../..${path.replace('/web-js/', '/web/')}`, import.meta.url));
-    return await file.exists() ? new Response(readFileSync(file.name), { headers: { 'content-type': 'text/javascript' } }) : new Response(null, {status: 404});
-  }});
   const browser = await suiteBrowser();
+  let server;
   try {
+    server = dialogServer('<div id="exact-root"><button id="opener">Open</button><div id="branch"></div></div>');
     const page = await browser.newPage();
     for (const retain of [false, true]) {
       await page.goto(server.url.href);
@@ -612,7 +619,7 @@ engineTest.chromium('a queued dialog close cannot act after its conditional scop
       }, retain);
       expect(result).toEqual({closed: 0, detached: true, focused: 'opener'});
     }
-  } finally { await browser.close(); server.stop(true); }
+  } finally { server?.stop(true); await browser.close(); }
 }, 60000);
 
 test('autofocus is deferred and consumed per mounted control, preserving other UI focus', async () => {

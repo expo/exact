@@ -1086,6 +1086,13 @@ fn reply() -> Outcome {
     })
 }
 
+/// `change` as tool invocation 7's.
+fn change_as_tool<D: DataSource>(r: &mut Runner<D>) {
+    let tool = crate::runner::provenance::Cause::call(false, 7);
+    let change = |r: &mut Runner<D>| r.act_named("change", vec![Value::Number(1.)]);
+    r.as_cause(tool, change).unwrap();
+}
+
 /// The re-ask keeps the original ask's origin and invocation, from a refused
 /// turn of the ask (the query) and from a refused reply alike.
 #[test]
@@ -1095,17 +1102,14 @@ fn a_reask_keeps_the_asks_origin_and_invocation() {
         Data::new(records(2)),
     );
     r.data().refuse = Some(overrun());
-    r.as_invocation(CallOrigin::Tool, 7, |r| {
-        r.act("change", vec![Value::Number(1.)])
-    })
-    .unwrap();
+    change_as_tool(&mut r);
     let t0 = r.now_ms();
     r.data().refuse = None;
     r.data().later = true;
     r.advance(t0 + 250.).unwrap();
     let asked = r.take_requests();
     assert_eq!(asked.len(), 1, "asked again");
-    assert_eq!(r.ticket_origin(asked[0].ticket), CallOrigin::Tool);
+    assert_eq!(r.ticket_cause(asked[0].ticket).origin(), CallOrigin::Tool);
     assert_eq!(r.ticket_id(asked[0].ticket), 7);
     // Its reply refused by a turn over its budget: asked again, the same.
     r.data().parse_error = Some(overrun());
@@ -1115,7 +1119,7 @@ fn a_reask_keeps_the_asks_origin_and_invocation() {
     r.advance(t1 + 1000.).unwrap();
     let again = r.take_requests();
     assert_eq!(again.len(), 1, "asked again after the reply's refusal");
-    assert_eq!(r.ticket_origin(again[0].ticket), CallOrigin::Tool);
+    assert_eq!(r.ticket_cause(again[0].ticket).origin(), CallOrigin::Tool);
     assert_eq!(r.ticket_id(again[0].ticket), 7);
 }
 
@@ -1270,10 +1274,7 @@ fn a_refresh_replaces_another_invocations_wait() {
         Data::new(records(2)),
     );
     r.data().refuse = Some(overrun());
-    r.as_invocation(CallOrigin::Tool, 7, |r| {
-        r.act("change", vec![Value::Number(1.)])
-    })
-    .unwrap();
+    change_as_tool(&mut r);
     let t0 = r.now_ms();
     r.advance(t0 + 100.).unwrap();
     r.act("refresh", vec![]).unwrap();
@@ -1283,7 +1284,7 @@ fn a_refresh_replaces_another_invocations_wait() {
     r.advance(t0 + 350.).unwrap();
     let asked = r.take_requests();
     assert_eq!(asked.len(), 1);
-    assert_eq!(r.ticket_origin(asked[0].ticket), CallOrigin::App);
+    assert_eq!(r.ticket_cause(asked[0].ticket).origin(), CallOrigin::App);
     assert_eq!(r.ticket_id(asked[0].ticket), 0);
 }
 
@@ -1346,10 +1347,7 @@ fn a_spent_streaks_failure_keeps_its_asks_provenance() {
         Data::new(records(2)),
     );
     r.data().refuse = Some(overrun());
-    r.as_invocation(CallOrigin::Tool, 7, |r| {
-        r.act("change", vec![Value::Number(1.)])
-    })
-    .unwrap();
+    change_as_tool(&mut r);
     let t0 = r.now_ms();
     r.data().refuse = None;
     r.data().value = records(3);
@@ -1362,7 +1360,7 @@ fn a_spent_streaks_failure_keeps_its_asks_provenance() {
         .iter()
         .find(|q| q.target == "watch")
         .expect("watch asked");
-    assert_eq!(r.ticket_origin(watch.ticket), CallOrigin::Tool);
+    assert_eq!(r.ticket_cause(watch.ticket).origin(), CallOrigin::Tool);
     assert_eq!(r.ticket_id(watch.ticket), 7);
 }
 
@@ -1375,15 +1373,15 @@ fn a_refresh_asked_again_in_a_later_pass_still_replaces_the_wait() {
     data.read_store = true;
     let mut r = boot(plan(TypeKind::Number, None, true, true), data);
     r.data().refuse = Some(overrun());
-    r.as_invocation(CallOrigin::Tool, 7, |r| {
-        r.act("change", vec![Value::Number(1.)])
-    })
-    .unwrap();
+    change_as_tool(&mut r);
     let t0 = r.now_ms();
     r.advance(t0 + 100.).unwrap();
     r.data().guard_writes_once = true;
     let asked = r.data().queries;
-    r.commit_again(vec![0, 1], "a refresh of both").unwrap();
+    // The app's refresh: a commit with no cause would re-ask as the last ask.
+    let app = crate::runner::provenance::Cause::person();
+    r.as_cause(app, |r| r.commit_again(vec![0, 1], "a refresh of both"))
+        .unwrap();
     assert!(
         r.data().queries >= asked + 3,
         "rows asked again in a second pass"
@@ -1397,7 +1395,7 @@ fn a_refresh_asked_again_in_a_later_pass_still_replaces_the_wait() {
         .iter()
         .find(|q| q.target == "rows")
         .expect("rows asked");
-    assert_eq!(r.ticket_origin(rows.ticket), CallOrigin::App);
+    assert_eq!(r.ticket_cause(rows.ticket).origin(), CallOrigin::App);
 }
 
 /// Arguments that change by the re-ask's time start a new streak: their first
@@ -1451,10 +1449,7 @@ fn a_refresh_that_first_asked_later_still_replaces_the_wait() {
     data.read_store = true;
     let mut r = boot(plan(TypeKind::Number, None, true, true), data);
     r.data().refuse = Some(overrun());
-    r.as_invocation(CallOrigin::Tool, 7, |r| {
-        r.act("change", vec![Value::Number(1.)])
-    })
-    .unwrap();
+    change_as_tool(&mut r);
     let t0 = r.now_ms();
     r.advance(t0 + 100.).unwrap();
     r.data().guard_writes_once = true;

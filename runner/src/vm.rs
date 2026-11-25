@@ -404,6 +404,8 @@ pub struct Accounting {
 /// them. A string read twice is the same object, inline text or one shared
 /// allocation, never a fresh one.
 pub struct Strings {
+    /// Host notation for strings this VM formats, fixed before the first settlement.
+    keyboard: crate::page::Keyboard,
     cells: Vec<std::cell::OnceCell<Value>>,
     constants: Option<std::sync::Arc<Constants>>,
 }
@@ -413,6 +415,7 @@ impl Strings {
     pub fn new(plan: &Plan) -> Strings {
         let cells = (0..plan.strings.len()).map(|_| std::cell::OnceCell::new());
         Strings {
+            keyboard: crate::page::Platform::at_boot().keyboard(),
             cells: cells.collect(),
             constants: None,
         }
@@ -429,6 +432,7 @@ impl Strings {
     /// or holding what is not text).
     pub fn of(values: impl IntoIterator<Item = Value>) -> Strings {
         Strings {
+            keyboard: crate::page::Keyboard::Unknown,
             cells: values.into_iter().map(std::cell::OnceCell::from).collect(),
             constants: None,
         }
@@ -1236,6 +1240,18 @@ impl<const CONSTANT: bool> Host<Value> for Run<'_, '_, CONSTANT> {
             return Ok(v);
         }
         let env = self.env;
+        // Like the implicit locale of a localized formatter, the keyboard is
+        // supplied by the VM. It is never a platform value in the Contract.
+        let shortcut_args;
+        let call_args = if f == Stdlib::FormatShortcut {
+            shortcut_args = [
+                call_args[0].clone(),
+                Value::Number(env.strings.keyboard as u8 as f64),
+            ];
+            &shortcut_args[..]
+        } else {
+            call_args
+        };
         stdlib::call(
             f,
             call_args,

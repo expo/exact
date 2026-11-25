@@ -15,7 +15,9 @@ fn one(op: impl FnOnce(&mut Batch)) -> String {
     batch.finish(None, false, 0.0, None)
 }
 
-fn request(ticket: u64, request: Request, forced: bool) -> RequestOut {
+/// The app's own request, whose op names no origin (`batch.rs`).
+fn request(ticket: u64, mut request: Request, forced: bool) -> RequestOut {
+    request.reach.origin = exact_runner::CallOrigin::App;
     RequestOut {
         completion: None,
         class: exact_runner::RequestClass::Ordered,
@@ -72,6 +74,7 @@ fn cases() -> Vec<(&'static str, String)> {
             Value::list(vec![Value::Number(1.5), Value::Number(-2.0)]),
             Value::str("a\"b"),
         ],
+        types: vec![None, None],
     };
     vec![
         (
@@ -87,6 +90,7 @@ fn cases() -> Vec<(&'static str, String)> {
                     visits: vec![(1, "/".into()), (5, "/tag/\"x\"?q=1".into())],
                     pattern: String::new(),
                     params: vec![],
+                    due: false,
                 })
             }),
         ),
@@ -103,6 +107,7 @@ fn cases() -> Vec<(&'static str, String)> {
                     visits: vec![(18_446_744_073_709_551_615, "/".into())],
                     pattern: String::new(),
                     params: vec![],
+                    due: false,
                 })
             }),
         ),
@@ -275,6 +280,7 @@ fn cases() -> Vec<(&'static str, String)> {
             one(|b| b.request(&request(47, mixed, false))),
         ),
         ("destroy", one(|b| b.destroy(13))),
+        ("hold", one(|b| b.hold(&[(7, Some(3)), (9, None)]))),
         (
             "at",
             one(|b| {
@@ -465,6 +471,10 @@ const GOLDEN: &[(&str, &str)] = &[
     (
         "destroy",
         r#"{"ops":[{"op":"destroy","id":13}],"timers":false,"clock":0,"error":null}"#,
+    ),
+    (
+        "hold",
+        r#"{"ops":[{"op":"hold","movers":[[7,3],[9,null]]}],"timers":false,"clock":0,"error":null}"#,
     ),
     (
         "at",

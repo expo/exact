@@ -9,6 +9,19 @@
 
 use std::ffi::c_void;
 
+/// Only a binding observer sends a null answer slot. A native caller always supplies its own slot.
+pub fn binding_observer(call: CallFn, ctx: *mut c_void) -> exact_runner::Announce {
+    let ctx = ctx as usize;
+    std::sync::Arc::new(move |body: &str| {
+        call(
+            ctx as *mut c_void,
+            body.as_ptr(),
+            body.len(),
+            std::ptr::null_mut(),
+        );
+    })
+}
+
 /// `later(ctx, body, len, reply)`: a long native call's JSON body, on the
 /// executor's thread. The host copies the body, dispatches the call to the
 /// main thread (Q5) and returns; `reply` is answered exactly once, from

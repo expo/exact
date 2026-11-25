@@ -79,7 +79,7 @@ extension NavigationHost {
         switch operation {
         case .push:
             guard let route = pushedRoute(to),
-                  let part = presenter.session?.runtime.routePart(route.node.id, exit: false, size: nav.view.bounds.size) else { return nil }
+                  let part = presenter.session?.routePart(route.node, exit: false, size: nav.view.bounds.size) else { return nil }
             return RouteTransition(part: part, arriving: true)
         case .pop:
             #if os(iOS)
@@ -100,7 +100,7 @@ extension NavigationHost {
         guard let top = routes.last else { return }
         let size = nav?.view.bounds.size ?? top.view.bounds.size
         let pops = routes.count > 1 || (nav != nil && nav === split?.detail)
-        top.exitPart = pops ? presenter.session?.runtime.routePart(top.node.id, exit: true, size: size) : nil
+        top.exitPart = pops ? presenter.session?.routePart(top.node, exit: true, size: size) : nil
     }
 }
 #endif

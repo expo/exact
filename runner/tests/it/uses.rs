@@ -418,6 +418,25 @@ fn documents_are_a_plan_that_runs_save_file_or_a_file_picker() {
 }
 
 #[test]
+fn a_drag_into_the_app_is_a_plan_that_hears_a_drop_or_its_enter_or_leave() {
+    // @ref LLP 1094.001 D4 — linked by use on UIKit; the Mac's core and the web's documents glue take drops
+    for event in ["drop", "dragenter", "dragleave"] {
+        let heard = used(&format!(
+            "component A\n  state n = 0\n  action took(e: DragEvent)\n    n = n + 1\n  view\n    column {event}=took\n      text \"zone\"\n"
+        ));
+        assert!(
+            heard.has(Capability::DragIn) && heard.has(Capability::Documents),
+            "{event}"
+        );
+    }
+    let pasted = used(
+        "component A\n  state n = 0\n  action pasted(e: ClipboardEvent)\n    n = n + 1\n  view\n    textarea paste=pasted\n",
+    );
+    assert!(pasted.has(Capability::Documents) && !pasted.has(Capability::DragIn));
+    assert!(Uses::NATIVE.has(Capability::DragIn) && Uses::MAC_CORE.has(Capability::DragIn));
+}
+
+#[test]
 fn the_picker_is_a_file_input_or_show_picker() {
     // @ref LLP 1069.002 — linked by use on the web (the web core's size).
     assert!(!used("component A\n  view\n    text \"a\"\n").has(Capability::Picker));

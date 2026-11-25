@@ -34,7 +34,7 @@ impl<D: DataSource> Presenter<D> {
             fields,
             field_history,
             field_drag,
-            file_drag,
+            drag_in,
             mouse_selection,
             #[cfg(any(target_os = "android", test))]
             reader_selection,
@@ -76,6 +76,7 @@ impl<D: DataSource> Presenter<D> {
             top: _,
             alert: _,
             hatches: _,
+            frame_partitions: _,
             // The tree's, set by `restore_focus` from the place of the old
             // focus.
             focus: _,
@@ -154,7 +155,6 @@ impl<D: DataSource> Presenter<D> {
             pointer_kind: _,
             slop: _,
             window: _,
-            segments: _,
             choice: _,
             #[cfg(any(windows, test))]
                 deferred_painter: _,
@@ -195,7 +195,7 @@ impl<D: DataSource> Presenter<D> {
         fields.clear();
         *field_history = Default::default();
         *field_drag = None;
-        *file_drag = Default::default();
+        drag_in.reset();
         *mouse_selection = Default::default();
         #[cfg(any(target_os = "android", test))]
         {
@@ -234,6 +234,8 @@ impl<D: DataSource> Presenter<D> {
         self.give_clock();
         self.modules_replaced();
         self.auth_replaced();
+        self.opens_replaced();
+        self.frame_partitions_asked();
         self.brush.replaced();
         self.brush.canvases.drawings = self.host.canvas_snapshots().clone();
         self.brush.lift = Default::default();

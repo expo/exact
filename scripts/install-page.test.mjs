@@ -22,6 +22,12 @@ import { publishRoot } from './deploy.mjs';
 import { DirectoryOrigin, webReleasePath } from './origin.mjs';
 import { developmentLinks } from '../host/apple/build.mjs';
 const manifest = {name:'Interview',app:{id:'com.interview.app',name:'Interview'}};
+// scripts/filesystem.mjs as a fixture's checkout at `dir` holds it, beside a stand-in for the tool sets it asks
+// first (tools.mjs): none is kept, and Rust is not missing, so the helper is the fixture's own Cargo's to build.
+function stageFilesystem(dir) {
+  writeFileSync(join(dir, 'scripts/filesystem.mjs'), readFileSync(new URL('./filesystem.mjs', import.meta.url)));
+  writeFileSync(join(dir, 'scripts/tools.mjs'), 'export class RustMissing extends Error {}\nexport const fromSets = () => null, rustMissing = () => false;\n');
+}
 
 test('wasm install provenance keeps source facts and records a build time only in development', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'install-provenance-'));
@@ -388,7 +394,7 @@ test('a resident reader that exits with reads pending asks each once more of a f
   const dir=mkdtempSync(join(tmpdir(),'exact-reader-exit-'));
   try {
     mkdirSync(join(dir,'scripts'));mkdirSync(join(dir,'bin'));
-    writeFileSync(join(dir,'scripts/filesystem.mjs'),readFileSync(new URL('./filesystem.mjs',import.meta.url)));
+    stageFilesystem(dir);
     writeFileSync(join(dir,'bin/cargo'),`#!/bin/sh
 set -e
 mkdir -p target/exact-filesystem-tool/debug
@@ -436,7 +442,7 @@ test('filesystem callers retain their helper across rebuilds and report failed o
   const dir=mkdtempSync(join(tmpdir(),'exact-helper-capture-'));
   try {
     mkdirSync(join(dir,'scripts'));mkdirSync(join(dir,'bin'));
-    writeFileSync(join(dir,'scripts/filesystem.mjs'),readFileSync(new URL('./filesystem.mjs',import.meta.url)));
+    stageFilesystem(dir);
     // Stand in for Cargo's mutable public output, independently of the real
     // workspace cache. A second caller publishes a different executable.
     writeFileSync(join(dir,'bin/cargo'),`#!/bin/sh
@@ -473,7 +479,7 @@ test('a helper checked from the same inputs is taken by the next process without
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-helper-record-')));
   try {
     for (const sub of ['scripts','bin','filesystem/src']) mkdirSync(join(dir,sub),{recursive:true});
-    writeFileSync(join(dir,'scripts/filesystem.mjs'),readFileSync(new URL('./filesystem.mjs',import.meta.url)));
+    stageFilesystem(dir);
     writeFileSync(join(dir,'filesystem/src/main.rs'),'fn main() {}\n');
     // A stand-in Cargo that counts its builds and publishes whatever helper-source holds
     writeFileSync(join(dir,'bin/cargo'),`#!/bin/sh
@@ -503,8 +509,7 @@ test('a deploy capture keeps its checked helper in its owning Cargo cache', () =
   const capture=join(dir,'capture'), cache=join(dir,'cargo');
   try {
     for (const sub of ['scripts','bin','filesystem/src']) mkdirSync(join(capture,sub),{recursive:true});
-    const bridge=readFileSync(new URL('./filesystem.mjs',import.meta.url));
-    const restore=()=>writeFileSync(join(capture,'scripts/filesystem.mjs'),bridge);
+    const restore=()=>stageFilesystem(capture);
     restore();
     writeFileSync(join(capture,'filesystem/src/main.rs'),'fn main() {}\n');
     writeFileSync(join(capture,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"helper"}'\n`);
@@ -620,7 +625,7 @@ test('a helper named by its checker is taken without a build, and only if it is 
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-helper-named-')));
   try {
     mkdirSync(join(dir,'scripts'));mkdirSync(join(dir,'bin'));
-    writeFileSync(join(dir,'scripts/filesystem.mjs'),readFileSync(new URL('./filesystem.mjs',import.meta.url)));
+    stageFilesystem(dir);
     // A stand-in Cargo that counts its builds and publishes whatever helper-source holds
     writeFileSync(join(dir,'bin/cargo'),`#!/bin/sh
 set -e
@@ -666,7 +671,7 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
 function helperBuilds() {
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-helper-claim-')));
   mkdirSync(join(dir,'scripts'));mkdirSync(join(dir,'bin'));
-  writeFileSync(join(dir,'scripts/filesystem.mjs'),readFileSync(new URL('./filesystem.mjs',import.meta.url)));
+  stageFilesystem(dir);
   writeFileSync(join(dir,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"helper"}'\n`,{mode:0o755});
   writeFileSync(join(dir,'bin/cargo'),`#!/bin/sh
 set -e

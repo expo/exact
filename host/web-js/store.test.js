@@ -1,5 +1,6 @@
-// The web JS target's store. Run alone, `bun test ./host/web-js/store.test.js`: reorder.test.js mocks rt.js for its process.
+// The web JS target's store, with its persistence (store.js), as a page with a data module links it. Run alone, `bun test ./host/web-js/store.test.js`: reorder.test.js mocks rt.js for its process.
 import { test, expect, mock } from "bun:test";
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // The build copies navigation.js and prompt-glue.js in from host/web and writes names.js.
 mock.module("./navigation.js", () => import("../web/navigation.js"));
@@ -8,6 +9,7 @@ mock.module("./alert-message.js", () => ({}));
 mock.module("./menu-rows.js", () => ({}));
 mock.module("./names.js", () => ({ sourceTypes: {} }));
 const { Store } = await import("./rt.js");
+await import("./store.js");
 const { createSecretFacade } = await import("./admission.js");
 
 test("a render's store refuses writes before changing memory or scheduling readers", () => {
@@ -336,8 +338,8 @@ test("a lease's request with effects arms its recovery, and a safe one does not"
   const { pathToFileURL } = await import('node:url');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-lease-fetch-'));
   try {
-    cpSync(resolve(import.meta.dir, 'ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
-    writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, 'admission.js')).href)};
+    writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
+    writeFileSync(resolve(dir, 'admission.js'), `export { fetchTarget, ownWithout, redirectOf, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dir, 'admission.js')).href)};
 export class FetchError extends Error {} export const overlaying = { on: false }; export const inOverlay = what => new Error(what);
 export const signalDeadline = { arm: null }; export const fetchWith = async () => new Response('sent');\n`);
     writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};\n');
@@ -373,7 +375,9 @@ export const signalDeadline = { arm: null }; export const fetchWith = async () =
 test('the render fetch boundary defers effective credentials before the cache or network', async () => {
   const { renderer } = await import('./render.mjs');
   const saved = globalThis.fetch, sent = [];
-  globalThis.fetch = async input => {
+  globalThis.fetch = async (input, init) => {
+    expect(init.credentials).toBe('omit');
+    expect(new Headers(input.headers).has('cookie')).toBe(false);
     const url = typeof input === 'string' ? input : input.url;
     sent.push(url);
     return Object.defineProperty(new Response('public', { headers: { 'cache-control': 'public, max-age=600' } }), 'url', { value: url });
@@ -652,3 +656,160 @@ component App
     }, {}, { app: { id: 'test.origin', name: 'Origin', origin } });
   }
 }, 120000);
+
+test('a render resolves data against its own URL and holds only its named network grants', async () => {
+  const { renderer, pageServer } = await import('./render.mjs');
+  const { renderedPages } = await import('./rendered-pages.mjs');
+  const hits = [];
+  const servers = Array.from({length: 2}, () => Bun.serve({port: 0, async fetch(request) {
+    hits.push(request.url);
+    const path = new URL(request.url).pathname;
+    if (path.endsWith('/post303') || path.endsWith('/post307')) return new Response(null, {status: Number(path.slice(-3)), headers: {Location: 'echo'}});
+    if (path.endsWith('/echo')) return new Response(request.method + ':' + await request.text());
+    if (path.endsWith('/empty')) return new Response(null, {status: 302, headers: {Location: ''}});
+    if (path.endsWith('/redirect')) return new Response(null, {status: 302, headers: {Location: 'final.json'}});
+    if (path.endsWith('/ungranted')) return new Response(null, {status: 302, headers: {Location: 'https://ungranted.invalid/'}});
+    if (path.endsWith('/events')) return new Response('data: from-stream\n\n', {headers: {'content-type': 'text/event-stream'}});
+    return Response.json(request.url, { headers: { 'cache-control': 'public, max-age=60' } });
+  }}));
+  const [one, two] = servers.map(s => s.url.origin);
+  try {
+    await renderedPages(`routes nav
+  home "/" render=request
+  item "/articles/:id" render=request
+component App
+  derive id = match stack(nav).at(-1) { case some(e) => e.params.id, case none => "" }
+  resource label = label(id) as shape string
+  view
+    text label
+`, async (_, __, dist) => {
+      const render = renderer(dist);
+      await expect(render('about:blank')).rejects.toThrow('absolute HTTP(S) URL');
+      const locations = [one, two, one].map(origin => origin + '/articles/entry');
+      const pages = await Promise.all(locations.map(location => render(location)));
+      for (const [i, page] of pages.entries()) expect(page.html).toContain(new URL('data.json', locations[i]).href);
+      expect(new Set(hits)).toEqual(new Set([one + '/articles/data.json', two + '/articles/data.json']));
+      const before = hits.length;
+      expect((await render(locations[0])).html).toContain(one + '/articles/data.json');
+      expect(hits).toHaveLength(before);
+      expect((await render(one + '/articles/redirect')).html).toContain(one + '/articles/final.json cloned redirect');
+      for (const [id, text] of [['post303', 'GET:'], ['post307', 'POST:sample'], ['empty', 'status 302']]) {
+        expect((await render(one + '/articles/' + id)).html).toContain(text);
+      }
+      const denied = await render(one + '/articles/ungranted');
+      expect(denied.refused).toEqual([]);
+      expect(denied.html).toContain('redirected to https://ungranted.invalid');
+      const stream = await render(two + '/articles/stream');
+      expect(stream.html).toContain('from-stream');
+      expect(stream.html).toContain(JSON.stringify([[two + '/articles/events']]));
+      expect(hits).toContain(two + '/articles/events');
+      const header = name => ({ host: 'unused.example', 'x-forwarded-host': 'unused.example' })[name];
+      const missing = await pageServer(dist, render, () => {})('/articles/entry', header);
+      expect(missing.body).toContain('relative fetch has no page origin');
+      expect(missing.body).toContain('set app.origin');
+      const pending = await render('http://example.invalid/articles/entry');
+      expect(pending.refused).toEqual([['label', "fetch() outside the render server's grants"]]);
+      const readerStream = await render('http://example.invalid/articles/stream');
+      expect(readerStream.refused).toEqual([['label', "fetch() outside the render server's grants"]]);
+    }, { 'app.ts': `export const grants = ${JSON.stringify('net.fetch http:\nnet.fetch ' + one + '\nnet.fetch ' + two)};
+export const answer = async (_: string, [id]: string[]) => {
+  if (id === 'stream') return fetch('events', {credentials: 'omit', exactStream: e => e.data || 'from-stream'});
+  try {
+    if (id === 'empty') return 'status ' + (await fetch(id, { credentials: 'omit' })).status;
+    if (id === 'post303' || id === 'post307') return await (await fetch(id, {method: 'POST', body: 'sample', mode: 'same-origin', credentials: 'omit'})).text();
+    const response = await fetch(new Request(id === 'redirect' || id === 'ungranted' ? id : 'data.json', { credentials: 'omit' }));
+    if (id === 'redirect') {
+      const copy = response.clone();
+      return await copy.json() + (response.redirected && copy.redirected ? ' cloned redirect' : '');
+    }
+    return await response.json();
+  }
+  catch (e) { return String(e); }
+};` });
+  } finally { for (const server of servers) server.stop(true); }
+}, 60000);
+
+test('build-time data takes the manifest origin and a missing origin names the fix', async () => {
+  const { renderedPages } = await import('./rendered-pages.mjs');
+  const hits = [];
+  const site = Bun.serve({port: 0, fetch(req) {
+    hits.push(req.url);
+    return new Response('published');
+  }});
+  try {
+    for (const [configured, grant] of [[false, site.url.origin], [true, site.url.origin], [true, 'self']]) {
+      hits.length = 0;
+      await renderedPages(`routes nav
+  home "/" render=request
+  guide "/guides/one" render=build
+component App
+  resource label = read() as shape string
+  view
+    text label
+`, async (_, html) => {
+        expect(html('guides/one')).toContain(configured ? 'published' : 'relative fetch has no page origin: set app.origin');
+        expect(hits).toEqual(configured ? [site.url.origin + '/guides/data.json'] : []);
+      }, { 'app.ts': `export const grants = 'net.fetch ${grant}';
+export const answer = async () => {
+  try { return await (await fetch('data.json', {credentials: 'omit'})).text(); }
+  catch (e) { return String(e); }
+};` }, { app: {id: 'test.build', name: 'Build', ...(configured ? { origin: site.url.origin } : {})} });
+    }
+  } finally { site.stop(true); }
+}, 60000);
+
+test('one build with net.fetch self resolves data against each trusted render URL', async () => {
+  const { renderer } = await import('./render.mjs');
+  const { renderedPages } = await import('./rendered-pages.mjs');
+  const hits = [];
+  const sites = Array.from({ length: 3 }, () => Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    hits.push(request.url);
+    if (new URL(request.url).pathname === '/guides/redirect') return Response.redirect(sites[2].url.origin + '/api');
+    return new Response(request.url);
+  }}));
+  const [named, tenant, api] = sites.map(site => site.url.origin);
+  try {
+    for (const grants of ['net.fetch self', ['net.fetch self', 'net.fetch http:', 'net.fetch ' + named, 'net.fetch ' + api].join('\n')]) {
+      hits.length = 0;
+      await renderedPages(`routes nav
+  home "/" render=request
+  page "/guides/:id" render=request
+component App
+  derive id = match stack(nav).at(-1) { case some(e) => e.params.id, case none => "" }
+  resource label = read(id) as shape string
+  view
+    text label
+`, async (_, __, dist) => {
+        const render = renderer(dist);
+        for (const origin of [named, tenant]) {
+          const page = await render(origin + '/guides/one');
+          expect(page.html).toContain(origin + '/guides/data.json');
+        }
+        if (grants === 'net.fetch self') {
+          expect((await render(tenant + '/guides/redirect')).html).toContain("outside the app's grants");
+          expect((await render('/guides/one')).html).toContain('needs a trusted HTTP(S) page URL');
+          expect(hits).toEqual([named + '/guides/data.json', tenant + '/guides/data.json', tenant + '/guides/redirect']);
+          return;
+        }
+        expect((await render(named + '/guides/redirect')).html).toContain(api + '/api');
+        expect((await render(named + '/guides/same')).html).toContain('same-origin fetch redirected');
+        const deferred = await render(tenant + '/guides/redirect');
+        expect(deferred.refused).toEqual([['label', "fetch() redirected outside the render server's grants"]]);
+        expect((await render(tenant + '/guides/same')).html).toContain('same-origin fetch redirected');
+        expect((await render(tenant + '/guides/authority')).html).toContain('host predicate is private');
+        const withoutPage = await render('/guides/one');
+        expect(withoutPage.refused).toEqual([['label', "fetch() outside the render server's grants"]]);
+        expect(hits).toEqual([named + '/guides/data.json', tenant + '/guides/data.json', named + '/guides/redirect', api + '/api', named + '/guides/redirect', tenant + '/guides/redirect', tenant + '/guides/redirect']);
+      }, { 'app.ts': `export const grants = ${JSON.stringify(grants)};
+export const answer = async (_: string, [id]: string[]) => {
+  try {
+    if (id === 'authority') return [globalThis, fetch, import.meta].every(object =>
+      !('__exactPageAdmits' in object || 'admitsPageOrigin' in object || 'exactPageAdmits' in object)) ? 'host predicate is private' : 'exposed';
+    if (id === 'same') return await (await fetch('redirect', {credentials: 'omit', mode: 'same-origin'})).text();
+    return await (await fetch(id === 'redirect' ? id : 'data.json', {credentials: 'omit'})).text();
+  }
+  catch (e) { return String(e); }
+};` }, { app: { id: 'test.self', name: 'Self', origin: tenant } });
+    }
+  } finally { for (const site of sites) site.stop(true); }
+}, 60000);

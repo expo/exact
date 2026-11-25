@@ -2,11 +2,11 @@
 //! follows its end until it settles. While it runs, `scrollFollowEnd` makes
 //! no move of its own, whatever the app sets it to; once it settles, the
 //! list follows its end only if it rests there, as after a reader's scroll.
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
-    CollectionFeedback, CollectionFill, CollectionSnapshot, DataError, DataSource, RowMeasurement,
-    Runner,
+    CollectionFeedback, CollectionFill, CollectionSnapshot, RowMeasurement, Runner,
 };
 
 /// Eleven rows 100 tall in a port 100 tall: the end is at 1000 plus the
@@ -28,18 +28,12 @@ const APP: &str = r#"component App
         text `${i}` height=100
 "#;
 
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 /// The app with `padding` on its list, every row measured, the port at its
 /// end (`1000 + end`).
-fn boot(padding: &str, end: f64) -> (Runner<NoData>, u32) {
+fn boot(padding: &str, end: f64) -> (Runner<Source>, u32) {
     let mut r = Runner::boot(
         contract::compile(&APP.replace("PADDING", padding)).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -51,7 +45,7 @@ fn boot(padding: &str, end: f64) -> (Runner<NoData>, u32) {
     }
     (r, feed)
 }
-fn snapshot(r: &Runner<NoData>, view: u32) -> CollectionSnapshot {
+fn snapshot(r: &Runner<Source>, view: u32) -> CollectionSnapshot {
     r.collections()
         .into_iter()
         .find(|c| c.view == view)
@@ -59,7 +53,7 @@ fn snapshot(r: &Runner<NoData>, view: u32) -> CollectionSnapshot {
 }
 /// One report from the port at `offset`, every mounted row 100 tall, `end`
 /// pixels of padding after the rows.
-fn report(r: &mut Runner<NoData>, view: u32, offset: f64, end: f64, fill: CollectionFill) {
+fn report(r: &mut Runner<Source>, view: u32, offset: f64, end: f64, fill: CollectionFill) {
     let c = snapshot(r, view);
     r.collection_feedback_filled(
         CollectionFeedback {
@@ -102,12 +96,12 @@ fn dragging() -> CollectionFill {
         ..Default::default()
     }
 }
-fn status(r: &Runner<NoData>) -> String {
+fn status(r: &Runner<Source>) -> String {
     exact_runner::agent::state(r)
 }
 /// The host at rest: it takes each correction, then reports where it put
 /// the port, until the list asks for nothing more. Where it ends.
-fn rest(r: &mut Runner<NoData>, view: u32, mut offset: f64, end: f64) -> f64 {
+fn rest(r: &mut Runner<Source>, view: u32, mut offset: f64, end: f64) -> f64 {
     for _ in 0..8 {
         if let Some(correction) = snapshot(r, view).correction {
             offset = correction.offset;

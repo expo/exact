@@ -3,7 +3,7 @@
 use super::*;
 
 /// The hosts a test's `on` names, as the driver names them.
-const TEST_HOSTS: [&str; 7] = ["web", "macos", "ios", "tvos", "linux", "windows", "android"];
+pub const TEST_HOSTS: [&str; 7] = ["web", "macos", "ios", "tvos", "linux", "windows", "android"];
 
 impl Parser {
     /// `font "Name" = "path.ttf"`, or a block of `weight [weight] [italic] =
@@ -125,6 +125,7 @@ impl Parser {
                         | Step::AnswerFetch { .. }
                         | Step::AnswerSource { .. }
                         | Step::Prefer { .. }
+                        | Step::PreferExtension { .. }
                 )
         });
         if let Some(late) = late {
@@ -169,6 +170,8 @@ impl Parser {
         for step in &steps {
             let refused = match step {
                 Step::Perf { .. } | Step::ExpectPerf { .. } => Some("a `perf` block measures steps; its `expect perf` lines follow it, and blocks do not nest".to_string()),
+                Step::Rotate { .. } => Some("`rotate` waits for the scene on the wall clock, so it cannot run in a `perf` block".to_string()),
+                Step::Fold { .. } => Some("`fold` waits for the simulator hinge on the wall clock, so it cannot run in a `perf` block".to_string()),
                 Step::Background { .. } => Some("`background` waits on iOS and the wall clock, so it cannot run in a `perf` block".to_string()),
                 // `clock +N real`, `clock held` and `clock until` let real
                 // time pass while the agent's clock stands.
@@ -498,6 +501,7 @@ impl Parser {
     fn json_value(&mut self) -> R<String> {
         let token = self.next();
         Ok(match token.kind {
+            TokenKind::Json(raw) => raw,
             TokenKind::Punct(open @ ("{" | "[")) => {
                 let close = if open == "{" { "}" } else { "]" };
                 let mut out = String::from(open);
@@ -542,7 +546,7 @@ impl Parser {
                 return self.err(
                     "syntax-expected-step",
                     format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `answer source`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `fold`, `rotate`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `answer source`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
                     describe(&other)
                 ),
                 )
@@ -554,16 +558,41 @@ impl Parser {
             "prefer" if self.at_ident("midi") => return self.prefer_midi(span),
             "prefer" => {
                 // A module's permission is dotted (`permission.notifications`).
-                let (mut name, _) = self.ident()?;
+                let (mut name, name_span) = self.ident()?;
                 while self.eat_punct(".") {
                     name.push('.');
                     name.push_str(&self.ident()?.0);
+                }
+                if prefer_key(&name) == "extension" && name != "extension" {
+                    return Err(SyntaxError { id: "syntax-expected-step", message: "write `prefer extension <extension>.<name>=<JSON>|clear`".into(), span: name_span });
+                }
+                if name == "extension" {
+                    let (key, _) = self.ident()?;
+                    if !key.contains('.') {
+                        return self.err("syntax-expected-step", "expected <extension>.<name>=<JSON>|clear");
+                    }
+                    self.expect_punct("=")?;
+                    let value = if self.at_ident("clear") {
+                        self.next();
+                        None
+                    } else {
+                        Some(self.json_value()?)
+                    };
+                    self.newline()?;
+                    return Ok(Step::PreferExtension { key, value, span });
+                }
+                if prefer_key(&name) == "mode" && matches!(self.peek2(), TokenKind::Punct("=")) {
+                    return Err(SyntaxError {
+                        id: "syntax-drive-only-preference",
+                        message: "`prefer mode` pins a mode in an agent drive. Use `prefer mode <axis>=<value>` there".into(),
+                        span: name_span,
+                    });
                 }
                 let value = match self.next() {
                     Token { kind: TokenKind::Ident(value) | TokenKind::Str(value), .. } => value,
                     token => return Err(SyntaxError {
                         id: "syntax-expected-step",
-                        message: "`prefer` takes a media feature, a page fact (including `root-font-size`) or a module permission and its value. Quote numbers and values with punctuation, as `prefer root-font-size \"24\"` or `prefer permission.notifications granted`. Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now".into(),
+                        message: "`prefer` takes a media feature, a page fact (including `root-font-size`) or a module permission and its value. Quote numbers and values with punctuation, as `prefer root-font-size \"24\"` or `prefer permission.notifications granted`. Use `prefer extension <extension>.<name>=<JSON>|clear` for a package substitute. Folds (`posture`, `segments`, `gap`) and mode pins require an agent drive".into(),
                         span: token.span,
                     }),
                 };
@@ -577,122 +606,14 @@ impl Parser {
                 let target = self.str_lit("a testId")?;
                 if self.at_ident("drag") {
                     self.next();
-                    // `drag to "B" [at x y]` (LLP 1094 D12) or `drag dx dy`.
-                    let (dx, dy, to) = if self.at_ident("to") {
-                        self.next();
-                        let to = self.str_lit("the testId the drag ends on")?;
-                        let at = if self.at_ident("at") {
-                            self.next();
-                            let x = self.step_number("the end's x in the node's box")?;
-                            let y = self.step_number("the end's y in the node's box")?;
-                            Some((x, y))
-                        } else {
-                            None
-                        };
-                        (0.0, 0.0, Some((to, at)))
-                    } else {
-                        let dx = self.step_number("the drag's dx in points")?;
-                        let dy = self.step_number("the drag's dy in points")?;
-                        (dx, dy, None)
-                    };
-                    let (mut press, mut over, mut hold) = (None, None, None);
-                    let (mut from, mut mouse) = (None, false);
-                    let mut into = None;
-                    // Quoted reads or `clock`, last, while the finger is down (drums R8).
-                    let mut during = Vec::new();
-                    while let TokenKind::Ident(w) = self.peek_kind().clone() {
-                        let twice = match w.as_str() {
-                            "from" => from.is_some(),
-                            "mouse" => mouse,
-                            "into" => into.is_some(),
-                            _ => false,
-                        };
-                        if twice {
-                            return self.err(
-                                "syntax-expected-step",
-                                format!("`{w}` is given twice in one drag"),
-                            );
-                        }
-                        if w == "mouse" {
-                            self.next();
-                            mouse = true;
-                            continue;
-                        }
-                        if w == "into" {
-                            self.next();
-                            self.expect_word("keyboard")?;
-                            into = Some("keyboard".to_string());
-                            continue;
-                        }
-                        if w == "from" {
-                            self.next();
-                            let x = self.step_number("the start's x in the node's box")?;
-                            let y = self.step_number("the start's y in the node's box")?;
-                            from = Some((x, y));
-                            continue;
-                        }
-                        if w == "during" {
-                            self.next();
-                            while let TokenKind::Str(op) = self.peek_kind().clone() {
-                                self.next();
-                                if !during_read(&op) {
-                                    return self.err(
-                                        "syntax-expected-step",
-                                        format!("`during` {op:?} is not a read or the clock (tree, layout, state, logs, screenshot, clock)"),
-                                    );
-                                }
-                                during.push(op);
-                            }
-                            if during.is_empty() {
-                                return self.err(
-                                    "syntax-expected-step",
-                                    "`during` takes a quoted op, as during \"clock +500\", and it is the last option",
-                                );
-                            }
-                            if !matches!(self.peek_kind(), TokenKind::Newline | TokenKind::Eof) {
-                                return self.err(
-                                    "syntax-expected-step",
-                                    "`during` is the last option of a drag",
-                                );
-                            }
-                            break;
-                        }
-                        let slot = match w.as_str() {
-                            "press" => &mut press,
-                            "over" => &mut over,
-                            "hold" => &mut hold,
-                            _ => break,
-                        };
-                        if slot.is_some() {
-                            return self.err(
-                                "syntax-expected-step",
-                                format!("`{w}` is given twice in one drag"),
-                            );
-                        }
-                        self.next();
-                        *slot = Some(self.step_number("milliseconds")?);
-                    }
-                    self.newline()?;
-                    return Ok(Step::Drag {
-                        target,
-                        dx,
-                        dy,
-                        to,
-                        from,
-                        mouse,
-                        into,
-                        press,
-                        over,
-                        hold,
-                        during,
-                        span,
-                    });
+                    return self.drag_step(target, span);
                 }
                 let form = match self.peek_kind().clone() {
-                    TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "wheel" => {
+                    TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "swipe" || w == "wheel" => {
                         self.next();
                         match w.as_str() {
                             "hover" => TapForm::Hover,
+                            "dblclick" if self.at_ident("touch") => { self.next(); TapForm::DoubleTap }
                             "dblclick" => TapForm::Dblclick,
                             "contextmenu" => TapForm::Contextmenu,
                             "pinch" => {
@@ -715,6 +636,31 @@ impl Parser {
                                 };
                                 TapForm::Pinch { scale, at }
                             }
+                            // `tap "id" swipe <direction> [at x y]`: the platform's discrete swipe (LLP 1057.001 §8.3).
+                            "swipe" => {
+                                let direction = match self.peek_kind().clone() {
+                                    TokenKind::Ident(d) if ["left", "right", "up", "down"].contains(&d.as_str()) => {
+                                        self.next();
+                                        d
+                                    }
+                                    _ => {
+                                        return self.err(
+                                            "syntax-expected-step",
+                                            "`swipe` takes a direction: left, right, up or down",
+                                        )
+                                    }
+                                };
+                                let at = if self.at_ident("at") {
+                                    self.next();
+                                    Some((
+                                        self.step_number("the swipe's x in the node's box")?,
+                                        self.step_number("the swipe's y in the node's box")?,
+                                    ))
+                                } else {
+                                    None
+                                };
+                                TapForm::Swipe { direction, at }
+                            }
                             // `tap "id" wheel <dx> <dy>`: the agent's wheel, so a Mac's scroll can be tested.
                             "wheel" => {
                                 let dx = self.step_number("the wheel's dx, in points")?;
@@ -728,6 +674,28 @@ impl Parser {
                         }
                     }
                     TokenKind::Ident(w) if w == "mediasession" => self.tap_media_session()?,
+                    TokenKind::Ident(w) if w == "drop" => {
+                        self.next();
+                        let (mut files, mut text, mut url) = (Vec::new(), None, None);
+                        loop {
+                            if self.at_ident("file") {
+                                self.next();
+                                files.push(self.str_lit("the dropped file's path")?);
+                            } else if self.at_ident("text") && text.is_none() {
+                                self.next();
+                                text = Some(self.str_lit("the dropped text")?);
+                            } else if self.at_ident("url") && url.is_none() {
+                                self.next();
+                                url = Some(self.str_lit("the dropped link")?);
+                            } else {
+                                break;
+                            }
+                        }
+                        if files.is_empty() && text.is_none() && url.is_none() {
+                            return self.err("syntax-expected-step", "`drop` takes what the drag carries: `file \"path\"` (from the test file's folder), `text \"…\"` or `url \"…\"`, as `tap \"zone\" drop text \"Mount Fuji\"`");
+                        }
+                        TapForm::Drop { files, text, url }
+                    }
                     TokenKind::Ident(w) if w == "history" => {
                         self.next();
                         let delta = self.step_number("the history delta, a nonzero integer")?;
@@ -856,6 +824,20 @@ impl Parser {
                     );
                 }
                 Step::Authorize { cancel, span }
+            }
+            "rotate" => {
+                let (orientation, _) = self.ident()?;
+                if !matches!(orientation.as_str(), "portrait" | "portraitUpsideDown" | "landscapeLeft" | "landscapeRight") {
+                    return self.err("syntax-expected-step", "rotate takes portrait, portraitUpsideDown, landscapeLeft or landscapeRight");
+                }
+                Step::Rotate { orientation, span }
+            }
+            "fold" => {
+                let degrees = self.step_number("a fold angle from 0 through 180 degrees")?;
+                if !(0.0..=180.0).contains(&degrees) {
+                    return self.err("syntax-expected-step", "fold takes a hinge angle from 0 through 180 degrees");
+                }
+                Step::Fold { degrees, span }
             }
             "background" => {
                 let ms = self.step_number("the time away in milliseconds")?;
@@ -1317,7 +1299,7 @@ impl Parser {
                 return Err(SyntaxError {
                     id: "syntax-expected-step",
                     message: format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`), found `{other}`"
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `fold`, `rotate`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`), found `{other}`"
                 ),
                     span,
                 })
@@ -1345,7 +1327,7 @@ fn json_string(s: &str) -> String {
 
 /// A drag's `during` op is a read or the clock, not a second finger (drums R8).
 /// A filmed screenshot (`over … every`) loops on the clock.
-fn during_read(op: &str) -> bool {
+pub(super) fn during_read(op: &str) -> bool {
     let mut words = op.split_whitespace();
     let Some(head) = words.next() else {
         return false;
@@ -1378,6 +1360,7 @@ pub(super) const LAUNCH: [&str; 13] = [
 pub(super) fn launch_word(step: &Step) -> &'static str {
     match step {
         Step::Prefer { .. } => "prefer",
+        Step::PreferExtension { .. } => "prefer extension",
         Step::Size { .. } => "size",
         Step::At { .. } => "at",
         Step::Epoch { .. } => "epoch",
@@ -1424,6 +1407,9 @@ pub fn same_launch(a: &Step, b: &Step) -> bool {
     }
     if let (Step::Prefer { name: x, .. }, Step::Prefer { name: y, .. }) = (a, b) {
         return prefer_key(x) == prefer_key(y);
+    }
+    if let (Step::PreferExtension { key: x, .. }, Step::PreferExtension { key: y, .. }) = (a, b) {
+        return x == y;
     }
     let word = launch_word(a);
     !word.is_empty() && word == launch_word(b)
@@ -1474,6 +1460,7 @@ fn prefer_key(name: &str) -> &str {
         "segments",
         "gap",
         "mode",
+        "extension",
         "midi.state",
         "midi.inputs",
         "midi.outputs",

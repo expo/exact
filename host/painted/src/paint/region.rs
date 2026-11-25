@@ -63,7 +63,30 @@ impl ScrollBounds {
     /// `collection_max` is a collection's range on its main axis: y for a
     /// block list, x for a flex (row) one, the runner's rule at creation
     /// (LLP 1070 H1).
-    fn capture(node: &NodeRef<'_>, kernel: &Kernel, collection_max: Option<f32>) -> Self {
+    pub(super) fn capture(
+        node: &NodeRef<'_>,
+        kernel: &Kernel,
+        collection_max: Option<f32>,
+    ) -> Self {
+        Self::capture_with(
+            node,
+            kernel,
+            collection_max,
+            &|id| {
+                kernel
+                    .node(id)
+                    .map_or(Presented::IDENTITY, |n| Presented::from_style(n.style))
+            },
+            &Default::default(),
+        )
+    }
+    fn capture_with(
+        node: &NodeRef<'_>,
+        kernel: &Kernel,
+        collection_max: Option<f32>,
+        presented: &dyn Fn(ViewId) -> Presented,
+        scaled_presented: &std::collections::BTreeSet<ViewId>,
+    ) -> Self {
         let axes = effective_overflow(node);
         // Not a scroll container: nothing to measure; it never moves.
         if axes == (Overflow::Visible, Overflow::Visible) && collection_max.is_none() {
@@ -72,7 +95,8 @@ impl ScrollBounds {
                 max: (0., 0.),
             };
         }
-        let (width, height) = content_size(node, kernel);
+        let (width, height) =
+            super::space::content_size_with(node, kernel, presented, scaled_presented);
         let mut max = (
             (width - node.frame.width).max(0.),
             (height - node.frame.height).max(0.),
@@ -550,6 +574,8 @@ impl Painter {
         region: Option<&crate::content_region::ContentRegionState>,
         node: &NodeRef<'_>,
         collection_max: Option<f32>,
+        presented: &dyn Fn(ViewId) -> Presented,
+        scaled_presented: &std::collections::BTreeSet<ViewId>,
     ) -> ScrollBounds {
         if let Some(region) = region {
             if let Some(bounds) = self.region_scroll_bounds(region, node.key) {
@@ -575,7 +601,7 @@ impl Painter {
                 };
             }
         }
-        ScrollBounds::capture(node, kernel, collection_max)
+        ScrollBounds::capture_with(node, kernel, collection_max, presented, scaled_presented)
     }
     pub(super) fn validate_region_presentation(
         &self,
@@ -695,7 +721,9 @@ impl<'a> Replay<'a> {
                     if f.node != n.key || i != nodes.len() {
                         return Err("content recipe identity mismatch".into());
                     }
-                    let geometry = n.paint.geometry(paint_rect(f.frame, offset));
+                    let geometry = n
+                        .paint
+                        .geometry(paint_rect(f.frame, (offset.0.into(), offset.1.into())));
                     let rect = geometry.outer.rect;
                     let c = geometry.content;
                     let parent = transform;
@@ -715,7 +743,7 @@ impl<'a> Replay<'a> {
                                 || !p.translate.0.is_finite()
                                 || !p.translate.1.is_finite()
                                 || p.translate_percent != (0., 0.)
-                                || p.scale != 1.
+                                || p.scale != (1., 1.)
                                 || p.rotate != 0.
                                 || p.layout != Presented::IDENTITY.layout
                                 || p.opacity != n.opacity
@@ -726,14 +754,15 @@ impl<'a> Replay<'a> {
                             }
                             // EXACT ordinary node composition, including f32
                             // center association. Never translate baked pixels.
-                            let (x, y, w, h) = paint_rect(f.frame, offset);
+                            let (x, y, w, h) =
+                                paint_rect(f.frame, (offset.0.into(), offset.1.into()));
                             let (ox, oy) = node.style.transform_origin.resolve(w, h);
                             let (cx, cy) = (x + ox, y + oy);
                             let (tx, ty) = p.translate_at(w, h);
                             transform = parent.pre_concat(
                                 Transform::from_translate(cx + tx, cy + ty)
                                     .pre_rotate(p.rotate)
-                                    .pre_scale(p.scale, p.scale)
+                                    .pre_scale(p.scale.0, p.scale.1)
                                     .pre_translate(-cx, -cy),
                             );
                         }
@@ -827,7 +856,7 @@ impl<'a> Replay<'a> {
         painter: &mut Painter,
         walk: &mut Walk<'_, '_>,
         _parent: Transform,
-        _offset: (f32, f32),
+        _offset: PaintOffset,
         outer_clip: Option<Rect4>,
     ) {
         let mut clip = outer_clip;
@@ -844,8 +873,10 @@ impl<'a> Replay<'a> {
                     // Containing-block transforms were refused before prepare.
                     let parent = r.transform;
                     if r.live_hit {
+                        let (x, y, ..) = g.outer.rect;
                         walk.boxes.push(PaintedBox {
                             baseline: None,
+                            text_origin: matches!(n.payload, Payload::Text(..)).then_some((x, y)),
                             rounded_border: if walk.scrollbar_cover {
                                 g.outer.rounded_outline()
                             } else {
@@ -1003,6 +1034,7 @@ mod hit_tests {
             let rect = (0.0, 0.0, 100.0, 100.0);
             let mut b = PaintedBox {
                 baseline: None,
+                text_origin: None,
                 rounded_border: None,
                 shape_clips: Vec::new(),
                 pointer_hit: true,

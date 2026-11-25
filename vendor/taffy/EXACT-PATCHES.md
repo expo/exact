@@ -1,10 +1,12 @@
 # Vendored Taffy — Exact patches
 
-- **Upstream:** `taffy` 0.14.0, crates.io package supplied offline at
-  `~/Library/Caches/exact2-textflow/taffy-0.14.0/` (M8, 2026-09-18).
-  The archive's `.cargo_vcs_info.json` pins commit `77f385683c1d698c91a23a259f87fdddf26925fb`.
-- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75 and 76 below remain. `[patch.crates-io]`
-  selects this copy; the kernel declares `taffy = "0.14"`.
+- **Upstream:** `taffy` 0.16.0 (crates.io package `taffy-0.16.0`).
+- **Why vendored:** Exact carries layout patches on top of 0.16.0, including
+  `RareStyle`, hoisted absolute positioning, `Cache`/`LazyCache`/`SizeCachePolicy`,
+  row `Memo`, bar and outset layout, `grid_link`, `compute::ratio`, and Patch 67
+  scroll-container end padding. Patch 3 (allocation-free unfrozen flex loop) and
+  Patch 17's grid stretch loop were upstreamed in 0.16.0. `[patch.crates-io]`
+  selects this copy; the kernel declares `taffy = "0.16"`.
 - **Owner:** Charlie Cheever (kernel/layout).
 - **Features:** std, taffy_tree, flexbox, grid, block_layout, content_size, calc.
   `BlockContext` belongs to block_layout; float_layout is unnecessary and
@@ -2541,7 +2543,16 @@ stretched to the slot's final extent within its bounds or placed by
 parent's direction) or its `auto` margins, held by its margins, at the depth
 it was measured at, which is definite only where the bar authored it. Each
 bar adds its scrollable overflow at its slot to the parent's, and its slot's
-depth is kept for publication (`TaffyTree::bar_depth`). A parent with bars is
+depth and rectangle are kept for publication (`TaffyTree::bar_depth`,
+`TaffyTree::bar_slot`), the rectangle from the parent's border-box origin as a
+child's location is, which the kernel reads to choose the scroller beneath the
+bar; a slot that moves or resizes marks the bar's layout changed, though its
+own layout may be the same. A parent whose `RareStyle::bar_scrollport` is set,
+one its host presents as a scroll view, holds its bars on its scrollport: their
+slots lie as any parent's do, but they add nothing to its padding, so its
+content keeps its own place and size, and their scrollable overflow stays out
+of its scrollable extent; the host's inset clears them, not the content. A
+parent with bars is
 no marked root's recorded algorithm and is laid out outside a trace being
 recorded, as an outset box is.
 
@@ -2553,5 +2564,28 @@ and a maximum keeping their border box under a block and a flex parent, a bar
 past its parent's reservation in a flex row, bars past their parent's
 observation, along and across their edges, two panes whose bars hold
 wrapping text, a positioned parent's bar in a scroller's content, a bar its
-host replaces, and the boxes that are no bars; `contract/cli/tests/it/duo_lab.rs`'s
+host replaces, a scroller's bars on its scrollport, its content's padding and
+extent without them, a parent that clips laying its bar out as padding, and the
+boxes that are no bars; `contract/cli/tests/it/duo_lab.rs`'s
 bars screen.
+
+## Patch 82: a form control's natural size is not scrollable overflow — Exact only
+
+`Style::item_is_form_control` (`CoreStyle::is_form_control`), which the
+kernel sets for its text fields and native controls, gives a leaf the
+scrollable overflow patch 5 gives a replaced element: its used padding box.
+A control's measure answers its natural size (a determinate `progress` is
+`10em` by `1em`, a fixed field twenty characters) whatever its box, and the
+leaf built its overflow rect from that answer, so a control that flex,
+`width` or `max-width` made narrower than its natural width gave its
+scroller a range past every box. CSS Overflow 3 §2.1: a form control's
+content is not scrollable overflow; its parent adds its border box, as for
+any box. Nothing else reads the flag: a control is not a replaced element to
+the ratio table, the automatic minimum, stretch or absolute insets, and it
+keeps the table marker's block sizing (patch 21).
+
+**Held by** `kernel/tests/it/browser_scroll_padding.rs::a_form_controls_natural_width_does_not_widen_its_scroller`:
+a `progress`, a text field and a textarea at a 60px font in a 200px
+scroller, at `width: 100%` and narrower, against Chrome 159's
+`scrollWidth`. Before the repair the scroller's width was 610 or 730 where
+Chrome's is 220.

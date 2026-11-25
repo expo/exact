@@ -5,7 +5,7 @@
 //! subset explicit. The same parser serves literals, runtime writes and wire
 //! decode; the web only excludes the few valid forms Taffy cannot run.
 
-use cssparser::{serialize_identifier, Parser, ParserInput, Token};
+use cssparser::{serialize_identifier, Parser, Token};
 #[cfg(not(target_arch = "wasm32"))]
 use taffy::prelude::{
     auto, fit_content, fr, length, line, max_content, min_content, minmax, percent, span,
@@ -515,7 +515,7 @@ fn max_from_taffy(value: TaffyMax) -> Option<GridTrackMaxExpanded> {
         TaffyMax::MaxContent => GridTrackMaxExpanded::Track(GridTrackMax::MaxContent),
         TaffyMax::FitContentPx(v) => GridTrackMaxExpanded::FitContentPoints(v),
         TaffyMax::FitContentPercent(v) => GridTrackMaxExpanded::FitContentPercent(v * 100.0),
-        TaffyMax::Calc(_) => return None,
+        TaffyMax::Calc(_) | TaffyMax::FitContentCalc(_) => return None,
     })
 }
 
@@ -1055,8 +1055,7 @@ impl PlacementPart {
 }
 
 fn placement_tokens(text: &str) -> Option<(GridLine, Option<GridLine>)> {
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(text);
     let mut parts = [PlacementPart::default(), PlacementPart::default()];
     let mut side = 0usize;
     while !parser.is_exhausted() {
@@ -1213,8 +1212,7 @@ fn check_encode(style: &StyleProps, mask: StyleMask, writer: &mut Writer) {
 }
 
 fn parse_css_idents(text: &str) -> Option<Vec<String>> {
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(text);
     let mut words = Vec::new();
     while !parser.is_exhausted() {
         match parser.next().ok()?.clone() {

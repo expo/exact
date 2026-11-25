@@ -248,6 +248,7 @@ pub fn shipped_targets(root: &Path) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Target {
     pub name: String,
+    pub includes_iphone: bool,
     /// "the `linux/` crate", "app.json `deploy.store.linux`".
     pub from: Vec<String>,
 }
@@ -276,6 +277,10 @@ fn targets(root: Option<&Path>) -> Vec<Target> {
         Some(t) => t.from.push(from),
         None => out.push(Target {
             name: name.to_string(),
+            includes_iphone: name == "ios"
+                && app["host"]["ios"]["deviceFamily"]
+                    .as_array()
+                    .is_none_or(|family| family.iter().any(|f| f == "iphone")),
             from: vec![from],
         }),
     };

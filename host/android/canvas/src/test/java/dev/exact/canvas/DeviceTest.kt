@@ -1,18 +1,35 @@
 package dev.exact.canvas
 
+import android.hardware.display.DisplayManager
 import android.provider.Settings
+import android.view.Surface
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowDisplayManager
 import org.robolectric.annotation.Config
 
 /** `formatLocale` carries the hour cycle the person forces (LLP 1027.000.000), as Apple's does. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 class DeviceTest {
+    @Test fun orientationReadsTheContextsOwnDisplay() {
+        val app = RuntimeEnvironment.getApplication()
+        val id = ShadowDisplayManager.addDisplay("w800dp-h480dp-land-mdpi")
+        try {
+            val display = app.getSystemService(DisplayManager::class.java).getDisplay(id)
+            shadowOf(display).setRotation(Surface.ROTATION_180)
+            // Half a turn of a naturally wide display is landscape-secondary.
+            assertEquals(16 or (2 shl 2) or 3, Device.orientation(app.createDisplayContext(display)))
+        } finally {
+            ShadowDisplayManager.removeDisplay(id)
+        }
+    }
+
     @Test fun touchExplorationIsTheScreenReaderProxy() {
         val context = RuntimeEnvironment.getApplication()
         val manager = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)

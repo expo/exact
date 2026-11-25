@@ -66,6 +66,30 @@
     "radio-dot": { "source": "RadioButton.kt", "name": "RadioButtonDotSize" },
     "radio-stroke": { "source": "RadioButton.kt", "name": "RadioStrokeWidth" },
     "radio-disabled-opacity": { "token": "RadioButtonTokens.DisabledSelectedIconOpacity" },
-    "touch-target": { "defaults": "LocalMinimumInteractiveComponentSize" }
+    "touch-target": { "defaults": "LocalMinimumInteractiveComponentSize" },
+    "list-row-inset": { "source": "ListItem.kt", "name": "ListItemStartPadding" },
+    "grouped-ground": { "token": "ListTokens.ListItemContainerColor" },
+    "grouped-ground-plain": { "token": "ListTokens.ListItemContainerColor" },
+    "grouped-page-ground": { "token": "ListTokens.ListItemContainerColor" },
+    "grouped-card-fill": { "token": "ListTokens.ListItemContainerColor" },
+    "grouped-edge-width": {
+      "computed": "0",
+      "in": "ListItem.kt: a list item draws no edge (ListTokens.ListItemContainerShape is CornerNone, unoutlined); a divider is a HorizontalDivider the app adds"
+    },
+    "grouped-row-min-height": { "token": "ListTokens.ListItemOneLineContainerHeight" },
+    "grouped-button-min-height": { "token": "ListTokens.ListItemOneLineContainerHeight" },
+    "grouped-button-stack-min-height": { "token": "ListTokens.ListItemTwoLineContainerHeight" },
+    "grouped-row-padding-block": { "source": "ListItem.kt", "name": "ListItemVerticalPadding" },
+    "grouped-row-inline-gap": { "source": "ListItem.kt", "name": "LeadingContentEndPadding" },
+    "grouped-symbol-gap": {
+      "computed": "0",
+      "in": "ListItem.kt: LeadingContentEndPadding supplies the entire gap"
+    },
+    "grouped-stack-min-height": { "token": "ListTokens.ListItemTwoLineContainerHeight" },
+    "grouped-stack-padding-block": { "source": "ListItem.kt", "name": "ListItemVerticalPadding" },
+    "grouped-lines-padding-block": {
+      "computed": "0",
+      "in": "ListItem.kt: the item's ListItemVerticalPadding, the row's own, is the only space above and below its lines"
+    }
   }
 }

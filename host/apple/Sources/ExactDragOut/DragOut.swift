@@ -207,7 +207,7 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         guard !view.isHidden, let target = LiftTarget.target(view) else { return nil }
         let parameters = UIDragPreviewParameters()
         parameters.visiblePath = LiftTarget.rounded(view)
-        parameters.backgroundColor = view.layer.backgroundColor.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear
+        parameters.backgroundColor = view.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear
         return UITargetedDragPreview(view: view, parameters: parameters, target: target)
     }
 

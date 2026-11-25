@@ -1,8 +1,11 @@
-import { address } from "./network.js";
+import { matchesPage } from "./network.js";
 // WHATWG URL normalization for the wasm grant parser, using the browser's
 // existing tables. This is pure parsing: it grants no host I/O to the app.
 export function grantOrigins(memory) {
-  return { origin(ptr, len, wildcard, out, capacity) {
+  return { page_admits(ptr, len) {
+    const bytes = new Uint8Array(memory().buffer, ptr >>> 0, len >>> 0);
+    try { return Number(matchesPage(new URL(new TextDecoder().decode(bytes)))); } catch { return 0; }
+  }, origin(ptr, len, wildcard, out, capacity) {
     try {
       const target = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(memory().buffer, ptr >>> 0, len >>> 0));
       const u = new URL(target), port = u.port || {

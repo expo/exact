@@ -4,6 +4,7 @@
 //! an installed one, whose implementation the test plays as the host's
 //! native slot.
 
+use crate::source::{boxed, NoData, Source};
 use exact_runner::{CallOrigin, Reply, Runner};
 use serde_json::{json, Value as Json};
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ const INTERFACE: &str = r#"{
   "name": "@fixture/swatch",
   "version": "1.0.0",
   "views": {
-    "swatch-box": { "props": { "tint": { "type": "string", "binds": true }, "caption": "option<string>" },
+    "swatch-box": { "props": { "tint": { "type": "option<string>", "binds": true }, "caption": "option<string>" },
       "events": ["message"], "displayed": true }
   },
   "names": []
@@ -30,6 +31,8 @@ const APP: &str = r#"component App
     shown = false
   action hide
     hidden = true
+  action reveal
+    hidden = false
   action recolor
     tint = "blue"
   view
@@ -208,7 +211,7 @@ fn a_package_with_no_module_names_accepts_its_views_agent_words() {
     let interface = r#"{
       "kind": "interface", "name": "@fixture/words", "version": "1.0.0",
       "agent": { "heard": "string", "levels": "number[]", "enabled": "bool" },
-      "views": { "words-panel": {} }, "names": []
+      "views": { "words-panel": {"displayed": true} }, "names": []
     }"#;
     let app = App::new(
         "words-without-sources",
@@ -218,14 +221,14 @@ fn a_package_with_no_module_names_accepts_its_views_agent_words() {
     let (mut r, told) = boot(&app);
     assert!(r.plan().modules.is_empty());
     assert_eq!(r.plan().views.len(), 1);
-    let prefer = |r: &mut Runner<NoData>, values: Json| {
+    let prefer = |r: &mut Runner<Source>, values: Json| {
         let request = json!({ "op": "prefer", "extension": values });
         r.extension_agent(&request.to_string()).unwrap().1
     };
     prefer(&mut r, json!({ "words.heard": "hello" })).unwrap();
     r.bind_extensions(&[], &["words"]);
     assert_eq!(
-        told.lock().unwrap().last().unwrap()["preferred"]["heard"],
+        told.lock().unwrap().first().unwrap()["preferred"]["heard"],
         "hello"
     );
     prefer(
@@ -293,7 +296,7 @@ fn a_view_only_map_accepts_its_declared_tile_preference() {
     let (mut r, told) = boot(&app);
     assert!(r.plan().modules.is_empty());
     r.bind_extensions(&[], &["maps"]);
-    let prefer = |r: &mut Runner<NoData>, value: Json| {
+    let prefer = |r: &mut Runner<Source>, value: Json| {
         let request = json!({ "op": "prefer", "extension": { "maps.tiles": value } });
         r.extension_agent(&request.to_string()).unwrap().1
     };
@@ -379,27 +382,16 @@ fn a_view_only_package_keeps_agent_word_types_and_source_precedence() {
     );
 }
 
-struct NoData;
-impl exact_runner::DataSource for NoData {
-    fn query(
-        &mut self,
-        source: &str,
-        _: &[exact_runner::Value],
-    ) -> Result<exact_runner::Value, exact_runner::DataError> {
-        Err(exact_runner::DataError::UnknownSource(source.into()))
-    }
-}
-
 type Told = Arc<Mutex<Vec<Json>>>;
 
 /// A runner over the app, every body its native slot is given kept.
-fn boot(app: &App) -> (Runner<NoData>, Told) {
+fn boot(app: &App) -> (Runner<Source>, Told) {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let plan = exact_plan::Plan::decode(&plan.encode()).unwrap();
     let r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -437,10 +429,100 @@ fn reports(told: &Told) -> Vec<String> {
         .collect()
 }
 
-fn view_id(r: &Runner<NoData>) -> u32 {
+fn view_id(r: &Runner<Source>) -> u32 {
     let state = r.extensions_json().unwrap();
     let state: Json = serde_json::from_str(&state).unwrap();
     state["swatch"]["views"][0]["view"].as_u64().unwrap() as u32
+}
+
+#[test]
+fn device_bindings_follow_the_runner_node_through_both_orders_and_removal() {
+    let app = App::new("device-bindings", APP, &[]);
+    for (shown, bound, expected) in [
+        (CallOrigin::Tool, CallOrigin::App, "tool"),
+        (CallOrigin::App, CallOrigin::Tool, "tool"),
+        (CallOrigin::Action, CallOrigin::App, "action"),
+        (CallOrigin::App, CallOrigin::Wake, "wake"),
+    ] {
+        let (mut runner, _) = boot(&app);
+        runner.bind_extensions(&["swatch"], &[]);
+        let snapshots: Told = Arc::default();
+        let seen = snapshots.clone();
+        runner.observe_view_bindings(
+            &[("swatch-box", "tint")],
+            Some(Arc::new(move |body| {
+                seen.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(body).unwrap());
+            })),
+        );
+        runner.act_from(shown, "show", Vec::new()).unwrap();
+        let id = view_id(&runner).to_string();
+        runner.act_from(bound, "recolor", Vec::new()).unwrap();
+        let last = || snapshots.lock().unwrap().last().unwrap().clone();
+        assert_eq!(
+            last()["swatch-box"][&id]["tint"],
+            json!({"value":"blue","origin":expected})
+        );
+        runner.act("unshow", Vec::new()).unwrap();
+        assert_eq!(last(), serde_json::json!({}));
+        runner.act("show", Vec::new()).unwrap();
+        assert_eq!(
+            last()["swatch-box"][view_id(&runner).to_string()]["tint"]["origin"],
+            "app"
+        );
+        runner.bind_extensions(&[], &[]);
+        assert_eq!(last(), serde_json::json!({}));
+    }
+}
+
+#[test]
+fn another_packages_string_binding_does_not_notify_the_track_observer() {
+    let app = App::new("track-filter", APP, &[]);
+    let (mut runner, _) = boot(&app);
+    runner.bind_extensions(&["swatch"], &[]);
+    let snapshots: Told = Arc::default();
+    let seen = snapshots.clone();
+    runner.observe_view_bindings(
+        &[("audio-waveform", "track")],
+        Some(Arc::new(move |body| {
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_str(body).unwrap());
+        })),
+    );
+    runner.act("show", Vec::new()).unwrap();
+    runner.act("recolor", Vec::new()).unwrap();
+    assert_eq!(*snapshots.lock().unwrap(), [json!({})]);
+}
+
+#[test]
+fn a_hidden_binding_keeps_its_origin_when_the_node_is_revealed() {
+    let app = App::new("binding-before-show", APP, &[]);
+    let (mut runner, _) = boot(&app);
+    runner.bind_extensions(&["swatch"], &[]);
+    let snapshots: Told = Arc::default();
+    let seen = snapshots.clone();
+    runner.observe_view_bindings(
+        &[("swatch-box", "tint")],
+        Some(Arc::new(move |body| {
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_str(body).unwrap());
+        })),
+    );
+    runner.act("show", Vec::new()).unwrap();
+    let id = view_id(&runner).to_string();
+    runner.act("hide", Vec::new()).unwrap();
+    runner
+        .act_from(CallOrigin::Tool, "recolor", Vec::new())
+        .unwrap();
+    assert_eq!(snapshots.lock().unwrap().last(), Some(&json!({})));
+    runner.act("reveal", Vec::new()).unwrap();
+    assert_eq!(
+        snapshots.lock().unwrap().last().unwrap()["swatch-box"][&id]["tint"],
+        json!({"value":"blue", "origin":"tool"})
+    );
 }
 
 /// The plan carries the view's row: its tag, the extension that makes it,
@@ -467,7 +549,7 @@ fn a_view_hears_each_change_with_its_commit_s_origin() {
     assert!(reports(&told).is_empty(), "nothing is placed yet");
 
     r.act("show", Vec::new()).unwrap();
-    assert_eq!(reports(&told), ["displayed true app", "bound tint app"]);
+    assert_eq!(reports(&told), ["bound tint app", "displayed true app"]);
     let id = view_id(&r);
     assert_eq!(r.view_origin(id, None), Some(CallOrigin::App));
 
@@ -491,6 +573,56 @@ fn a_view_hears_each_change_with_its_commit_s_origin() {
     );
 }
 
+#[test]
+fn clearing_and_rebinding_the_same_value_reports_the_new_commits_origin() {
+    let app = App::new(
+        "unbind",
+        r#"component App
+  state tint: option<string> = some("red")
+  state hidden = false
+  action hide
+    hidden = true
+  action clear
+    tint = none
+    hidden = false
+  action restore
+    tint = some("red")
+  view
+    swatch-box tint=tint display=(hidden ? "none" : "block")
+"#,
+        &[],
+    );
+    let (mut r, told) = boot(&app);
+    r.bind_extensions(&["swatch"], &[]);
+    assert_eq!(reports(&told), ["displayed true app", "bound tint app"]);
+    let id = view_id(&r);
+    r.act("hide", Vec::new()).unwrap();
+    assert_eq!(reports(&told), ["displayed false app"]);
+    r.act("clear", Vec::new()).unwrap();
+    let changes: Vec<_> = told
+        .lock()
+        .unwrap()
+        .drain(..)
+        .filter(|r| r.get("view").is_some())
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0]["bound"], "tint");
+    assert_eq!(changes[0].get("value"), Some(&Json::Null));
+    assert_eq!(changes[1]["displayed"], true);
+    assert_eq!(r.view_origin(id, Some("tint")), None);
+    r.act_from(CallOrigin::Action, "restore", Vec::new())
+        .unwrap();
+    assert_eq!(r.view_origin(id, Some("tint")), Some(CallOrigin::Action));
+    assert!(told
+        .lock()
+        .unwrap()
+        .drain(..)
+        .any(|r| { r["bound"] == "tint" && r["value"] == "red" && r["origin"] == "action" }));
+    r.act("restore", Vec::new()).unwrap();
+    assert!(reports(&told).is_empty());
+    assert_eq!(r.view_origin(id, Some("tint")), Some(CallOrigin::Action));
+}
+
 /// A view a tool's commit shows is reported with the tool's origin, which
 /// the runner keeps: a capture start that follows is admitted with it.
 #[test]
@@ -499,7 +631,7 @@ fn a_view_a_tool_shows_is_reported_with_the_tool_s_origin() {
     let (mut r, told) = boot(&app);
     r.bind_extensions(&[], &["swatch"]);
     r.act_from(CallOrigin::Tool, "show", Vec::new()).unwrap();
-    assert_eq!(reports(&told), ["displayed true tool", "bound tint tool"]);
+    assert_eq!(reports(&told), ["bound tint tool", "displayed true tool"]);
     assert_eq!(r.view_origin(view_id(&r), None), Some(CallOrigin::Tool));
     r.act("unshow", Vec::new()).unwrap();
     assert_eq!(reports(&told), ["displayed false app"]);

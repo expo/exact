@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 @testable import ExactKit
 @testable import ExactNavigation
+@testable import ExactControls
 
 /// A header's bar items (LLP 1141.004 D1) over hand-built routes: every
 /// button UIKit's own item, the readouts hosted, nothing else an item, what
@@ -284,6 +285,96 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertEqual(p.views[2]?.container.subviews.compactMap { ($0 as? NodeView)?.id }, [3, 4, 5], "at its place")
     }
 
+    /// UIKit brings an item into the bar at the size its view has then, and
+    /// takes it out with an animation that shows its view (D3). A readout's
+    /// item is in the bar while its element has a size: a new element's comes
+    /// in once it is laid out, at that size, and an element that loses its
+    /// size, or goes, leaves its item a picture of it for that animation.
+    func testAReadoutsItemIsInTheBarWhileItsElementHasASize() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "UIKit lays out the bar in the app window")
+        }
+        let p = route([], kids: [])
+        let (c, nav) = try shownRoute(p, in: scene)
+        func shown() -> [UIBarButtonItem] { c.navigationItem.rightBarButtonItems ?? [] }
+        func frame(_ w: Double, _ h: Double) -> [String: Any] { ["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": w, "h": h] }
+        p.apply(wireBatch([status(4), text(5, "Updating"), ["op": "children", "id": 4, "ids": [5]], ["op": "children", "id": 2, "ids": [3, 4]]]))
+        p.navigationHost.prepareRoutes([c], in: nav)
+        XCTAssertEqual(p.navigationHost.barHosted.blocks.keys.sorted(), [4], "the element is given its block")
+        XCTAssertTrue(shown().isEmpty, "and its item waits for its layout")
+        // Without it, a group's space stays only between two items
+        let waiting = try XCTUnwrap(p.navigationHost.barItems(try bar(p).trailing, c).first)
+        let (a, b) = (UIBarButtonItem(), UIBarButtonItem())
+        let (one, two) = (UIBarButtonItem(barButtonSystemItem: .fixedSpace, target: nil, action: nil), UIBarButtonItem(barButtonSystemItem: .fixedSpace, target: nil, action: nil))
+        let spaces = c.barSpaces
+        c.barSpaces = [90: one, 91: two]
+        XCTAssertEqual(p.navigationHost.shown([waiting, one, a], in: c), [a])
+        XCTAssertEqual(p.navigationHost.shown([a, one, waiting], in: c), [a])
+        XCTAssertEqual(p.navigationHost.shown([a, one, waiting, two, b], in: c), [a, two, b])
+        c.barSpaces = spaces
+        p.apply(wireBatch([frame(90, 22)]))
+        let item = try XCTUnwrap(shown().first, "laid out, it comes in")
+        let view = try XCTUnwrap(item.customView as? HostedItemView)
+        XCTAssertEqual(view.size, CGSize(width: 90, height: 22), "at its size")
+        waitFor("UIKit lays the item out") { view.window != nil && abs(view.bounds.width - 90) < 0.5 }
+        XCTAssertNil(view.picture)
+        p.apply(wireBatch([frame(0, 0)]))
+        XCTAssertTrue(shown().isEmpty, "emptied, it leaves")
+        XCTAssertNotNil(view.picture, "with a picture of what it showed")
+        XCTAssertEqual(view.bounds.width, 90, accuracy: 0.5, "at the size it had")
+        p.apply(wireBatch([frame(20, 20)]))
+        XCTAssertTrue(shown().first === item && view.picture == nil, "given a size again, it comes back as itself")
+        waitFor("UIKit lays the item out again") { view.window != nil && view.bounds.width < 89 }
+        // Moved in the header, it reads the same to the bar, which hosts it again
+        p.apply(wireBatch([["op": "create", "id": 6, "kind": "view"], ["op": "children", "id": 6, "ids": [4]], ["op": "children", "id": 2, "ids": [3, 6]]]))
+        XCTAssertEqual(try bar(p).trailing.map(\.id), [4])
+        XCTAssertTrue(view.picture?.superview === view && view.stand.subviews.isEmpty, "the item it left keeps a picture of it")
+        let moved = try XCTUnwrap(shown().first?.customView as? HostedItemView, "the bar takes that item out and hosts it again")
+        XCTAssertTrue(moved !== view && moved.node === p.views[4] && moved.picture == nil && shown().count == 1)
+        waitFor("UIKit lays the new item out") { moved.window != nil }
+        p.apply(wireBatch([["op": "children", "id": 6, "ids": []], ["op": "destroy", "id": 5], ["op": "destroy", "id": 4]]))
+        XCTAssertNotNil(moved.picture, "the element leaves a picture of it in the item")
+        XCTAssertTrue(shown().isEmpty, "which UIKit takes out")
+    }
+
+    /// UIKit gives an item narrower than its minimum (a spinner alone) that
+    /// minimum, and the readout is drawn in it (D3): at the bar's edge in the
+    /// item nearest it, on the bar's layout margin where a wider item's edge
+    /// falls, a leading one where no Back button is; centred in any other, as
+    /// UIKit's own spinner draws in a custom view's frame.
+    func testANarrowReadoutSitsAtTheBarsEdgeOnlyInTheOutermostItem() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "UIKit lays out the bar in the app window")
+        }
+        let frame = { (id: Int) -> [String: Any] in ["op": "frame", "id": id, "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0] }
+        let p = route([status(7), status(6), status(4), frame(7), frame(6), frame(4)], kids: [6, 4], header: [7, 3, 6, 4])
+        let (c, nav) = try shownRoute(p, in: scene)
+        p.navigationHost.prepareRoutes([c], in: nav)
+        func view(_ items: [UIBarButtonItem]?, _ id: UInt32) throws -> HostedItemView {
+            try XCTUnwrap((items ?? []).compactMap { $0.customView as? HostedItemView }.first { $0.node.id == id }, "\(id)")
+        }
+        let (leading, outer, inner) = (try view(c.navigationItem.leftBarButtonItems, 7), try view(c.navigationItem.rightBarButtonItems, 4), try view(c.navigationItem.rightBarButtonItems, 6))
+        waitFor("UIKit widens each item to its minimum") { [leading, outer, inner].allSatisfy { $0.window != nil && $0.bounds.width > 20.5 } }
+        for v in [leading, outer, inner] { v.layoutIfNeeded() }
+        XCTAssertEqual(leading.stand.frame.minX, 0, accuracy: 0.5, "the leading item's at its leading edge")
+        XCTAssertEqual(outer.stand.frame.maxX, outer.bounds.width, accuracy: 0.5, "the outermost trailing item's at its trailing edge")
+        XCTAssertEqual(inner.stand.frame.midX, inner.bounds.midX, accuracy: 0.5, "an inner one's centred")
+    }
+
+    /// A route over the hand-built presenter `p`, the root of a stack Exact keeps, shown in the app's window.
+    private func shownRoute(_ p: Presenter, in scene: UIWindowScene) throws -> (RouteController, UINavigationController) {
+        let c = RouteController(try XCTUnwrap(p.views[1])), nav = UINavigationController(rootViewController: c)
+        c.host = p.navigationHost
+        window.isHidden = true
+        window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = nav
+        window.makeKeyAndVisible()
+        p.navigationHost.registerStack(nav)
+        p.navigationHost.prepareRoutes([c], in: nav)
+        return (c, nav)
+    }
+
     func testAPressInAReadoutsPopoverUsesThePopoversMount() throws {
         let popover: [String: Any] = ["op": "create", "id": 5, "kind": "view",
                                       "props": ["id": "details", "popover": "manual"]]
@@ -412,6 +503,9 @@ final class BarHostedIOSTests: XCTestCase {
         view.frame = host.view.bounds
         view.layoutIfNeeded()
         until("the first route") { session.presenter.navigationHost.primaryNavigation?.topViewController is RouteController }
+        // A readout comes into the bar once its element is laid out.
+        let home = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation?.topViewController)
+        until("the first route's readouts are in its bar") { self.shown("sync-status", on: home) != nil && self.shown("syncing", on: home) != nil }
         return session
     }
 
@@ -420,8 +514,12 @@ final class BarHostedIOSTests: XCTestCase {
     }
 
     private func item(_ testId: String, on c: UIViewController) throws -> UIBarButtonItem {
-        let items = (c.navigationItem.leftBarButtonItems ?? []) + (c.navigationItem.rightBarButtonItems ?? [])
-        return try XCTUnwrap(items.first { $0.accessibilityIdentifier == testId }, testId)
+        try XCTUnwrap(shown(testId, on: c), testId)
+    }
+
+    /// The bar item of `testId` on `c`'s bar, if the bar shows it.
+    private func shown(_ testId: String, on c: UIViewController) -> UIBarButtonItem? {
+        ((c.navigationItem.leftBarButtonItems ?? []) + (c.navigationItem.rightBarButtonItems ?? [])).first { $0.accessibilityIdentifier == testId }
     }
 
     private func tap(_ point: CGPoint, with touch: TouchRunner) throws {
@@ -551,6 +649,30 @@ final class BarHostedIOSTests: XCTestCase {
         waitFor("the accessibility element's label follows the readout", cap: 5) { self.stops(in: ready).first?.accessibilityLabel == "Retrying" }
     }
 
+    /// A readout that comes into the bar while it is on screen, as a refresh's
+    /// does, is laid out at its whole width once UIKit has placed it: drawn
+    /// wider than its item, it would run past the item's room toward the bar's
+    /// edge and the safe area beyond it.
+    func testAReadoutThatComesIntoTheBarTakesItsWholeWidth() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else {
+            throw missing("scene", "UIKit lays out the bar in the app window")
+        }
+        let session = try session(), p = session.presenter
+        let nav = try XCTUnwrap(p.navigationHost.primaryNavigation), home = try XCTUnwrap(nav.topViewController)
+        let ready = try XCTUnwrap(item("sync-status", on: home).customView)
+        waitFor("the bar is laid out") { ready.isDescendant(of: nav.navigationBar) && !ready.bounds.isEmpty }
+        p.press(try node("show-updating", in: p).id)
+        waitFor("the readout has its item") { self.shown("updating", on: home) != nil }
+        let view = try XCTUnwrap(item("updating", on: home).customView as? HostedItemView)
+        waitFor("UIKit lays the readout out at its whole width") {
+            view.isDescendant(of: nav.navigationBar) && view.size.width > 0 && abs(view.bounds.width - view.size.width) < 0.5
+        }
+        let slot = try XCTUnwrap(view.superview), bar = nav.navigationBar
+        XCTAssertTrue(slot.bounds.insetBy(dx: -0.5, dy: -0.5).contains(view.convert(view.stand.frame, to: slot)), "drawn inside its item")
+        let safe = bar.bounds.inset(by: UIEdgeInsets(top: 0, left: bar.safeAreaInsets.left, bottom: 0, right: bar.safeAreaInsets.right))
+        XCTAssertTrue(safe.insetBy(dx: -0.5, dy: -0.5).contains(view.convert(view.stand.frame, to: bar)), "and inside the bar's safe area")
+    }
+
     func testAHostedReadoutAnnouncesAnUpdateOnce() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else {
             throw missing("scene", "the readout announces from the bar in the app window")
@@ -606,6 +728,82 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertNil(try item("note-button", on: history).customView, "UIKit's own item")
         try XCTUnwrap(item("about-link", on: history).target as? BarPress).press()
         until("a tap on the item followed the link") { nav.viewControllers.count == 3 }
+    }
+
+    /// LLP 1141.004 D3: at the accessibility text sizes a long press shows a readout in the Large Content
+    /// Viewer by what VoiceOver says: its name, then its words where they differ.
+    func testTheLargeContentViewerShowsWhatVoiceOverSays() throws {
+        let p = route([status(4, ["accessibilityLabel": "Battery"]), text(5, "42%"), text(6, "Ready", ["accessibilityRole": "status"]),
+                       status(7), progress(8)],
+                      kids: [4, 6, 7], more: [["op": "children", "id": 4, "ids": [5]], ["op": "children", "id": 7, "ids": [8]]])
+        let route = RouteController(try XCTUnwrap(p.views[1]))
+        let views = try p.navigationHost.barItems(try bar(p).trailing, route).map { try XCTUnwrap($0.customView as? HostedItemView) }
+        XCTAssertEqual(views.map(\.node.id), [4, 6, 7])
+        let (labelled, words, nameless) = (views[0], views[1], views[2])
+        XCTAssertTrue(labelled.interactions.contains { $0 is UILargeContentViewerInteraction })
+        XCTAssertTrue(labelled.showsLargeContentViewer)
+        XCTAssertEqual(labelled.largeContentTitle, "Battery, 42%")
+        p.apply(wireBatch([["op": "props", "id": 5, "set": ["text": "43%"]]]))
+        XCTAssertEqual(labelled.largeContentTitle, "Battery, 43%", "it follows the readout")
+        p.apply(wireBatch([["op": "props", "id": 5, "set": ["text": "Battery"]]]))
+        XCTAssertEqual(labelled.largeContentTitle, "Battery", "words the same as the name are said once")
+        XCTAssertEqual(words.largeContentTitle, "Ready", "an unlabelled readout by its words")
+        XCTAssertFalse(nameless.showsLargeContentViewer, "a readout with no name shows nothing")
+    }
+
+    /// LLP 1141.004 D3: a readout's spinner is UIKit's own grey unless the readout says otherwise. An accent
+    /// it only inherits from above the readout does not reach it; one written on the readout does; a colour
+    /// written on the spinner wins; and UIKit's own returns when the written ones go.
+    func testAReadoutsSpinnerTakesOnlyWhatTheReadoutSays() throws {
+        let red = [255, 0, 0, 255], green = [0, 204, 0, 255], blue = [0, 0, 255, 255]
+        let spinner: [String: Any] = ["op": "create", "id": 5, "kind": "control", "props": ["type": "progress"], "style": ["accent_color": red]]
+        let p = route([status(4), spinner, text(6, "Updating")], kids: [4],
+                      more: [["op": "children", "id": 4, "ids": [5, 6]], ["op": "frame", "id": 5, "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0]])
+        let route = RouteController(try XCTUnwrap(p.views[1]))
+        let item = try XCTUnwrap(p.navigationHost.barItems(try bar(p).trailing, route).first?.customView as? HostedItemView)
+        // In a window of its own tint, as a bar's item is
+        window.addSubview(item)
+        window.tintColor = .systemOrange
+        p.apply(wireBatch([]))
+        XCTAssertTrue(p.views[5]?.barReadout === p.views[4], "the spinner is in the hosted readout")
+        let indicator = try XCTUnwrap(p.controls.spinners[5])
+        func rgba() -> [CGFloat] {
+            var (r, g, b, a) = (CGFloat(0), CGFloat(0), CGFloat(0), CGFloat(0))
+            indicator.color.resolvedColor(with: indicator.traitCollection).getRed(&r, green: &g, blue: &b, alpha: &a)
+            return [r, g, b, a]
+        }
+        XCTAssertEqual(indicator.color, ControlHost.platformInk, "an accent from above the readout does not reach it")
+        p.apply(wireBatch([["op": "style", "id": 4, "style": ["accent_color": green, "written": ["accent_color"]]],
+                           ["op": "style", "id": 5, "style": ["accent_color": green]]]))
+        XCTAssertEqual(rgba(), [0, 0.8, 0, 1], "an accent written on the readout reaches it")
+        p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": green, "text_color": blue, "written": ["text_color"]]]]))
+        XCTAssertEqual(rgba(), [0, 0, 1, 1], "a colour written on it wins")
+        p.apply(wireBatch([["op": "style", "id": 4, "style": [:]], ["op": "style", "id": 5, "style": ["accent_color": red]]]))
+        XCTAssertEqual(indicator.color, ControlHost.platformInk, "UIKit's own returns when the written ones go")
+        // An accent written on a box between them reaches it
+        p.apply(wireBatch([["op": "create", "id": 7, "kind": "view"], ["op": "children", "id": 4, "ids": [7, 6]], ["op": "children", "id": 7, "ids": [5]],
+                           ["op": "frame", "id": 7, "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0],
+                           ["op": "style", "id": 7, "style": ["accent_color": green, "written": ["accent_color"]]],
+                           ["op": "style", "id": 5, "style": ["accent_color": green]]]))
+        XCTAssertEqual(rgba(), [0, 0.8, 0, 1], "an accent written on a box between them")
+        // One the spinner writes as the tint (`AccentColor`) is the design's accent, not the readout's green
+        let tint: [String: Any] = ["sys": "@tint", "c": [[0, 136, 255, 255], [0, 145, 255, 255]]]
+        p.apply(wireBatch([["op": "style", "id": 4, "style": ["accent_color": green, "written": ["accent_color"]]],
+                           ["op": "style", "id": 7, "style": ["accent_color": green]],
+                           ["op": "style", "id": 5, "style": ["accent_color": tint, "written": ["accent_color"]]]]))
+        // With no theme's accent here, the design's is the window's tint
+        let design = try XCTUnwrap(ThemeRoles.color("AccentColor", in: indicator) ?? indicator.window?.tintColor, "in a window")
+        XCTAssertNotEqual(design, ControlHost.platformInk)
+        XCTAssertEqual(indicator.color.resolvedColor(with: indicator.traitCollection), design.resolvedColor(with: indicator.traitCollection), "the design's accent")
+        XCTAssertNotEqual(rgba(), [0, 0.8, 0, 1], "not the readout's")
+        // `Highlight` is a fifth of it
+        let highlight: [String: Any] = ["sys": "@tint/0.2", "c": [[0, 136, 255, 51], [0, 145, 255, 51]]]
+        p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": highlight, "written": ["accent_color"]]]]))
+        XCTAssertEqual(indicator.color.resolvedColor(with: indicator.traitCollection),
+                       design.withAlphaComponent(0.2).resolvedColor(with: indicator.traitCollection), "`Highlight`'s share of the accent")
+        // `auto` is UIKit's own colour
+        p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": "auto", "written": ["accent_color"]]]]))
+        XCTAssertEqual(indicator.color, ControlHost.platformInk, "`auto` leaves UIKit's")
     }
 }
 #endif

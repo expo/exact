@@ -65,3 +65,24 @@ test('an utterance dropped before its turn comes is never given to the browser',
   await turn();
   expect(spoken()).toEqual(['one', 'three']);
 });
+
+for (const [order, paused] of [['speaking first', false], ['queued first', false], ['speaking first', true]]) {
+  test(`dropping the speaking and a queued utterance (${order}${paused ? ', paused' : ''}) never gives the browser the dropped one`, async () => {
+    const { synth, impl, spoken } = browser();
+    const a = await impl.speak({ text: 'first' }), b = await impl.speak({ text: 'dropped' }), c = await impl.speak({ text: 'kept' });
+    if (paused) await impl.pauseSpeech();
+    impl.dispose(order === 'speaking first' ? [a.id, b.id] : [b.id, a.id]);
+    expect(spoken()).toEqual(['first']);
+    await turn();
+    if (paused) {
+      expect(spoken()).toEqual(['first']);
+      await impl.resumeSpeech();
+    }
+    expect(synth.dropped).toEqual([]);
+    expect(spoken()).toEqual(['first', 'kept']);
+    expect(await impl.speechUtterance({ utterance: a.id })).toMatchObject({ outcome: 'error', error: 'interrupted' });
+    expect(await impl.speechUtterance({ utterance: b.id })).toMatchObject({ outcome: 'error', error: 'canceled' });
+    expect(await impl.speechUtterance({ utterance: c.id })).toMatchObject({ state: 'speaking' });
+    expect(await impl.speechSynthesisState()).toMatchObject({ utterance: c.id, queue: [] });
+  });
+}

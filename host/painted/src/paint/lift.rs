@@ -9,7 +9,8 @@
 //! what that hides. Its boxes are not hit: a ghost is the web's
 //! `pointer-events: none` popover.
 use super::shadow::ShadowPaint;
-use super::{Painter, Rect4, Shape, Walk};
+use super::{PaintOffset, Painter, Presented, Rect4, Shape, Walk};
+use exact_kernel::Kernel;
 use exact_kernel::{NodeKey, NodeRef, NodeType, PropId, ViewId};
 use tiny_skia::Transform;
 
@@ -46,7 +47,7 @@ impl Painter {
         walk: &mut Walk<'_, '_>,
         node: &NodeRef<'_>,
         ts: Transform,
-        child_offset: (f32, f32),
+        child_offset: PaintOffset,
         child_rect: Option<Rect4>,
     ) {
         let lift = self.lifted_child(walk, node);
@@ -72,20 +73,24 @@ impl Painter {
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
         let ts = self.zoom_children(walk.scene.kernel, node, ts, child_offset);
-        let space = ts.pre_translate(node.frame.x - child_offset.0, node.frame.y - child_offset.1);
+        let r = self.drawn_rect(node, child_offset);
+        let space = ts.pre_translate(r.0, r.1);
         self.kept.push_space(node.id, space);
         let rows = self.has_rows(walk, node);
         let group = rows && !self.rows_wrapper(node.key);
         let wrap = group && self.wraps_rows(walk, &children);
         let split_sections = rows && self.backend.independent_section_rows();
         let sections = (split_sections && !wrap).then(|| self.row_sections(walk.scene.kernel));
+        let group = group
+            && (!self.pixel_grid || self.grid().is_some())
+            && self.group_can_move(walk.scene.kernel, node.id);
         if group {
             self.group_begin(walk, node.id);
         }
         let kept = self.kept_places(walk, Some(node), &children);
         let (last, count) = (self.stage_after(&children), children.len());
         for (at, child) in children.into_iter().enumerate() {
-            self.replay_kept(walk.scene, &kept, at, space);
+            self.replay_kept(walk, &kept, at, space);
             if wrap || Self::is_row_section(walk, sections.as_deref(), child) {
                 self.wrapped(walk, child, ts, child_offset, child_rect);
             } else if rows {
@@ -95,7 +100,7 @@ impl Painter {
             }
             self.paint_stage(walk, child, Some(child) == last);
         }
-        self.replay_kept(walk.scene, &kept, count, space);
+        self.replay_kept(walk, &kept, count, space);
         if group {
             self.group_end(walk);
         }
@@ -142,12 +147,17 @@ impl Painter {
             );
         }
         let boxes = walk.boxes.len();
-        let (reveal, page) = (walk.reveal, (node.frame.x - rect.0, node.frame.y - rect.1));
+        let at = self.without_grid(super::grid::changes_axes(ts), |painter| {
+            painter.drawn_offset((node.frame.x, node.frame.y))
+        });
+        let (reveal, page) = (
+            walk.reveal,
+            (at.0 - f64::from(rect.0), at.1 - f64::from(rect.1)),
+        );
         walk.reveal = Some(node.id);
-        // Painted after the walk, out of its ancestors: the row's own scheme
-        // (LLP 1034 §8), else the app's.
+        // Painted after the walk, out of its ancestors, in their scheme.
         let previous = self.dark;
-        self.dark = node.color_scheme_dark().unwrap_or(previous);
+        self.dark = scheme_of(walk.scene.kernel, walk.scene.presented, node.id).unwrap_or(previous);
         self.node(walk, node.id, ts, page, None);
         self.dark = previous;
         walk.reveal = reveal;
@@ -156,4 +166,23 @@ impl Painter {
             self.backend.pop_opacity();
         }
     }
+}
+
+/// The scheme `id` paints in (LLP 1034 §8): the nearest presented one (a
+/// node's `color-scheme`, else a report for its view) through its logical
+/// parents, as the walk carries it, for what is painted out of its
+/// ancestors; `None` is the session's.
+pub(crate) fn scheme_of(
+    kernel: &Kernel,
+    presented: &dyn Fn(ViewId) -> Presented,
+    id: ViewId,
+) -> Option<bool> {
+    let mut at = Some(id);
+    while let Some(id) = at {
+        if let Some(dark) = presented(id).dark {
+            return Some(dark);
+        }
+        at = kernel.node(id)?.parent;
+    }
+    None
 }

@@ -115,10 +115,18 @@ final class NavigationCollapseIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else { throw missing("scene", "route resizing needs UIKit containment") }
         let session = try booted("EXACT_FIXTURE_PLAN", label: "owner-resize")
         let view = try XCTUnwrap(session.view), p = session.presenter
-        for width: CGFloat in [380, 402, 360, 402] {
-            waitFor("the previous layout is idle") { !session.ownerInFlight && !Agent(session: session).nativeInFlight() }
-            waitForMainQueue("the previous reports")
-            let batches = session.appliedBatches, syncs = p.navigationHost.syncCalls
+        // Keep the view clear of the window's side safe area (the iPhone Duo's), where its inset would change with its width
+        let window = try XCTUnwrap(window), full = window.bounds.inset(by: window.safeAreaInsets).width
+        view.frame.size.width = full
+        view.layoutIfNeeded()
+        for width in [full - 22, full, full - 42, full] {
+            // UIKit can lay its bars out again some frames after a resize, which a batch answers
+            var batches = -1, since = Date()
+            waitFor("no batch for 0.2 s") {
+                if session.appliedBatches != batches { (batches, since) = (session.appliedBatches, Date()) }
+                return Date().timeIntervalSince(since) > 0.2 && !session.ownerInFlight && !Agent(session: session).nativeInFlight()
+            }
+            let syncs = p.navigationHost.syncCalls
             let start = CACurrentMediaTime()
             view.frame.size.width = width
             view.setNeedsLayout()
@@ -131,6 +139,44 @@ final class NavigationCollapseIOSTests: XCTestCase {
             XCTAssertEqual(session.appliedBatches - batches, 1, "the viewport and route bounds share a layout")
             XCTAssertEqual(p.navigationHost.syncCalls - syncs, 1, "navigation synchronizes once")
             print("ROUTE-RESIZE width=\(width) ms=\(milliseconds) batches=\(session.appliedBatches - batches) syncs=\(p.navigationHost.syncCalls - syncs)")
+        }
+    }
+
+    /// The agent's explicit size (`--size`) is drawn inside the device's safe area, so none of it is the page's: its
+    /// document has no inset and its route its bars' alone, at any scale. Without one they are the device's.
+    @MainActor
+    func testTheAgentsExplicitSizeHasNoneOfTheDevicesSafeArea() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a screen's safe area") }
+        defer { ExactView.agentSize = nil }
+        for size in [nil, CGSize(width: 390, height: 844), CGSize(width: 1180, height: 800), CGSize(width: 320, height: 480)] {
+            ExactView.agentSize = size
+            let session = try booted("EXACT_FIXTURE_PLAN", label: "agent-size")
+            let window = try XCTUnwrap(window), view = try XCTUnwrap(session.view), p = session.presenter
+            window.frame = scene.coordinateSpace.bounds
+            view.frame = try XCTUnwrap(window.rootViewController).view.bounds
+            view.layoutIfNeeded()
+            waitFor("the layout settles") { !Agent(session: session).nativeInFlight() }
+            let safe = view.safeAreaInsets, route = try XCTUnwrap(p.navigationHost.activeRoute), surface = route.surface
+            XCTAssertGreaterThan(safe.top + safe.bottom + safe.right, 0, "the device has a safe area")
+            p.navigationHost.reportCovers()
+            let document = p.navigationHost.localInsets.wanted[nil]
+            guard let size else {
+                XCTAssertEqual(document, [safe.top, safe.right, safe.bottom, safe.left], "the device's, at its own size")
+                window.isHidden = true
+                continue
+            }
+            XCTAssertEqual(p.insets, .zero, "\(size)")
+            XCTAssertEqual(document, [0, 0, 0, 0], "\(size)")
+            XCTAssertEqual(p.viewport.bounds.size, size)
+            XCTAssertTrue(view.bounds.inset(by: safe).insetBy(dx: -0.5, dy: -0.5).contains(p.viewport.frame), "\(size): \(p.viewport.frame) inside \(safe)")
+            XCTAssertEqual(p.documentHost.safeAreaInsets, .zero, "\(size): nothing of the device's reaches the document")
+            let bar = try XCTUnwrap(route.navigationController).navigationBar
+            XCTAssertEqual(surface.safeAreaInsets.top, bar.convert(bar.bounds, to: surface).maxY, accuracy: 0.5, "\(size): the bar's alone")
+            // UIKit can place a vertical bar of its own there (the iPhone Duo's, iOS 27.1 24A94232)
+            if !surface.traitCollection.placesVerticalBar {
+                XCTAssertEqual([surface.safeAreaInsets.left, surface.safeAreaInsets.right], [0, 0], "\(size)")
+            }
+            window.isHidden = true
         }
     }
 
@@ -618,8 +664,13 @@ final class NavigationCollapseIOSTests: XCTestCase {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: wasLandscape ? .landscapeLeft : .portrait))
         }
         for landscape in [true, false] {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeLeft : .portrait))
-            waitFor("the scene rotates") { scene.interfaceOrientation.isLandscape == landscape }
+            var refusal: Error?
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeLeft : .portrait)) { refusal = $0 }
+            waitFor("the scene rotates", giveUp: { refusal != nil }, onFailure: { if refusal == nil { XCTFail($0) } }) {
+                scene.interfaceOrientation.isLandscape == landscape
+            }
+            // An open iPhone Duo's scene does not turn for its app
+            if let refusal { throw XCTSkip(refusal.localizedDescription) }
             window.frame = scene.coordinateSpace.bounds
             for fraction: CGFloat in [0.75, 1] {
                 host.additionalSafeAreaInsets = UIEdgeInsets(top: 7, left: 11, bottom: 13, right: 17)
@@ -696,8 +747,10 @@ final class NavigationCollapseIOSTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(elapsed, 0.5)
         XCTAssertEqual(scroll.contentOffset.y - origin, 300, accuracy: 0.5)
         XCTAssertEqual((reply["scrolledBy"] as? [Double])?[1] ?? -1, 300, accuracy: 0.5)
-        for band in [0.05..<0.2, 0.2..<0.35, 0.35..<0.5] {
-            XCTAssertTrue(offsets.contains { band.contains($0.time) && $0.y > 0 && $0.y < 300 }, "no intermediate offset in \(band): \(offsets)")
+        // From its first movement, as the agent can start a drag some frames after it is asked to
+        let moved = try XCTUnwrap(offsets.first { $0.y > 0 }, "the drag moves: \(offsets)").time
+        for band in [0..<0.15, 0.15..<0.3, 0.3..<0.45] {
+            XCTAssertTrue(offsets.contains { band.contains($0.time - moved) && $0.y < 300 }, "no intermediate offset in \(band): \(offsets)")
         }
         XCTAssertTrue(zip(offsets, offsets.dropFirst()).allSatisfy { $0.y <= $1.y }, "the drag follows the finger")
         let capture = native.snapshot()

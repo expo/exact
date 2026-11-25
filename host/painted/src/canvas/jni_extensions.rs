@@ -87,6 +87,26 @@ pub fn surface_has(name: &str) -> bool {
 #[doc(hidden)]
 macro_rules! canvas_jni_extensions {
     () => {
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_moduleSizes(
+            env: *mut JNIEnv,
+            _class: jclass,
+            reports: jstring,
+        ) {
+            let reports = string(env, reports);
+            with(|h| h.module_sizes(&reports));
+        }
+
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_moduleAfter(
+            _env: *mut JNIEnv,
+            _class: jclass,
+            timer: jint,
+            due: jdouble,
+        ) {
+            with(|h| h.module_after(timer, due));
+        }
+
         /// A topic an extension announced: its readers are asked again.
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_changed(
@@ -115,6 +135,46 @@ macro_rules! canvas_jni_extensions {
             let args = string(env, args);
             let action = (!action.is_null()).then(|| string(env, action));
             with(|h| h.extension_activated(&extension, &event, &args, action.as_deref()));
+        }
+
+        /// A person's press of a control (`Controls.kt`): `{"call": id}` or
+        /// `{"error"}`.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_press(
+            env: *mut JNIEnv,
+            _class: jclass,
+            kind: jstring,
+            digest: jstring,
+            foreground: jboolean,
+            cold: jboolean,
+            hidden: jboolean,
+        ) -> jstring {
+            let kind = string(env, kind);
+            let digest = string(env, digest);
+            let (foreground, cold, hidden) = (foreground != 0, cold != 0, hidden != 0);
+            let reply = with(|h| h.press_control(&kind, &digest, foreground, cold, hidden))
+                .unwrap_or_else(|| r#"{"error":"no session"}"#.into());
+            $crate::canvas::field::java(env, &reply)
+        }
+
+        /// A control's press ends before its own end (`Controls.kt`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_cancelPress(
+            _env: *mut JNIEnv,
+            _class: jclass,
+            id: jlong,
+        ) {
+            with(|h| h.cancel_press(id as u64));
+        }
+
+        /// Whether a control's press still runs (`ExtensionContext.pressLive`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_pressLive(
+            _env: *mut JNIEnv,
+            _class: jclass,
+            id: jlong,
+        ) -> jboolean {
+            with(|h| h.press_live(id as u64)).unwrap_or(false) as jboolean
         }
 
         /// A line for the session's journal (`Exact.journal`).

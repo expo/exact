@@ -4,6 +4,15 @@ import XCTest
 @testable import ExactKit
 @testable import ExactCollections
 
+/// The sheet consumed the vertical travel and its list released at the top.
+final class SheetAtScrollStart: UIPanGestureRecognizer, SheetScrollGesture {
+    func receive(_ touch: UITouch, in scroll: UIScrollView) -> Bool { false }
+    func takesEdge(in scroll: UIScrollView, direction: CGPoint) -> Bool { false }
+    func correctOffset(in scroll: UIScrollView) -> Bool { false }
+    var atStart = true
+    func listDrag(in scroll: UIScrollView) -> (start: CGFloat, atStart: Bool)? { (0, atStart) }
+}
+
 /// LLP 1008: nearest projected rest on both axes; oversized areas remain freely scrollable.
 final class ScrollSnapIOSTests: XCTestCase {
     func testVirtualizedFlingReachesBeyondTheMountedWindow() throws {
@@ -112,6 +121,24 @@ final class ScrollSnapIOSTests: XCTestCase {
         }
     }
 
+    func testPercentagePaddingRestsAtTheBrowsersOffsetsOnBothAxes() throws {
+        for vertical in [false, true] {
+            let (node, scroll) = try strip([("start", 96, 80), ("center", 396, 80), ("end", 696, 80)], vertical: vertical)
+            let (first, last) = vertical ? ("top", "bottom") : ("left", "right")
+            node.style["border_width_\(first)"] = 8
+            node.style["border_width_\(last)"] = 12
+            node.style["scroll_padding_\(first)"] = .object(["pct": 10])
+            for (trailing, center, end): (BatchValue, CGFloat, CGFloat) in [(.object(["pct": 10]), 288, 516), (6, 277, 494)] {
+                node.style["scroll_padding_\(last)"] = trailing
+                for (proposal, expected): (CGFloat, CGFloat) in [(50, 60), (300, center), (510, end)] {
+                    let at = CGPoint(x: proposal, y: proposal)
+                    let rest = node.snappedOffset(at, in: scroll)
+                    XCTAssertEqual(vertical ? rest.y : rest.x, expected, accuracy: 0.01)
+                }
+            }
+        }
+    }
+
     func testNestedOverflowOwnsItsDescendantsExceptForClip() throws {
         for vertical in [false, true] {
             for overflow in ["scroll", "auto", "hidden", "clip"] {
@@ -207,6 +234,29 @@ final class ScrollSnapIOSTests: XCTestCase {
             Agent.scroll(from: scroll, dx: vertical ? 0 : 190, dy: vertical ? 190 : 0)
             XCTAssertEqual(vertical ? scroll.contentOffset.y : scroll.contentOffset.x, 225, accuracy: 0.01)
         }
+    }
+
+    func testSheetReleaseAtTheTopKeepsTheListsSnapAreas() throws {
+        for vertical in [false, true] {
+            let (node, scroll) = try strip([("start", 45, 100), ("start", 300, 100)], vertical: vertical)
+            node.heightRecognizer = SheetAtScrollStart()
+            var target = CGPoint(x: 275, y: 275)
+            node.scrollViewWillEndDragging(scroll, withVelocity: CGPoint(x: 0, y: 1), targetContentOffset: &target)
+            XCTAssertEqual(target.x, vertical ? 275 : 300)
+            XCTAssertEqual(target.y, vertical ? 45 : 0)
+        }
+    }
+
+    func testMixedFlickAdvancesFromWhereTheListStarted() throws {
+        let (node, scroll) = try strip([("start", 0, 100), ("start", 100, 100)], vertical: true, stop: "always")
+        let sheet = SheetAtScrollStart()
+        sheet.atStart = false
+        node.heightRecognizer = sheet
+        scroll.contentOffset.y = 20
+        scroll.panGestureRecognizer.setTranslation(CGPoint(x: 0, y: -180), in: scroll)
+        var target = CGPoint(x: 0, y: 40)
+        node.scrollViewWillEndDragging(scroll, withVelocity: CGPoint(x: 0, y: 0.3), targetContentOffset: &target)
+        XCTAssertEqual(target.y, 100)
     }
 
     func testEndRestsAnAreasEndAtTheViewportsEnd() throws {

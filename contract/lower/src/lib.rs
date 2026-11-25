@@ -15,10 +15,8 @@
 //!
 //! Row order is source order everywhere, so two compilations of one source
 //! are byte-identical.
-
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-
 mod alert_parts;
 pub mod anatomy;
 mod atoms;
@@ -114,9 +112,9 @@ pub use fields::Profile;
 pub use identity::compiler_identity;
 pub use lint::{lint, lint_unused};
 use lint::{unknown_attr, unknown_tag};
-pub use native::{is_module_tag, module_tags};
+pub use native::{is_module_tag, module_tags, CONTROL_PROPS};
 pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
-pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, Written};
+pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, SourceOutput, Written};
 pub use states::PRESS_OPACITY_TO;
 pub use swipe_rows::expand_row_deletes;
 pub use theme::vocab as forma_vocab;
@@ -234,7 +232,7 @@ pub(crate) fn prop_row(id: exact_kernel::PropId, expr: Code, written: bool) -> B
 
 pub(crate) struct Lowerer<'a> {
     pub b: PlanBuilder,
-    each_steps: &'a BTreeMap<u32, u32>,
+    source_places: Option<&'a contract_syntax::Expanded>,
     /// The app's theme, resolved (LLP 1095 D4).
     pub theme: Vec<theme::ThemeEntry>,
     sites: Option<Sites>,
@@ -283,6 +281,7 @@ pub(crate) struct Lowerer<'a> {
     font_files: Vec<theme::rows::FontFile>,
     /// How many `fn` bodies are being expanded now (a guard; the type pass refuses a cycle).
     pub fn_depth: u32,
+    panel_action: Option<exact_plan::ActionsId>,
     /// Tags' fixed row values already built (`Lowerer::fixed`).
     fixed: BTreeMap<(bool, &'static str), Code>,
     /// Refusals so far: an element or attribute that fails is recorded, its siblings lowered anyway.
@@ -332,8 +331,8 @@ pub(crate) struct Lowerer<'a> {
     /// Where a native button may not be, from the nearest ancestor that says.
     pub(crate) button_context: Option<&'static str>,
     pub(crate) guards: Vec<Expr>,
-    /// Whether the element being lowered is a popover's direct child.
-    pub(crate) popover_child: bool,
+    /// Which menu container, if any, supplies the element being lowered as a row.
+    menu_parent: Option<menu_rows::Parent>,
     /// Where the element being lowered sits relative to a navigation root.
     nav_place: routes::NavPlace,
     host_transforms: std::collections::BTreeSet<(Span, u32)>,
@@ -374,19 +373,20 @@ pub fn lower_all(
     checked: &Checked<'_>,
     analysis: &Analysis,
     asset_root: Option<&Path>,
-    mapped: bool,
+    output: impl Into<SourceOutput>,
     profile: Profile,
     warned: Option<(&WarningSelection, &mut Vec<LowerError>)>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
     exact_kernel::style::link_all();
-    if mapped && checked.expanded.instances.is_empty() {
+    let output = output.into();
+    if output == SourceOutput::Mapped && checked.expanded.instances.is_empty() {
         return Err(vec![LowerError {
             id: "lower-source-sites",
             message: "mapped lowering needs source provenance from `check_all(file, true)`".into(),
             span: checked.expanded.root.span,
         }]);
     }
-    let (mut asset_errors, asset_warnings) = asset_root
+    let (mut asset_errors, mut notes) = asset_root
         .filter(|_| !theme::retained::stops_at_retention())
         .map(|root| {
             let checking = contract_checking::Checking::new(checked);
@@ -399,15 +399,16 @@ pub fn lower_all(
         checked,
         analysis,
         asset_root,
-        mapped,
+        output,
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
+    asset_errors.extend(routes::bottom_toolbar::check(checked, &mut notes));
     if let Some((selection, out)) = warned {
         out.extend(warnings::with_text_styles(
             checked,
             &text_styles,
-            asset_warnings,
+            notes,
             selection,
         ));
     }
@@ -431,14 +432,12 @@ fn lower_with_sites(
     checked: &Checked<'_>,
     _analysis: &Analysis,
     asset_root: Option<&Path>,
-    capture_sites: bool,
+    output: SourceOutput,
     profile: Profile,
     text_styles: Option<&mut warnings::TextStyles>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
-    // An earlier compile's targets and roles go first: lowering may stop
-    // before the design is read, and the warnings still run.
+    // Warnings can run even if lowering stops before the design is read.
     control_roles::unlowered();
-    // Keep the exact expansion whose root and row slots inference checked.
     let Checked {
         file,
         types,
@@ -451,11 +450,12 @@ fn lower_with_sites(
         .iter()
         .map(|f| contract_syntax::share_calls(&f.body, &is_fn))
         .collect();
+    let source_places = (output != SourceOutput::Comparison).then_some(ex);
     let mut l = Lowerer {
-        b: nodes::builder(ex),
-        each_steps: &ex.each_steps,
+        b: nodes::builder(source_places),
+        source_places,
         theme: Vec::new(),
-        sites: capture_sites.then(|| Sites::declared(ex)),
+        sites: (output == SourceOutput::Mapped).then(|| Sites::declared(ex)),
         text_styles,
         types,
         sharing: sharing::Sharing::new(ex),
@@ -499,13 +499,14 @@ fn lower_with_sites(
         parent_horizontal_flex: Some(false),
         button_context: None,
         guards: Vec::new(),
-        popover_child: false,
+        menu_parent: None,
         nav_place: Default::default(),
         host_transforms: Default::default(),
         arm_scopes: BTreeMap::new(),
         font_stacks: BTreeMap::new(),
         declared_fonts: BTreeMap::new(),
         font_files: Vec::new(),
+        panel_action: None,
         fixed: BTreeMap::new(),
         errors: Vec::new(),
         locale: None,
@@ -545,6 +546,7 @@ fn lower_with_sites(
                 }
             }
             all.truncate(MAX_REFUSALS);
+            values::name_template_holes(checked, &mut all);
             Err(all)
         }
     }
@@ -640,7 +642,7 @@ fn lower_body(
             });
         }
     }
-    // Each component's parts and the rows its classes bring them (LLP 1139 D2).
+    lint::action_targets(checked, &mut l.errors);
     l.check_anatomy(file);
     l.errors.extend(provenance::check(checked));
     let refused = l.declare_keyframes(file);
@@ -994,7 +996,7 @@ impl<'a> Lowerer<'a> {
                 let new_button_context = step.button_context.or(self.button_context);
                 let button_context =
                     std::mem::replace(&mut self.button_context, new_button_context);
-                let popover_child = std::mem::replace(&mut self.popover_child, step.popover_child);
+                let menu_parent = std::mem::replace(&mut self.menu_parent, step.menu_parent);
                 let bounded = std::mem::replace(&mut self.parent_bounded_column, step.bounded);
                 let stacks = std::mem::replace(&mut self.parent_stacks, step.stacks);
                 let nav_place = std::mem::replace(&mut self.nav_place, step.nav_place);
@@ -1027,7 +1029,7 @@ impl<'a> Lowerer<'a> {
                 self.parent_bounded_column = bounded;
                 self.parent_stacks = stacks;
                 self.button_context = button_context;
-                self.popover_child = popover_child;
+                self.menu_parent = menu_parent;
                 self.parent_positioned = parent_positioned;
                 self.svg_depth -= step.enters as u32;
                 lowered
@@ -1082,7 +1084,7 @@ impl<'a> Lowerer<'a> {
                 let (region, arms) =
                     self.b
                         .region(RegionKind::Each, parent, arm, order, subject, key, 1);
-                if let Some(&step) = self.each_steps.get(tag) {
+                if let Some(&step) = self.source_places.and_then(|ex| ex.each_steps.get(tag)) {
                     self.b
                         .set_region_place(region, exact_plan::PlaceStepsId(step));
                 }
@@ -1388,6 +1390,7 @@ impl<'a> Lowerer<'a> {
             }
             tags::AttrTarget::Prop(prop) => {
                 let glass;
+                values::check_numeric_prop(a, prop, scope, &self.types.shapes)?;
                 let aria_bool = values::aria_bool_literal(&a.name, prop, &a.value);
                 let value = if prop == exact_kernel::PropId::GlassGroup {
                     glass = values::glass_group(&a.value)?;
@@ -1464,7 +1467,8 @@ impl<'a> Lowerer<'a> {
                         Expr::NamedArg(name, value, _) => (name.as_str(), value.as_ref()),
                         _ => ("", arg),
                     };
-                    codes.push((name, self.expr_code(value, scope, locals)?));
+                    let (code, ty) = self.typed_code(value, scope, locals)?;
+                    codes.push((name, code, self.ty_id(&ty).ok()));
                 }
                 *surface = Some(self.b.surface(name, &codes));
             }

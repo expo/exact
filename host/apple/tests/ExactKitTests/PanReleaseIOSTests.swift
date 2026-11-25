@@ -55,6 +55,7 @@ final class PanReleaseIOSTests: XCTestCase {
         drive(node, [(.began, 10), (.changed, 20), (.cancelled, 20)], speed: CGPoint(x: 500, y: 0))
         XCTAssertEqual(releases, [[0, 0]])
         drive(node, [(.began, 10), (.failed, 10)])
+        drive(node, [(.failed, 0)])
         XCTAssertEqual(releases, [[0, 0], [0, 0]])
     }
 

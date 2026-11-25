@@ -4,16 +4,9 @@
 //! their `pointer-events` and `visibility` (CSS inheritance follows the
 //! tree, not the top layer).
 
+use crate::source::{boxed, measure_dialogs, NoData};
 use exact_kernel::{Kernel, Offer};
-use exact_runner::{DataError, DataSource, Runner, Value};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Runner, Value};
 
 /// `elementFromPoint` at (x, y) once the boxes named `open` are open in the
 /// top layer, in an app whose view is `view`.
@@ -32,12 +25,13 @@ fn hit_with(view: &str, open: &[&str], (x, y): (u32, u32)) -> Option<String> {
     );
     let mut r = Runner::boot(
         contract::compile(&source).unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     let root = r.kernel().roots()[0];
     r.kernel_mut()
         .compute_layout(root, Offer::definite(400.0, 800.0))

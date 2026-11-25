@@ -18,6 +18,9 @@ pub(super) struct WriteRecord {
     /// The send's id and its place in send order.
     pub(super) id: u64,
     pub(super) mutation: usize,
+    /// The cause of the commit that sent it: `data_ready`, which first
+    /// shows a write made before it, joins it (LLP 1133.023 D7a).
+    pub(super) cause: provenance::Cause,
     /// A parallel mutation's send number ([`Target::Sent`]); 0 for any
     /// other mutation's.
     pub(super) send: u64,
@@ -108,6 +111,7 @@ impl<D: DataSource> Runner<D> {
         self.writes.records.push(WriteRecord {
             id,
             mutation: m,
+            cause: self.cause(),
             send: match target {
                 Target::Sent(_, n) => n,
                 _ => 0,
@@ -120,6 +124,25 @@ impl<D: DataSource> Runner<D> {
             self.end_pending(m, Some(id));
         }
         Some(id)
+    }
+
+    /// Replacing a tail would move its write after newer pending writes.
+    /// An overlay shared with any of them must keep send order (LLP 1161.000 D3).
+    pub(super) fn has_intervening_write(&self, m: usize, tail: Option<u64>) -> bool {
+        let Some(tail) = tail else { return false };
+        let refreshes = self.declared_refreshes(m);
+        self.writes
+            .records
+            .iter()
+            .rev()
+            .take_while(|w| w.id > tail)
+            .any(|w| {
+                w.landed.is_none()
+                    && self
+                        .declared_refreshes(w.mutation)
+                        .iter()
+                        .any(|r| refreshes.contains(r))
+            })
     }
 
     /// The pending record a reply to `target` belongs to: a parallel send's

@@ -75,19 +75,29 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Why data code may not call `name` of `@exact/child-process` now
-    /// ([`refusal`]). `asked` is the origin of the request that calls it,
-    /// else the commit's.
+    /// ([`held`]): a name held to the app's origin is refused from any
+    /// other (`person-required`, LLP 1133.007 D13). `asked` is the origin
+    /// the calling request carries (`Reach`), else the commit's is read.
     pub(in crate::runner) fn admit_process(
         &self,
         name: &str,
         asked: Option<CallOrigin>,
     ) -> Result<(), String> {
-        let origin = asked.unwrap_or_else(|| self.origin_for(None));
-        match self.links.grants {
-            Some(link) => (link.process)(name, origin),
-            None => Err(format!(
+        let Some(link) = self.links.grants else {
+            return Err(format!(
                 "{name}: this archive links no I/O, which runs programs"
+            ));
+        };
+        let cause = self.cause();
+        let (app, word) = match asked {
+            Some(origin) => (origin == CallOrigin::App, origin.word()),
+            None => (cause.origin() == CallOrigin::App, cause.origin().word()),
+        };
+        match (link.process)(name)? {
+            true if !app => Err(format!(
+                "person-required ({word} origin): {name} (LLP 1133.007 D13)"
             )),
+            _ => Ok(()),
         }
     }
 
@@ -188,7 +198,8 @@ impl<D: DataSource> Runner<D> {
         let Some((running, asked)) = self.child_of(target) else {
             return false;
         };
-        let origin = self.origin_for(Some(target));
+        let cause = self.cause_for(target);
+        let origin = cause.origin();
         if origin == CallOrigin::App {
             return false;
         }
@@ -229,7 +240,8 @@ impl<D: DataSource> Runner<D> {
         let Some((running, _)) = self.child_of(target) else {
             return false;
         };
-        let origin = self.origin_for(Some(target));
+        let cause = self.cause_for(target);
+        let origin = cause.origin();
         if origin == CallOrigin::App {
             return false;
         }
@@ -332,23 +344,17 @@ impl<D: DataSource> Runner<D> {
     }
 }
 
-/// Why `name` of `@exact/child-process` is refused from `origin`: a name
-/// its declaration does not list, or one whose `origin` is `app` called
-/// from a tool, a wake or the device (`person-required`, LLP 1133.007 D13).
-pub(crate) fn refusal(name: &str, origin: CallOrigin) -> Result<(), String> {
+/// Whether `name` of `@exact/child-process` is held to the app's origin
+/// (LLP 1133.007 D13), or why it is refused from every origin: a name its
+/// declaration does not list.
+pub(crate) fn held(name: &str) -> Result<bool, String> {
     static NAMES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
     let declaration = NAMES.get_or_init(|| serde_json::from_str(DECLARATION).unwrap_or_default());
     let declared =
         (declaration["data"].as_array().into_iter().flatten()).find(|d| d["data"] == name);
     match declared {
         None => Err(format!("{name}: not a call @exact/child-process declares")),
-        Some(d) if held_to_app(d, &serde_json::json!({})) && origin != CallOrigin::App => {
-            Err(format!(
-                "person-required ({} origin): {name} (LLP 1133.007 D13)",
-                origin.word()
-            ))
-        }
-        Some(_) => Ok(()),
+        Some(d) => Ok(held_to_app(d, &serde_json::json!({}))),
     }
 }
 
@@ -389,7 +395,7 @@ mod tests {
             .chain(ops.iter().map(ProcessOp::declared))
             .collect();
         for name in &names {
-            assert_eq!(refusal(name, CallOrigin::App), Ok(()), "{name} is declared");
+            assert!(held(name).is_ok(), "{name} is declared");
         }
         let declaration: serde_json::Value = serde_json::from_str(DECLARATION).unwrap();
         for d in declaration["data"].as_array().unwrap() {
@@ -399,18 +405,12 @@ mod tests {
                 names.contains(&name) || name == "processStatus",
                 "{name} reaches the runner"
             );
-            for origin in [CallOrigin::Tool, CallOrigin::Wake, CallOrigin::Device] {
-                let refused = refusal(name, origin).is_err();
-                assert_eq!(
-                    refused,
-                    held_to_app(d, &serde_json::json!({})),
-                    "{name} from {origin:?}"
-                );
-            }
+            assert_eq!(
+                held(name),
+                Ok(held_to_app(d, &serde_json::json!({}))),
+                "{name}"
+            );
         }
-        assert!(
-            refusal("shell", CallOrigin::App).is_err(),
-            "an undeclared kind"
-        );
+        assert!(held("shell").is_err(), "an undeclared kind");
     }
 }

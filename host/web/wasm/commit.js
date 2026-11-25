@@ -1,6 +1,6 @@
 import { AGENT_ADMITTED, views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
-import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, modalCommand, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
+import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, modalCommand, popoverCommand, runFocusCommands, inertAncestor, refitTexts, noteSymbolEffect, playSymbolEffects } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
 import { attach } from "./input.js";
 import { flowBatch } from "./flow.js";
@@ -36,9 +36,74 @@ function viewFor(op, id) {
   }
   return el;
 }
+// The `portal` movers no list shows: connected, so their media and state live on, and not `hidden`, which lets a
+// browser pause media its own way, but unpainted and out of reach (LLP 1013.002 D6).
+let holder = null;
+function portalHolder() {
+  if (holder?.isConnected) {
+    return holder;
+  }
+  holder = document.createElement("div");
+  holder.inert = true;
+  holder.style.display = "none";
+  holder.dataset.exactPortals = "";
+  document.body.append(holder);
+  return holder;
+}
+// The focus a move into the holder took, given back once the batch has placed it (D5).
+let refocus = null;
+/** Move `child` before `ref` under `parent`: `moveBefore()` keeps its state where the browser has it. */
+function move(parent, child, ref) {
+  if (child.contains(document.activeElement)) {
+    refocus = document.activeElement;
+  }
+  if (parent.moveBefore && child.isConnected && parent.isConnected) {
+    try {
+      return parent.moveBefore(child, ref);
+    } catch {}
+  }
+  parent.insertBefore(child, ref);
+}
+/** Before the batch's exit ghosts, destroys and lists, each mover whose shown parent changed waits in the holder,
+ * where one shown nowhere stays; `later` takes the ones this batch has yet to make. */
+function holdMovers(op, later) {
+  for (const [id, parent] of op.movers) {
+    const el = views.get(id);
+    if (!el) {
+      if (parent === null) {
+        later.push(id);
+      }
+    } else if (el.parentNode !== holder && el.parentNode !== (parent === null ? portalHolder() : views.get(parent))) {
+      move(portalHolder(), el, null);
+    }
+  }
+}
+/** After a batch that held movers: each hidden one it made goes to the holder, and the focus a move took returns. */
+function settleMovers(later) {
+  for (const id of later) {
+    const el = views.get(id);
+    if (el && !el.isConnected) {
+      portalHolder().append(el);
+    }
+  }
+  if (refocus?.isConnected && !holder?.contains(refocus) && document.activeElement !== refocus) {
+    refocus.focus({ preventScroll: true });
+  }
+  refocus = null;
+}
+// `apply` and its `children` case name the portal functions above only on a batch with movers: the page's tests run
+// them alone.
 function apply(batch) {
+  if (batch.packageViewOwners) host.packageViewOwners = batch.packageViewOwners;
+  // Hidden movers this batch makes: to the holder once it has made them.
+  const hiddenLater = [];
+  let holding = false;
   // Retire before teardown blur. Keep removed descendants attached to their removed parent for the outgoing focusout; presence reads leaving boxes before any op (LLP 1063).
   for (const op of batch.ops ?? []) {
+    if (op.op === "hold") {
+      holding = true;
+      holdMovers(op, hiddenLater);
+    }
     if (op.op === "destroy") {
       const el = views.get(op.id);
       if (el) {
@@ -48,6 +113,7 @@ function apply(batch) {
         el.exactAppFrame?.dispose();
         el.exactIntersect?.();
         el.exactResize?.();
+        el.exactPanRetire?.();
       }
     }
   }
@@ -62,7 +128,10 @@ function apply(batch) {
   if (batch.error) {
     console.error("exact:", batch.error);
   }
-  for (const op of batch.ops ?? []) {
+  // A list that takes a held mover into an element not yet in the document runs again at the end, so the mover
+  // goes from one connected place to another.
+  const ops = [...(batch.ops ?? [])], late = new Set();
+  for (const op of ops) {
     try {
       switch (op.op) {
         case "textflow": break;
@@ -130,6 +199,7 @@ function apply(batch) {
             el.style.cssText = css;
           }
           noteFit(css);
+          noteSymbolEffect(css);
           if (el.hasAttribute("data-time-reservation")) {
             loadLiveTime(el);
           }
@@ -163,6 +233,7 @@ function apply(batch) {
             exact.gpu?.beforeStyle(el);
             motion.style(op.id, op.css);
             noteFit(op.css);
+            noteSymbolEffect(op.css);
             if (el.hasAttribute("data-action")) {
               el.style.touchAction = "none";
             }
@@ -173,6 +244,11 @@ function apply(batch) {
         case "children": {
           const el = viewFor("children", op.id);
           if (!el) {
+            break;
+          }
+          if (!el.isConnected && op.ids.some((id) => views.get(id)?.parentElement?.hasAttribute("data-exact-portals")) && !late.has(op)) {
+            late.add(op);
+            ops.push(op);
             break;
           }
           const want = [];
@@ -197,7 +273,11 @@ function apply(batch) {
               cursor = skip(cursor.nextElementSibling);
               continue;
             }
-            el.insertBefore(child, cursor);
+            if (child.parentElement?.hasAttribute("data-exact-portals")) {
+              move(el, child, cursor);
+            } else {
+              el.insertBefore(child, cursor);
+            }
           }
           while (cursor) {
             const next = skip(cursor.nextElementSibling);
@@ -537,6 +617,7 @@ function apply(batch) {
               globalThis.exact?.fragment?.cancel();
             }
           } else if ([
+            "cancelReorder",
             "showPopover",
             "hidePopover",
             "togglePopover"
@@ -780,6 +861,10 @@ function apply(batch) {
             if (document.fullscreenElement) {
               document.exitFullscreen().catch((e) => log(`exitFullscreen: refused: ${e.name}`));
             }
+          } else if (op.name === "panel") {
+            log("panel unsupported: route panels are available on macOS only");
+          } else if (["setBounds", "setAspectRatio", "setWindowAlwaysOnTop", "setWindowIgnoreMouseEvents"].includes(op.name)) {
+            log(`${op.name} refused: the browser has no such window command`);
           } else if (op.name === "setWindowOpacity") {
             log("setWindowOpacity refused: a page cannot change its window's opacity");
           } else if (op.name === "hideWindow") {
@@ -808,6 +893,7 @@ function apply(batch) {
             el.exactAppFrame?.dispose();
             el.exactIntersect?.();
             el.exactResize?.();
+            el.exactPanRetire?.();
             el.exactMarkup?.destroy();
             el.exactDecorations?.destroy();
             el.exactLiveTime?.destroy();
@@ -938,7 +1024,9 @@ function apply(batch) {
   syncLists();
   // Focusing can dispatch an action: every node/value of the batch is committed before its focus handler runs.
   for (const command of focusCommands) {
-    if ([
+    if (command.name === "cancelReorder") {
+      arrange.cancel(command.args[0]);
+    } else if ([
       "showPopover",
       "hidePopover",
       "togglePopover"
@@ -960,6 +1048,9 @@ function apply(batch) {
         releaseFollowed(s);
       }
     }
+  }
+  if (holding) {
+    settleMovers(hiddenLater);
   }
   focusAutofocus();
   host.inputHandlers?.arrive();
@@ -1113,6 +1204,7 @@ export function applyBatch(batch) {
     const timers = link ? navigation.withLink(link, () => apply(batch)) : apply(batch);
     letGo();
     refitTexts();
+    playSymbolEffects();
     if (host.wakeLock) {
       holdWake();
     }
@@ -1162,6 +1254,7 @@ export function applyBatch(batch) {
       globalThis.exact.gpu?.syncPerformance?.();
       globalThis.exact.gpu?.drainRecords();
       globalThis.exact.gpu?.layout?.();
+      if (HAS_PACKAGE_VIEWS) host.packageViews?.report();
       globalThis.exact.committed?.();
       // A commit may settle the request a replacement waits for (boot.js).
       globalThis.exact.replacementChanged?.();

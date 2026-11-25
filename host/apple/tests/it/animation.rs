@@ -86,7 +86,7 @@ fn an_animation_is_presented_from_boot_and_stops_when_its_row_does() {
     assert!(presented(&first, mark, "opacity").is_none(), "{first}");
     assert!(presented(&first, mark, "scale").is_none(), "{first}");
     assert!(presented(&first, added, "translate").is_none(), "{first}");
-    let scale = track(&first, mark, "transform.scale");
+    let scale = track(&first, mark, "transform.scale.x");
     assert_eq!(scale["v"], serde_json::json!([0.9, 1]));
     assert_eq!(scale["d"], 1.6);
     assert_eq!(scale["n"], -1);
@@ -111,7 +111,7 @@ fn an_animation_is_presented_from_boot_and_stops_when_its_row_does() {
     let on = host.dispatch_at(toggle, Event::Press, 600.0);
     assert!(lowered(&on, mark), "{on}");
     close(presented(&on, mark, "scale"), 1.0);
-    let restarted = track(&on, mark, "transform.scale");
+    let restarted = track(&on, mark, "transform.scale.x");
     assert_eq!(restarted["v"], scale["v"]);
     assert_eq!(restarted["s"], 0.6);
     assert!(on.contains("\"motion\":false"), "{on}");
@@ -147,4 +147,134 @@ fn a_colour_is_motion_and_a_slide_is_spatial() {
         settled.contains("\"motion\":true") && !settled.contains("\"spatial\""),
         "{settled}"
     );
+}
+
+#[test]
+fn per_axis_scale_keyframes_and_transitions_stay_on_core_animation() {
+    let plan = contract::compile(
+        r#"keyframes flip
+  from scale="1 1"
+  50% scale="1 0.1"
+  to scale="1 1"
+component App
+  state flat = false
+  action toggle
+    flat = not flat
+  view
+    column
+      button "Toggle" testId="toggle" press=toggle
+      box testId="flip" width=100 height=100 animation="flip 1s linear both"
+      box testId="change" width=100 height=100 scale=(flat ? "-2 0" : "1 0.5") transition="scale 1s linear"
+"#,
+    )
+    .unwrap();
+    let (mut host, first) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        390.0,
+        844.0,
+    )
+    .unwrap();
+    let flip = view(&host, "flip");
+    assert_eq!(
+        track(&first, flip, "transform.scale.x")["v"],
+        serde_json::json!([1, 1, 1])
+    );
+    assert_eq!(
+        track(&first, flip, "transform.scale.y")["v"],
+        serde_json::json!([1, 0.1, 1])
+    );
+    host.start_on_frame(true, 0.0);
+    let changed = host.dispatch_at(view(&host, "toggle"), Event::Press, 100.0);
+    let change = view(&host, "change");
+    let tick = host.tick_at(112.0, 116.0);
+    let batch = if lowered(&changed, change) {
+        &changed
+    } else {
+        &tick
+    };
+    assert_eq!(
+        track(batch, change, "transform.scale.x")["v"],
+        serde_json::json!([1, -2])
+    );
+    assert_eq!(
+        track(batch, change, "transform.scale.y")["v"],
+        serde_json::json!([0.5, 0])
+    );
+    // Handoff writes the model's destination once. Later frames stay in CA.
+    close(presented(&tick, change, "scale"), -2.0);
+    let later = host.tick_at(300.0, 300.0);
+    assert!(presented(&later, change, "scale").is_none(), "{later}");
+    assert!(later.contains("\"motion\":false"), "{later}");
+}
+
+#[test]
+fn per_axis_scale_present_keeps_y_on_the_apple_wire() {
+    let plan = contract::compile(
+        r#"component App
+  view
+    box testId="scaled" width=100 height=100 scale="1 0.5"
+"#,
+    )
+    .unwrap();
+    let (host, first) = Host::boot(
+        &plan.encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        390.0,
+        844.0,
+    )
+    .unwrap();
+    let id = view(&host, "scaled");
+    let batch: serde_json::Value = serde_json::from_str(&first).unwrap();
+    let scale = batch["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "present" && op["id"] == id && op["property"] == "scale")
+        .unwrap();
+    assert_eq!(scale["x"], 1);
+    assert_eq!(scale["y"], 0.5);
+}
+
+#[test]
+fn per_axis_scale_scroll_extent_matches_chrome() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../runner/tests/fixtures/per-axis-scale.contract"
+    ))
+    .unwrap();
+    for (scale, width, height) in [
+        ("1 0.5", 160, 225),
+        ("0 0.5", 120, 120),
+        ("1 0", 120, 120),
+        ("-1 0.5", 120, 225),
+        ("1 -0.5", 160, 120),
+        ("0.5 3", 120, 1100),
+        ("1 1\" translate=\"50px 70px", 160, 400),
+        ("1 1\" rotate=\"45deg", 160, 400),
+    ] {
+        let source = source.replace("scale=\"1 0.5\"", &format!("scale=\"{scale}\""));
+        let plan = contract::compile(&source).unwrap();
+        let (host, batch) = Host::boot(
+            &plan.encode(),
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            390.0,
+            844.0,
+        )
+        .unwrap();
+        let port = view(&host, "port");
+        let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+        let content = batch["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|op| op["op"] == "content" && op["id"] == port)
+            .unwrap();
+        assert_eq!(content["w"], width, "{scale}");
+        assert_eq!(content["h"], height, "{scale}");
+    }
 }

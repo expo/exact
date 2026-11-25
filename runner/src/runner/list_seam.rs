@@ -13,7 +13,9 @@ use crate::list_api::{
     ListTextPosition, ReorderBinding, ReorderFrame, ReorderGeometry, ReorderProgress, ReorderStart,
     ReorderStep, ReorderToken,
 };
-use exact_kernel::{Display, Kernel, NodeKey, NodeType, Op, PropId};
+use exact_kernel::{
+    Display, Kernel, NodeKey, NodeType, Op, PropId, StyleId, StyleMask, Visibility,
+};
 
 /// The runner's list work. The provided methods are what the runner answers
 /// with no list; `LinkedLists` (`lists.rs`) implements every one.
@@ -500,7 +502,8 @@ impl<D: DataSource> Runner<D> {
         let result = {
             let cell_margins = |view| super::render::cell_margins(&self.kernel, view);
             let scroll_margin = |view| super::render::scroll_margin(&self.kernel, view);
-            let scroll_padding = |view| super::render::scroll_padding(&self.kernel, view);
+            let scroll_padding =
+                |view, port| super::render::scroll_padding(&self.kernel, view, port);
             let mut update = self.instance_update(&mut ids);
             update.reuse = self.reuse;
             update.scroll_padding = Some(&scroll_padding);
@@ -642,6 +645,65 @@ impl<D: DataSource> Runner<D> {
         lists.wake_deferred_edges(self)
     }
 
+    /// The row keys and handles in a grouped settings section (LLP 1084 D1).
+    /// The enclosing section may itself be repeated. Only a keyed region
+    /// between the card and its row identifies the row.
+    pub fn grouped_reorder_rows(
+        &self,
+        list: ViewId,
+        card: ViewId,
+    ) -> Vec<(ViewId, String, Option<ViewId>)> {
+        let Some(owner) = self.kernel.node(list) else {
+            return Vec::new();
+        };
+        let Some(name) = owner.props.str(PropId::Id).filter(|id| !id.is_empty()) else {
+            return Vec::new();
+        };
+        let Some(section) = self.kernel.grouped_card_section(card) else {
+            return Vec::new();
+        };
+        if self.kernel.node(section).and_then(|n| n.parent) != Some(list)
+            || !self.handlers_of(list).contains(&EventKind::Reorderdrop)
+        {
+            return Vec::new();
+        }
+        let Some(tree) = self.tree.as_ref() else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        for (id, key) in tree.keyed_children(card, |v| self.kernel.node(v)?.parent) {
+            let Some(row) = self.kernel.node(id) else {
+                continue;
+            };
+            if row.style.display == Display::None {
+                continue;
+            }
+            let mut stack = vec![id];
+            let mut grip = None;
+            while let Some(view) = stack.pop() {
+                let Some(n) = self.kernel.node(view) else {
+                    continue;
+                };
+                if n.style.display == Display::None
+                    || n.props.bool(PropId::Inert) == Some(true)
+                    || n.props.bool(PropId::Disabled) == Some(true)
+                {
+                    continue;
+                }
+                if n.props.str(PropId::ReorderFor) == Some(name)
+                    && n.computed_style(StyleMask::of(StyleId::Visibility))
+                        .visibility
+                        == Visibility::Visible
+                {
+                    grip = Some(view);
+                    break;
+                }
+                stack.extend(n.children().into_iter().rev());
+            }
+            rows.push((id, key.to_owned(), grip));
+        }
+        rows
+    }
     /// Resolve a strict authored ancestor IDREF, then join only mounted collection
     /// rows. String key, current positive measurement and List handler are required.
     pub fn reorder_binding(&self, handle: NodeKey) -> Option<ReorderBinding> {
@@ -683,11 +745,13 @@ impl<D: DataSource> Runner<D> {
             return None;
         }
         let tree = self.tree.as_ref()?;
-        let binding = (self.seams.lists).reorder_binding(tree, &self.kernel, list.id, handle)?;
+        let binding = (self.seams.lists)
+            .reorder_binding(tree, &self.kernel, list.id, handle)
+            .or_else(|| self.mounted_binding(handle, list.id))?;
         let mut at = node;
         loop {
             if at.style.rotate != 0.0
-                || at.style.scale != 1.0
+                || (at.style.scale.x != 1.0 || at.style.scale.y != 1.0)
                 || (at.key != binding.wrapper
                     && (at.style.translate.x != 0.0
                         || at.style.translate.y != 0.0
@@ -706,7 +770,9 @@ impl<D: DataSource> Runner<D> {
     /// Latest accepted scroll facts. Hosts also certify their own viewport mapping.
     pub fn reorder_geometry(&self, list: NodeKey) -> Option<ReorderGeometry> {
         let view = self.kernel.node_by_key(list)?.id;
-        (self.seams.lists).reorder_geometry(self.tree.as_ref()?, view, list)
+        (self.seams.lists)
+            .reorder_geometry(self.tree.as_ref()?, view, list)
+            .or_else(|| self.mounted_geometry(list))
     }
     /// Begin a reorder of `binding`'s row, certified by `geometry`.
     pub fn begin_reorder(

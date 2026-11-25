@@ -13,6 +13,8 @@ pub struct Device {
     pub font_scale: f32,
     /// Android's touch-exploration reading, a proxy for a screen reader (LLP 1039 D10).
     pub screen_reader: exact_runner::ScreenReader,
+    /// Orientation of the display hosting the reader.
+    pub orientation: Option<exact_runner::ScreenOrientation>,
     /// The first of the device's locales, a BCP 47 tag (`en-GB`).
     pub locale: String,
     /// That locale is laid out right to left.
@@ -101,6 +103,7 @@ impl<D: DataSource> Presenter<D> {
         self.set_system_scheme(device.night);
         let runner = self.host.runner();
         let mut preferences = runner.viewport().preferences;
+        preferences.orientation = device.orientation;
         preferences.dark = device.night;
         preferences.reduced_motion = device.reduced_motion;
         preferences.contrast = match device.high_contrast {

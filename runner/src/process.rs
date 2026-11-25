@@ -109,6 +109,7 @@ impl Request {
             prefetch: false,
             held: false,
             listen: None,
+            mutation_ticket: None,
             reach: Default::default(),
             due_ms: None,
             wake_ms: None,

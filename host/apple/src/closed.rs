@@ -12,8 +12,8 @@
 //! back inside closed ones gives them back too while it is open, since
 //! nothing under a covered box is laid out; they are covered again when no
 //! box open inside them needs them. A node that stops being one is given
-//! back here. Other hosts lay closed boxes out as before, hidden by their
-//! views.
+//! back here. AppKit can measure a dialog before showing it. Its viewport
+//! block keeps that measurement out of the page.
 //!
 //! The navigation root's tablist is covered from boot too, where a tab bar
 //! takes its place (`cover_root_tablist`).
@@ -56,9 +56,7 @@ pub(crate) struct Closed {
 impl<D: DataSource> Host<D> {
     /// At boot, before the first layout: every top-layer box in `order`.
     pub(crate) fn close_top_layer(&mut self, order: &[ViewId]) {
-        if closed_wait() {
-            self.close_boxes(order.iter().copied());
-        }
+        self.close_boxes(order.iter().copied());
     }
 
     /// At boot, before the first layout: the navigation root's tablist
@@ -119,9 +117,6 @@ impl<D: DataSource> Host<D> {
         for key in receipts.iter().flat_map(|t| &t.receipt.destroyed) {
             self.forget_box(*key);
         }
-        if !closed_wait() {
-            return;
-        }
         let kernel = self.runner.kernel();
         let (mut made, mut left) = (Vec::new(), Vec::new());
         for t in receipts {
@@ -130,7 +125,7 @@ impl<D: DataSource> Host<D> {
                     continue;
                 };
                 match (top_layer(&node), self.closed.boxes.contains(key)) {
-                    (true, false) => made.push(node.id),
+                    (true, _) => made.push(node.id),
                     (false, true) => left.push((*key, node.id)),
                     _ => {}
                 }
@@ -185,6 +180,11 @@ impl<D: DataSource> Host<D> {
                 }
             }
         }
+        for &(view, cover) in &out {
+            self.runner
+                .kernel_mut()
+                .measure_dialog(view, cover != Some(HostCover::Whole));
+        }
         out
     }
 
@@ -219,6 +219,7 @@ impl<D: DataSource> Host<D> {
         for above in freed {
             let id = self.runner.kernel().node_by_key(above).map(|n| n.id);
             if let Some(id) = id {
+                self.runner.kernel_mut().measure_dialog(id, false);
                 let _ = self
                     .runner
                     .kernel_mut()
@@ -236,6 +237,16 @@ impl<D: DataSource> Host<D> {
                 continue;
             }
             let key = node.key;
+            if !closed_wait() {
+                self.runner.kernel_mut().measure_dialog(id, true);
+                continue;
+            }
+            if self.closed.boxes.contains(&key) {
+                let k = self.runner.kernel();
+                let covered = k.arena().slot_of(id).and_then(|s| k.arena().cover(s))
+                    == Some(HostCover::Whole);
+                self.runner.kernel_mut().measure_dialog(id, !covered);
+            }
             if self.closed.boxes.insert(key) {
                 let _ = self
                     .runner
@@ -326,6 +337,30 @@ component App
             text "Home"
 "#;
         assert!(!covered(source));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn measuring_an_appkit_dialog_leaves_its_scroller_at_its_own_width() {
+        let source = r#"component App
+  view
+    column height="100%"
+      scroll testId="port" width=200 height=160
+        column width="100%" box-sizing="border-box" padding="0px 24px"
+          dialog testId="notice" width="100%" height=100
+            text "Notice"
+          box height=400
+"#;
+        let plan = contract::compile(source).unwrap().encode();
+        let measurer = Box::new(MonospaceMeasurer::default());
+        let (host, _) = Host::boot(&plan, NoData, measurer, 390.0, 844.0).unwrap();
+        let k = host.runner.kernel();
+        let port = k.node_by_key(k.find_by_test_id("port")[0]).unwrap();
+        let dialog = k.node_by_key(k.find_by_test_id("notice")[0]).unwrap();
+        assert_eq!(dialog.frame.width, 390.);
+        assert_eq!(port.frame.width, 200.);
+        assert_eq!(port.content.0, port.frame.width);
+        assert!(port.content.1 > port.frame.height);
     }
 
     /// A box in a closed `dialog` is not laid out, so it does not

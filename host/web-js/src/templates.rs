@@ -410,9 +410,11 @@ impl Templates {
                 write!(declarations, "const {name}=({})=>", params.join(",")).unwrap();
                 if t.params.is_some() {
                     declarations.push('{');
+                    declarations.push(crate::hoist::OPEN);
                 }
                 render.expand(&t.body, Base::Relative(0), &values, &mut declarations);
                 if t.params.is_some() {
+                    declarations.push(crate::hoist::CLOSE);
                     declarations.push('}');
                 }
                 declarations.push(';');
@@ -559,9 +561,12 @@ impl Render<'_> {
                 Some("p") => out.push('{'),
                 // The parent can have the same local name as a child.
                 Some(parent) => write!(out, "{{const p={parent};{{").unwrap(),
-                None => write!(out, "({params})=>{{").unwrap(),
+                None => write!(out, "({params})=>{{{}", crate::hoist::OPEN).unwrap(),
             }
             self.expand_with_slot(&t.body, base, &values, slot, out);
+            if parent.is_none() {
+                out.push(crate::hoist::CLOSE);
+            }
             out.push('}');
             if parent.is_some_and(|p| p != "p") {
                 out.push('}');

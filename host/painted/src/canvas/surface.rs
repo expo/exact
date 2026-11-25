@@ -102,7 +102,24 @@ impl<D: DataSource + Default> CanvasHost<D> {
     }
 
     /// Begin a display tick; successful canvases cannot retry within this tick.
-    pub fn display_frame(&mut self) {
+    /// Live frames take Choreographer's two monotonic timestamps onto the canvas clock.
+    pub fn display_frame(
+        &mut self,
+        vsync: i64,
+        arrival: i64,
+        fastest: i64,
+        thermal: u32,
+        period: i64,
+    ) {
         self.p.begin_display_frame();
+        if self.p.has_window_canvases() && super::agent::clock(&self.p).is_none() {
+            self.p.surfaces.period(period as f64 / 1e6);
+            let now_ns = super::reader::monotonic_ns();
+            let now_ms = self.now();
+            let raw = super::present::monotonic_ms(vsync, now_ns, now_ms);
+            let callback = super::present::monotonic_ms(arrival, now_ns, now_ms);
+            let fastest = fastest.max(0) as f64 / 1e6;
+            self.p.surfaces.host_frame(raw, callback, fastest, thermal);
+        }
     }
 }

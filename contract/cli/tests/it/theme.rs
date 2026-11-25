@@ -3,23 +3,16 @@
 //! table, and a colour string naming an entry reads its colour, in the
 //! compiler and when the runner sets the row.
 
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Color, ColorValue, Kernel, RowValue, StyleId};
 use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Runner};
+use exact_runner::Runner;
 
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
-
-fn boot(src: &str) -> Runner<NoData> {
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+fn boot(src: &str) -> Runner<Source> {
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -27,7 +20,7 @@ fn boot(src: &str) -> Runner<NoData> {
     .unwrap()
 }
 
-fn colour(r: &Runner<NoData>, id: &str, row: StyleId) -> ColorValue {
+fn colour(r: &Runner<Source>, id: &str, row: StyleId) -> ColorValue {
     let key = r.kernel().find_by_test_id(id)[0];
     match r.kernel().node_by_key(key).unwrap().computed(row) {
         RowValue::ColorValue(c) => c,
@@ -241,7 +234,7 @@ fn two_plans_each_read_their_own_names() {
     let run = |src: &str| {
         Runner::boot(
             contract::compile(src).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -259,7 +252,7 @@ fn two_plans_each_read_their_own_names() {
         blue.journal().collect::<Vec<_>>()
     );
     // Unsaid text is `CanvasText`, each session's own.
-    let unsaid = |r: &Runner<NoData>| {
+    let unsaid = |r: &Runner<Source>| {
         let _roles = r.bind_roles();
         exact_kernel::ColorValue::Role(exact_kernel::style::roles::role("CanvasText").unwrap())
             .resolve(false)
@@ -380,7 +373,7 @@ fn a_plan_without_overrides_leaves_another_sessions_its_own() {
     let run = |src: &str| {
         Runner::boot(
             contract::compile(src).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -412,7 +405,7 @@ fn a_refused_boot_keeps_the_threads_overrides() {
     let run = |src: &str| {
         Runner::boot(
             contract::compile(src).unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -453,7 +446,7 @@ fn a_reload_with_other_overrides_re_presents() {
                 "theme\n  CanvasText = \"{canvas}\"\n\ncomponent App\n  view\n    text \"a\"\n"
             ))
             .unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -486,7 +479,7 @@ fn a_refused_candidate_and_a_nested_boot_leave_the_live_sessions_roles() {
                 "theme\n  CanvasText = \"{canvas}\"\n\ncomponent App\n  view\n    text \"a\"\n"
             ))
             .unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -539,7 +532,7 @@ fn an_unbound_resolve_beside_another_session_asserts() {
                 "theme\n  CanvasText = \"{canvas}\"\n\ncomponent App\n  view\n    text \"a\"\n"
             ))
             .unwrap(),
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",

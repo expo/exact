@@ -66,12 +66,15 @@ fn core_in(grants: &str, dir: &std::path::Path) -> (Core, Receiver<()>) {
 }
 
 fn request(ticket: u64, body: serde_json::Value, stream: bool) -> RequestOut {
+    // The app's own child process (`process.rs` refuses another origin's start).
+    let mut request = Request::process(body.to_string().into_bytes(), stream, 1 << 20);
+    request.reach.origin = exact_runner::CallOrigin::App;
     RequestOut {
         completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "server".into(),
-        request: Request::process(body.to_string().into_bytes(), stream, 1 << 20),
+        request,
         forced: false,
     }
 }

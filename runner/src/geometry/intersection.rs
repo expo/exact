@@ -44,7 +44,9 @@ pub(crate) fn intersection(
         };
         let implicit =
             !s.mask.has(StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default();
-        if implicit || scrolls(s.overflow_x) || scrolls(s.overflow_y) {
+        // A bar on a scroller's scrollport does not scroll in it, which only clips it (LLP 1123 D12)
+        let stationary = arena.on_scrollport(at);
+        if !stationary && (implicit || scrolls(s.overflow_x) || scrolls(s.overflow_y)) {
             root = Some(Root::Element(arena.key(slot)));
             break;
         }
@@ -92,8 +94,9 @@ pub(crate) fn intersection(
                 .placed_block(kernel, slot)
                 .filter(|(entry, _)| element_root && entry.clip_only)
                 .and_then(|_| block_clip(kernel, scrolled, slot, f));
-            let clips_overflow =
-                s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible;
+            // A `scroll` or `list` that says no `overflow-y` clips as the scroller it is
+            let (ox, oy) = arena.overflow(slot);
+            let clips_overflow = ox != Overflow::Visible || oy != Overflow::Visible;
             if element_root || (!rooted && slot != key.index && clips_overflow) {
                 let mut bounds = padding_box(kernel, slot);
                 // A clipped scroll root's allocation defines its visible bounds,
@@ -103,11 +106,11 @@ pub(crate) fn intersection(
                     transform = mul(own, transform);
                 }
                 if !element_root {
-                    if s.overflow_x == Overflow::Visible {
+                    if ox == Overflow::Visible {
                         bounds[0] = f64::NEG_INFINITY;
                         bounds[2] = f64::INFINITY;
                     }
-                    if s.overflow_y == Overflow::Visible {
+                    if oy == Overflow::Visible {
                         bounds[1] = f64::NEG_INFINITY;
                         bounds[3] = f64::INFINITY;
                     }

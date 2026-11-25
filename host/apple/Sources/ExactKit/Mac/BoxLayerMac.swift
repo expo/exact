@@ -62,6 +62,8 @@ extension NodeView {
         var curve: CALayerCornerCurve = .circular
         /// A shape only a path says: the layer keeps no radius of its own.
         var shaped = false
+        /// The box's radius where its scroll view's clip follows it (`syncScrollCorner`), 0 where it clips square.
+        var scrollRadius: CGFloat = 0
     }
 
     /// Core Animation's corner mask names corners in the layer's own space;
@@ -80,11 +82,11 @@ extension NodeView {
     private var boxPlan: BoxPlan {
         var p = BoxPlan()
         // Most nodes paint nothing and clip nothing: nothing to read.
-        guard hasBoxPaint || clipsToBounds || clipBox != nil else { return p }
+        guard hasBoxPaint || clipsToBounds || clipBox != nil || scroll != nil else { return p }
         // CGColors straight from the rows: an NSColor's `cgColor` is made
         // anew on each call, and this runs for every repaint.
         // In a sheet, the window's background is the sheet's own ground, which AppKit draws (SheetsMac.swift).
-        p.fill = materialContent != nil || standsOnSheetGround || standsOnSplitGround ? nil : (cgColor("background_color") ?? fieldGround).flatMap { $0.alpha > 0 ? $0 : nil }
+        p.fill = materialContent != nil || standsOnSheetGround || standsOnSplitGround || standsOnPanelGround ? nil : (cgColor("background_color") ?? fieldGround).flatMap { $0.alpha > 0 ? $0 : nil }
         let uniform = number("border_width")
         let sides = ["top", "right", "bottom", "left"]
         p.widths = sides.map { number("border_width_" + $0, uniform) }
@@ -134,6 +136,8 @@ extension NodeView {
         // A layout transition's size shows the surface on its own layer.
         let away = surface != nil
         p.drawn = !away && (patterned || !((p.oneBorder || p.edges) && p.oneRadius && (shape == nil || continuous)) || gradientDraws || backgroundClip != "border-box") && (p.fill != nil || gradient || p.widths.contains { $0 > 0 })
+        // All four corners: `CALayer.render`, which a capture uses, ignores `maskedCorners`.
+        p.scrollRadius = scroll != nil && !clipsItself && p.oneRadius && !p.shaped && !p.partialCorners ? p.radius : 0
         // A border over the children needs the backing layer's own radius,
         // and AppKit makes a backing layer's radius clip: where the node
         // does not clip, a rounded one draws.
@@ -161,7 +165,7 @@ extension NodeView {
     /// uniform border following the curve, the radius clipping children
     /// only where the overflow clips.
     package func applyBoxLayer() {
-        defer { syncEllipticalClip(); applyColorRanges() }
+        defer { syncEllipticalClip(); syncScrollCorner(); applyColorRanges() }
         guard layerBoxEligible else { applyClipOnly(); return }
         let p = boxPlan
         applyBoxLayer(p)
@@ -256,6 +260,45 @@ extension NodeView {
         if b.cornerCurve != p.curve { b.cornerCurve = p.curve }
         if b.borderWidth != devicePixels(p.widths[0]) { b.borderWidth = devicePixels(p.widths[0]) }
         if b.borderColor != border { b.borderColor = border }
+    }
+
+    /// As on UIKit (`Backdrop.swift`): a scroller's children are its scroll view's document's, so the scroll view
+    /// takes the corner that clips them, a painted menu's panel's while the panel is there, else its author's one
+    /// radius (`BoxPlan.scrollRadius`) at the padding edge. With no border that edge is the scroll view's bounds and
+    /// its layer's radius says it. With one the curve lies inside the bounds and the scroll view masks its layer
+    /// with it (`ChainingScrollView.clip(toPaddingEdge:inset:)`), so a translucent border shows the box's ground and
+    /// not the children. The scroll view stays the node's own subview, at the border box. A layout transition's
+    /// surface masks the scroll view itself until it ends (`Surface.swift`).
+    func syncScrollCorner() {
+        guard let scroll else { return }
+        var radius: CGFloat = 0, curve = CALayerCornerCurve.circular, widths: [CGFloat] = [0, 0, 0, 0]
+        if materialView != nil, paintedMenuRadius != nil {
+            radius = effectiveCornerSizes(in: bounds).first?.width ?? 0
+        } else {
+            let p = boxPlan
+            (radius, curve) = (p.scrollRadius, p.scrollRadius > 0 ? p.curve : .circular)
+            if radius > 0 { widths = p.widths.map(devicePixels) }
+        }
+        let inset = NSEdgeInsets(top: widths[0], left: widths[3], bottom: widths[2], right: widths[1])
+        if surface != nil {
+            scroll.clipInsets = inset
+            return
+        }
+        var edge: CGPath?
+        if widths.contains(where: { $0 > 0 }) {
+            let inner = CGRect(x: widths[3], y: widths[0], width: max(0, bounds.width - widths[1] - widths[3]),
+                               height: max(0, bounds.height - widths[0] - widths[2]))
+            // Each radius less the borders beside it. No radius of a layer the size of the border box is that curve.
+            edge = BorderPaint.roundedRect(inner, BorderPaint.contentRadii(cornerSizes(in: bounds), outer: bounds, inner: inner),
+                                           shape: CornerShape(style["corner_shape"]))
+            radius = 0
+        }
+        scroll.clip(toPaddingEdge: edge, inset: inset)
+        guard radius > 0 || (scroll.layer?.cornerRadius ?? 0) > 0 else { return }
+        scroll.wantsLayer = true
+        scroll.layer?.cornerRadius = radius
+        scroll.layer?.cornerCurve = curve
+        if radius > 0 { scroll.layer?.masksToBounds = true }
     }
 
     /// A paragraph, canvas or web view paints its box in `draw(_:)`; its

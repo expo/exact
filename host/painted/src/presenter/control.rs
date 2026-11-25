@@ -1005,6 +1005,10 @@ mod tests {
 pub(super) mod material_tests;
 
 #[cfg(test)]
+#[path = "material_type_tests.rs"]
+mod material_type_tests;
+
+#[cfg(test)]
 #[path = "range_tests.rs"]
 mod range_tests;
 

@@ -16,13 +16,40 @@ final class MouseLayoutPan {
     init(_ presenter: Presenter) {
         self.presenter = presenter
         escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53, self?.candidate != nil { self?.cancel(); return nil }
+            if event.keyCode == 53, let self, event.window === self.presenter?.viewport.window {
+                let hadPan = self.candidate != nil
+                if hadPan || self.presenter?.pointerHolds == true { self.systemCancel() }
+                if hadPan { return nil }
+            }
             return event
         }
         inactive = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
             object: nil, queue: .main) { [weak self] note in
-                if let window = note.object as? NSWindow, window === self?.presenter?.viewport.window { self?.cancel() }
+                if let window = note.object as? NSWindow, window === self?.presenter?.viewport.window { self?.systemCancel() }
             }
+    }
+    /// A native tracking loop can leave a key in the queue until after the
+    /// button's action. An Escape from inside that contact takes effect first.
+    func trackingEnded(_ down: NSEvent) {
+        guard presenter?.pointerHolds == true,
+              let key = NSApp.nextEvent(matching: .keyDown, until: .distantPast, inMode: .eventTracking, dequeue: false),
+              key.keyCode == 53, key.window === down.window, key.timestamp >= down.timestamp,
+              key.timestamp <= (NSApp.currentEvent.flatMap { $0.type == .leftMouseUp ? $0.timestamp : nil } ?? ProcessInfo.processInfo.systemUptime) else { return }
+        _ = NSApp.nextEvent(matching: .keyDown, until: .distantPast, inMode: .eventTracking, dequeue: true)
+        systemCancel()
+    }
+    func systemCancel() {
+        let view = candidate, release = active
+        abandon()
+        if let source = presenter?.pointerSource {
+            presenter?.mouseChain.bubbledPress?.cancel()
+            source.pressed = false
+            source.inlinePressed = nil
+            source.svgPressed = nil
+            (presenter?.controls.controls[source.id] as? NativeButtonMac)?.cancelHeldContact()
+            source.pointerReleased(nil, cancelled: true)
+        }
+        if release, let view, let presenter, presenter.views[view.id] === view { presenter.panRelease(view.id, 0, 0) }
     }
     deinit {
         if let escape { NSEvent.removeMonitor(escape) }
@@ -95,9 +122,17 @@ import UIKit
 private final class ContactLayoutPan: UIPanGestureRecognizer {
     private weak var startWindow: UIWindow?
     private var startPoint: CGPoint?
+    private weak var contact: UITouch?
+    func cancelPointer() {
+        #if os(iOS)
+        guard let contact else { return }
+        for observer in contact.gestureRecognizers ?? [] { (observer as? PointerRecognizer)?.cancel(contact) }
+        #endif
+    }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         if startPoint == nil, let touch = touches.first, let window = view?.window {
             startWindow = window
+            contact = touch
             startPoint = touch.location(in: window)
         }
         super.touchesBegan(touches, with: event)
@@ -112,7 +147,7 @@ private final class ContactLayoutPan: UIPanGestureRecognizer {
     }
     override func reset() {
         super.reset()
-        startWindow = nil; startPoint = nil
+        startWindow = nil; startPoint = nil; contact = nil
     }
 }
 
@@ -126,33 +161,40 @@ extension NodeView {
             g.delegate = self
             addGestureRecognizer(g); layoutPanRecognizer = g
         } else if !handlers.contains("pan"), let g = layoutPanRecognizer {
-            removeGestureRecognizer(g); layoutPanRecognizer = nil
+            removeGestureRecognizer(g); layoutPanRecognizer = nil; layoutPanOrigin = nil
         }
     }
     @objc func layoutPanning(_ gesture: UIPanGestureRecognizer) {
-        guard let presenter, presenter.views[id] === self, SwipeInput.allows(self) else {
+        let held = HeldNode(self)
+        if gesture.state == .began { layoutPanOrigin = .zero }
+        guard let origin = layoutPanOrigin else { return }
+        if [.ended, .failed, .cancelled].contains(gesture.state) { layoutPanOrigin = nil }
+        guard let presenter, held.live(in: presenter) != nil, SwipeInput.allows(self) else {
             // A contact that began and is cut short while shown releases at rest.
-            if let presenter, presenter.views[id] === self, [.changed, .ended].contains(gesture.state) { presenter.panRelease(id, 0, 0) }
+            layoutPanOrigin = nil
+            if let presenter, held.live(in: presenter) != nil, gesture.state != .began {
+                if gesture.state != .ended { (gesture as? ContactLayoutPan)?.cancelPointer() }
+                if held.live(in: presenter) != nil { presenter.panRelease(held.id, 0, 0) }
+            }
             gesture.isEnabled = false; gesture.isEnabled = true; return
         }
         let port = presenter.port(of: self)
         let p = (gesture as? ContactLayoutPan)?.displacement(in: port) ?? gesture.translation(in: port)
-        if gesture.state == .began { layoutPanOrigin = .zero }
         if [.began, .changed, .ended].contains(gesture.state) {
-            let dx = p.x - layoutPanOrigin.x, dy = p.y - layoutPanOrigin.y
-            layoutPanOrigin = p
+            let dx = p.x - origin.x, dy = p.y - origin.y
+            if gesture.state != .ended { layoutPanOrigin = p }
             if dx != 0 || dy != 0 { presenter.pan(id, Double(dx), Double(dy)) }
         }
-        // UIKit measures the release (LLP 1057.001 §3); its action sees
-        // .cancelled or .failed only after .began.
+        // UIKit measures the release (LLP 1057.001 §3).
         if gesture.state == .ended {
             let v = gesture.velocity(in: port)
-            presenter.panRelease(id, Double(v.x), Double(v.y))
+            if held.live(in: presenter) != nil { presenter.panRelease(held.id, Double(v.x), Double(v.y)) }
         } else if [.cancelled, .failed].contains(gesture.state) {
             // UIKit took the contact (a system gesture, a scroll view's pan):
             // the journal says so, as the web's does (files diary F10).
+            (gesture as? ContactLayoutPan)?.cancelPointer()
             if gesture.state == .cancelled { presenter.session?.log("pan cancelled: UIKit took the contact (a system gesture or a scroll view's pan)") }
-            presenter.panRelease(id, 0, 0)
+            if held.live(in: presenter) != nil { presenter.panRelease(held.id, 0, 0) }
         }
     }
 }

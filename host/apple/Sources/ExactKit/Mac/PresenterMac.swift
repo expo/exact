@@ -36,7 +36,7 @@ package final class Presenter {
     var personScrolls = 0, fragmentArm: (activation: Int, scrolls: Int)?, fragmentSeen = 0 // the person's wheels and live scrolls; the activation a router change asked a fragment's scroll for and their count then, which one since cancels; the last armed (Fragment.swift)
     lazy var focusEvents = FocusEvents(self)
     var inlineOwners: [UInt32: (owner: UInt32, index: Int)] = [:]
-    private(set) package var chrome = ChromeIndex()
+    internal(set) package var chrome = ChromeIndex()
     /// Views leaving with their exit, by id (LLP 1063, `PresenceMac.swift`).
     package var leaving: [UInt32: Leaving] = [:]
     /// The shared elements in flight (LLP 1013.000, `FlightLink`).
@@ -621,7 +621,7 @@ package final class Presenter {
     /// The page's canvas: the first root's background, else the theme's, else
     /// the platform's (LLP 1115 D2).
     func canvasColor() -> NSColor {
-        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: .windowBackgroundColor)
+        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: root.window is RoutePanel ? .clear : .windowBackgroundColor)
         return (root.subviews.first as? NodeView)?.color("background_color", ground) ?? ground
     }
 
@@ -773,8 +773,8 @@ package final class Presenter {
     /// went down on, perhaps a child of the held node, kept in the window
     /// until the button comes up even if a batch removes it (`MouseChainMac`).
     package internal(set) var pointerSource: NodeView?
-    /// The drag last delivered as a `pointermove` (LLP 1056 §3 stage 3).
-    weak var pointerDrag: NSEvent?
+    /// The held pointer's last position, including when Escape ends its contact.
+    var pointerDrag: NSEvent?
     /// Each node's latest free move, in the order the pointer reached them,
     /// sent at the next display frame or before a button goes down or up
     /// (`hoverMoved`).
@@ -894,7 +894,11 @@ package final class Presenter {
         defer { if row { split.pressing = nil } }
         let command = dialogs.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
         let popover = menus.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
-        if command == nil && popover == nil, node.id == id, let url = node.defaultLink, node.activateLink(url, bubbled: bubbled) { return }
+        // A link follows its link, and one that also hides its popover (a menu's link row) hides it then
+        if command == nil, popover == nil || menus.onlyHides(node), node.id == id, let url = node.defaultLink, node.activateLink(url, bubbled: bubbled) {
+            popover?()
+            return
+        }
         if node.isButton, !node.handlers.contains("press") { dispatchButtonAncestor(node, click: click ?? pressClick) }
         else if (command == nil && popover == nil) || node.handlers.contains("press") { pressClick = click ?? pressClick; onPress?(id); pressClick = nil }
         guard views[node.id] === node else { return }
@@ -1101,10 +1105,11 @@ package final class Presenter {
         let bar = toolbar.concerns(batch)
         if bar { toolbar.prepare() }
         anchorChanges.reset()
-        // A collection keeps its own place; the focus is read only for another scroller.
-        let anchored = scrollers.filter { !collections.owns($0) }
-        let anchorFocus = anchored.isEmpty ? nil : focusedNode
-        for id in anchored { views[id]?.captureScrollPosition(focused: anchorFocus) }
+        // Read focus only if an ordinary scroller needs an anchor.
+        lazy var anchorFocus = focusedNode
+        for id in scrollers where !collections.owns(id) {
+            views[id]?.captureScrollPosition(focused: anchorFocus)
+        }
         if let e = batch.error { FileHandle.standardError.write(Data("exact: \(e)\n".utf8)) }
         if let text = session?.text {
             // SVG text shapes with the session's fonts (LLP 1055.000 D11).
@@ -1257,7 +1262,7 @@ package final class Presenter {
                 switch op.property {
                 case "translate": v.translatePx = CGPoint(x: x, y: CGFloat(op.y)); v.translatePercent = CGPoint(x: CGFloat(op.w), y: CGFloat(op.h)); v.applyTransform()
                 case "layout": v.layoutOffset = CGPoint(x: x, y: CGFloat(op.y)); v.layoutResize = CGSize(width: CGFloat(op.w), height: CGFloat(op.h)); v.applyTransform(); v.applySurface()
-                case "scale": v.scale = x; v.applyTransform()
+                case "scale": v.scale = CGPoint(x: x, y: CGFloat(op.y)); v.applyTransform()
                 case "rotate": v.rotate = x; v.rotationAxis = [op.y, op.w, op.h]; v.applyTransform()
                 case "opacity": v.presentedAlpha = x; v.alphaValue = v.disabledShown ? x * NodeView.disabledOpacity : x; v.refreshPressOpacity()
                 case "flight": flightHost.present(id, x)

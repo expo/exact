@@ -1,11 +1,12 @@
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 import { expect, test } from 'bun:test';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { asyncContextHelper } from '../../js/bake/src/typescript.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // An answer's own timers on the JS target (LLP 1027.000 D1, amended 2026-10-28), ts-fetch.js and held.js as they
 // are: each is an entry of the page clock's timers, owned by its answer, run with that answer current, never run
@@ -16,8 +17,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 // (`globalThis.landing`) and rejects when its signal aborts.
 async function load() {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-answer-timers-'));
-  for (const name of ['ts-fetch.js', 'held.js']) cpSync(resolve(ROOT, 'host/web-js', name), resolve(dir, name));
-  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
+  for (const name of ['ts-fetch.js', 'held.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
+  writeFileSync(resolve(dir, 'admission.js'), `export { fetchTarget, ownWithout, redirectOf, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
 export class FetchError extends Error {} export const overlaying = { on: false }; export const inOverlay = what => new Error(what);
 export const signalDeadline = { arm: null };
 // As the real one: the deadline armed with the signal the request reads, ended when it is done

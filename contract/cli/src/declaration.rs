@@ -15,6 +15,7 @@ mod implementation;
 mod json;
 mod permissions;
 
+pub(crate) use json::{agent_shapes, agent_value_fits};
 use json::{is_json, json_holds};
 
 /// A refusal: its id and message; the caller adds the `use`'s span.
@@ -57,6 +58,7 @@ pub(crate) fn read(
                 .as_str()
                 .ok_or_else(|| refuse("an interface has a `name`".into()))?;
             let dir = path.parent().unwrap_or(Path::new("."));
+            file.uses = implementation::shape_imports(&json, dir, origin, consulted, span, |_, _| {}).map_err(refuse)?;
             let implementations = implementation::endorsed(dir).map_err(refuse)?;
             for (subpath, implementation) in &implementations {
                 let names: Vec<UseName> = object(&implementation["shapes"])
@@ -876,9 +878,10 @@ fn substitute(entry: &Value, interface: &Value) -> Result<String, String> {
             // item 5): a recognition of a track is a capture start, of a
             // file not.
             // `{"none": ["tool", "wake"]}`: refused while any of those is
-            // among the call's possible causes (LLP 1133.035 D16 item 6).
+            // among the call's possible causes (LLP 1133.035 D16 item 6);
+            // `action` too, a background action's or a control press's.
             "origin" => check(
-                matches!(value.as_str(), Some("app" | "person"))
+                matches!(value.as_str(), Some("app" | "person" | "input"))
                     || (value["is"] == "app"
                         && value["whenAny"].as_array().is_some_and(|any| {
                             (any.iter()).all(|o| {
@@ -890,10 +893,10 @@ fn substitute(entry: &Value, interface: &Value) -> Result<String, String> {
                         && value["none"].as_array().is_some_and(|none| {
                             !none.is_empty()
                                 && none.iter().all(|w| {
-                                    matches!(w.as_str(), Some("device" | "wake" | "tool"))
+                                    matches!(w.as_str(), Some("device" | "wake" | "tool" | "action"))
                                 })
                         })),
-                "`origin` is \"app\", \"person\", {\"whenAny\": [its options], \"is\": \"app\"}, or {\"none\": [\"device\", \"wake\" or \"tool\"]}",
+                "`origin` is \"app\", \"person\", \"input\", {\"whenAny\": [its options], \"is\": \"app\"}, or {\"none\": [\"device\", \"wake\", \"tool\" or \"action\"]}",
             )?,
             "foreground" => check(value.is_boolean(), "`foreground` is true or false")?,
             // A `foreground` name admitted while hidden when the app holds a

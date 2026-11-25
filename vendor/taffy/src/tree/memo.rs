@@ -41,8 +41,8 @@
 //! at one place), so a lookup is one walk whatever the number of rows seen.
 //! Nothing here holds a node: places are indices in the order boxes were
 //! first read, so a trace made by one row serves any other.
-use super::{Layout, LayoutInput, LayoutOutput, StaticPosition};
-use crate::geometry::{Point, Rect, Size};
+use super::{Layout, LayoutInput, LayoutOutput, ScrollableOverflow, StaticPosition};
+use crate::geometry::{Point, Size};
 use crate::style::Style;
 use std::rc::Rc;
 use std::vec::Vec;
@@ -93,8 +93,9 @@ pub(crate) enum Event {
 }
 
 /// Whether an overflow lies inside the border box of `size`.
-fn inside(overflow: Rect<f32>, size: Size<f32>) -> bool {
-    overflow.left >= 0.0 && overflow.top >= 0.0 && overflow.right <= size.width && overflow.bottom <= size.height
+fn inside(overflow: ScrollableOverflow, size: Size<f32>) -> bool {
+    let o = overflow.rect();
+    o.left >= 0.0 && o.top >= 0.0 && o.right <= size.width && o.bottom <= size.height
 }
 
 /// Whether two answers to `input` are one outcome. A size asked for is its
@@ -109,7 +110,8 @@ pub(crate) fn same_answer(input: &LayoutInput, a: &LayoutOutput, b: &LayoutOutpu
             && a.margins_can_collapse_through == b.margins_can_collapse_through;
     }
     a == b
-        || (inside(a.scrollable_overflow_rect, a.size)
+        || (a.scrollable_overflow_rect.is_reversed() == b.scrollable_overflow_rect.is_reversed()
+            && inside(a.scrollable_overflow_rect, a.size)
             && inside(b.scrollable_overflow_rect, b.size)
             && LayoutOutput { scrollable_overflow_rect: b.scrollable_overflow_rect, ..*a } == *b)
 }
@@ -117,7 +119,8 @@ pub(crate) fn same_answer(input: &LayoutInput, a: &LayoutOutput, b: &LayoutOutpu
 /// The same for two layouts written.
 fn same_layout(a: &Layout, b: &Layout) -> bool {
     a == b
-        || (inside(a.scrollable_overflow_rect, a.size)
+        || (a.scrollable_overflow_rect.is_reversed() == b.scrollable_overflow_rect.is_reversed()
+            && inside(a.scrollable_overflow_rect, a.size)
             && inside(b.scrollable_overflow_rect, b.size)
             && Layout { scrollable_overflow_rect: b.scrollable_overflow_rect, ..*a } == *b)
 }
@@ -196,7 +199,7 @@ pub(crate) struct Memo {
     pub(crate) nodes: Vec<super::NodeId>,
     /// The overflow each box last answered a final layout with, where the
     /// replay asked it.
-    pub(crate) overflows: Vec<Option<Rect<f32>>>,
+    pub(crate) overflows: Vec<Option<ScrollableOverflow>>,
     /// The containers a replay has stored a result for.
     pub(crate) stored: Vec<super::NodeId>,
     /// Replays that reached their end, and layouts recorded.
@@ -313,7 +316,7 @@ pub(crate) struct Recorder {
     index: std::collections::HashMap<super::NodeId, (u32, bool), core::hash::BuildHasherDefault<IdHasher>>,
     count: u32,
     /// The overflow each box last gave a final layout with, by index.
-    overflows: Vec<Option<Rect<f32>>>,
+    overflows: Vec<Option<ScrollableOverflow>>,
     /// The calls the trace holds an answer or a result for, each with the
     /// position of its box's call before it (`NONE`: its first).
     asked: Vec<(LayoutInput, u32)>,

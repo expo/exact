@@ -17,7 +17,7 @@
 //! before anything is asked, in every state: presence is not delegable
 //! (D12).
 
-use super::provenance::CallOrigin;
+use super::provenance::{CallOrigin, Cause};
 use super::reply::{response, Pending};
 use super::seams::PresenceSecrets;
 use super::{CommitReceipt, DataSource, Runner, RunnerError};
@@ -76,8 +76,8 @@ pub struct PresenceAsk {
     pub policy: String,
     /// The reason's text, translated: what the sheet shows.
     pub reason: String,
-    /// Who made the call.
-    pub origin: CallOrigin,
+    /// Who made the call; the host reads its origin in [`Self::json`].
+    pub(crate) cause: Cause,
     /// Where the host reads the item after the check (Apple: the keychain
     /// service). `None` under the agent, whose own store holds the value:
     /// the host only checks (`--bind`).
@@ -90,7 +90,7 @@ impl PresenceAsk {
     /// words, the reason's text and the origin. Never a value.
     pub fn json(&self) -> String {
         json!({ "call": self.id, "name": self.name, "account": format!("{}#{}", self.name, self.generation),
-            "service": self.keystore, "policy": self.policy, "reason": self.reason, "origin": self.origin.word() })
+            "service": self.keystore, "policy": self.policy, "reason": self.reason, "origin": self.cause.origin().word() })
         .to_string()
     }
 }
@@ -110,7 +110,7 @@ pub enum PresenceAnswer {
 struct Call {
     slot: Arc<Mutex<Pending>>,
     ticket: Option<u64>,
-    origin: CallOrigin,
+    cause: Cause,
     op: &'static str,
     name: String,
     reason: String,
@@ -189,7 +189,8 @@ impl<D: DataSource> Runner<D> {
         let Some(call) = self.presence.calls.get(&id) else {
             return;
         };
-        let (origin, reason) = (call.origin, call.reason.clone());
+        let (cause, reason) = (call.cause, call.reason.clone());
+        let origin = cause.origin();
         if origin != CallOrigin::App {
             let checked = Checked::Failed("PERMISSION_DENIED".into(), "person-required".into());
             return self.presence_checked(id, checked);
@@ -212,7 +213,7 @@ impl<D: DataSource> Runner<D> {
                 generation,
                 policy: presence.line_words(),
                 reason: self.strings_text(&reason),
-                origin,
+                cause,
                 keystore: p.keystore.clone(),
             };
             self.log(format!("store {op} {name}: the platform's check"));
@@ -475,7 +476,8 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
                 format!("{name} is not a secret.keep name with a presence policy"),
             ));
         };
-        let origin = r.data_origin();
+        let cause = r.data_cause();
+        let origin = cause.origin();
         let occupancy = r.store.occupancy(&name).unwrap_or(Occupancy::Absent);
         // Presence is not delegable (D12): refused before anything is asked.
         if matches!(op, "unlock" | "unprotect") && occupancy.locked() && origin != CallOrigin::App {
@@ -507,7 +509,7 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
             Call {
                 slot: slot.clone(),
                 ticket,
-                origin,
+                cause,
                 op,
                 name,
                 reason,
@@ -679,6 +681,48 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
         r.presence_checked(id, checked);
     }
 
+    /// Each call whose request is no longer wanted (the app aborted it, or
+    /// let it go) leaves the backend's queue, unanswered. A check the agent
+    /// or a later bind would make is withdrawn and ends as cancelled, so the
+    /// name is not held for an answer no one will give; one the platform is
+    /// making ends when the platform answers.
+    fn presence_let_go(&self, r: &mut Runner<D>) {
+        let gone: Vec<u64> = (r.presence.calls.iter())
+            .filter(|(_, c)| c.ticket.is_some_and(|t| !r.holds(t)))
+            .map(|(id, _)| *id)
+            .collect();
+        for &id in &gone {
+            let p = &mut r.presence;
+            let Some(call) = p.calls.remove(&id) else {
+                continue;
+            };
+            let holds: Vec<u64> = (p.holds.iter())
+                .filter(|(_, c, _)| *c == id)
+                .map(|(h, _, _)| *h)
+                .collect();
+            p.holds.retain(|(_, c, _)| *c != id);
+            let unasked = p.asks.iter().any(|a| a.id == id) || p.waiting.contains(&id);
+            p.asks.retain(|a| a.id != id);
+            p.waiting.retain(|w| *w != id);
+            if let Some(backend) = p.backend.as_mut() {
+                backend.cancel(id);
+                if unasked || !holds.is_empty() {
+                    let why = "the call was let go".to_owned();
+                    backend.checked(id, Checked::Failed("SYSTEM_CANCEL".into(), why));
+                }
+            }
+            for hold in holds {
+                r.retire_hold(hold);
+            }
+            r.log(format!("store {} {}: let go", call.op, call.name));
+            let done = Done::Failed("AbortError".into(), "the call was let go".into());
+            Pending::complete(&call.slot, response(&answer(&done)));
+        }
+        if !gone.is_empty() {
+            r.pump_presence();
+        }
+    }
+
     /// The store adopts the backend's occupancy, at the start of a commit:
     /// a move that landed shows in this commit, and asks the store's readers
     /// again where `has` or `locked` changed.
@@ -707,7 +751,7 @@ mod tests {
             generation: 2,
             policy: "user-presence optional".into(),
             reason: "Unlock Excord".into(),
-            origin: CallOrigin::App,
+            cause: Cause::person(),
             keystore: Some("com.example.presence".into()),
         };
         let json: Json = serde_json::from_str(&ask.json()).unwrap();

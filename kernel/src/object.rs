@@ -1,6 +1,6 @@
 //! CSS replaced-object geometry and defaults, shared by graphical hosts.
 use crate::{Dimension, Env, ObjectFit};
-use cssparser::{ParseError, Parser, ParserInput, Token};
+use cssparser::{ParseError, Parser, Token};
 use std::borrow::Cow;
 
 /// HTML's video UA default applies only when the author leaves `object-fit` unsaid.
@@ -178,8 +178,7 @@ impl Position {
 }
 
 fn position_components(css: &str) -> Option<Vec<Cow<'_, str>>> {
-    let mut input = ParserInput::new(css);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(css);
     let mut values = Vec::new();
     while !parser.is_exhausted() {
         parser.skip_whitespace();
@@ -192,7 +191,7 @@ fn position_components(css: &str) -> Option<Vec<Cow<'_, str>>> {
                 parser
                     .parse_nested_block(|p| {
                         while p.next().is_ok() {}
-                        Ok::<_, ParseError<'_, ()>>(())
+                        Ok::<_, ParseError<()>>(())
                     })
                     .ok()?;
                 Cow::Borrowed(parser.slice_from(start))

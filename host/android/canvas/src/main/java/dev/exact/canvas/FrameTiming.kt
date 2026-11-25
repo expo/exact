@@ -5,10 +5,13 @@ import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.PowerManager
 import android.view.Choreographer
 import android.view.Display
 import android.view.FrameMetrics
+import android.view.View
 import android.view.Window
+import android.view.WindowManager
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicLongArray
@@ -18,8 +21,8 @@ import java.util.concurrent.atomic.AtomicLongArray
  * gives the frame's deadline and the spacing of the vsyncs it is scheduled on; before it a frame callback, which gives
  * neither. Both run in Choreographer's animation phase, so a turn is scheduled the same either way.
  */
-internal class Turns(private val turned: (vsync: Long, deadline: Long, period: Long) -> Unit) {
-    private val frame = Choreographer.FrameCallback { turned(it, 0L, 0L) }
+internal class Turns(private val turned: (vsync: Long, deadline: Long, period: Long, arrival: Long) -> Unit) {
+    private val frame = Choreographer.FrameCallback { turned(it, 0L, 0L, System.nanoTime()) }
     private val vsync: Any? = if (Build.VERSION.SDK_INT >= 33) Vsyncs.callback(turned) else null
 
     fun post(c: Choreographer) { if (vsync != null) Vsyncs.post(c, vsync) else c.postFrameCallback(frame) }
@@ -28,11 +31,12 @@ internal class Turns(private val turned: (vsync: Long, deadline: Long, period: L
 
 @android.annotation.TargetApi(33)
 private object Vsyncs {
-    fun callback(turned: (Long, Long, Long) -> Unit): Any = Choreographer.VsyncCallback { data ->
+    fun callback(turned: (Long, Long, Long, Long) -> Unit): Any = Choreographer.VsyncCallback { data ->
+        val arrival = System.nanoTime()
         // The timelines are the vsyncs this frame could be presented at, one period apart.
         val lines = data.frameTimelines
         val period = if (lines.size >= 2) lines[1].expectedPresentationTimeNanos - lines[0].expectedPresentationTimeNanos else 0L
-        turned(data.frameTimeNanos, data.preferredFrameTimeline.deadlineNanos, period)
+        turned(data.frameTimeNanos, data.preferredFrameTimeline.deadlineNanos, period, arrival)
     }
     fun post(c: Choreographer, callback: Any) = c.postVsyncCallback(callback as Choreographer.VsyncCallback)
     fun remove(c: Choreographer, callback: Any) = c.removeVsyncCallback(callback as Choreographer.VsyncCallback)
@@ -170,4 +174,97 @@ internal class FrameRates {
 
     /** The rate [view] asks for; 0 for the display's. */
     fun of(view: Int): Int = rates[view] ?: 0
+}
+
+/** The active reader's GPU canvases share the display callback and thermal code of LLP 1009.
+ * Views and registrations belong to the main thread. The render thread reads the current registration. */
+internal object HostFacts {
+    private val views = LinkedHashSet<View>()
+    @Volatile private var active: Registration? = null
+
+    fun turned(vsync: Long, arrival: Long, scheduled: Long = 0L) {
+        val facts = active
+        Native.displayFrame(vsync, arrival, facts?.fastest ?: 0L, facts?.thermal ?: 0,
+            if (scheduled > 0L) scheduled else facts?.period ?: 0L)
+    }
+
+    fun attached(view: View) {
+        if (!views.add(view)) return
+        if (active == null) active = Registration(view.context.applicationContext)
+        displayChanged()
+    }
+
+    fun detached(view: View) {
+        if (!views.remove(view)) return
+        if (views.isEmpty()) {
+            val previous = active
+            active = null
+            previous?.close()
+        } else displayChanged()
+    }
+
+    private fun displayChanged() {
+        val view = views.lastOrNull() ?: return
+        val display = view.display ?: view.context.getSystemService(WindowManager::class.java).defaultDisplay
+        active?.readDisplay(display)
+    }
+
+    /** A move between two connected displays need not change either mode or the window configuration. */
+    fun onScreen(display: Display?) {
+        val facts = active ?: return
+        if (display != null && display.displayId != facts.displayId) facts.readDisplay(display)
+    }
+
+    private class Registration(context: Context) : DisplayManager.DisplayListener {
+        private val displays = context.getSystemService(DisplayManager::class.java)
+        private val power = context.getSystemService(PowerManager::class.java)
+        var displayId = Display.INVALID_DISPLAY
+        @Volatile var period = 0L
+        @Volatile var fastest = 0L
+        @Volatile var thermal = try { thermalCode(power.currentThermalStatus) } catch (_: RuntimeException) { 0 }
+        private val listener = PowerManager.OnThermalStatusChangedListener { thermal = thermalCode(it) }
+        private val registered = try {
+            power.addThermalStatusListener(listener)
+            true
+        } catch (_: RuntimeException) { false }
+
+        init {
+            displays.registerDisplayListener(this, Handler(android.os.Looper.getMainLooper()))
+        }
+
+        fun readDisplay(display: Display) {
+            displayId = display.displayId
+            val hz = display.refreshRate
+            period = if (hz > 0f) Math.round(1e9 / hz) else 0L
+            fastest = fastestPeriod(display)
+        }
+
+        override fun onDisplayChanged(id: Int) = displayChanged()
+        override fun onDisplayAdded(id: Int) = displayChanged()
+        override fun onDisplayRemoved(id: Int) = displayChanged()
+
+        fun close() {
+            displays.unregisterDisplayListener(this)
+            if (registered) try { power.removeThermalStatusListener(listener) } catch (_: RuntimeException) {}
+        }
+    }
+
+    fun thermalCode(status: Int): Int = when (status) {
+        PowerManager.THERMAL_STATUS_NONE -> 1
+        PowerManager.THERMAL_STATUS_LIGHT -> 2
+        PowerManager.THERMAL_STATUS_MODERATE, PowerManager.THERMAL_STATUS_SEVERE -> 3
+        PowerManager.THERMAL_STATUS_CRITICAL, PowerManager.THERMAL_STATUS_EMERGENCY,
+        PowerManager.THERMAL_STATUS_SHUTDOWN -> 4
+        else -> 0
+    }
+
+    /** A frame-rate vote can change refresh rate within the current resolution. */
+    private fun fastestPeriod(display: Display): Long {
+        val mode = display.mode
+        var hz = mode.refreshRate
+        for (m in display.supportedModes) {
+            if (m.physicalWidth == mode.physicalWidth && m.physicalHeight == mode.physicalHeight) hz = maxOf(hz, m.refreshRate)
+        }
+        return if (hz > 0f) Math.round(1e9 / hz) else 0L
+    }
 }

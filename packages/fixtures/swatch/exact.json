@@ -6,7 +6,26 @@
   "shapes": {
     "SwatchReports": {
       "text": "string",
-      "count": "number"
+      "count": "number",
+      "config": "string"
+    }
+  },
+  "config": {
+    "web": {
+      "apiKey": { "type": "env", "required": "release", "missing": "swatch-key-missing" },
+      "label": "string"
+    },
+    "android": {
+      "apiKey": { "type": "env", "required": "release", "missing": "swatch-key-missing" },
+      "label": "string"
+    },
+    "ios": {
+      "apiKey": { "type": "env", "required": "release", "missing": "swatch-key-missing" },
+      "label": "string"
+    },
+    "macos": {
+      "apiKey": { "type": "env", "required": "release", "missing": "swatch-key-missing" },
+      "label": "string"
     }
   },
   "views": {
@@ -24,7 +43,7 @@
       "source": "swatchReports",
       "live": true,
       "answers": "SwatchReports",
-      "substitute": { "default": { "text": "", "count": 0 } }
+      "substitute": { "default": { "text": "", "count": 0, "config": "" } }
     }
   ]
 }

@@ -1,4 +1,3 @@
-// linux: the Linux host takes no drag from outside the app and pastes text only
 // Files dragged in and pasted (LLP 1069.010, "Files dropped or pasted"): a
 // drag over the column, then into its textarea, is one enter; a drop on the
 // textarea is the column's, with no dragleave after it; a paste's files and

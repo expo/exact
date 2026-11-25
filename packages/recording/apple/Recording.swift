@@ -39,6 +39,7 @@ public final class RecordingModule: ExactPackage {
     private let context: ExactPackageContext
     private var recorders: [String: MediaTake] = [:]
     private var meters: [String: Meter] = [:]
+    private var waveforms: [String: Waveform] = [:]
     private var next = 0
 
     public init(context: ExactPackageContext) { self.context = context }
@@ -81,19 +82,28 @@ public final class RecordingModule: ExactPackage {
     /// `<audio-waveform>` (D13).
     public func view(_ tag: String, id: String, props: [String: String], events: ExactPackageEvents) throws -> ExactPackageView {
         guard tag == "audio-waveform" else { throw ExactPackageRefusal("no view \(tag)") }
-        let waveform = Waveform(module: self)
+        waveforms[id]?.destroy()
+        let waveform = Waveform(id: id, module: self)
+        waveforms[id] = waveform
         try waveform.setProps(props)
         return waveform
     }
 
-    var now: Double { context.now() }
-
-    /// A waveform's own meter of `track`, a reader that never starts it.
-    func waveformMeter(_ track: String) -> Meter? {
-        let m = Meter(interval: WaveformBars.step, history: WaveformBars.history, agent: context.agent, now: context.now())
-        m.subscription = try? context.tracks.subscribe(track, m, start: false, origin: context.origin)
-        return m.subscription == nil ? nil : m
+    func propsChanged(_ waveform: Waveform) {
+        guard waveforms[waveform.id] === waveform else { return }
+        waveform.presentation?.cancel()
+        let agent = context.agent, now = context.now
+        waveform.presentation = context.tracks.present("audio-waveform", id: waveform.id, prop: "track", value: waveform.track, kind: "audio") { _ in
+            WaveformMeter(agent: agent, now: now())
+        } show: { [weak waveform] reader in waveform?.canvas.meter = reader as? WaveformMeter }
     }
+
+    func gone(_ waveform: Waveform) {
+        waveform.presentation?.cancel()
+        if waveforms[waveform.id] === waveform { waveforms[waveform.id] = nil }
+    }
+
+    var now: Double { context.now() }
 
     private func announce() { context.changed("recording.mediaRecorderState") }
 
@@ -183,6 +193,7 @@ public final class RecordingModule: ExactPackage {
 
     /// The session ends: every recorder stops and its file is finished (D6).
     public func destroy(_ done: @escaping () -> Void) {
+        for w in waveforms.values { w.destroy() }
         for m in meters.values { m.stop() }
         let group = DispatchGroup()
         for r in recorders.values {
@@ -264,7 +275,8 @@ final class Recorder: ExactTrackConsumer, MediaTake {
         state = "recording"; reason = nil; since = context.now(); recordingFlag.value = true
         if context.agent { spans.append((context.now(), nil)) }
         arm()
-        // A reset or a failed foreground activation can leave the track without a capture.
+        // A resumed subscription gets its own tap and appends to the same writer.
+        tap?.cancel(); tap = nil
         subscription?.cancel(); subscription = nil
         do {
             subscription = try context.tracks.subscribe(track, self, start: true, origin: context.origin)
@@ -281,8 +293,11 @@ final class Recorder: ExactTrackConsumer, MediaTake {
         guard let source, tap == nil, state != "inactive" else { return }
         let format = source.format, pending = pending, limit = AVAudioFrameCount(format.sampleRate * 2)
         do {
-            let writer = try Writer(url: url, type: type, format: format, bitRate: bitRate, bitRateMode: bitRateMode, apple: apple)
-            queue.sync { self.writer = writer }
+            try queue.sync {
+                if writer == nil {
+                    writer = try Writer(url: url, type: type, format: format, bitRate: bitRate, bitRateMode: bitRateMode, apple: apple)
+                }
+            }
             context.log("recording: \(id) writes \(Writer.describe(format))")
         } catch {
             return finish("error", error: "the file did not open: \(error)") { _ in }
@@ -583,7 +598,7 @@ struct CaptureFailure: Error, CustomStringConvertible {
 }
 
 /// A level on one track with one argument group (D1).
-final class Meter: ExactTrackConsumer {
+class Meter: ExactTrackConsumer {
     let interval: Double, history: Int, agent: Bool
     var subscription: ExactSubscription?
     private var tap: ExactSubscription?
@@ -718,16 +733,28 @@ struct WaveformBars {
     }
 }
 
+/// A runner node owns the meter and its scrolling history across native view replacement.
+final class WaveformMeter: Meter {
+    var bars: WaveformBars
+    init(agent: Bool, now: Double) {
+        bars = WaveformBars(start: now)
+        super.init(interval: WaveformBars.step, history: WaveformBars.history, agent: agent, now: now)
+    }
+}
+
 /// `<audio-waveform track=…>`: the track's levels as bars, newest at the
 /// right, drawn each display frame from a meter of its own, so no level
 /// crosses into Contract. A reader of the track, never a start: an idle
 /// track draws silence.
 final class Waveform: NSObject, ExactPackageView {
-    private let canvas = WaveformCanvas()
+    fileprivate let canvas = WaveformCanvas()
+    fileprivate var presentation: ExactSubscription?
     private let module: RecordingModule
-    private var track = ""
+    private(set) var track = ""
+    let id: String
 
-    init(module: RecordingModule) {
+    init(id: String, module: RecordingModule) {
+        self.id = id
         self.module = module
         super.init()
         canvas.advance = { [weak self] in self?.advance() }
@@ -738,20 +765,23 @@ final class Waveform: NSObject, ExactPackageView {
     func setProps(_ props: [String: String]) throws {
         canvas.color = props["tint"].flatMap(Waveform.color) ?? canvas.color
         let next = props["track"] ?? ""
-        guard next != track else { return }
-        canvas.meter?.stop()
-        track = next
-        canvas.meter = track.isEmpty ? nil : module.waveformMeter(track)
-        canvas.bars = WaveformBars(start: module.now)
+        if next != track {
+            track = next
+            module.propsChanged(self)
+        }
     }
 
     private func advance() {
         guard let meter = canvas.meter else { return }
         let now = module.now
-        canvas.bars.advance(now, meter.advance(now))
+        meter.bars.advance(now, meter.advance(now))
     }
 
-    func destroy() { canvas.stop(); canvas.meter?.stop() }
+    func destroy() {
+        module.gone(self)
+        canvas.stop()
+        canvas.meter = nil
+    }
 
     /// `#rgb` or `#rrggbb`.
     static func color(_ hex: String) -> WaveformColor? {
@@ -765,8 +795,7 @@ final class Waveform: NSObject, ExactPackageView {
 
 final class WaveformCanvas: ExactPackagePlatformView {
     var color: WaveformColor = .systemRed
-    var meter: Meter?
-    var bars = WaveformBars(start: 0)
+    var meter: WaveformMeter?
     var advance: () -> Void = {}
     private var link: AnyObject?
     static let bar: CGFloat = 3, gap: CGFloat = 2
@@ -812,6 +841,7 @@ final class WaveformCanvas: ExactPackagePlatformView {
         #else
         guard let g = UIGraphicsGetCurrentContext() else { return }
         #endif
+        guard let bars = meter?.bars else { return }
         let w = bounds.width, h = bounds.height
         // One bar more than fits: the oldest slides out at the left as the bars scroll.
         let fit = max(0, Int((w + Self.gap) / (Self.bar + Self.gap))) + 1, shown = bars.bars.suffix(fit), phase = CGFloat(bars.phase)

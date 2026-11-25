@@ -285,7 +285,7 @@ final class AccessibilityTests: XCTestCase {
         withExtendedLifetime(w) {}
     }
     /// LLP 1116 D8: a drawn `role="progressbar"` is AppKit's progress
-    /// indicator (#278), its value `aria-valuenow` between `aria-valuemin`
+    /// indicator, its value `aria-valuenow` between `aria-valuemin`
     /// and `aria-valuemax` (ARIA's 0 and 100 where unsaid), `aria-valuetext`
     /// its description, and its children unread.
     func testARangeRoleIsOneElementWithItsValue() {
@@ -329,8 +329,8 @@ final class AccessibilityTests: XCTestCase {
     /// is `rtl`, which the document's sets unless the node says its own),
     /// ArrowUp and ArrowDown for a vertical one and a spin button. A
     /// `progressbar` offers neither.
-    func testADrawnSliderOrSpinbuttonStepsByItsKeys() {
-        let (p, w, _, _) = fixture()
+    func testADrawnSliderOrSpinbuttonStepsByItsKeys() throws {
+        let (p, w, reset, _) = fixture()
         let node = NodeView(id: 20, kind: "view", presenter: p)
         node.frame = NSRect(x: 0, y: 100, width: 200, height: 30)
         p.root.addSubview(node); p.views[node.id] = node
@@ -360,6 +360,74 @@ final class AccessibilityTests: XCTestCase {
         XCTAssertEqual(keys { _ = node.accessibilityPerformIncrement(); _ = node.accessibilityPerformDecrement() }, ["ArrowUp", "ArrowDown"])
         node.applyProps(set: ["accessibilityRole": "spinbutton"], clear: ["accessibilityOrientation"])
         XCTAssertEqual(keys { _ = node.accessibilityPerformIncrement(); _ = node.accessibilityPerformDecrement() }, ["ArrowUp", "ArrowDown"])
+        XCTAssertEqual(NodeView.idRefs("one\ntwo\rthree\r\nfour\tfive\u{c}six"), ["one", "two", "three", "four", "five", "six"])
+        XCTAssertEqual(NodeView.idRefs("one \u{301}two\u{b}three\u{a0}four"), ["one", "\u{301}two\u{b}three\u{a0}four"])
+        reset.handlers = ["press"]
+        reset.applyProps(set: ["id": "reset", "accessibilityLabel": "Reset quantity"], clear: [])
+        p.chrome.note(reset.id, props: reset.props)
+        node.applyProps(set: ["accessibilityActions": "reset"], clear: [])
+        node.applyProps(set: ["tabIndex": "0"], clear: [])
+        XCTAssertTrue(w.makeFirstResponder(node))
+        var presses: [UInt32] = []
+        p.onPress = { presses.append($0); _ = w.makeFirstResponder(reset) }
+        let action = try XCTUnwrap(node.accessibilityCustomActions()?.first)
+        XCTAssertEqual(action.name, "Reset quantity")
+        XCTAssertEqual(action.handler?(), true)
+        waitFor("the accepted press runs") { presses == [reset.id] }
+        XCTAssertTrue(w.firstResponder === node)
+        let outside = NSTextField()
+        w.contentView?.addSubview(outside)
+        var movedOutside = false
+        p.onPress = { _ in movedOutside = w.makeFirstResponder(outside) }
+        XCTAssertEqual(action.handler?(), true)
+        waitFor("the handler moved focus outside Exact") { movedOutside }
+        XCTAssertTrue(w.firstResponder === outside || (w.firstResponder as? NSTextView)?.delegate === outside)
+        p.onPress = { presses.append($0) }
+        reset.applyProps(set: ["accessibilityLabel": "Start over"], clear: [])
+        XCTAssertEqual(node.accessibilityCustomActions()?.map(\.name), ["Start over"])
+        XCTAssertEqual(action.handler?(), true)
+        waitFor("the renamed target is pressed") { presses == [reset.id, reset.id] }
+        let label = NodeView(id: 21, kind: "text", presenter: p)
+        p.views[label.id] = label
+        p.root.addSubview(label)
+        label.applyProps(set: ["id": "caption", "text": "Referenced name"], clear: [])
+        p.chrome.note(label.id, props: label.props)
+        reset.applyProps(set: ["accessibilityLabelledBy": "caption"], clear: [])
+        XCTAssertEqual(node.accessibilityCustomActions()?.map(\.name), ["Referenced name"])
+        let caption: [String: Any] = ["id": 23, "parent": 21, "paint": true,
+                                     "props": ["id": "run-caption", "text": "Inline name", "accessibilityLabel": "", "accessibilityElementsHidden": "true"]]
+        p.apply(wireBatch([["op": "paragraph", "id": 21, "runs": [caption]]]))
+        reset.applyProps(set: ["accessibilityLabelledBy": "run-caption"], clear: [])
+        XCTAssertEqual(reset.authoredLabel, "Inline name")
+        XCTAssertEqual(node.accessibilityCustomActions()?.map(\.name), ["Inline name"])
+        p.apply(wireBatch([["op": "paragraph", "id": 21, "runs": []]]))
+        XCTAssertNil(p.chrome.accessibilityID("run-caption"))
+        reset.applyProps(set: [:], clear: ["accessibilityLabelledBy", "accessibilityLabel"])
+        XCTAssertNil(node.accessibilityCustomActions())
+        XCTAssertEqual(action.handler?(), false)
+        reset.applyProps(set: ["accessibilityLabel": "Reset quantity"], clear: [])
+        let hidden = NodeView(id: 22, kind: "view", presenter: p)
+        p.root.addSubview(hidden)
+        hidden.addSubview(reset)
+        hidden.applyProps(set: ["accessibilityDisabled": "true"], clear: [])
+        XCTAssertNil(node.accessibilityCustomActions())
+        reset.applyProps(set: ["accessibilityDisabled": "false"], clear: [])
+        XCTAssertEqual(node.accessibilityCustomActions()?.map(\.name), ["Reset quantity"])
+        hidden.applyProps(set: ["accessibilityElementsHidden": "true"], clear: [])
+        XCTAssertNil(node.accessibilityCustomActions())
+        hidden.applyProps(set: [:], clear: ["accessibilityElementsHidden"])
+        reset.isHidden = true
+        XCTAssertNil(node.accessibilityCustomActions())
+        XCTAssertEqual(action.handler?(), false)
+        p.chrome.forget(reset.id)
+        let replacement = NodeView(id: 24, kind: "button", presenter: p)
+        p.views[replacement.id] = replacement
+        p.root.addSubview(replacement)
+        replacement.handlers = ["press"]
+        replacement.applyProps(set: ["id": "reset", "accessibilityLabel": "Reset quantity"], clear: [])
+        p.chrome.note(replacement.id, props: replacement.props)
+        XCTAssertEqual(action.handler?(), true)
+        waitFor("the retained action presses the mounted button") { presses.last == replacement.id }
         node.applyProps(set: ["accessibilityRole": "progressbar"], clear: [])
         XCTAssertFalse(node.isAccessibilitySelectorAllowed(#selector(NSView.accessibilityPerformIncrement)))
         XCTAssertEqual(keys { XCTAssertFalse(node.accessibilityPerformIncrement()) }, [])
@@ -751,6 +819,32 @@ final class AccessibilityTests: XCTestCase {
         XCTAssertNil(p.focusedNode)
         withExtendedLifetime(w) {}
     }
+    func testReferencedLinksFollowTheirDestinationOnce() throws {
+        final class Links: ExactSessionDelegate {
+            var opened: [String] = []
+            func exactSession(_ session: ExactSession, command name: String, args: [Any]) {
+                if name == "openURL", let url = args.first as? String { opened.append(url) }
+            }
+        }
+        let (session, window) = try launchFixture(extra: """
+              column aria-label="Read" aria-actions="docs help" testId="links"
+                button "Docs" id="docs" href="https://example.com/docs"
+                text
+                  text "Help" id="help" href="https://example.com/help"
+
+        """)
+        defer { session.destroy() }
+        let links = Links()
+        session.delegate = links
+        let owner = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "links" })
+        let actions = try XCTUnwrap(owner.accessibilityCustomActions())
+        XCTAssertEqual(actions.map(\.name), ["Docs", "Help"])
+        for action in actions { XCTAssertEqual(action.handler?(), true) }
+        waitFor("both link presses") { links.opened.count == 2 }
+        XCTAssertEqual(links.opened, ["https://example.com/docs", "https://example.com/help"])
+        withExtendedLifetime(window) {}
+    }
+
     /// Runs the main run loop until `done` holds, for at most `timeout` seconds.
     private func spin(timeout: TimeInterval = 10, until done: () -> Bool) {
         let end = Date().addingTimeInterval(timeout)

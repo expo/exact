@@ -1,5 +1,6 @@
 package exact.languagemodel
 
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Native
 import org.json.JSONObject
@@ -31,7 +32,7 @@ class BackgroundTest {
 
     private fun call(name: String, args: JSONObject): JSONObject {
         var answer: JSONObject? = null
-        module.later(name, args) { answer = it }
+        module.later(name, args, null, Cause("app")) { answer = it }
         return answer!!
     }
 

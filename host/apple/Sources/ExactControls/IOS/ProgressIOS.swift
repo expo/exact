@@ -43,6 +43,25 @@ extension ControlHost {
             if spinner.superview !== mount { mount.addSubview(spinner) }
             let box = owner.contentBox()
             assign(spinner, \.style, min(box.width, box.height) >= Self.largeSide ? .large : .medium)
+            if let readout = owner.barReadout {
+                // In a readout the bar hosts, what it leaves unsaid is the bar's (LLP 1141.004 D3): its own
+                // `color`, else the nearest `accent-color` written on it or within the readout (`AccentColor`
+                // the design's accent, else its window's tint; `auto` UIKit's), else UIKit's own colour. An
+                // accent from above the readout does not reach it.
+                let writer = owner.authoredLine.prefix { $0 !== readout }.first { $0.wrote("accent_color") }
+                    ?? (readout.wrote("accent_color") ? readout : nil)
+                assign(spinner, \.tintColor, nil)
+                let accent = writer.flatMap { w -> UIColor? in
+                    guard let share = w.style["accent_color"]?.tintAlpha else { return w.authoredAccentTint }
+                    let tint = ThemeRoles.color("AccentColor", in: spinner) ?? spinner.window?.tintColor ?? SystemColor.appTint
+                    // `Highlight` is a share of the tint
+                    return share < 1 ? tint?.withAlphaComponent(share) : tint
+                }
+                let color = owner.ownUIColor("text_color") ?? accent
+                assign(spinner, \.color, color ?? Self.platformInk)
+                place(spinner, of: owner, held: held, box: box)
+                continue
+            }
             // The spinner's own `color`, else an authored accent (on it or
             // around it, as the bar takes it: LLP 1121 D9), else UIKit's grey
             // (LLP 1115 D4: an inherited text colour is not the spinner's).
@@ -61,18 +80,23 @@ extension ControlHost {
             let kept = above.map { SystemColor.tint($0.style["accent_color"]?.tintAlpha ?? 1) }
             let accent = (written ? owner.accentUIColor() : nil) ?? kept ?? ThemeRoles.color("AccentColor", in: spinner)
             assign(spinner, \.color, own ?? accent ?? Self.platformInk)
-            assign(spinner, \.isHidden, owner.cssVisibilityHidden)
-            assign(spinner, \.accessibilityIdentifier, owner.props["testId"])
-            // None restores UIKit's own ("In progress").
-            assign(spinner, \.accessibilityLabel, owner.props["accessibilityLabel"])
-            let natural = spinner.intrinsicContentSize
-            assign(spinner, \.frame, CGRect(x: box.midX - natural.width / 2, y: box.midY - natural.height / 2,
-                                            width: natural.width, height: natural.height))
-            let turns = !held && !owner.cssVisibilityHidden && Self.shown(owner)
-            if turns != spinner.isAnimating { if turns { spinner.startAnimating() } else { spinner.stopAnimating() } }
+            place(spinner, of: owner, held: held, box: box)
         }
         // One leaving with its exit holds too, under the agent's clock.
         if held { for id in leaving { if let s = spinners[id], s.isAnimating { s.stopAnimating() } } }
+    }
+
+    /// Show, name, place and turn `spinner` for `owner`.
+    private func place(_ spinner: UIActivityIndicatorView, of owner: NodeView, held: Bool, box: CGRect) {
+        assign(spinner, \.isHidden, owner.cssVisibilityHidden)
+        assign(spinner, \.accessibilityIdentifier, owner.props["testId"])
+        // None restores UIKit's own ("In progress").
+        assign(spinner, \.accessibilityLabel, owner.props["accessibilityLabel"])
+        let natural = spinner.intrinsicContentSize
+        assign(spinner, \.frame, CGRect(x: box.midX - natural.width / 2, y: box.midY - natural.height / 2,
+                                        width: natural.width, height: natural.height))
+        let turns = !held && !owner.cssVisibilityHidden && Self.shown(owner)
+        if turns != spinner.isAnimating { if turns { spinner.startAnimating() } else { spinner.stopAnimating() } }
     }
 
     /// Whether `view` authors its `accent-color` (not the platform's tint,
@@ -157,6 +181,11 @@ final class ProgressBarIOS: UIProgressView {
         get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
         set { super.accessibilityDragSourceDescriptors = newValue }
     }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { super.accessibilityDropPointDescriptors = newValue }
+    }
     #endif
 }
 
@@ -167,6 +196,11 @@ final class SpinnerIOS: UIActivityIndicatorView {
     override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
         get { super.accessibilityDragSourceDescriptors ?? owner?.presenter?.dragOut?.descriptors(of: self, isElement: true) }
         set { super.accessibilityDragSourceDescriptors = newValue }
+    }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { super.accessibilityDropPointDescriptors = newValue }
     }
     #endif
 }

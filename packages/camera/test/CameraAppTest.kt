@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Extensions
 import dev.exact.canvas.Files
@@ -114,8 +115,8 @@ class CameraAppTest {
     }
 
     private fun take(args: JSONObject = JSONObject(), tap: String? = null, send: String = "takePhotoWithCameraApp", request: Int? = null) =
-        CameraModule(ExtensionContext(application, "camera").also { it.request = request }).let { module ->
-            module.later(send, args, tap?.let { JSONObject().put("tap", it) }) { answers += it; answeredOn += Looper.myLooper() }
+        CameraModule(ExtensionContext(application, "camera")).let { module ->
+            module.later(send, args, tap?.let { JSONObject().put("tap", it) }, Cause("app", request = request)) { answers += it; answeredOn += Looper.myLooper() }
             module
         }
 
@@ -305,7 +306,7 @@ class CameraAppTest {
         assertEquals("kept", clip.readText())
         assertFalse(staging())
         answers.clear()
-        module.later("takePhotoWithCameraApp", JSONObject(), null) { answers += it }
+        module.later("takePhotoWithCameraApp", JSONObject(), null, Cause("app")) { answers += it }
         assertEquals(MediaStore.ACTION_IMAGE_CAPTURE, started().first.action)
     }
 
@@ -371,7 +372,7 @@ class CameraAppTest {
     @Test fun aSecondCallWhileTheCameraAppIsUpIsInvalidStateError() {
         val module = record()
         started()
-        module.later("takePhotoWithCameraApp", JSONObject(), null) { answers += it }
+        module.later("takePhotoWithCameraApp", JSONObject(), null, Cause("app")) { answers += it }
         assertEquals("InvalidStateError", answers.single().getString("error"))
     }
 

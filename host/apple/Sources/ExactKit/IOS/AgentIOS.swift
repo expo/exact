@@ -126,16 +126,14 @@ extension Agent {
         return true
     }
 
-    /// Whether the navigation, modal or menu host is in a transition, or a
-    /// sync that a move of UIKit's owes in the next turn (`syncNextTurn`) has
-    /// not run, so Exact has not followed the move: what an input waits for
-    /// under frozen timing, and part of what `clock settle` waits for. The
-    /// owed sync counts here and not in `NavigationHost.inTransition`, which a
-    /// confirmation waiting to show also reads (`resumeAfterRouteDismissal`)
-    /// and that sync does not retry.
+    /// Native transitions and scheduled navigation work that an input waits
+    /// for under frozen timing and that `clock settle` waits for. A scheduled
+    /// sync can follow a UIKit move, continue a yielded projection or retry
+    /// a stack write UIKit declined. A queued sync alone leaves the route
+    /// available for a confirmation to show (`resumeAfterRouteDismissal`).
     var hostsInTransition: Bool {
         let navigation = presenter.navigation
-        return navigation.inTransition || navigation.resyncOwed || presenter.modals.inTransition || presenter.menus.inTransition
+        return navigation.inTransition || navigation.syncScheduled || presenter.modals.inTransition || presenter.menus.inTransition
     }
 
     /// Under platform timing UIKit animates an alert's dismissal, and a
@@ -320,7 +318,22 @@ extension Agent {
     /// mounted for it. Observations, never a second model; a stale id is
     /// refused by name. An inline run's geometry is its fragment union.
     func layout(_ req: [String: Any]) -> [String: Any] {
-        var reply = layout()
+        #if os(iOS) && targetEnvironment(simulator) && EXACT_AGENT
+        if req["simulatorRotation"] as? Bool == true {
+            guard let window = presenter.viewport.window, let scene = window.windowScene else { return [:] }
+            // The inner screen has a division even when fully open. Only active divisions affect app layout.
+            var mask = UIApplication.shared.supportedInterfaceOrientations(for: window)
+            if let route = presenter.orientationLock.supported { mask.formIntersection(route) }
+            var locked = presenter.orientationLock.locked
+            if #available(iOS 26, *) { locked = locked || scene.effectiveGeometry.isInterfaceOrientationLocked }
+            return ["angle": session.view?.simulatorHingeAngle as Any, "orientation": Agent.orientation(scene), "device": UIDevice.current.orientation.rawValue,
+                    "allowed": OrientationLock.named(OrientationLock.bits(mask)), "locked": locked,
+                    "inner": !(ReservedRegions.divisions(of: window) ?? []).isEmpty,
+                    "ready": Agent.frontRefusal(window) == nil && window.rootViewController?.transitionCoordinator == nil]
+        }
+        #endif
+        let bars = drawnBarBoxes()
+        var reply = layout(bars: bars)
         guard let id = req["id"] as? Int else { return reply }
         // A flat leaf (FlatLeavesIOS) is a layer in the view it is drawn in: answered as one, its own id kept.
         let leaf = presenter.textHost(UInt32(id)) == nil ? presenter.flats.leaves[UInt32(id)] : nil
@@ -444,6 +457,27 @@ extension Agent {
             if !host.symbolFound { symbol["reason"] = source == "symbol:sf/" || source == "symbol:" ? "empty" : name.isEmpty ? "role" : "os" }
             native["symbol"] = symbol
         }
+        if let drawn = bars[UInt32(id)], let window = drawn.view.window {
+            let shift = PresentedScrolls(vp).shift(of: drawn.view)
+            let from = vp.convert(CGPoint.zero, to: window), to = vp.convert(shift, to: window)
+            let frame = drawn.view.convert(drawn.region, to: window).offsetBy(dx: to.x - from.x, dy: to.y - from.y)
+            let viewport = box(drawn.view, region: drawn.region).offsetBy(dx: shift.x, dy: shift.y)
+            node["space"] = ["viewport": rect(viewport), "window": rect(frame),
+                             "screen": rect(window.convert(frame, to: window.screen.coordinateSpace)),
+                             "local": ["w": Agent.r2(drawn.region.width), "h": Agent.r2(drawn.region.height)],
+                             "capture": ["scale": Agent.r2(window.screen.scale)]]
+            let shown = self.visibility(of: drawn.view, region: drawn.region, box: viewport, hidden: drawn.region.isEmpty)
+            node.merge(shown.facts) { _, new in new }
+            if v.disabled || v.inert, var visible = node["visible"] as? [String: Any] {
+                visible["inert"] = true
+                node["visible"] = visible
+            }
+            node.removeValue(forKey: "geometry")
+            node.removeValue(forKey: "radii")
+            native["view"] = drawn.name
+            native["accessibilityLabel"] = drawn.view.accessibilityLabel
+            if let editor = drawn.view as? UITextField { native["firstResponder"] = editor.isFirstResponder }
+        }
         node["native"] = native
         node["observed"] = ["clock": session.now(), "wall": Date().timeIntervalSince1970 * 1000]
         reply["node"] = node
@@ -470,10 +504,37 @@ extension Agent {
         return backReply(presenter.modals.agentDismiss().map { ("sheet", $0) })
     }
 
+    /// A named press can reach the front modal and presentations above it, including a lifted popover.
+    func inertDialogTap(_ req: [String: Any]) -> [String: Any]? {
+        let menus = presenter.menus
+        let confirmation = menus.nativeConfirmation.flatMap { menus.openModally($0) == true ? $0 : nil }
+        guard let modal = confirmation ?? presenter.dialogs.topDialog,
+              let id = req["id"] as? Int, let target = view(req) ?? flatBoxForRequest(req)?.host else { return nil }
+        if menus.confirmationShows(target) { return nil }
+        let layer = presenter.openTopLayer
+        if let boundary = layer.modal, layer.frames.contains(where: { $0.0 == modal.id }) {
+            for frame in layer.frames[boundary...] {
+                if let root = presenter.views[frame.0], presenter.logicallyWithin(target, root) { return nil }
+            }
+        } else if presenter.logicallyWithin(target, modal) {
+            // An opening sheet or one being swiped down can still be modal without a frame.
+            return nil
+        }
+        return ["error": "view \(id) is inert under the open modal dialog"]
+    }
+
     func tap(_ req: [String: Any]) -> [String: Any] {
         if req["holdState"] != nil { return holdTap(req) } // a held state (LLP 1122 D8, HeldState.swift)
-        // A drag of files from outside the app is the Mac's and the web's (FileDragMac.swift).
-        if req["drop"] != nil || req["dragenter"] != nil || req["dragleave"] != nil { return ["delivery": "unsupported", "reason": "iOS has no drag of files from outside the app: no drop, dragenter or dragleave"] }
+        // A drag from another app, through the drop target the drag-in module keeps (LLP 1094.001 D6); tvOS has no drag
+        if req["drop"] != nil || req["dragenter"] != nil || req["dragleave"] != nil {
+            #if os(iOS)
+            guard let drops = presenter.dragIn else { return ["delivery": "unsupported", "reason": "this app links no drops (`drag_in`): no node hears drop, dragenter or dragleave"] }
+            guard let id = req["id"] as? Int, let view = presenter.views[UInt32(id)] else { return ["error": "a drag needs a target"] }
+            return drops.agentDrag(req, over: view)
+            #else
+            return ["delivery": "unsupported", "reason": "tvOS has no drag: no drop, dragenter or dragleave"]
+            #endif
+        }
         // A header node the app's navigation bar leaves out is not there to
         // tap, whatever the agent's chrome paints (LLP 1116 D2).
         if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)], let why = presenter.navigation.unshownByBar()[node.id] {
@@ -486,6 +547,8 @@ extension Agent {
             return ["error": "a contact is already down; use `tap up` or `tap cancel` first"]
         }
         settleForPress()
+        let plainPress = ["wheel", "hover", "contextmenu", "dblclick", "pinch", "x", "y", "phase", "scrollDrag"].allSatisfy { req[$0] == nil }
+        if plainPress, req["at"] == nil, let refusal = inertDialogTap(req) { return refusal }
         // Each synthetic contact ends a live press's handoff before it is
         // delivered, as a real one's touch-down does (PressHandoffIOS).
         presenter.supersedePress()
@@ -531,6 +594,10 @@ extension Agent {
             if req["contextmenu"] == nil, req["dblclick"] == nil, node.activateInline(id) { return delivered(["tapped": Int(id), "delivery": "host-activation", "native": "inline-text"], node) }
         }
 
+        #if os(iOS)
+        if let reply = titleContext(req) { return delivered(reply, view(req)) }
+        #endif
+
         // A held contact (LLP 1035.003 D1) needs a touch that stays down
         // across requests, which XCTest's touches do not (LLP 1080.000 P3):
         // the iOS carrier says so rather than activating a node and calling it
@@ -574,7 +641,7 @@ extension Agent {
         }
         if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil,
-           let why = drawnCovered(node) {
+           let why = drawnCovered(node, request: req) {
             return ["error": "tap #\(id): \(why)"]
         }
         if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
@@ -622,7 +689,7 @@ extension Agent {
         // A plain press: `at` is a point in the target, the press whatever a
         // finger there reaches; without one, the target's own press
         // (`AgentAddressedTap.swift`).
-        let plain = ["wheel", "hover", "contextmenu", "dblclick", "pinch", "x", "y"].allSatisfy { req[$0] == nil } && v.kind != "iframe"
+        let plain = plainPress && v.kind != "iframe"
         // The target's box as it is seen now, or the refusal.
         func aimed() -> (box: CGRect, refusal: [String: Any]?) {
             var b = flat.map { box($0.host.container, region: $0.rect) } ?? v.tapBox(box(v))
@@ -730,13 +797,13 @@ extension Agent {
                         if handled { presenter.contextmenu(target.id) }
                         // A node with only a popover that cannot open it is not the target.
                         // One behind a modal hears it, but its popover would open inert.
-                        if target.inert || !presenter.menus.agentContext(target), !handled { next = presenter.listenerParent(of: node); continue }
+                        if target.inert || !presenter.menus.agentContext(target), !handled { next = presenter.pressParent(of: node); continue }
                     } else { presenter.dblclick(target.id) }
                     landed()
                     return ["tapped": Int(target.id), "event": event, "injected": true, "at": at].merging(selection.map { ["selection": $0] } ?? [:]) { a, _ in a }
                 }
                 // What a finger reaches, out of a sheet or a lifted popover too (`MountRelay`)
-                next = presenter.listenerParent(of: node)
+                next = presenter.pressParent(of: node)
             }
             if let selection { landed(); return ["tapped": Int((hit as? NodeView)?.id ?? v.id), "event": event, "delivery": "recognized", "selection": selection, "at": at] }
             return ["error": "no \(event) handler at view \(v.id)"]
@@ -873,16 +940,18 @@ extension Agent {
         if let run = node.inlineActivationTarget(at: local) { return .part(node, "inline run #\(run.id)", run.id) }
         if let href = node.inlineLink(at: local) { return .part(node, "the link \(href)", nil) }
         if session.canvases.wantsInput(node.id), !node.isSurfaceControl { return .canvas(node) }
-        var up: UIView? = node
+        var up: UIView? = node, declared = false
         while let cur = up {
             if let n = cur as? NodeView {
-                if n.disabled || n.authoredInert { return .blocked(n) }
+                // Past a declaration, inertness is the shown tree's (LLP 1013.002 D1).
+                if n.disabled || !declared && n.authoredInert { return .blocked(n) }
                 let box = presenter.pressBox(of: n, from: node)
                 if n.takesPress(bubbled: box !== n) {
                     return box.bounds.contains((box as? NodeView)?.local(p) ?? box.convert(p, from: nil)) ? .node(n) : .nothing
                 }
             }
-            up = presenter.listenerParent(of: cur)
+            declared = declared || presenter.declaredParent(of: cur) != nil
+            up = presenter.pressParent(of: cur)
         }
         return .nothing
     }
@@ -915,30 +984,32 @@ extension Agent {
     /// ancestor taking the touch is how a finger reaches a node that takes
     /// none itself. `v` may be a native view standing for a node (a
     /// grouped list's cell or accessory).
-    func obscured(_ v: UIView, at p: CGPoint, hit: UIView) -> String? {
+    func obscured(_ v: UIView, at p: CGPoint, hit: UIView, barItem: Bool = false, request: [String: Any] = [:]) -> String? {
+        let location = ["at", "x", "y"].contains { request[$0] != nil } ? "the requested point" : "its middle"
         if let container = presenter.keyboardContainer,
            let top = presenter.keyboardGuideTop(in: container), p.y >= container.convert(CGPoint(x: 0, y: top), to: nil).y {
-            return "its middle is under the software keyboard; dismiss it or scroll the target above it first (state shows keyboard.top)"
+            return "\(location) is under the software keyboard; dismiss it or scroll the target above it first (state shows keyboard.top)"
         }
+        if barItem { return Self.barItemReceives(hit, in: v) ? nil : Agent.covers(hit, at: location) }
         // A child lifted over the tab container is still the target's (LLP 1083.000 D4)
         let inside = sequence(first: hit, next: { self.presenter.layoutParent(of: $0) }).contains { $0 === v }
         if hit === v || inside || (hit is NodeView && v.isDescendant(of: hit)) { return nil }
-        return Agent.covers(hit)
+        return Agent.covers(hit, at: location)
     }
 
     /// What is over a target, named: a node by its id; another view by its
     /// class and the node holding it. The app's own native view (a module's
     /// splash) may be animating away on the wall clock, which the agent's
     /// clock does not move.
-    static func covers(_ hit: UIView) -> String {
-        if let node = hit as? NodeView { return "node #\(node.id) covers its middle" }
+    static func covers(_ hit: UIView, at location: String = "its middle") -> String {
+        if let node = hit as? NodeView { return "node #\(node.id) covers \(location)" }
         var up = hit.superview
         while let u = up, !(u is NodeView) { up = u.superview }
         let cls: AnyClass = Swift.type(of: hit), name = String(describing: cls)
         let held = (up as? NodeView).map { "\(name), in node #\($0.id)," } ?? name
         // build.mjs compiles an app's native modules as one Swift module of this name.
         let own = String(reflecting: cls).hasPrefix("ExactAppModules.") || appOverlay(hit)
-        return "\(held) covers its middle" + (own ? "; it is the app's own view, on the wall's time: a tap waits up to 3 s while one over its point moves, `clock settle` up to 1.5 s for its UIView.animate, `clock +N real` lets a display link's motion run, and one drawn from the module's `frames` or `after` follows `clock +N`" : "")
+        return "\(held) covers \(location)" + (own ? "; it is the app's own view, on the wall's time: a tap waits up to 3 s while one over its point moves, `clock settle` up to 1.5 s for its UIView.animate, `clock +N real` lets a display link's motion run, and one drawn from the module's `frames` or `after` follows `clock +N`" : "")
     }
 
     /// Why the agent's press would not do what a finger on `hit` does, or
@@ -1121,14 +1192,15 @@ extension Agent {
             // A release focuses nothing: a Tab's down has already moved the
             // focus, which its up must not take back.
             let phase = req["phase"] as? String
+            let responder = v.projectedReorderResponder() ?? v
             if phase != "up" {
                 if let f = v.textArea { if !f.isFirstResponder { _ = f.becomeFirstResponder() } }
                 else if let f = v.selectionField { if !f.isFirstResponder { _ = f.becomeFirstResponder() } }
-                else if v.canBecomeFirstResponder, !v.isFirstResponder { _ = v.becomeFirstResponder() }
+                else if responder.canBecomeFirstResponder, !responder.isFirstResponder { _ = responder.becomeFirstResponder() }
             }
             // With nothing focused the first root hears it, as a keyboard's key reaches it (`ExactView`).
-            let focus = v.field != nil || v.textArea != nil || v.isFirstResponder || v.handlers.contains("press") ? v : presenter.focusedNode == nil ? presenter.keyRoot : nil
-            // The release's `keyup` handlers at the focus (#140): after the
+            let focus = v.field != nil || v.textArea != nil || responder.isFirstResponder || v.handlers.contains("press") ? v : presenter.focusedNode == nil ? presenter.keyRoot : nil
+            // The release's `keyup` handlers at the focus: after the
             // down, or when a held key comes up. A modifier's own keydown
             // holds it and its keyup no longer does, as DOM's.
             let code = device.code, lone = KeyCodes.modifier(code)

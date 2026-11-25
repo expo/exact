@@ -62,7 +62,7 @@ impl Painter {
         kind: IconButton,
         accent: [u8; 4],
         on_accent: [u8; 4],
-        pressed_background: Option<[u8; 4]>,
+        pressed_background: super::PressBackground,
         ts: Transform,
     ) -> [u8; 4] {
         let dark = self.dark;
@@ -112,7 +112,7 @@ impl Painter {
             ),
             false => (container, content),
         };
-        if let Some(fill) = pressed_background.or(container) {
+        if let Some(fill) = pressed_background.mix(container) {
             self.backend.fill(shape, fill, ts);
         }
         if outline {

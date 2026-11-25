@@ -5,7 +5,7 @@
 //! carry.
 
 use super::provenance::{Contribution, Operation};
-use super::{Kernel, Keyboard, OwnerMargins};
+use super::{Kernel, Keyboard, KeyboardReport, OwnerMargins, WindowMap};
 use crate::error::{KernelError, LayoutError};
 use crate::id::IdMap;
 use crate::style::env::{Rect, SegmentGrid};
@@ -26,10 +26,67 @@ pub struct OwnerUpdate {
     /// Its margins as UIKit gives them (D8), `None` where its host reports
     /// none.
     pub margins: Option<OwnerMargins>,
-    /// Its keyboard in its block's space (D7), `None` while dismissed.
-    pub keyboard: Option<Keyboard>,
+    /// Its keyboard in its block's space (D7), shown or dismissed, or nothing where the host
+    /// does not know.
+    pub keyboard: KeyboardReport,
     /// Its segments (D16), `None` where it lies on one.
     pub segments: Option<SegmentGrid>,
+    /// UIKit's bar layout region on each edge of its view, top right bottom left (D12), `None`
+    /// where its host has none.
+    pub bar_regions: [Option<BarRegion>; 4],
+    /// Its chrome (D6's `chrome`), `None` where its host reports none.
+    pub chrome: Option<OwnerChrome>,
+    /// Its view's map into its window (D6's `"window"` space), from the origin its block's space
+    /// starts at; `None` out of a window or where its host reports none.
+    pub window_map: Option<WindowMap>,
+}
+
+/// What an owner's host reports of its chrome (D6's `chrome`, D4, D15), which no layout reads:
+/// each quantity `None` where the host does not have it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OwnerChrome {
+    /// The edge UIKit prefers for the iPhone Duo's vertical bar, the owner view's
+    /// `verticalBarEdge` trait (iOS 27.1), whether or not the bar shows.
+    pub vertical_bar_edge: Option<VerticalBarEdge>,
+    /// Whether the sidebar of the tab controller holding the owner is available
+    /// (`UITabBarController.Sidebar.isAvailable`, iOS 27), which is not whether it shows.
+    pub sidebar_available: Option<bool>,
+}
+
+/// UIKit's `UIVerticalBarEdge`, by its raw value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalBarEdge {
+    /// No vertical bar is placed here.
+    Unspecified,
+    /// The bar is on the leading edge.
+    Leading,
+    /// The bar is on the trailing edge.
+    Trailing,
+}
+
+impl VerticalBarEdge {
+    /// Every edge, by its raw value.
+    pub const ALL: [VerticalBarEdge; 3] = [Self::Unspecified, Self::Leading, Self::Trailing];
+
+    /// Its name in D6's `chrome.verticalBarEdge`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Leading => "leading",
+            Self::Trailing => "trailing",
+        }
+    }
+}
+
+/// UIKit's bar layout region on one edge of an owner's view (D12, "Region"): how far in from
+/// that edge it begins, and how far in from the two edges beside it it runs, in their order
+/// (left and right for the top or bottom, top and bottom for a side), all in points.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BarRegion {
+    /// How far in from its edge it begins.
+    pub distance: f32,
+    /// How far in from the two edges beside it it runs, in their order.
+    pub sides: [f32; 2],
 }
 
 impl Kernel {
@@ -43,7 +100,11 @@ impl Kernel {
         owed |= self.set_owner_margins(view, update.margins)?;
         owed |= self.set_owner_segments(view, update.segments)?;
         owed |= self.set_owner_band(view, update.band, &update.contributions)?;
-        owed |= self.set_owner_keyboard(view, update.keyboard)?;
+        owed |= self.set_owner_keyboard_report(view, update.keyboard)?;
+        owed |= self.set_owner_bar_regions(view, update.bar_regions)?;
+        self.set_owner_chrome(view, update.chrome)?;
+        let slot = self.arena.slot_of(view);
+        self.set_window_map(slot, update.window_map);
         Ok(owed)
     }
 
@@ -71,12 +132,46 @@ impl Kernel {
         if let Some(m) = &update.margins {
             super::margins::check(m)?;
         }
-        if let Some(k) = &update.keyboard {
+        if let KeyboardReport::Shown(k) = &update.keyboard {
             super::keyboard::check(k)?;
         }
-        match update.segments.as_ref().and_then(SegmentGrid::refusal) {
-            Some(why) => Err(LayoutError::OwnerSegments(why).into()),
-            None => Ok(()),
+        if let Some(why) = update.segments.as_ref().and_then(SegmentGrid::refusal) {
+            return Err(LayoutError::OwnerSegments(why).into());
+        }
+        if let Some(why) = WindowMap::refusal(update.window_map.as_ref()) {
+            return Err(LayoutError::NativeTarget(why).into());
+        }
+        super::bar::check_regions(&update.bar_regions)
+    }
+}
+
+impl Kernel {
+    /// Set the chrome of the owner whose root is `view` (D6's `chrome`), which a host reports
+    /// with the owner's other fields through [`Kernel::update_owner`]. No layout reads it.
+    pub fn set_owner_chrome(
+        &mut self,
+        view: ViewId,
+        chrome: Option<OwnerChrome>,
+    ) -> Result<(), KernelError> {
+        let slot = (self.arena.slot_of(view)).ok_or(LayoutError::UnknownView(view))?;
+        let store = &mut self.arena.observations.chrome;
+        match chrome {
+            Some(c) => store.insert(slot, c),
+            None => store.remove(&slot),
+        };
+        Ok(())
+    }
+
+    /// The chrome of the owner holding the box `view` (D6's `chrome`), as its host last
+    /// reported it; `None` outside every owner, which the session reports none of, and where the
+    /// owner's host reported none.
+    pub fn owner_chrome(&self, view: ViewId) -> Option<OwnerChrome> {
+        let slot = self.arena.slot_of(view)?;
+        match super::area::holder(&self.arena, slot) {
+            super::area::Holder::Owner(owner) => {
+                self.arena.observations.chrome.get(&owner).copied()
+            }
+            _ => None,
         }
     }
 }
@@ -88,7 +183,8 @@ impl OwnerUpdate {
         let mut r = Reader::new(bytes);
         let update = read(&mut r).ok_or(
             "an owner update is truncated, holds a presence byte other than 0 or 1, or names \
-             an unknown relation or operation; encode it as `OwnerUpdate::encode` does",
+             an unknown relation, operation, keyboard state or vertical bar edge; encode it as \
+             `OwnerUpdate::encode` does",
         )?;
         match r.is_empty() {
             true => Ok(update),
@@ -102,12 +198,17 @@ impl OwnerUpdate {
     /// a keyboard's frame and a rect four `f32`s, x, y, width, height. A
     /// contribution is its node (`u32`), its operation's index in
     /// [`Operation::ALL`] (`u8`) and its effect (insets); a target its id
-    /// (`u64`), its generation (`u64`) and its optional insets; a chain entry
+    /// (`u64`), its generation (`u64`), its optional insets and its optional
+    /// frame in its window (a rect); a chain entry
     /// a target and its kinds' bits (`u8`, `Kind::bit`); a relation its
     /// index in [`Relation::ALL`] (`u8`) and a target; the margins their
-    /// root, plain and minimum insets and the readable width (`f32`); a
-    /// keyboard its frame and a docked byte, 0 or 1; segments their columns
-    /// and rows (`u8` each) and the `cols × rows` rects, row-major.
+    /// root, plain and minimum insets and the readable width (`f32`); the
+    /// keyboard a byte, 0 unreported, 1 dismissed or 2 shown, a shown one's
+    /// frame and a docked byte, 0 or 1, after it; segments their columns
+    /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
+    /// top right bottom left, its distance and its two sides (`f32` each); then the chrome, its
+    /// vertical bar edge's raw value (`u8`) and its sidebar's availability (a byte, 0 or 1), each
+    /// optional; then the window map after a presence byte, its six terms `f32` each.
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         optional(&mut w, self.band.as_ref(), |w, b| floats(w, b));
@@ -117,26 +218,14 @@ impl OwnerUpdate {
             w.u8(c.operation as u8);
             floats(&mut w, &c.effect);
         }
-        w.u32(self.targets.chain.len() as u32);
-        for e in &self.targets.chain {
-            target_out(&mut w, &e.target);
-            w.u8(e.kinds);
-        }
-        w.u32(self.targets.relations.len() as u32);
-        for (relation, target) in &self.targets.relations {
-            w.u8(*relation as u8);
-            target_out(&mut w, target);
-        }
+        targets_out(&mut w, &self.targets);
         optional(&mut w, self.margins.as_ref(), |w, m| {
             floats(w, &m.root);
             floats(w, &m.plain);
             floats(w, &m.minimum);
             w.f32(m.readable_width);
         });
-        optional(&mut w, self.keyboard.as_ref(), |w, k| {
-            floats(w, &k.frame);
-            w.u8(u8::from(k.docked));
-        });
+        keyboard_out(&mut w, &self.keyboard);
         optional(&mut w, self.segments.as_ref(), |w, g| {
             w.u8(g.cols);
             w.u8(g.rows);
@@ -144,6 +233,18 @@ impl OwnerUpdate {
                 floats(w, &[r.x, r.y, r.width, r.height]);
             }
         });
+        for region in &self.bar_regions {
+            optional(&mut w, region.as_ref(), |w, r| {
+                w.f32(r.distance);
+                w.f32(r.sides[0]);
+                w.f32(r.sides[1]);
+            });
+        }
+        optional(&mut w, self.chrome.as_ref(), |w, c| {
+            optional(w, c.vertical_bar_edge.as_ref(), |w, e| w.u8(*e as u8));
+            optional(w, c.sidebar_available.as_ref(), |w, a| w.u8(u8::from(*a)));
+        });
+        window_map_out(&mut w, self.window_map.as_ref());
         w.into_vec()
     }
 }
@@ -192,16 +293,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
             effect: four(r)?,
         });
     }
-    let mut targets = NativeTargets::default();
-    for _ in 0..r.u32().ok()? {
-        let target = target_in(r)?;
-        let kinds = r.u8().ok()?;
-        targets.chain.push(ChainEntry { target, kinds });
-    }
-    for _ in 0..r.u32().ok()? {
-        let relation = *Relation::ALL.get(usize::from(r.u8().ok()?))?;
-        targets.relations.push((relation, target_in(r)?));
-    }
+    let targets = targets_in(r)?;
     let margins = match present(r)? {
         true => Some(OwnerMargins {
             root: four(r)?,
@@ -211,13 +303,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         }),
         false => None,
     };
-    let keyboard = match present(r)? {
-        true => Some(Keyboard {
-            frame: four(r)?,
-            docked: present(r)?,
-        }),
-        false => None,
-    };
+    let keyboard = keyboard_in(r)?;
     let segments = match present(r)? {
         true => {
             let (cols, rows) = (r.u8().ok()?, r.u8().ok()?);
@@ -235,6 +321,30 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         }
         false => None,
     };
+    let mut bar_regions = [None; 4];
+    for region in &mut bar_regions {
+        if present(r)? {
+            let [distance, a, b] = [r.f32().ok()?, r.f32().ok()?, r.f32().ok()?];
+            *region = Some(BarRegion {
+                distance,
+                sides: [a, b],
+            });
+        }
+    }
+    let chrome = match present(r)? {
+        true => Some(OwnerChrome {
+            vertical_bar_edge: match present(r)? {
+                true => Some(*VerticalBarEdge::ALL.get(usize::from(r.u8().ok()?))?),
+                false => None,
+            },
+            sidebar_available: match present(r)? {
+                true => Some(present(r)?),
+                false => None,
+            },
+        }),
+        false => None,
+    };
+    let window_map = window_map_in(r)?;
     Some(OwnerUpdate {
         band,
         contributions,
@@ -242,11 +352,84 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         margins,
         keyboard,
         segments,
+        bar_regions,
+        chrome,
+        window_map,
+    })
+}
+
+/// An owner's or the session's native targets: the chain after its count, each entry a target
+/// and its kinds, then the relations after theirs, each its index and a target.
+pub(super) fn targets_out(w: &mut Writer, targets: &NativeTargets) {
+    w.u32(targets.chain.len() as u32);
+    for e in &targets.chain {
+        target_out(w, &e.target);
+        w.u8(e.kinds);
+    }
+    w.u32(targets.relations.len() as u32);
+    for (relation, target) in &targets.relations {
+        w.u8(*relation as u8);
+        target_out(w, target);
+    }
+}
+
+pub(super) fn targets_in(r: &mut Reader<'_>) -> Option<NativeTargets> {
+    let mut targets = NativeTargets::default();
+    for _ in 0..r.u32().ok()? {
+        let target = target_in(r)?;
+        let kinds = r.u8().ok()?;
+        targets.chain.push(ChainEntry { target, kinds });
+    }
+    for _ in 0..r.u32().ok()? {
+        let relation = *Relation::ALL.get(usize::from(r.u8().ok()?))?;
+        targets.relations.push((relation, target_in(r)?));
+    }
+    Some(targets)
+}
+
+/// A keyboard report: a byte, 0 unreported, 1 dismissed or 2 shown, a shown keyboard's frame and
+/// docked byte after it.
+pub(super) fn keyboard_out(w: &mut Writer, keyboard: &KeyboardReport) {
+    match keyboard {
+        KeyboardReport::Unreported => w.u8(0),
+        KeyboardReport::Dismissed => w.u8(1),
+        KeyboardReport::Shown(k) => {
+            w.u8(2);
+            floats(w, &k.frame);
+            w.u8(u8::from(k.docked));
+        }
+    }
+}
+
+pub(super) fn keyboard_in(r: &mut Reader<'_>) -> Option<KeyboardReport> {
+    Some(match r.u8().ok()? {
+        0 => KeyboardReport::Unreported,
+        1 => KeyboardReport::Dismissed,
+        2 => KeyboardReport::Shown(Keyboard {
+            frame: four(r)?,
+            docked: present(r)?,
+        }),
+        _ => return None,
+    })
+}
+
+/// A window map after a presence byte, its six terms `f32` each.
+pub(super) fn window_map_out(w: &mut Writer, map: Option<&WindowMap>) {
+    optional(w, map, |w, m| floats(w, &m.0));
+}
+
+pub(super) fn window_map_in(r: &mut Reader<'_>) -> Option<Option<WindowMap>> {
+    Some(match present(r)? {
+        true => {
+            let terms: Option<Vec<f32>> = (0..6).map(|_| r.f32().ok()).collect();
+            Some(WindowMap(terms?.try_into().ok()?))
+        }
+        false => None,
     })
 }
 
 /// A presence byte: 0 or 1, else malformed.
-fn present(r: &mut Reader<'_>) -> Option<bool> {
+pub(super) fn present(r: &mut Reader<'_>) -> Option<bool> {
     match r.u8().ok()? {
         0 => Some(false),
         1 => Some(true),
@@ -254,7 +437,7 @@ fn present(r: &mut Reader<'_>) -> Option<bool> {
     }
 }
 
-fn four(r: &mut Reader<'_>) -> Option<[f32; 4]> {
+pub(super) fn four(r: &mut Reader<'_>) -> Option<[f32; 4]> {
     Some([r.f32().ok()?, r.f32().ok()?, r.f32().ok()?, r.f32().ok()?])
 }
 
@@ -270,10 +453,12 @@ fn optional_four(r: &mut Reader<'_>) -> Option<Option<[f32; 4]>> {
 fn target_in(r: &mut Reader<'_>) -> Option<NativeTarget> {
     let (id, generation) = (r.u64().ok()?, r.u64().ok()?);
     let insets = optional_four(r)?;
+    let frame = optional_four(r)?;
     Some(NativeTarget {
         id,
         generation,
         insets,
+        frame,
     })
 }
 
@@ -284,7 +469,7 @@ fn optional<T>(w: &mut Writer, value: Option<&T>, each: impl FnOnce(&mut Writer,
     }
 }
 
-fn floats(w: &mut Writer, values: &[f32]) {
+pub(super) fn floats(w: &mut Writer, values: &[f32]) {
     values.iter().for_each(|&v| w.f32(v));
 }
 
@@ -292,4 +477,5 @@ fn target_out(w: &mut Writer, t: &NativeTarget) {
     w.u64(t.id);
     w.u64(t.generation);
     optional(w, t.insets.as_ref(), |w, i| floats(w, i));
+    optional(w, t.frame.as_ref(), |w, f| floats(w, f));
 }

@@ -331,6 +331,23 @@ final class PageEdgesIOSTests: XCTestCase {
         let hit = try XCTUnwrap(filter.window?.hitTest(filter.convert(CGPoint(x: filter.bounds.midX, y: filter.bounds.midY), to: nil), with: nil))
         XCTAssertTrue(hit.isDescendant(of: filter), "a tap on the switcher is the switcher's, not \(type(of: hit))")
         XCTAssertTrue(filter.interactions.contains { $0 is UIScrollEdgeElementContainerInteraction }, "UIKit's edge effect over the list")
+        // An edge whose effect the list hides is neither banded nor open (LLP 1131 D2): here, with no open foot over a
+        // bottom cover, a hidden top keeps both edges where they are, as a top with more than bars does, and a hidden foot
+        // leaves the top its band
+        let style = list.style, board = list.pageBand
+        list.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a hidden top keeps both edges where they are")
+        list.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, UIEdgeInsets(top: board.top, left: 0, bottom: 0, right: 0), "a hidden foot leaves the top its band")
+        list.style = style
+        list.style["scroll_edge_effect"] = .string("none")
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "the retired `none` hides both")
+        list.style = style
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, board)
         // An app's own scroll view holds the bar's edge through a batch, and its nil gives the edge
         // back to the list by the route's next layout, through the list's band under the switcher,
         // since the title does not collapse with the list
@@ -353,10 +370,124 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertNil(filter.window, "the switcher is gone")
         XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, try XCTUnwrap(list.window).bounds.maxY, accuracy: 0.5, "the transcript runs under the composer to the screen's foot")
         XCTAssertGreaterThan(try node(session, "composer").layer.zPosition, list.layer.zPosition, "the composer draws over it")
+        let chat = list.pageBand
+        list.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a hidden top keeps the transcript above the composer too")
+        list.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a hidden foot leaves the composer no band, and the open top none without it")
+        list.style = style
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, chat)
         for shape in ["caption", "painted", "large"] {
             p.press(try node(session, "pick-\(shape)").id)
             until("\(shape) is no bar over the list") { list.pageBand == .zero }
         }
+    }
+
+    /// An authored `edge-effect` registration (LLP 1123 D12) gives a bar's view UIKit's scroll edge element
+    /// interaction with the scroller it names, on its edge, over LLP 1131's inferred one for that view, and one
+    /// naming no scroller removes it. The same registration keeps its interaction, one follows its scroller's new
+    /// scroll view, a scroller out of the window gives none, clearing the authored ones gives the inferred one back,
+    /// a painted bar 1131 rejects and a flat box register when authored, a destroyed bar loses its interaction with
+    /// its registration, and a reset takes every interaction away.
+    func testAnAuthoredBarEdgeEffectWinsOverTheInferredOne() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("UIScrollEdgeElementContainerInteraction is iOS 26's") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter, list = try node(session, "list"), filter = try node(session, "filter")
+        until("the switcher is a bar over the list") { list.pageBand.top > 0 }
+        let sv = try XCTUnwrap(list.scrollView)
+        let held = { (bar: NodeView) in bar.interactions.compactMap { $0 as? UIScrollEdgeElementContainerInteraction } }
+        XCTAssertEqual(held(filter).map(\.edge), [.top])
+        XCTAssertTrue(held(filter).first?.scrollView === sv, "LLP 1131 infers the switcher's registration")
+        ControlBars.setBarEdgeEffects([(filter.id, .top, nil)], in: p)
+        XCTAssertTrue(held(filter).isEmpty, "an authored registration with no scroller wins")
+        ControlBars.setBarEdgeEffects([(filter.id, .bottom, list.id)], in: p)
+        let authored = try XCTUnwrap(held(filter).first)
+        XCTAssertEqual(held(filter).count, 1)
+        XCTAssertTrue(authored.scrollView === sv)
+        XCTAssertEqual(authored.edge, .bottom)
+        ControlBars.setBarEdgeEffects([(filter.id, .bottom, list.id)], in: p)
+        XCTAssertTrue(held(filter).first === authored, "the same registration keeps its interaction")
+        // The runner's restyles replace the list's scroll view, and the batch's end moves the registration onto the new one
+        let scrolling = list.style.mapValues(\.any)
+        let still = scrolling.merging(["overflow_x": "visible", "overflow_y": "visible"]) { _, b in b }
+        p.apply(wireBatch([["op": "style", "id": list.id, "style": still]]))
+        XCTAssertNil(list.scrollView, "no scroll view while it does not scroll")
+        XCTAssertTrue(held(filter).isEmpty, "and no registration")
+        p.apply(wireBatch([["op": "style", "id": list.id, "style": scrolling]]))
+        let recreated = try XCTUnwrap(list.scrollView)
+        XCTAssertTrue(recreated !== sv && held(filter).first?.scrollView === recreated, "it follows the list's new scroll view")
+        p.apply(wireBatch([["op": "create", "id": 9000, "kind": "scroll", "style": ["overflow_y": "auto"]]]))
+        XCTAssertNotNil(p.views[9000]?.scrollView)
+        ControlBars.setBarEdgeEffects([(filter.id, .top, 9000)], in: p)
+        XCTAssertTrue(held(filter).isEmpty, "a scroller out of the window gives none")
+        ControlBars.setBarEdgeEffects([], in: p)
+        XCTAssertEqual(held(filter).map(\.edge), [.top])
+        XCTAssertTrue(held(filter).first?.scrollView === recreated, "the inferred registration comes back")
+        // It goes as its scroller leaves the window and comes back with it, a reach pass between them included
+        let home = try XCTUnwrap(list.superview), place = try XCTUnwrap(home.subviews.firstIndex(of: list))
+        list.removeFromSuperview()
+        until("its scroller's leaving takes the inferred one away") { held(filter).isEmpty }
+        p.reachPageEdges()
+        home.insertSubview(list, at: place)
+        until("and it comes back with its scroller") { held(filter).first?.scrollView === recreated }
+        p.press(try node(session, "pick-painted").id)
+        // The list keeps the foot's margin, at the foot of a page that fits (LLP 1131 D2)
+        until("the painted switcher is no bar") { list.pageBand.top == 0 }
+        let painted = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "filter" && $0.window != nil })
+        XCTAssertTrue(held(painted).isEmpty)
+        ControlBars.setBarEdgeEffects([(painted.id, .top, list.id)], in: p)
+        XCTAssertTrue(held(painted).first?.scrollView === recreated, "an authored registration needs no inferred bar")
+        let (viewport, bar) = (try XCTUnwrap(p.viewport as? Viewport), painted.id)
+        p.press(try node(session, "pick-chat").id)
+        until("the switcher goes") { painted.window == nil }
+        XCTAssertNil(viewport.authoredBars[bar], "a destroyed bar's registration goes with it")
+        XCTAssertTrue(held(painted).isEmpty, "and its view's interaction")
+        // A flat box takes a view to hold its interaction, and a reset takes every interaction away
+        let q = Presenter()
+        q.viewport.frame = try XCTUnwrap(list.window).bounds
+        try XCTUnwrap(list.window).addSubview(q.viewport)
+        defer { q.viewport.removeFromSuperview() }
+        q.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["testId": "root"]],
+            ["op": "create", "id": 2, "kind": "scroll", "props": ["testId": "pane"], "style": ["overflow_y": "auto"]],
+            ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 400.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 40.0, "w": 300.0, "h": 360.0],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 0.0, "w": 300.0, "h": 40.0],
+        ]))
+        XCTAssertTrue(q.flats.isFlat(3), "a plain box is a flat leaf")
+        ControlBars.setBarEdgeEffects([(3, .top, 2)], in: q)
+        let (promoted, root) = (try XCTUnwrap(q.views[3]), try XCTUnwrap(q.views[1]))
+        let pane = try XCTUnwrap(q.views[2]?.scrollView)
+        XCTAssertNotNil(promoted.window, "the promoted bar is in the window, under \(String(describing: promoted.superview))")
+        XCTAssertNotNil(pane.window, "and so is the pane's scroll view")
+        XCTAssertTrue(held(promoted).first?.scrollView === pane, "and registers as a view: \(held(promoted))")
+        // It goes as its scroller leaves the window and comes back with it, the bar mounted throughout
+        let scroller = try XCTUnwrap(q.views[2])
+        scroller.removeFromSuperview()
+        until("its scroller's leaving takes it away") { held(promoted).isEmpty }
+        root.insertSubview(scroller, at: 0)
+        until("and its return gives it back") { held(promoted).first?.scrollView === pane }
+        // Its interaction goes as the bar leaves the window, at once as it is forgotten or parked, and at a
+        // reset; its return gives it back, as a reach pass does while it is registered
+        promoted.removeFromSuperview()
+        until("leaving the window") { held(promoted).isEmpty }
+        root.addSubview(promoted)
+        until("back in the window") { held(promoted).count == 1 }
+        promoted.forget()
+        XCTAssertTrue(held(promoted).isEmpty, "forgotten")
+        q.reachPageEdges()
+        promoted.recycle()
+        XCTAssertTrue(held(promoted).isEmpty, "parked")
+        q.reachPageEdges()
+        XCTAssertEqual(held(promoted).count, 1)
+        q.reset()
+        XCTAssertTrue(held(promoted).isEmpty, "a reset takes the interactions away")
     }
 
     /// A transcript in a box over a composer its author filled: the composer is no bar, so
@@ -438,6 +569,7 @@ final class PageEdgesIOSTests: XCTestCase {
         let route = try XCTUnwrap(p.navigationHost.activeRoute)
         until("the filter is page content and its bar has settled") { route.scoped == nil && !Agent(session: session).nativeInFlight() }
         let nav = try XCTUnwrap(route.navigationController), sv = try XCTUnwrap(list.scrollView)
+        guard !nav.traitCollection.placesVerticalBar else { throw XCTSkip("a vertical bar has no expanding title") }
         nav.view.layoutIfNeeded()
         let expanded = nav.navigationBar.bounds.height
         XCTAssertGreaterThan(expanded, 80)
@@ -469,6 +601,138 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(ControlBars(p).bars(of: list, in: route.node, top: true)?.isEmpty, false)
     }
 
+    /// LLP 1131 D3: rows of buttons above and below a column holding a row and the list are lifted over that
+    /// column, and the inner row over the list, whatever the ranks, so each draws over the list and keeps its
+    /// touches, and the band beside each is the list's. A lifted row follows its sibling's rank as the parent
+    /// is ranked. A `z-index` written on the column that ranks it over the rows refuses the band; one written
+    /// on the list ranks it only within the column.
+    func testABarIsLiftedOverTheBoxHoldingItsScroller() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        p.press(try node(session, "pick-nested").id)
+        let top = try node(session, "nested-bar"), foot = try node(session, "nested-foot"), inner = try node(session, "nested-inner"),
+            wrap = try node(session, "nested-wrap"), list = try node(session, "nested-list")
+        let rows = [(top, wrap, try node(session, "nested-all")), (foot, wrap, try node(session, "nested-foot-all")),
+                    (inner, list, try node(session, "nested-inner-mine"))]
+        let pickers = try node(session, "pickers")
+        until("the rows are bars over the list") { list.pageBand.top > 0 && list.pageBand.bottom > 0 }
+        let window = try XCTUnwrap(top.window), scroller = try XCTUnwrap(list.scrollView)
+        // The list at the origin; at the pickers' rank (as authored); at one no sibling of the outer rows has (a
+        // `z-index: 1`'s); and the column ranked as a positioned box, the pickers' rank.
+        for (wrapRank, listRank) in [(Int64(0), Int64(0)), (Int64(0), Int64(1)), (Int64(0), Int64(2)), (Int64(1), Int64(0))] {
+            let ranks = "column \(wrapRank), list \(listRank)"
+            wrap.setRank(wrapRank)
+            list.setRank(listRank)
+            XCTAssertGreaterThan(top.layer.zPosition, wrap.layer.zPosition, "\(ranks): the top row follows the column's rank at once")
+            p.reachPageEdges()
+            if listRank == 2 {
+                XCTAssertFalse(try XCTUnwrap(top.superview).subviews.contains { ($0 as? NodeView)?.paintRank == 2 }, "no sibling of the outer rows has the list's rank")
+            }
+            XCTAssertGreaterThan(list.pageBand.top, 0, "\(ranks): the list still runs under the top rows")
+            XCTAssertGreaterThan(list.pageBand.bottom, 0, "\(ranks): and under the foot's")
+            for (row, over, button) in rows {
+                let which = "\(ranks), \(button.props["testId"] ?? "")"
+                XCTAssertGreaterThan(row.layer.zPosition, over.layer.zPosition, "\(which): the row draws over its sibling holding the list")
+                if over === wrap, row.paintRank < pickers.paintRank {
+                    XCTAssertLessThan(row.layer.zPosition, pickers.layer.zPosition, "\(which): and stays under a sibling that painted over the column")
+                }
+                let hit = try XCTUnwrap(window.hitTest(button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil), with: nil))
+                XCTAssertTrue(hit.isDescendant(of: button), "\(which): a tap on the row's button is the button's, not \(type(of: hit))")
+                let beside = try XCTUnwrap(window.hitTest(row.convert(CGPoint(x: -8, y: row.bounds.midY), to: nil), with: nil))
+                XCTAssertTrue(beside.isDescendant(of: scroller), "\(which): the band beside the row is the list's scroll view's, not \(type(of: beside))")
+            }
+        }
+        wrap.setRank(0)
+        list.setRank(0)
+        let wrapStyle = wrap.style
+        wrap.style["written"] = .array([.string("z_index")])
+        wrap.style["z_index"] = .number(5)
+        wrap.setRank(10)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a column its author ranks over its rows takes no band")
+        // The column positioned, over the top row's rank by no `z-index`, and the list ranked under it by its own
+        wrap.style = wrapStyle
+        wrap.setRank(1)
+        list.style["written"] = .array([.string("z_index")])
+        list.style["z_index"] = .number(-1)
+        list.setRank(-2)
+        p.reachPageEdges()
+        XCTAssertGreaterThan(list.pageBand.top, 0, "a list's own z-index ranks it only within its column")
+        XCTAssertGreaterThan(top.layer.zPosition, wrap.layer.zPosition)
+    }
+
+    /// LLP 1131 D1: a control that scrolls or holds a shown scroller is content, not a bar. A pressable column
+    /// holding a list, scrolling itself, or in a box with a button and a spacer drawn as a layer is no bar over
+    /// the list below it, so that list takes no band through it; the preview's own scroller takes one through
+    /// the row of buttons above, and the row keeps its touches. A list the column hides leaves it a bar, and a
+    /// dialog up in its sheet is no longer the box's.
+    func testAControlHoldingAScrollerIsNoBar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        func shown(_ shape: String, _ scroller: String) throws -> (lower: NodeView, preview: NodeView) {
+            p.press(try node(session, "pick-\(shape)").id)
+            until("\(shape) is laid out") {
+                [scroller, "lower-list"].allSatisfy { id in (try? node(session, id)).map { $0.frame.height > 0 && $0.scrollView != nil } == true }
+            }
+            p.reachPageEdges()
+            return (try node(session, "lower-list"), try node(session, scroller))
+        }
+        for (shape, scroller) in [("preview", "preview-list"), ("preview-scrolls", "preview"), ("preview-wrapped", "preview-list")] {
+            let (lower, preview) = try shown(shape, scroller)
+            XCTAssertEqual(lower.pageBand.top, 0, "\(shape): no band through the pressable column above it")
+            XCTAssertGreaterThan(preview.pageBand.top, 0, "\(shape): the preview's scroller is banded through the row")
+            let all = try node(session, "preview-all"), window = try XCTUnwrap(all.window)
+            let hit = try XCTUnwrap(window.hitTest(all.convert(CGPoint(x: all.bounds.midX, y: all.bounds.midY), to: nil), with: nil))
+            XCTAssertTrue(hit.isDescendant(of: all), "\(shape): a tap on the row's button is the button's, not \(type(of: hit))")
+        }
+        p.press(try node(session, "pick-preview-hidden").id)
+        let lower = try node(session, "lower-list"), column = try node(session, "preview")
+        until("the hidden list's preview is laid out") { column.frame.height > 0 && lower.frame.height > 0 && lower.scrollView != nil }
+        p.reachPageEdges()
+        XCTAssertGreaterThan(lower.pageBand.top, column.frame.height, "a list the column hides leaves it a bar: the band runs through it and the row")
+        // A dialog up in its sheet is no longer the row's: a row beside it, read through a spacer drawn as a layer,
+        // stays a bar.
+        p.press(try node(session, "pick-sheet-opener").id)
+        until("the opener is laid out") { (try? node(session, "lower-list")).map { $0.frame.height > 0 && $0.scrollView != nil } == true }
+        let opener = try node(session, "lower-list"), sheet = try node(session, "opener-sheet")
+        p.reachPageEdges()
+        let band = opener.pageBand.top
+        XCTAssertGreaterThan(band, 0, "the row is a bar over the list")
+        p.press(try node(session, "opener-open").id)
+        until("the dialog is up in its sheet") { p.dialogs.isOpen(sheet) && !p.dialogs.inTransition }
+        p.reachPageEdges()
+        XCTAssertEqual(opener.pageBand.top, band, "the row stays a bar while its dialog is up")
+        p.dialogs.close(sheet, animated: false)
+        until("the sheet is gone") { !p.dialogs.owns(sheet) && !p.dialogs.inTransition }
+        p.reachPageEdges()
+        XCTAssertEqual(opener.pageBand.top, band, "and once the dialog is back in the row")
+    }
+
+    /// LLP 1131 D1: a scroll view that scrolls nothing makes no control content. A tablist UIKit draws as its
+    /// segmented control, written `overflow-x: auto`, and a button whose label truncates (`overflow-x: hidden`
+    /// gives the text a scroll view) are bars over the list.
+    func testAScrollViewThatScrollsNothingLeavesItsControlABar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        for shape in ["tabs-scroll", "truncating"] {
+            p.press(try node(session, "pick-\(shape)").id)
+            // The scroll view that would have made the row no bar: the tablist's, behind UIKit's control, or the label's
+            until("\(shape) is laid out with its scroll view") {
+                guard let filter = try? node(session, "filter"), filter.frame.height > 0 else { return false }
+                return shape == "tabs-scroll" ? filter.scrollView != nil && p.segments.projects(filter.id)
+                    : (try? node(session, "filter-label"))?.scrollView != nil
+            }
+            p.reachPageEdges()
+            XCTAssertGreaterThan(try node(session, "list").pageBand.top, 0, "\(shape): the list runs under the bar")
+        }
+    }
+
     func testLargeTitleRidersRequireBothEdgesAndTheBarsPaintOrder() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the title belongs to a scene window") }
         guard #available(iOS 26.0, *) else { throw XCTSkip("control bars require iOS 26") }
@@ -483,6 +747,18 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertTrue(route.collapseScroll === list)
         p.onCovers = nil
         let originalStyle = list.style, originalFrame = list.frame
+        // Riders need both edges banded or open, and an edge whose effect the list hides is neither (LLP 1131 D2)
+        for hide in ["top", "bottom", "none"] {
+            p.navigationHost.prepareRoutes([route], in: nav)
+            p.reachPageEdges()
+            XCTAssertFalse(route.ridingBars.isEmpty, "the filter rides the title with both edges shown")
+            if hide == "none" { list.style["scroll_edge_effect"] = .string("none") } else { list.style["scroll_edge_effect_hidden"] = .number(hide == "top" ? 1 : 4) }
+            p.navigationHost.prepareRoutes([route], in: nav)
+            p.reachPageEdges()
+            XCTAssertTrue(route.ridingBars.isEmpty, "a hidden \(hide) keeps the filter from riding")
+            XCTAssertEqual(filter.controlRide, 0)
+            list.style = originalStyle
+        }
         list.style["written"] = .array([.string("z_index")])
         list.style["z_index"] = .number(100)
         list.setRank(filter.paintRank + 100)
@@ -504,6 +780,39 @@ final class PageEdgesIOSTests: XCTestCase {
             XCTAssertTrue(route.ridingBars.isEmpty)
             XCTAssertEqual(list.pageBand.top, 0)
         }
+    }
+
+    /// A page's scroller at the area's top over a control bar runs under the bar to the area's foot (LLP 1131 D2), but
+    /// not with its top hidden: an edge whose effect the scroller hides is neither banded nor open at the area's edge
+    /// too, so the foot keeps its place, and the top keeps the status bar's margin (LLP 1130), whatever its effect. The
+    /// same holds at the area's foot under a bar.
+    func testAPageScrollerHidingAnEdgeKeepsItsPlaceBesideABar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the status bar and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars require iOS 26") }
+        let (session, view) = try fixture()
+        let p = session.presenter, list = try node(session, "list"), safe = view.safeAreaInsets
+        // Not `node`: its XCTUnwrap records a failure while a bar is on its way or gone
+        let shown = { (testId: String) in p.views.values.contains { $0.props["testId"] == testId && $0.window != nil } }
+        p.press(try node(session, "foot-toggle").id)
+        until("the foot is a bar under the list") { shown("foot") && list.pageBand.bottom > safe.bottom + 0.5 }
+        let banded = list.pageBand
+        XCTAssertEqual(banded.top, safe.top, accuracy: 0.5)
+        list.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, UIEdgeInsets(top: safe.top, left: 0, bottom: 0, right: 0))
+        list.style["scroll_edge_effect_hidden"] = nil
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, banded)
+        p.press(try node(session, "foot-toggle").id)
+        p.press(try node(session, "top-toggle").id)
+        until("the list is at the area's foot under a bar") { !shown("foot") && shown("top") && list.pageBand.top > safe.top + 0.5 }
+        let under = list.pageBand
+        list.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, UIEdgeInsets(top: 0, left: 0, bottom: safe.bottom, right: 0), "a hidden foot keeps its place too")
+        list.style["scroll_edge_effect_hidden"] = nil
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, under)
     }
 
     /// A route that opts out of its sides (`-exact-safe-area="left right"`, LLP 1123 D4) lays its content
@@ -593,7 +902,7 @@ final class PageEdgesIOSTests: XCTestCase {
     func testUnderACoverRootARoutesLastScrollerRunsUnderTheTabBar() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
         guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
-        let (session, _) = try fixture("COVER_TABS")
+        let (session, view) = try fixture("COVER_TABS")
         let p = session.presenter, routeNode = try node(session, "route-home")
         let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id])
         let foot = { routeNode.convert(routeNode.bounds, to: nil).maxY }
@@ -602,7 +911,7 @@ final class PageEdgesIOSTests: XCTestCase {
         until("the scroller runs under the tab bar") { (list()?.pageBand.bottom ?? 0) > 0.5 }
         guard case .edges(let cover)? = p.navigationHost.covers[routeNode.id] else { return XCTFail("the route keeps the tab bar's cover") }
         XCTAssertGreaterThan(cover.bottom, 0.5)
-        XCTAssertGreaterThan(cover.top, 0.5, "the route clears the status bar itself")
+        XCTAssertEqual(cover.top, view.safeAreaInsets.top, accuracy: 0.5, "the route clears the status bar itself")
         var v = try XCTUnwrap(list()), sv = try XCTUnwrap(v.scrollView)
         let box = v.convert(v.bounds, to: nil)
         XCTAssertEqual(box.maxY, foot() - cover.bottom, accuracy: 0.5, "laid out above the cover, as before")
@@ -610,6 +919,14 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot(), accuracy: 0.5, "its scroll view reaches the route's foot, under the bar")
         XCTAssertEqual(sv.adjustedContentInset.bottom, cover.bottom, accuracy: 0.5, "inset by the band alone")
         XCTAssertTrue(route.contentScrollView(for: .bottom) === sv, "the tab bar's edge effect follows it")
+        // A hidden top keeps its place, and the open foot keeps its band over the tab bar (LLP 1131 D2)
+        let banded = v.pageBand, shown = v.style
+        v.style["scroll_edge_effect_hidden"] = .number(1)
+        p.reachPageEdges()
+        XCTAssertEqual(v.pageBand, UIEdgeInsets(top: 0, left: 0, bottom: cover.bottom, right: 0), "a hidden top keeps its place over the tab bar")
+        v.style = shown
+        p.reachPageEdges()
+        XCTAssertEqual(v.pageBand, banded)
         sv.contentOffset.y = sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height
         let end = try node(session, "end")
         XCTAssertEqual(end.convert(end.bounds, to: nil).maxY, box.maxY, accuracy: 0.5, "at its end the content rests where the box ends, above the bar")
@@ -638,6 +955,60 @@ final class PageEdgesIOSTests: XCTestCase {
             guard let l = list(), l.scrollView != nil, p.listHost.entries[l.id] != nil else { return false }
             return abs(l.pageBand.bottom - cover.bottom) < 0.5
         }
+    }
+
+    /// Under a large title too, a route's scroller below a line is drawn on under the tab bar by its open foot and
+    /// inset by the gap, while its top and the title keep their places, as a hand-built table pinned from a fixed
+    /// header to its view's bottom runs under its tab bar under a still title (#223, LLP 1131 D2).
+    func testUnderACoverRootAScrollerBelowALargeTitleRunsUnderTheTabBar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id])
+        let shown = { (id: String) in p.views.values.first { $0.props["testId"] == id && $0.window != nil } }
+        p.press(try node(session, "use-titled").id)
+        until("the route shows its large title over the lead") {
+            route.navigationItem.largeTitleDisplayMode == .always && route.navigationController?.isNavigationBarHidden == false
+                && route.ridingBars.isEmpty && shown("lead") != nil
+        }
+        until("the scroller's foot runs under the tab bar") { (shown("list")?.pageBand.bottom ?? 0) > 0.5 }
+        guard case .edges(let cover)? = p.navigationHost.covers[routeNode.id] else { return XCTFail("the route keeps the tab bar's cover") }
+        let v = try XCTUnwrap(shown("list")), sv = try XCTUnwrap(v.scrollView), lead = try XCTUnwrap(shown("lead"))
+        let bar = try XCTUnwrap(route.navigationController?.navigationBar), foot = routeNode.convert(routeNode.bounds, to: nil).maxY
+        XCTAssertFalse(route.collapseScroll === v, "the scroller is not the title's")
+        XCTAssertEqual(v.convert(v.bounds, to: nil).maxY, foot - cover.bottom, accuracy: 0.5, "laid out above the cover")
+        XCTAssertEqual(v.pageBand.bottom, cover.bottom, accuracy: 0.5, "its foot is banded")
+        XCTAssertEqual(v.pageBand.top, 0, accuracy: 0.5, "its top keeps its place")
+        XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot, accuracy: 0.5, "its scroll view reaches the route's foot, under the bar")
+        XCTAssertEqual(sv.adjustedContentInset.bottom, cover.bottom, accuracy: 0.5, "inset by the band alone")
+        XCTAssertEqual(sv.verticalScrollIndicatorInsets.bottom, cover.bottom, accuracy: 0.5, "its indicator ends at the bar")
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === sv, "the tab bar's edge effect follows it")
+        let barHeight = bar.bounds.height, leadFrame = lead.convert(lead.bounds, to: nil)
+        sv.setContentOffset(CGPoint(x: 0, y: sv.contentOffset.y + 300), animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(bar.bounds.height, barHeight, accuracy: 0.5, "the title stays large, as it does over a hand-built table below a header")
+        XCTAssertEqual(lead.convert(lead.bounds, to: nil), leadFrame, "the line over the scroller stays")
+    }
+
+    /// A banded scroller's indicators count the band and its own safe area once each: UIKit's indicator adjustment,
+    /// which would add its own top and bottom (and under a large title it hangs over, a top of its own) to the band,
+    /// is off while the band is on, as on a large title's collapse scroller under a control bar that rides it (UI
+    /// Gallery's detail screens), and its indicators run from the content's top to its foot.
+    func testABandedScrollersIndicatorsCountTheBandAndItsSafeAreaOnce() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id])
+        let list = { p.views.values.first { $0.props["testId"] == "list" && $0.window != nil } }
+        p.press(try node(session, "use-riding").id)
+        until("the control bar rides the large title and the scroller is banded at both edges") {
+            !route.ridingBars.isEmpty && (list()?.pageBand.top ?? 0) > 0.5 && (list()?.pageBand.bottom ?? 0) > 0.5
+        }
+        let sv = try XCTUnwrap(list()?.scrollView)
+        XCTAssertFalse(sv.automaticallyAdjustsScrollIndicatorInsets, "the band's writer holds UIKit's indicator adjustment off")
+        XCTAssertEqual(sv.verticalScrollIndicatorInsets.top, sv.adjustedContentInset.top, accuracy: 0.5, "the indicator starts at the content's top")
+        XCTAssertEqual(sv.verticalScrollIndicatorInsets.bottom, sv.adjustedContentInset.bottom, accuracy: 0.5, "and ends at its foot")
     }
 }
 #endif

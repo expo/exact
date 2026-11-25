@@ -306,6 +306,34 @@ engineTest.chromium('JS: built platform lengths resolve on every length row that
 
 for (const runtime of ['JS', 'wasm']) {
   const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest.chromium;
+  check(`${runtime}: a numeric string clears line-height and journals its value`, () => fixture(runtime, async evaluate => {
+    const leading = () => evaluate(`getComputedStyle(document.querySelector('[data-testid="child"]')).lineHeight`);
+    expect(await leading()).toBe('24px');
+    await evaluate(`document.querySelector('[data-testid="change"]').click()`);
+    expect(await leading()).toBe('36px');
+    for (const id of ['comment', 'percent']) {
+      await evaluate(`document.querySelector('[data-testid="${id}"]').click()`);
+      expect(await leading()).toBe('36px');
+    }
+    const lines = runtime === 'JS' ? await evaluate(`import('/rt.js').then(m => m.journal)`)
+      : (await evaluate(`exact.agent({op:'logs',since:0})`)).lines;
+    for (const value of ['1.5', '1.5/**/', '150%'])
+      expect(lines.filter(l => l.endsWith(`invalid line-height value "${value}"; unset`))).toHaveLength(1);
+  }, `component App
+  state leading = "24px"
+  action change
+    leading = "1.5"
+  action comment
+    leading = "1.5/**/"
+  action percent
+    leading = "150%"
+  view
+    column line-height="36px"
+      text "Child" testId="child" font-size=16 line-height=leading
+      button "Change" press=change testId="change"
+      button "Comment" press=comment testId="comment"
+      button "Percent" press=percent testId="percent"
+`));
   check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
       for (const id of ['pushed', 'literal', 'unsaid']) document.querySelector('[data-testid="' + id + '"]').setAttribute('data-exact-in-sheet', '');
@@ -665,6 +693,12 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
     ? evaluate(`(async () => { const { pieces } = await import('/rt.js'); await pieces(); })()`)
     : page.waitForFunction(() => typeof exact.hold === 'function');
   const settle = evaluate => evaluate('Promise.all(document.getAnimations().map(a => (a.finish(), a.finished)))');
+  const release = async (evaluate, page) => {
+    await page.mouse.up();
+    // A quick tap displays its pressed frame before starting the release animation.
+    await page.locator('[data-testid="slab"]:not([data-pressed])').waitFor({ state: 'attached' });
+    await settle(evaluate);
+  };
   check(`${runtime} ${engine}: active translate composes and a stationary real pointer activates`, async () => {
     await fixture(runtime, async (evaluate, page) => {
       await feedback(evaluate, page);
@@ -677,7 +711,7 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
       expect(held.width).toBeCloseTo(base.width, 2);
       // The original left edge is now outside: the browser hit-tests the paint.
       expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x + 1, y + 40)?.closest('[data-testid="slab"]') != null, base)).toBe(false);
-      await page.mouse.up(); await settle(evaluate);
+      await release(evaluate, page);
       expect(await page.locator('[data-testid="count"]').textContent()).toBe('1');
       expect(await slab.boundingBox()).toEqual(base);
     }, `component App
@@ -703,7 +737,7 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
       await page.waitForFunction(() => document.querySelector('[data-testid="size"]').textContent === '200');
       const resized = await slab.boundingBox();
       expect(resized.x - base.x).toBeCloseTo((resized.width - base.width) * .1 + resized.width * .1, 2);
-      await page.mouse.up(); await settle(evaluate);
+      await release(evaluate, page);
       expect((await slab.boundingBox()).x - base.x).toBeCloseTo((resized.width - base.width) * .1, 2);
     }, `component App
   state size = 100
@@ -772,7 +806,7 @@ component App
         await page.mouse.down(); await settle(evaluate);
         expect(await child.evaluate(el => el.offsetTop)).toBe(0);
         expect((await child.boundingBox()).y - (await slab.boundingBox()).y).toBeCloseTo(0, 2);
-        await page.mouse.up(); await settle(evaluate);
+        await release(evaluate, page);
         expect((await child.boundingBox()).y).toBe(40);
       }
     }, `component App

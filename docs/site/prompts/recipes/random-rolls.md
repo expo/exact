@@ -1,0 +1,14 @@
+```prompt Roll dice in my app
+Add random rolls to the Exact app in this folder: draws that an expression makes from a seed, with no data module. Use https://github.com/expo/exact/blob/main/docs/recipes/random-rolls.md as the source for each step. The Exact checkout has the same page at docs/recipes/random-rolls.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say what the app rolls, how many values a roll has, and what starts a roll (a press, a held finger), propose it and ask me before you write code. If it is a deal or a shuffle, tell me: that is docs/recipes/random-and-shuffle.md. If a draw must be a secret, stop and tell me: that is `crypto.getRandomValues` in a source.
+3. Copy the recipe's three `fn`s (`turn`, `stir` and `roll`) into app.contract and do not change them. Do not write a `sin` hash in their place: the web's `Math.sin` need not match the runner's bits, so the two would roll differently.
+4. Read `exactTime()` as a resource with a `shape Time` that has `seed`. Keep a counter in a state and derive each draw from it, as in `roll(time.seed, rolls, 6)`. `roll(seed, k, n)` is a whole number from 0 to `n - 1`, and the same seed and count roll the same again.
+5. To roll while a finger is held, run a `task` only `when` a state is true, with `every(50, next)`, and set that state from `pointerdown` and `pointerup`. A second stream takes a second seed: `roll(time.seed + 1, k, n)`.
+6. Show a value that changes in place with `font-variant-numeric="tabular-nums"`.
+7. Add a test in app.test.contract like the recipe's, with `seed 2` at the top of the file. Expect the first value. Hold the control (`tap "roll" drag 0 0 hold 500`) and expect the count and the value. Run `clock +500` and expect the count unchanged. Then `reload` and expect the first value again.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me what the app rolls and what starts a roll, what the tests and checks reported, and the launch command for each target platform. The seed is new each launch, so each launch rolls a new sequence.
+```

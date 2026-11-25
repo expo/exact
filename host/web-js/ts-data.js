@@ -264,8 +264,10 @@ globalThis.__exact_module = body => {
   if (body.source && watching) (moduleWatched.get(key) ?? moduleWatched.set(key, new Set()).get(key)).add(watching);
   // A continuation keeps the least privileged pending call until its answer settles.
   const origin = call?.origin ?? 'app';
+  const owner = answering.call ?? answering.promiseCall;
+  const startedByInput = owner?.input === true && !owner.settled;
   answering.call = call;
-  try { return ordinary(() => globalThis.exact?.extensions?.call?.({ ...body, origin }, () => call?.wanted?.() ?? true) ?? Promise.resolve({ error: 'NotSupportedError' })); }
+  try { return ordinary(() => rt.Origin.callData?.({ ...body, origin }, () => call?.wanted?.() ?? true, startedByInput, tsGrantSet) ?? Promise.resolve({ error: 'NotSupportedError' })); }
   finally { answering.call = before; }
 };
 (globalThis.exact ??= {}).announceModule = topic => announce(topic, 'module');
@@ -554,7 +556,7 @@ const opener = (stream, conv, name) => (deliver, controller) => {
   return import('./ts-stream.js').then(m => m.open(stream, conv, tsGrantSet, deliver, controller))
     .catch(e => ({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
 };
-export function install(data, mixed = false, modules = null) {
+export function install(data, rustSources = null, modules = null) {
   // What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
   // outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
   answering.page = { clock: rt.clock, journal: rt.journal, drive: rt.drive, time: rt.time };
@@ -614,7 +616,8 @@ export function install(data, mixed = false, modules = null) {
     seeded = true;
     for (const { source: sourceName, answers } of rt.checkpoint().kept?.values() ?? []) {
       const types = Object.hasOwn(sourceTypes, sourceName) ? sourceTypes[sourceName] : undefined;
-      if (!types) {
+      // A Rust source's kept answers are the Rust module's.
+      if (!types || data.rustSources?.has(sourceName)) {
         continue;
       }
       for (const [args, value] of answers) {
@@ -637,7 +640,7 @@ export function install(data, mixed = false, modules = null) {
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: rt.Origin.now(), watches: new Set() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, input: mutation && rt.Origin.input === true, origin: rt.Origin.now(), watches: new Set() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).
@@ -686,15 +689,17 @@ export function install(data, mixed = false, modules = null) {
     call.settled = true; dropTimers(call); answering.untraced.delete(call);
     return { v: conv(shaped(r), result, target_), store: seen.read, effects, watches: call.watches, madeBy: call };
   };
-  // Beside a Rust source (LLP 1027.002): a source this module does not
-  // answer is the Rust module's, not ready until it loads; rust-data.js
-  // then asks it first and this module for what it calls unknown.
+  // Beside a Rust source (LLP 1027.002, LLP 1153.003 D2): a source the crate's RUST_SOURCES lists is the Rust
+  // module's, not ready until it loads (rust-data.js), and this module answers every other, as `exact_data::Mixed`
+  // routes them natively.
   data.uploads = ledger; // the uploads a resource asks are asked once (LLP 1016.000 D10)
-  data.answer = mixed ? (name, args, store, target, mutation, forced) => { try { return ts(name, args, store, target, mutation, forced); } catch { return null; } } : ts;
-  // An overlay (`overlay.js`): what a resource shows while writes affect it, in overlay mode; `undefined` without one.
+  const rust = data.rustSources = rustSources && new Set(rustSources);
+  data.answer = rust ? (name, args, store, target, mutation, forced) => rust.has(name) ? null : ts(name, args, store, target, mutation, forced) : ts;
+  // An overlay (`overlay.js`): what a resource shows while writes affect it, in overlay mode; `undefined` without one,
+  // and for a Rust source, whose overlay is the Rust module's.
   overlaying.say = line => rt.journal.push(`t=${rt.clock.now} ${line}`);
   data.overlay = source.overlay && ((name, args, answer, writes) => {
-    const types = sourceTypes[name]; if (!types) return undefined;
+    const types = sourceTypes[name]; if (!types || rust?.has(name)) return undefined;
     const keep = [], ws = writes.map(w => { const t = sourceTypes[w.source]; return Object.freeze({ id: w.id, mutation: w.mutation, source: w.source, answered: w.answered,
       args: w.args.map((a, i) => named(a, t?.[0][i])), ...(w.reply === undefined ? {} : { reply: named(w.reply, t?.[1]) }), keep: () => { if (!keep.includes(w.id)) keep.push(w.id); } }); });
     overlaying.on = true;
@@ -709,6 +714,7 @@ export function install(data, mixed = false, modules = null) {
   // fresh answer that fills no slot, with the call's origin on it, so a module call it makes is admitted with that
   // origin (`__exact_module`). Its answer, or null for a name `tools` does not export.
   data.tool = (name, args, store, origin) => {
+    if (typeof name !== 'string' || name === 'script.message') return null;
     const handler = source.tools && Object.hasOwn(source.tools, name) ? source.tools[name] : undefined;
     if (typeof handler !== 'function') return null;
     const before = answering.call, call = answering.call = { stream: null, mutation: true, name, turn: true, origin };

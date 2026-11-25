@@ -50,7 +50,7 @@ pub(super) fn owned(
     let res = uses.rt("res");
     let call = call(plan, i, &args, scope, res, false, Some(i), uses)?;
     let own = uses.rt("own");
-    Ok(format!("{rows}.r{i}={own}(r_{i},()=>{call},{path});"))
+    Ok(format!("{rows}.r{i}={own}(r_{i},$path=>{call},{path});"))
 }
 
 fn arguments(plan: &Plan, i: usize, scope: &Scope, uses: &mut Uses) -> Result<Vec<String>, String> {
@@ -75,7 +75,8 @@ fn arguments(plan: &Plan, i: usize, scope: &Scope, uses: &mut Uses) -> Result<Ve
 
 /// The `res(…)` call for row `i` with arguments `args`, built by `res`. An
 /// instance's (`owned`) takes the bake's answer only when the boot render
-/// made it, and the page's answer by its arguments (each.js `keptMember`).
+/// made it, and the answer the page's instance at its path gave at its
+/// arguments (each.js `keptMember`).
 #[allow(clippy::too_many_arguments)]
 fn call(
     plan: &Plan,
@@ -115,10 +116,15 @@ fn call(
     } else {
         value_js(&Value::from_bytes(initial_args).map_err(|e| e.to_string())?)
     };
-    if owned.is_some() && initial_args != "void 0" {
-        let booting = uses.rt("booting");
-        initial = format!("({booting}()?{initial}:void 0)");
-        initial_args = format!("({booting}()?{initial_args}:void 0)");
+    // Give an instance the bake's answer only while the boot makes it (the
+    // runner's settlement.rs `launch`), whether or not its arguments are
+    // written, which a store reader's are not
+    if owned.is_some() {
+        for value in [&mut initial, &mut initial_args] {
+            if value != "void 0" {
+                *value = format!("({}()?{value}:void 0)", uses.rt("booting"));
+            }
+        }
     }
     let res = each::constructor(r, res);
     // An `else` row's compiled answer is the bake's for every launch,
@@ -138,13 +144,13 @@ fn call(
         serde_json::to_string(plan.str(r.source)).unwrap(),
     );
     let ty = serde_json::to_string(&type_code(plan, r.ty)).unwrap();
-    // An instance's page answer, found by its arguments as a list element's
-    // is (each.js).
+    // An instance's page answer, found as a list element's is, by its path too
+    // (each.js)
     let tail = match owned {
         Some(_) => {
             let kept_member = uses.rt("keptOwned");
             let carried = if is_placeholder { "1" } else { "0" };
-            format!(",{carried},{kept_member}({name},{source},{args},{ty})")
+            format!(",{carried},{kept_member}({name},{source},{args},{ty},$path)")
         }
         None => carry,
     };

@@ -162,7 +162,7 @@ fn deletion_remount_and_runtime_replacement_cannot_receive_old_release() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     p.tap(id(&p, "hide")).unwrap();
     assert!(!p.host.has_hold(token));
@@ -179,7 +179,7 @@ fn deletion_remount_and_runtime_replacement_cannot_receive_old_release() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     // A replacement waits for the press to end (LLP 1029.000.002 D9): here
     // the device loses its pointer, and a late release follows.
@@ -305,7 +305,7 @@ fn resize_keeps_live_hold_origin_pin_and_latest_target() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     assert!(p.resize(600., 700.).is_none());
     assert!(p.host.has_hold(token));
@@ -353,7 +353,7 @@ fn navigation_cancels_a_held_view_without_waiting_for_the_next_pointer_event() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     p.pointer_move(150., 40., 30.).unwrap();
     assert!(p
@@ -378,7 +378,7 @@ fn displayed_velocity_and_companion_catch_are_continuous_past_resistance_knee() 
     for (view, property, value) in [
         (row, Property::Translate, Value::new(80., 0.)),
         (companion, Property::Opacity, Value::scalar(0.4)),
-        (companion, Property::Scale, Value::scalar(0.4)),
+        (companion, Property::Scale, Value::new(0.4, 0.4)),
     ] {
         let token = p
             .host
@@ -397,6 +397,9 @@ fn displayed_velocity_and_companion_catch_are_continuous_past_resistance_knee() 
     assert_eq!(p.host.presented(companion).opacity, before.opacity);
     assert_eq!(p.host.presented(companion).scale, before.scale);
     p.pointer_move(x + 30., 40., 30.).unwrap();
+    let scale = p.host.presented(companion).scale;
+    assert!(scale.0 > 0.);
+    assert_eq!(scale.1, scale.0);
     let held = p.contact.as_ref().unwrap().hold.as_ref().unwrap();
     let velocity = held.velocity.estimate(0.03).x;
     assert!(
@@ -418,7 +421,7 @@ fn malformed_pointer_samples_preserve_contact_and_presentation() {
         .hold
         .as_ref()
         .unwrap()
-        .primary
+        .motion()
         .token;
     for (x, time) in [(f32::NAN, 100.), (80., 9.), (80., f64::INFINITY)] {
         assert!(p.pointer_move(x, 40., time).is_err());
@@ -771,7 +774,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         let _gate = block_body(&mut p, 21.);
         action(&mut p, "curry-change", 22.);
@@ -937,7 +940,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         let before = clocks(&p);
         // Existing region sessions explicitly refuse in-place reload; do not
@@ -1029,7 +1032,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         assert!(p.host.has_hold(token));
         assert!(p.host.presented(row).translate.0 > 0.);
@@ -1084,7 +1087,7 @@ component MessageBubble
             .hold
             .as_ref()
             .unwrap()
-            .primary
+            .motion()
             .token;
         let moved = ack(&mut p);
         assert_eq!(moved.pixels.data(), ack(&mut ordinary).pixels.data());
@@ -1176,7 +1179,7 @@ component MessageBubble
                 .hold
                 .as_ref()
                 .unwrap()
-                .primary
+                .motion()
                 .token;
             p.pointer_cancel(41.).unwrap();
             assert!(p.contact.is_none());

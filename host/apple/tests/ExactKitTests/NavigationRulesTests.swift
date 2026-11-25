@@ -1001,7 +1001,7 @@ final class MacShortcutTests: XCTestCase {
         let development = DevMenu.makeMenu(shortcuts: presenter.shortcuts, documents: false, develop: true)
         XCTAssertEqual(titles(development), ["File", "Edit", "View", "Go", "Window", "Develop", "Help"])
         let develop = development.items.first { $0.submenu?.title == "Develop" }!.submenu!
-        // The frame-health commands (#1141) take no chord.
+        // The frame-health commands take no chord.
         XCTAssertEqual(develop.items.map(\.title), ["Reload", "Open Project…", "App Info…", "Frame Health", "Save Trace"])
         XCTAssertEqual(develop.items.map(\.keyEquivalent), ["r", "o", "d", "", "t"])
         XCTAssertEqual(develop.items.filter { !$0.keyEquivalent.isEmpty }.map(\.keyEquivalentModifierMask), [.command, .command, .command, [.command, .option]])

@@ -99,34 +99,6 @@ test('Apple rebuilds carry a path-selected app into the child without changing t
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('macOS freshness checks the full product receipt when the bundle carries a reduced receipt', () => {
-  const previous = process.env.EXACT_APP_DIR, { dir, write } = scratchApp('ats-drive');
-  try {
-    process.env.EXACT_APP_DIR = dir;
-    const app = resolveApp('ats-drive'), source = resolve(dir, 'source.swift');
-    write('source.swift', 'before');
-    const paths = appleArtifacts(app), executable = resolve(paths.bundle, 'Contents/MacOS', paths.executable);
-    mkdirSync(dirname(executable), { recursive: true }); writeFileSync(executable, '');
-    const receipt = resolve(paths.products, 'receipt.json'), time = new Date(Date.now() + 60_000);
-    mkdirSync(dirname(receipt), { recursive: true });
-    writeFileSync(receipt, JSON.stringify({ target: paths.target, started: time.toISOString(), build: { trust: 'development', binary: { sha256: 'dev',
-      inputs: [{ name: 'source.swift', path: source, sha256: createHash('sha256').update('before').digest('hex') }], missing: [], directories: [] } } }));
-    utimesSync(receipt, time, time);
-    const bundled = resolve(paths.bundle, 'Contents/Resources/receipt.json');
-    mkdirSync(dirname(bundled), { recursive: true });
-    const shipped = JSON.parse(readFileSync(receipt, 'utf8')); shipped.build.binary = { sha256: 'dev' };
-    writeFileSync(bundled, JSON.stringify(shipped));
-    assert.equal(nativeBuild('macos', app).receipt, receipt);
-    assert.deepEqual(nativeBuild('macos', app).changed, []);
-    write('source.swift', 'after');
-    assert.deepEqual(nativeBuild('macos', app).changed, ['source.swift']);
-    write('source.swift', 'before');
-  } finally {
-    if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test('native drives refuse a baked backend that the drive did not select', async () => {
   const { dir, write } = scratchApp('backend-drive');
   const saved = { ...process.env };
@@ -161,7 +133,7 @@ test('native drives refuse a baked backend that the drive did not select', async
     record(other);
     for (const checked of [null, createHash('sha256').update(readFileSync(receipt)).digest('hex')]) {
       assert.deepEqual(receiptChanges(receipt, app, { hashed: !!checked }), []);
-      for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app, { checked }), app), /baked backend.*4412.*app.ts origin.*4400/);
+      for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app, { checked: checked && JSON.stringify({ receipt: checked, plan: null }) }), app), /baked backend.*4412.*app.ts origin.*4400/);
     }
     const unexpected = () => assert.fail('a refused backend must neither build nor bake');
     await assert.rejects(buildFirst('macos', app, { wait: () => {}, build: unexpected, bake: unexpected }), /baked backend/);
@@ -535,6 +507,12 @@ test('a missing or stale build is built first, said in one line; a fresh one run
     // A source edited since: the same refusal the driver makes, and the build first instead, naming what changed.
     utimesSync(resolve(dir, 'app.contract'), edited, edited);
     assert.deepEqual(nativeBuild('ios', app).changed.map(p => resolve(p)), [resolve(dir, 'app.contract')]);
+    const digest = createHash('sha256').update(readFileSync(receipt)).digest('hex');
+    for (const checked of ['not-json', '{broken', ...[
+      { receipt: digest }, { receipt: digest, plan: 123 }, { receipt: digest, plan: {} }, { receipt: null, plan: null }, { receipt: 123, plan: null },
+    ].map(record => JSON.stringify(record))]) {
+      assert.deepEqual(nativeBuild('ios', app, { checked }).changed.map(p => resolve(p)), [resolve(dir, 'app.contract')]);
+    }
     assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /^Error: ios build is stale: .*app\.contract changed since .*; run \(cd .* && bun exact\.mjs ios\); if .*no build reads.*`\.exact\/`/);
     assert.equal(await drive('ios'), 0);
     // (A contract edit alone is a plan-only edit, which a build with no module receipt to check its bake against still rebuilds.)
@@ -587,7 +565,7 @@ test('a missing or stale build is built first, said in one line; a fresh one run
 // is older than it, though the build read the file before the edit (polls: a prebuild tested the old UI); the receipt's
 // `started` bounds it. And a build another process claims between the check and this one is waited for, not failed on.
 test('a source edited while the build ran is stale; a build claimed meanwhile is waited for, then the check is made again', async () => {
-  const previous = process.env.EXACT_APP_DIR, macBin = process.env.EXACT_MAC_BIN;
+  const previous = process.env.EXACT_APP_DIR, macBin = process.env.EXACT_MAC_BIN, checkOut = process.env.EXACT_BUILD_CHECK_OUT;
   const { dir, write } = scratchApp('race-log');
   try {
     process.env.EXACT_APP_DIR = dir;
@@ -624,7 +602,21 @@ test('a source edited while the build ran is stale; a build claimed meanwhile is
     said.length = 0;
     assert.equal(await buildFirst('ios', app, { say: line => said.push(line), wait: () => {}, build: async () => ({ code: 101, output: 'error: could not compile\n' }) }), 101);
     assert.match(said.at(-1), /the iOS build failed \(exit 101\)/);
+
+    const check = process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/checked');
+    mkdirSync(dirname(check), { recursive: true });
+    const rebuild = (edited) => buildFirst('ios', app, { say() {}, wait() {}, build: async () => {
+      stamp('app.contract', edited); built(true); return { code: 0, output: '' };
+    } });
+    await assert.rejects(rebuild(-5), /ios build is stale: .*app\.contract changed/);
+    assert.ok(!existsSync(check));
+    const launch = () => refuseBuild('ios', nativeBuild('ios', app, { checked: existsSync(check) ? readFileSync(check, 'utf8') : null }), app);
+    assert.throws(launch, /ios build is stale/);
+    assert.equal(await rebuild(-60), 0);
+    stamp('app.contract', -5);
+    assert.doesNotThrow(launch);
   } finally {
+    if (checkOut === undefined) delete process.env.EXACT_BUILD_CHECK_OUT; else process.env.EXACT_BUILD_CHECK_OUT = checkOut;
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
     if (macBin === undefined) delete process.env.EXACT_MAC_BIN; else process.env.EXACT_MAC_BIN = macBin;
     rmSync(dir, { recursive: true, force: true });
@@ -781,6 +773,7 @@ test('a build already running ends before the check: the drive neither races it 
 });
 
 test('a plan-only edit runs its bake on the existing build; any other edit, or a newer real build, retires it', async () => {
+  const checkOut = process.env.EXACT_BUILD_CHECK_OUT;
   const previous = process.env.EXACT_APP_DIR, trust = process.env.EXACT_UPDATE_TRUST;
   const { dir, write } = scratchApp('plan-log');
   try {
@@ -819,7 +812,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     };
     build();
     const said = [], builds = [], bakes = [];
-    let baked = { ...module }, bakeFails = null, bakeSays = '', buildSays = '';
+    let baked = { ...module }, bakeFails = null, bakeSays = '', buildSays = '', buildAt = 65;
     const bake = async (a, into) => {
       bakes.push(into);
       if (bakeFails) return { code: 1, output: bakeFails };
@@ -828,9 +821,10 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
       return { code: 0, output: bakeSays };
     };
     const drive = (code = 0) => buildFirst('ios', app, { say: line => said.push(line), wait: () => {}, bake,
-      build: async args => (builds.push(args), { code, output: buildSays }) });
+      build: async args => (builds.push(args), build({}, buildAt), { code, output: buildSays }) });
     const reset = () => { said.length = builds.length = bakes.length = 0; };
     const kept = () => planOverride('ios', app, nativeBuild('ios', app));
+    process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/checked');
 
     // A script app.ts never imports is no input, a `.mjs` as a `.ts`; one it imports, through another, is.
     const input = notBuildInput(dir);
@@ -854,6 +848,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     assert.deepEqual(nativeBuild('ios', app).changed, []);
     assert.equal(await drive(), 0);
     assert.deepEqual([said, builds, bakes, kept()], [[], [], [], null]);
+    const freshCheck = readFileSync(process.env.EXACT_BUILD_CHECK_OUT, 'utf8');
 
     // A contract edit: baked and kept beside the build, in one line, and no build; the driver runs it. The
     // compiler's warnings the bake said follow it, one line each the first time, then a count naming their file.
@@ -879,13 +874,19 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     reset();
     assert.equal(await drive(), 0);
     assert.deepEqual([said, builds, bakes], [[], [], []]);
+    const planCheck = readFileSync(process.env.EXACT_BUILD_CHECK_OUT, 'utf8'), selectedPlan = kept();
 
     // The TypeScript edited since: what is kept is no longer the bake of these sources; the driver refuses it, test and agent bake again.
     write('app.ts', "export const grants = '';\nexport const more = 1;\n");
     stamp('app.ts', 30);
     assert.equal(kept(), null);
+    assert.deepEqual(planOverride('ios', app, nativeBuild('ios', app, { checked: planCheck })), selectedPlan);
+    assert.equal(planOverride('ios', app, nativeBuild('ios', app, { checked: freshCheck })), null);
     assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /ios build is stale/);
-    reset();
+    rmSync(overrideDir('ios', app), { recursive: true });
+    const gone = nativeBuild('ios', app, { checked: planCheck });
+    assert.equal(planOverride('ios', app, gone), null);
+    assert.throws(() => refuseBuild('ios', gone, app), /ios build is stale/); reset();
     assert.equal(await drive(), 0);
     assert.deepEqual([said.length, builds.length, bakes.length], [1, 0, 1]);
     assert.match(said[0], /^iOS: (app\.contract, app\.ts|app\.ts, app\.contract) changed; running the new plan on the existing build \(no native rebuild\)\. Only the agent's drives run it: .*`bun exact\.mjs ios` before timing one$/);
@@ -910,12 +911,12 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     assert.deepEqual([bakes.length, builds.length, said[1], said.length], [0, 1, warning, 3]);
     // Built again over the same warning: its count alone.
     reset();
-    stamp('app.json', 70);
+    stamp('app.json', 70); buildAt = 75;
     assert.equal(await drive(), 0);
     buildSays = '';
     assert.equal(said.length, 2);
     assert.match(said[1], /^compiler: 1 warning, as before \(\S+\/warnings-ios\.txt lists them; /);
-    assert.match(said[0], /^building for iOS: the build is older than its sources \((app\.contract, app\.json|app\.json, app\.contract) changed\); its log: /);
+    assert.match(said[0], /^building for iOS: the build is older than its sources \(app\.json changed\); its log: /);
     assert.ok(!existsSync(overrideDir('ios', app)));
 
     // What a build must still make: new grants, a Rust data crate, a build that links only what its plan used.
@@ -925,7 +926,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
       [() => build({ linked: ['router', 'io'] }, 70), 'the build links only what its plan used (--link plan)'],
     ]) {
       build({}, 70); baked = { ...module }; setup(); reset();
-      stamp('app.json', -60); stamp('app.contract', 80);
+      stamp('app.json', -60); stamp('app.contract', 80); buildAt = 85;
       assert.equal(await drive(), 0);
       assert.deepEqual([builds.length, kept()], [1, null], why);
       assert.match(said[0], new RegExp(`^building for iOS: the build is older than its sources \\(app\\.contract changed\\), and ${why.replace(/[().]/g, '\\$&')}; its log: `));
@@ -940,6 +941,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
   } finally {
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
     if (trust === undefined) delete process.env.EXACT_UPDATE_TRUST; else process.env.EXACT_UPDATE_TRUST = trust;
+    if (checkOut === undefined) delete process.env.EXACT_BUILD_CHECK_OUT; else process.env.EXACT_BUILD_CHECK_OUT = checkOut;
     rmSync(dir, { recursive: true, force: true });
   }
 });

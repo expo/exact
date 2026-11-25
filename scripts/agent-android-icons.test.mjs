@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { androidIcons } from './agent-android.mjs';
 import { apkChanges } from './agent-stdio.mjs';
-import { readPng } from './app-icons.mjs';
+import { placeRgba, readPng, resize } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
 
 const inDir = (body) => { const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-icons-')); try { return body(dir); } finally { rmSync(dir, { recursive: true, force: true }); } };
@@ -25,8 +25,8 @@ const picked = (dir, src) => ({ file: resolve(dir, src), sha256: createHash('sha
 const pixel = (image, x, y) => [...image.data.subarray((y * image.width + x) * 4, (y * image.width + x) * 4 + 4)];
 
 test('a maskable PNG becomes an adaptive icon, inset so its safe zone is the 66 dp one, with the glyph as its themed layer', () => inDir((dir) => {
-  // Red with a blue top-left pixel; the glyph an opaque square in its middle half.
-  png(dir, 'assets/maskable.png', 512, 512, (x, y) => x + y === 0 ? [0, 0, 255, 255] : [255, 0, 0, 255]);
+  // The RGB in a fully transparent corner still supplies the absent launch colour.
+  png(dir, 'assets/maskable.png', 512, 512, (x, y) => x + y === 0 ? [0, 0, 255, 0] : [255, 0, 0, 255]);
   png(dir, 'assets/glyph.png', 432, 432, (x, y) => x >= 108 && x < 324 && y >= 108 && y < 324 ? [0, 0, 0, 255] : [0, 0, 0, 0]);
   png(dir, 'assets/banner.png', 1280, 720, () => [0, 128, 0, 255]);
   const res = resolve(dir, 'res');
@@ -43,7 +43,6 @@ test('a maskable PNG becomes an adaptive icon, inset so its safe zone is the 66 
     '    <foreground android:drawable="@drawable/exact_icon_foreground" />',
     '    <monochrome android:drawable="@drawable/exact_icon_monochrome" />',
     '</adaptive-icon>', ''].join('\n'));
-  // Without background_color the layer behind is the image's top-left pixel.
   assert.match(readFileSync(resolve(res, 'values/exact_icon.xml'), 'utf8'), /<color name="exact_icon_background">#FF0000FF<\/color>/);
   // 330 px of 432, centred: 51 px of transparency on each side.
   const foreground = readPng(resolve(res, 'drawable-nodpi/exact_icon_foreground.png'));
@@ -57,13 +56,86 @@ test('a maskable PNG becomes an adaptive icon, inset so its safe zone is the 66 
   const banner = readPng(resolve(res, 'drawable-xxxhdpi/exact_banner.png'));
   assert.deepEqual([banner.width, banner.height, pixel(banner, 0, 0)], [640, 360, [0, 128, 0, 255]]);
 
-  // background_color, in each CSS form, as Android's #AARRGGBB; with no glyph, no <monochrome>.
-  for (const [css, android] of [['#0af', '#FF00AAFF'], ['#336699', '#FF336699'], ['#33669980', '#80336699']]) {
-    androidIcons({ icons: icons.slice(0, 1), background_color: css }, dir, res);
-    assert.match(readFileSync(resolve(res, 'values/exact_icon.xml'), 'utf8'), new RegExp(`>${android}<`));
+  // A single subopaque pixel anywhere retains the launch resource, even if it resizes away.
+  for (const [x, y, colours, expected] of [
+    [123, 0, { background_color: '#0af' }, '#FF00AAFF'],
+    [511, 123, { background_color: '#336699' }, '#FF336699'],
+    [123, 511, { background_color: '#fff', color_scheme_light: { background_color: '#33669980' } }, '#80336699'],
+    [0, 123, {}, '#FF0000FF'],
+    [211, 209, { background_color: '#f4f5ef' }, '#FFF4F5EF'],
+  ]) {
+    png(dir, 'assets/maskable.png', 512, 512, (i, j) => [i % 256, 0, 255, i === x && j === y ? 254 : 255]);
+    androidIcons({ icons: icons.slice(0, 1), ...colours }, dir, res);
+    assert.deepEqual(files(res), ['drawable-nodpi/exact_icon_foreground.png', 'mipmap-anydpi/exact_icon.xml', 'values/exact_icon.xml']);
+    assert.equal(readFileSync(resolve(res, 'values/exact_icon.xml'), 'utf8'),
+      `<resources>\n    <color name="exact_icon_background">${expected}</color>\n</resources>\n`);
+    assert.doesNotMatch(readFileSync(resolve(res, 'mipmap-anydpi/exact_icon.xml'), 'utf8'), /monochrome/);
+    const art = resize(readPng(resolve(dir, 'assets/maskable.png')), 330, 330);
+    assert.deepEqual(readFileSync(resolve(res, 'drawable-nodpi/exact_icon_foreground.png')), encodePng(placeRgba(432, 432, art, 51, 51)));
   }
-  assert.deepEqual(files(res), ['drawable-nodpi/exact_icon_foreground.png', 'mipmap-anydpi/exact_icon.xml', 'values/exact_icon.xml']);
-  assert.doesNotMatch(readFileSync(resolve(res, 'mipmap-anydpi/exact_icon.xml'), 'utf8'), /monochrome/);
+}));
+
+test('opaque flat and gradient artwork supply the adaptive background at every source size', () => inDir((dir) => {
+  const src = 'assets/mask.png', res = resolve(dir, 'res');
+  const manifest = { icons: [{ src, purpose: 'maskable' }], background_color: '#f4f5ef' };
+  const foreground = resolve(res, 'drawable-nodpi/exact_icon_foreground.png');
+  for (const size of [432, 512, 660, 1024]) {
+    png(dir, src, size, size, () => [18, 145, 72, 255]);
+    androidIcons(manifest, dir, res);
+    assert.match(readFileSync(resolve(res, 'values/exact_icon.xml'), 'utf8'), />#FF129148</);
+    assert.equal(files(res).length, 3);
+    png(dir, src, size, size, (x, y) => {
+      const t = (0.35 * x + 0.65 * y) / (size - 1);
+      return [Math.round(12 + 103 * t), Math.round(68 + 169 * t), Math.round(42 + 59 * t), 255];
+    });
+    androidIcons(manifest, dir, res);
+    assert.match(readFileSync(resolve(res, 'mipmap-anydpi/exact_icon.xml'), 'utf8'), /"@drawable\/exact_icon_background"/);
+    const art = readPng(foreground);
+    const bg = readPng(resolve(res, 'drawable-xxxhdpi/exact_icon_background.png'));
+    // Every exposed pixel, including corners, meets the colour at the nearest foreground edge.
+    let worst = 0;
+    for (let y = 0; y < 432; y++) for (let x = 0; x < 432; x++) {
+      const sx = Math.max(51, Math.min(x, 380)), sy = Math.max(51, Math.min(y, 380));
+      if (sx === x && sy === y) continue;
+      for (let c = 0; c < 3; c++) worst = Math.max(worst, Math.abs(bg.data[4 * (y * 432 + x) + c] - art.data[4 * (sy * 432 + sx) + c]));
+    }
+    assert.ok(worst <= 1, `${size} px gradient differs by ${worst}`);
+  }
+  utimesSync(foreground, 1, 1);
+  androidIcons({ icons: manifest.icons }, dir, res);
+  assert.equal(statSync(foreground).mtimeMs, 1000, 'removing the launch colour preserves opaque artwork');
+}));
+
+test('the bleed averages fine stripes and rims and follows a broad border', () => inDir((dir) => {
+  const src = 'assets/mask.png', res = resolve(dir, 'res');
+  const manifest = { icons: [{ src, purpose: 'maskable' }], background_color: '#f4f5ef' };
+  function generate(grey) {
+    png(dir, src, 660, 660, (x, y) => { const v = grey(x, y); return [v, v, v, 255]; });
+    androidIcons(manifest, dir, res);
+  }
+  for (const grey of [
+    (_, y) => y === 0 ? 254 : y === 1 ? 2 : 128,
+    (x, y) => (x + y) % 2 * 255,
+  ]) {
+    generate(grey);
+    assert.match(readFileSync(resolve(res, 'values/exact_icon.xml'), 'utf8'), />#FF808080</);
+  }
+  for (const paint of [x => [1, 1, 128, 128, 255, 255][x % 6], x => x < 6 ? 1 : x >= 654 ? 255 : 128]) {
+    generate(paint);
+    for (const [density, size] of Object.entries({ ldpi: 81, mdpi: 108, tvdpi: 144, hdpi: 162, xhdpi: 216, xxhdpi: 324, xxxhdpi: 432 })) {
+      const bg = readPng(resolve(res, `drawable-${density}/exact_icon_background.png`));
+      assert.deepEqual([bg.width, bg.height], [size, size]);
+      assert.ok(bg.data.every((v, i) => i % 4 === 3 ? v === 255 : Math.abs(v - 128) <= 3), density);
+    }
+  }
+  // One extra rendered row of ink changes the local box mean by six levels.
+  generate((x, y) => y < (x < 330 ? 20 : 22) ? 0 : 128);
+  const stepped = readPng(resolve(res, 'drawable-xxxhdpi/exact_icon_background.png'));
+  assert.ok(Math.abs(pixel(stepped, 180, 25)[0] - 66) <= 3);
+  assert.ok(Math.abs(pixel(stepped, 252, 25)[0] - 60) <= 3);
+  generate(x => x < 42 ? 80 : 176);
+  const broad = readPng(resolve(res, 'drawable-xxxhdpi/exact_icon_background.png'));
+  assert.deepEqual(pixel(broad, 0, 216), [80, 80, 80, 255]);
 }));
 
 test('an app with no icons builds into a directory that does not exist yet', () => inDir((dir) => {
@@ -115,8 +187,8 @@ test('every file too small for its slot, and a glyph with no transparency, is re
   assert.deepEqual(files(res), ['kept.xml'], 'nothing written or removed');
 }));
 
-test('an unchanged icon is not made again, and a new background colour makes it again', () => inDir((dir) => {
-  png(dir, 'assets/maskable.png', 432, 432, () => [255, 0, 0, 255]);
+test('an unchanged icon is not made again, and a new launch colour reaches a transparent edge', () => inDir((dir) => {
+  png(dir, 'assets/maskable.png', 432, 432, (x) => [255, 0, 0, x === 0 ? 0 : 255]);
   const res = resolve(dir, 'res'), manifest = { icons: [{ src: 'assets/maskable.png', purpose: 'maskable' }] };
   const made = () => statSync(resolve(res, 'drawable-nodpi/exact_icon_foreground.png')).mtimeMs;
   androidIcons(manifest, dir, res);

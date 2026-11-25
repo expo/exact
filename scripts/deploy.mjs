@@ -60,6 +60,7 @@ export { admitHead, cohortReceipt, inspectHead } from './deploy-heads.mjs';
 import { filesystemLock, removePrivateTree } from './filesystem.mjs';
 import { listBuildFiles, listPublicFiles, readStaticCandidate } from '../host/web/serve.mjs';
 import { BESIDE, STAGE } from '../host/web/beside.mjs';
+import { withVendorReach } from './install-page.mjs';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PLATFORMS = ['web', 'ios', 'macos', 'linux', 'android'];
 const USAGE = 'usage: bun scripts/deploy.mjs <app> [--origin <dir|url>] [--channel <name>] [--only bundle|origin] [--platform <web|ios|macos|linux|android>]... [--variant <name>] [--snapshot <sha>] [--dirty] [--release <id>] [--keys <dir>] [--json] [--yes]\n       bun scripts/deploy.mjs keygen <id> [--keys <dir>] [--json]';
@@ -221,8 +222,10 @@ export function contractCompiler(exactRoot) {
 }
 
 function contractSources(appDir, exactRoot, env = process.env, compiler = contractCompiler(exactRoot)) {
+  // A compiler built into a private CARGO_TARGET_DIR is outside the checkout it reads (LLP 1174 D1), so it is named.
+  const root = existsSync(resolve(exactRoot, 'contract/cli/Cargo.toml')) ? { EXACT_ROOT: canonicalPath(exactRoot) } : {};
   const result = spawnSync(compiler, ['sources', resolve(appDir, 'app.contract')], {
-    cwd: exactRoot, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    cwd: exactRoot, env: { ...env, ...root }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
   let graph;
   try { graph = JSON.parse(result.stdout); }
@@ -952,8 +955,8 @@ export async function classify({ app, opts, origin, channel, snapshot, release, 
   return { release, snapshot: { id: snapshot.id ?? snapshot.commit, commit: snapshot.commit, dirty: snapshot.dirty, changes: snapshot.changes,
     ...(snapshot.sources ? { sources: snapshot.sources.map(({ roles, commit, workingSha256 }) => ({ roles, commit, workingSha256 })) } : {}) },
   app: { id: app.id, name: app.displayName }, channel, origin: { kind: origin.kind, location: origin.describe() }, dryRun: !opts.yes, notes, rows,
-  // What the app can reach (LLP 1069.008 D7): the bake's rows, the same union on every platform.
-  reach: (compat.web ?? Object.values(compat).find((c) => c?.reach))?.reach?.rows ?? null };
+  // What the app can reach (LLP 1069.008 D7): the bake's rows, the same union on every platform, and the vendor keys.
+  reach: withVendorReach((compat.web ?? Object.values(compat).find((c) => c?.reach))?.reach?.rows ?? null, app.manifest) };
 }
 
 /** The reach table (LLP 1069.008 D7): each grant line, its purpose in the

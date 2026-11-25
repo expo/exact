@@ -116,6 +116,7 @@ public struct ExactNativeFactory {
     public let snapshot: Bool
     public let reuse: Bool
     public let firstFrame: Bool
+    private(set) var trackProps: [String] = []
     public let make: (ExactModule, [String: String], ExactNativeEvents) throws -> ExactNativeInstance
     /// A package's view (LLP 1133.001 D1), made with its node's id in the
     /// session, by which its implementation hears whether it is displayed.
@@ -141,10 +142,11 @@ public struct ExactNativeFactory {
         }
     }
     /// A package's view, by the session's module, the node's id, its props and events.
-    init(package make: @escaping (ExactModule, String, [String: String], ExactNativeEvents) throws -> ExactNativeInstance) {
+    init(trackProps: [String] = [], package make: @escaping (ExactModule, String, [String: String], ExactNativeEvents) throws -> ExactNativeInstance) {
         snapshot = false; reuse = false; firstFrame = false
         self.make = { owner, props, events in try make(owner, "", props, events) }
         made = make
+        self.trackProps = trackProps
     }
 }
 

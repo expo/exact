@@ -206,6 +206,10 @@ pub(super) struct Timer {
     pub(super) base: f64,
     /// … and which virtual frame after it is next.
     pub(super) k: u32,
+    /// The cause of the commit that armed it, which it fires under (LLP
+    /// 1133.023 D7a): a countdown a background action starts stays that
+    /// action's.
+    pub(super) cause: super::provenance::Cause,
 }
 
 /// Equal when the timer would fall due at the same time: the reply its

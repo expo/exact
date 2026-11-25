@@ -432,6 +432,18 @@ pub trait Surface {
     fn input_changed(&self) -> bool {
         true
     }
+    /// The host can poll queued input separately from a requested draw.
+    fn poll_input_before_draw(&mut self) {}
+    /// A live display callback with only device input pending. A surface that
+    /// queues its input can tick it here and keep its last complete picture.
+    /// Pending requests another callback for input that has yet to reach a tick.
+    fn redraw_for_input(&mut self, _now_ms: f64, _period_ms: f64) -> std::task::Poll<bool> {
+        std::task::Poll::Ready(true)
+    }
+    /// A completed draw left device input waiting for a simulation tick.
+    fn input_pending(&self) -> bool {
+        false
+    }
     /// Strings posted to the app, drained after render, input and agent calls (S2).
     /// The host consumes `"exact:audio"` and [`haptics::Haptic::message`]'s instead.
     /// On iOS/tvOS it asks for the app's `audio_session` configuration and activation;
@@ -652,6 +664,7 @@ struct Instance {
     /// The inputs its last accepted bind gave its surface ([`Module::bind_changed_json`]).
     inputs: Vec<Value>,
     dirty: bool,
+    input_dirty: bool,
     /// Its first frame has been handed to the compositor (`Module::seen`);
     /// shared with the callback that says so.
     seen: Arc<AtomicBool>,
@@ -661,6 +674,7 @@ struct Instance {
     children_generation: u32,
     /// Per-child textures (LLP 1014 D5), by index.
     each: Vec<Option<ChildTexture>>,
+    child_geometry: Vec<Option<(String, [f32; 4])>>,
     /// Its target is extended sRGB (LLP 1100 D12b).
     hdr: bool,
     alpha_modes: Vec<wgpu::CompositeAlphaMode>,
@@ -944,11 +958,13 @@ impl Module {
                 bound: false,
                 inputs: Vec::new(),
                 dirty: false,
+                input_dirty: false,
                 seen: Default::default(),
                 presented: Default::default(),
                 children: None,
                 children_generation: 0,
                 each: Vec::new(),
+                child_geometry: Vec::new(),
                 hdr: false,
                 alpha_modes: Vec::new(),
                 headroom: 1.0,
@@ -976,6 +992,7 @@ impl Module {
             inst.dirty = true;
             inst.children = None;
             inst.each.clear();
+            inst.child_geometry.clear();
         }
         self.gpu = None;
     }
@@ -1215,7 +1232,7 @@ impl Module {
             && self
                 .instances
                 .get(&id)
-                .is_some_and(|i| i.dirty || i.surface.preparing())
+                .is_some_and(|i| i.dirty || i.input_dirty || i.surface.preparing())
     }
 
     /// Whether a canvas's last render went without a drawable (`acquire`):

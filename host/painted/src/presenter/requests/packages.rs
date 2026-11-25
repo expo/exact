@@ -16,6 +16,7 @@ use std::rc::Rc;
 #[derive(Default)]
 pub(in crate::presenter) struct Packages {
     table: Vec<Entry>,
+    development: bool,
     made: Vec<(&'static str, Box<dyn Package>, Context)>,
     /// Extensions told they run under the agent (`--bind` names the others).
     agent: Vec<&'static str>,
@@ -36,15 +37,17 @@ pub(super) fn extension_of(body: &[u8]) -> Option<String> {
 /// Whether a module call is a tell: one that names no `source` or `send`,
 /// so no request in flight stands for it.
 pub(super) fn told(body: &[u8]) -> bool {
-    serde_json::from_slice::<Json>(body)
-        .is_ok_and(|v| v.get("source").is_none() && v.get("send").is_none())
+    serde_json::from_slice::<Json>(body).is_ok_and(|v| {
+        v.get("extension").is_some() && v.get("source").is_none() && v.get("send").is_none()
+    })
 }
 
 impl Packages {
     /// The table the entry handed over; which of them run told they are
     /// under the agent: under the agent, all but those `EXACT_AGENT_BIND`
     /// names (`--bind`).
-    pub(super) fn set(&mut self, table: Vec<Entry>, agent: bool) {
+    pub(super) fn set(&mut self, table: Vec<Entry>, agent: bool, development: bool) {
+        self.development = development;
         let bound = std::env::var("EXACT_AGENT_BIND").unwrap_or_default();
         self.agent = (table.iter())
             .map(|e| e.extension)
@@ -135,7 +138,9 @@ impl Packages {
             package.foreground(shown);
             reply.send(Json::Object(Default::default()));
         } else if let Some(name) = named.and_then(Json::as_str) {
-            let origin = request["origin"].as_str().unwrap_or("app");
+            // The runner names every call's origin; one that names none is no
+            // one's (LLP 1133.023 D7a).
+            let origin = request["origin"].as_str().unwrap_or("none");
             *context.0.origin.borrow_mut() = origin.to_owned();
             context.0.request.set(request["request"].as_u64());
             let args = args.cloned().unwrap_or(Json::Object(Default::default()));
@@ -191,6 +196,7 @@ impl Packages {
         let context = Context::new(
             entry.extension,
             self.agent.contains(&entry.extension),
+            self.development,
             self.native.clone(),
             self.now.clone(),
             self.lines.clone(),

@@ -24,6 +24,13 @@ impl World {
         self
     }
 
+    /// Identity and mutation generation of a resource, including its replacement.
+    pub fn resource_revision<R: Resource>(&self) -> Option<(u64, u64)> {
+        self.resources
+            .typed::<R>()
+            .map(|s| (s.instance(), s.revision()))
+    }
+
     /// Mutation lease epoch, shared by all world storage; excluded from saves/hashes.
     pub fn mutation_epoch(&self) -> u64 {
         self.epoch.get()

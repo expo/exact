@@ -1,10 +1,11 @@
 //! The Material look's controls (LLP 1115.001 D9, S2): a checkbox, a radio
 //! and a filled button take Material's size and colours, and what the
 //! author wrote wins; each takes a touch over 48 dp, apart from its layout
-//! (LLP 1115.001.001 §5 Q5). The
-//! look is the process's (`app::show_material_look`), so these run in a
-//! child process of their own.
+//! (LLP 1115.001.001 §5 Q5). Each test runs in a child process because the look is process-wide.
 use super::*;
+
+#[path = "material_grouped_tests.rs"]
+mod grouped_tests;
 
 const APP: &str = r##"component App
   view
@@ -14,15 +15,16 @@ const APP: &str = r##"component App
       input type="checkbox" checked=true disabled=true testId="faded"
       button buttonStyle="filled" testId="save"
         text "Save"
-      button buttonStyle="filled" -exact-control-size="large" testId="large"
+      button buttonStyle="filled" -exact-control-size="large" accent-color="#ffeeaa" testId="large"
         text "Save"
       button buttonStyle="filled" disabled=true accent-color="#ff0000" testId="red"
         text "Save"
-      button buttonStyle="filled" -exact-corner-style="small" testId="small"
+      button buttonStyle="filled" -exact-corner-style="small" accent-color="#ffeeaa" color="#663300" testId="small"
         text "Save"
       button buttonStyle="filled" disabled=true testId="quiet"
         text "Save"
         text "Later"
+      input type="checkbox" checked=true accent-color="#ffeeaa" testId="pale"
 "##;
 
 /// Whether this is the child process that shows the Material look; the
@@ -165,11 +167,18 @@ fn materials_checkbox_and_filled_button_take_its_size_and_colours() {
     );
     // A larger control size is a larger button.
     let large = p.rect_of(id(&p, "large")).unwrap();
+    let title_has = |p: &mut Presenter<()>, (x, y, w, h): (f32, f32, f32, f32), ink| {
+        (1..w as u32).any(|dx| pixel(p, x + dx as f32, y + h / 2.0) == ink)
+    };
+    assert!(title_has(&mut p, large, [0, 0, 0, 255]));
     assert!(large.3 > save.3 && large.2 > save.2, "{large:?} {save:?}");
     // An authored accent stays when disabled; an authored corner style wins.
     let red = p.rect_of(id(&p, "red")).unwrap();
     assert_eq!(pixel(&mut p, red.0 + 12.0, red.1 + 20.0), [255, 0, 0, 255]);
     let small = p.rect_of(id(&p, "small")).unwrap();
+    assert!(title_has(&mut p, small, [0x66, 0x33, 0, 255]));
+    let pale = p.rect_of(id(&p, "pale")).unwrap();
+    assert_eq!(pixel(&mut p, pale.0 + 12.0, pale.1 + 14.0), [0, 0, 0, 255]);
     assert_ne!(
         pixel(&mut p, small.0 + 1.5, small.1 + 1.5),
         page,
@@ -266,6 +275,7 @@ fn materials_radio_and_touch_target_reach_past_the_drawn_control() {
     let phone = Device {
         night: false,
         font_scale: 1.0,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,
@@ -808,6 +818,29 @@ fn materials_segmented_group_that_is_a_grouped_row_spans_the_card() {
         p.rect_of(id(&p, "units")).unwrap(),
     );
     assert_eq!((group.0, group.2), (plain.0, plain.2));
+}
+
+/// A grouped list's row is Material's list item: 56 dp high, and no line
+/// under it.
+#[test]
+fn materials_grouped_row_is_a_list_item() {
+    if !material_process() {
+        return;
+    }
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(GROUPED),
+        (),
+        (400., 300.),
+        2.4375,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.frame();
+    let row = id(&p, "plain");
+    assert_eq!(p.rect_of(row).unwrap().3, 56.);
+    assert!(p.host().kernel().grouped_separator(row).is_none());
 }
 
 /// A grouped section: a plain row, a `radiogroup` row and another row.

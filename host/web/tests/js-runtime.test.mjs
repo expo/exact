@@ -68,7 +68,7 @@ stub('late.mjs', `export const appId = 'test'; export const answer = () => 'x';
 stub('topped.mjs', `export const appId = 'test'; export const answer = () => 'x';
   export let overlay = (source, args, answer) => answer.concat(['overlaid']);
   export function setOverlay(on) { overlay = on ? (source, args, answer) => answer.concat(['overlaid']) : undefined; }`);
-const tsData = readFileSync(webJs('ts-data.js'), 'utf8').replace("'__APP_TS__'", JSON.stringify(resolve(dir, 'app.mjs'))).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'");
+const tsData = "import './ts-link.js';\n" + readFileSync(webJs('ts-data.js'), 'utf8').replace("'__APP_TS__'", JSON.stringify(resolve(dir, 'app.mjs'))).replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'");
 writeFileSync(resolve(dir, 'ts-data.js'), tsData);
 for (const name of ['late', 'topped']) writeFileSync(resolve(dir, `ts-data-${name}.js`), tsData.replace(JSON.stringify(resolve(dir, 'app.mjs')), JSON.stringify(resolve(dir, `${name}.mjs`))));
 

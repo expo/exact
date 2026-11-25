@@ -41,7 +41,7 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
       if (kind === 2) { out.push({ op: 'animate', id, property: p, delay: 0, duration: 0, values: [] }); i += 3; continue; }
       const k = f[i + 6], values = [];
       // Four numbers per frame: translation lengths/percentages or rotation angle/axis.
-      for (let j = 0, at = i + 7; j < k; j++, at += 4) values.push(p === 'translate' ? (f[at + 2] || f[at + 3] ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : [f[at], f[at + 1]]) : p === 'rotate' ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : f[at]);
+      for (let j = 0, at = i + 7; j < k; j++, at += 4) values.push(p === 'translate' ? (f[at + 2] || f[at + 3] ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : [f[at], f[at + 1]]) : p === 'scale' ? [f[at], f[at + 1]] : p === 'rotate' ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : f[at]);
       out.push(kind === 3 ? { op: 'animate', id, property: p, held: true, due: f[i + 3] * 1000, delay: f[i + 4] * 1000, duration: f[i + 5] * 1000, values } : { op: 'animate', id, property: p, at: f[i + 3] * 1000, delay: f[i + 4] * 1000, duration: f[i + 5] * 1000, values });
       i += 7 + 4 * k;
     }
@@ -52,22 +52,41 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
   const nodes = new Map(), authored = new Map(), holds = new Map();
   const held = view => [...holds.values()].includes(view);
   const ended = serial => { const view = holds.get(serial); holds.delete(serial); if (!held(view)) authored.delete(view); };
-  // `[translate, scale, rotate, opacity, transition, velocity]` as the plan binds them:
+  // `[translate, scale, rotate, opacity, transition, velocity, height?, drag?]` as the plan binds them:
   // translate is lengths in px and percentages of the box, `calc()` included
   // (`exact_motion::length`), rotate angle and axis; a value the row refuses
   // is the row's initial one.
   const num = (v, d) => { const n = typeof v === 'number' ? v : parseFloat(v); return Number.isFinite(n) ? n : d; };
-  const observe = (id, [tr, scale, rotate, opacity, transition, velocity]) => {
+  function pixelHeight(value) {
+    if (typeof value === 'string') {
+      const token = /^([+-]?(?:\d*\.\d+|\d+))((?:e[+-]?\d+)?)(px)?$/i.exec(value.trim());
+      if (!token || (!token[3] && /[1-9]/.test(token[1]))) return null;
+      value = Number(token[1] + token[2]);
+    }
+    return Number.isFinite(value) && value >= 0 && value <= 3.4028234663852886e38 ? Math.fround(value) : null;
+  }
+  const observe = (id, [tr, scale, rotate, opacity, transition, velocity, height, drag]) => {
     let n = nodes.get(id);
     if (!n) nodes.set(id, n = {});
     const [x, y, px, py] = typeof tr === 'string' && w.m_translate(put(tr)) ? [0, 1, 2, 3].map(i => w.m_scratch(i)) : [0, 0, 0, 0];
+    const [sx, sy] = w.m_scale(put(String(scale ?? 1))) ? [w.m_scratch(0), w.m_scratch(1)] : [1, 1];
     if (n.transition !== transition) { n.transition = transition; if (!w.m_transitions(id, put(transition ?? '')) && transition) say(`motion: transition ${JSON.stringify(transition)} refused`); }
+    if (height !== undefined || heights.has(id)) {
+      const px = pixelHeight(height);
+      const h = heights.get(id);
+      if (h) h.px = px;
+      else {
+        const h = { px, drag, sent: null };
+        heights.set(id, h);
+        syncHeight(id, h);
+      }
+    }
     const speed = typeof velocity === 'string' ? velocity.trim().split(/\s+/).map(v => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(v) ? Math.fround(Number(v)) : NaN) : [];
     const supplied = speed.length === 2 && speed.every(Number.isFinite);
     const cleared = velocity == null || typeof velocity === 'string' && (!velocity.trim() || velocity.trim().toLowerCase() === 'unset');
     if (!cleared && !supplied && n.velocity !== velocity) say(`motion: -exact-translate-velocity ${JSON.stringify(velocity)} refused`);
     n.velocity = velocity;
-    if (!w.m_observe(id, x, y, px, py, num(scale, 1), put(String(rotate ?? 0)), num(opacity, 1), supplied ? 1 : 0, supplied ? speed[0] : 0, supplied ? speed[1] : 0, now() / 1000)) say(`motion: targets for #${id} refused`);
+    if (!w.m_observe(id, x, y, px, py, sx, sy, put(String(rotate ?? 0)), num(opacity, 1), supplied ? 1 : 0, supplied ? speed[0] : 0, supplied ? speed[1] : 0, now() / 1000)) say(`motion: targets for #${id} refused`);
   };
   const ops = list => ({ ops: list, timers: false });
   const applyBatch = batch => {
@@ -90,10 +109,12 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
       case 'gesture': return { knee: w.m_gesture(0), resistance: w.m_gesture(1), edge: w.m_gesture(2), slop: w.m_gesture(3) };
       case 'begin': {
         const p = PROPS.indexOf(facts.property), el = views.get(facts.view);
+        if (facts.property === 'height' && facts.view !== owner) return { accepted: false };
         if (el && !authored.has(facts.view)) authored.set(facts.view, el.style.cssText);
         const s = w.m_begin(facts.view, p, facts.x, facts.y, facts.now / 1000);
         if (!s) { if (!held(facts.view)) authored.delete(facts.view); return { accepted: false }; }
         holds.set(s, facts.view);
+        if (facts.property === 'height') heights.get(owner).hold = s;
         // Taking over cancels whatever played the property (Host::begin_hold).
         return { token: String(s), value: [w.m_scratch(0), w.m_scratch(1)], batch: ops([...lower(), { op: 'animate', id: facts.view, property: facts.property, delay: 0, duration: 0, values: [] }]) };
       }
@@ -125,6 +146,7 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
         const s = w.m_begin(b.target, 4, facts.x, 0, facts.now / 1000);
         if (!s) { if (!held(b.target)) authored.delete(b.target); return { accepted: false }; }
         holds.set(s, b.target);
+        heights.get(owner).hold = s;
         return { token: String(s), target: b.target, value: [w.m_scratch(0), w.m_scratch(1)], batch: ops([...lower(), { op: 'animate', id: b.target, property: 'height', delay: 0, duration: 0, values: [] }]) };
       }
       case 'height-action': {
@@ -147,7 +169,7 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
     }
   };
   // Height drags: each handle and the owner its `heightDragFor` names, and
-  // the one owner the engine follows (Host::reconcile_height_drags: the
+  // the one owner a drag may hold (Host::reconcile_height_drags: the
   // first valid target, never stolen by a second).
   const handles = new Map(), heights = new Map();
   let owner = null;
@@ -157,25 +179,33 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
       const target = dragTarget(b.el, 'heightdragfor');
       b.target = target ? viewId(target) : null;
     }
-    const valid = t => heights.has(t) && typeof heights.get(t)[0] === 'number' && eligible(views.get(t)) && getComputedStyle(views.get(t)).boxSizing === 'border-box';
+    const valid = t => heights.get(t)?.drag && heights.get(t).px != null && eligible(views.get(t)) && getComputedStyle(views.get(t)).boxSizing === 'border-box';
     const targets = [...handles.values()].filter(b => eligible(b.el)).map(b => b.target).filter(t => t != null && valid(t));
     const next = owner != null && targets.includes(owner) ? owner : targets[0] ?? null;
     if (next !== owner) {
-      if (owner != null && w.m_unheight(owner)) api.retire(owner, 'height');
+      const h = heights.get(owner);
+      if (h && (h.hold || h.drag === 'drag')) {
+        if (w.m_unheight(owner)) api.retire(owner, 'height');
+        h.sent = null; h.hold = 0;
+      }
       owner = next;
-      if (owner != null) observeHeight(owner, heights.get(owner));
     }
+    for (const [id, h] of heights) syncHeight(id, h);
     for (const [id, b] of handles) {
       const target = b.target != null && b.target === owner && eligible(b.el) ? b.target : null;
       if (b.published !== target) { b.published = target; api.heightBinding({ id, target, handleKey: id, targetKey: target }); }
     }
   }
-  function observeHeight(id, [h, transition] = []) {
-    if (id !== owner || typeof h !== 'number') return;
-    let n = nodes.get(id);
-    if (!n) nodes.set(id, n = {});
-    if (n.transition !== transition) { n.transition = transition; w.m_transitions(id, put(transition ?? '')); }
-    w.m_height(id, h, now() / 1000);
+  function syncHeight(id, h) {
+    const el = views.get(id);
+    const shown = h.px != null && (id === owner || h.drag !== 'drag' && el?.getClientRects().length &&
+      (getComputedStyle(el).display !== 'inline' || el.matches('img,video,canvas,iframe,input,select,textarea,button,svg')));
+    const px = shown ? h.px : null;
+    if (px === h.sent) return;
+    h.sent = px;
+    if (h.hold && !w.m_held(h.hold)) h.hold = 0;
+    if (px != null) w.m_height(id, px, now() / 1000);
+    else if (w.m_unheight(id)) api.retire(id, 'height');
   }
   const api = motionController({ views, now, generation: () => 0, request, applyBatch, inert: inertAncestor });
   const T = transformDrags({ w, views, viewId, api, lower, ops, now, authored, holds, held, eligible, inflight, say });
@@ -208,14 +238,12 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
     flush() { A.before(); reconcileHeights(); applyBatch(ops([...T.reconcile(), ...lower()])); api.commit(); api.followTimelines(); A.reconcile(); },
     reorderHandle(el) { A.handle(el); A.reconcile(); },
     transformDrag(el) { T.attach(el); T.reconcile(); },
-    height(id, v) { heights.set(id, v); observeHeight(id, v); },
     heightDrag(el) {
       const id = viewId(el);
       handles.set(id, { el, target: null, published: undefined });
       api.attachHeightDrag(el, id, (t, g) => el.addEventListener(t, g));
-      reconcileHeights();
     },
-    gone(id) { T.gone(id); A.gone(id); if (handles.delete(id) | heights.delete(id)) reconcileHeights(); nodes.delete(id); authored.delete(id); for (const [k, v] of holds) if (v === id) holds.delete(k); w.m_remove(id); api.destroy(id); },
+    gone(id) { T.gone(id); A.gone(id); handles.delete(id); heights.delete(id); nodes.delete(id); authored.delete(id); for (const [k, v] of holds) if (v === id) holds.delete(k); w.m_remove(id); api.destroy(id); },
     swipe(el) { if (el.$swiping) return; el.$swiping = true; const id = viewId(el); api.attachSwipe(el, id, (t, g) => el.addEventListener(t, g)); }, // once for `swiperight` and `swipeleft` both
     pan: { sample: (id, x, y, t, first) => w.m_pan_sample(id, first ? 1 : 0, x, y, t), velocity: (id, t) => (w.m_pan_release(id, t), [w.m_scratch(0), w.m_scratch(1)]) },
   };

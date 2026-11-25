@@ -76,7 +76,7 @@ pub fn line(line: &str) -> Sandbox {
         "fs.read" | "fs.write" | "sqlite.open" => path(target.trim_matches('"')),
         "doc.keep" => Sandbox::Keys(&[USER_SELECTED, "files.bookmarks.app-scope"]),
         "secret.keep" | "secret.hold" | "storage.kv" | "env.launch" | "surface.read"
-        | "surface.write" | "browser.automation" | "payment.google-pay" => NONE,
+        | "surface.write" | "clipboard.read" | "browser.automation" | "payment.google-pay" => NONE,
         "env.read" | "process.spawn" => match exact_grants::process::sandbox_refusal(line) {
             Some(why) => Sandbox::Refused(why),
             None => NONE,

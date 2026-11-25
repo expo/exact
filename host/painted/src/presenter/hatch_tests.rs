@@ -557,18 +557,18 @@ fn field_hidden_on_down_keeps_pointerup_and_hatch_up_until_release() {
 }
 
 #[test]
-fn field_hidden_on_down_lifts_on_cancel_without_a_painted_position() {
+fn field_hidden_on_down_cancels_without_a_painted_position() {
     for end in ["lost", "cancel"] {
         let mut p = boot::<Ears>(
             r#"component App
   state shown = true
-  state ups = 0
+  state cancels = 0
   action hide
     shown = false
-  action lifted
-    ups = ups + 1
+  action cancelled
+    cancels = cancels + 1
   view
-    column hatch="outer" width=300 height=300 pointerup=lifted
+    column hatch="outer" width=300 height=300 pointercancel=cancelled
       input value="abcd" width=100 height=40 display=(shown ? "block" : "none") pointerdown=hide
 "#,
             &["outer"],
@@ -576,7 +576,7 @@ fn field_hidden_on_down_lifts_on_cancel_without_a_painted_position() {
         first_pixel(&mut p);
         p.pointer_down(20., 20., 0.).unwrap();
         assert_eq!(notes(), ["outer Down handled=true inside=true"]);
-        assert_eq!(state(&mut p)["slots"]["ups"], 0);
+        assert_eq!(state(&mut p)["slots"]["cancels"], 0);
         assert!(p.pointer.is_none());
         if end == "lost" {
             p.pointer_lost(0.).unwrap();
@@ -587,10 +587,14 @@ fn field_hidden_on_down_lifts_on_cancel_without_a_painted_position() {
             );
             assert!(cancel.get("error").is_none(), "{cancel}");
         }
-        assert_eq!(state(&mut p)["slots"]["ups"], 1, "{end}");
+        assert_eq!(state(&mut p)["slots"]["cancels"], 1, "{end}");
         assert_eq!(notes(), ["outer Cancel handled=true inside=true"]);
         p.pointer_lost(0.).unwrap();
-        assert_eq!(state(&mut p)["slots"]["ups"], 1, "{end}: no stale pointer");
+        assert_eq!(
+            state(&mut p)["slots"]["cancels"],
+            1,
+            "{end}: no stale pointer"
+        );
         assert!(notes().is_empty());
     }
 }

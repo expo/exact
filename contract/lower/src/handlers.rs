@@ -5,6 +5,7 @@ use crate::{err, LowerError, Lowerer};
 use contract_syntax::{Attr, Expr};
 use contract_types::{Scope, Ty};
 use exact_plan::{ActionsId, Code, EventKind};
+pub(crate) mod swipe;
 
 /// `toggle` written on an element with no `popover`. HTML fires `toggle` at
 /// a popover as it opens or closes, never at the button that opens it, and
@@ -28,6 +29,69 @@ pub(crate) fn unheard_toggle(tag: &str, attrs: &[Attr], a: &Attr) -> Option<Lowe
 }
 
 impl Lowerer<'_> {
+    /// A panel link has one default action across hosts. Keeping its destination in
+    /// that action also prevents a browser from following it before hydration.
+    pub(crate) fn panel_link(
+        &mut self,
+        tag: &str,
+        kind: &Attr,
+        attrs: &[Attr],
+        scope: &Scope,
+        locals: u16,
+    ) -> Result<(ActionsId, Vec<Code>), LowerError> {
+        let attr = |name| attrs.iter().rev().find(|a| a.name == name);
+        let (Some(href), Some(target)) = (attr("href"), attr("target")) else {
+            return err(
+                "lower-attr-value",
+                "`windowKind` requires a link with an href and a named target",
+                kind.span,
+            );
+        };
+        if tag != "link"
+            || !matches!(&kind.value, Expr::Str(s, _) if s == "panel")
+            || attr("press").is_some()
+        {
+            return err(
+                "lower-attr-value",
+                "`windowKind=\"panel\"` belongs on a link whose press opens the panel",
+                kind.span,
+            );
+        }
+        if matches!(&target.value, Expr::Str(s, _) if s.is_empty() || s == "main" || s.starts_with('_'))
+        {
+            return err(
+                "lower-attr-value",
+                "a panel target must name a secondary window",
+                target.span,
+            );
+        }
+        let mut args = Vec::new();
+        for (a, prop) in [
+            (href, exact_kernel::PropId::Href),
+            (target, exact_kernel::PropId::Target),
+        ] {
+            let (code, ty) = self.typed_code(&a.value, scope, locals)?;
+            crate::values::check_prop_value(&a.name, &a.value, a.span, prop, &ty)?;
+            args.push(code);
+        }
+        let action = if let Some(action) = self.panel_action {
+            action
+        } else {
+            let mut asm = exact_plan::asm::Asm::new();
+            asm.load_param(0)
+                .load_param(1)
+                .command(self.b.str("panel"), 2);
+            let body = self.b.code(asm);
+            let string = self.ty_id(&Ty::String)?;
+            let action =
+                self.b
+                    .action("#panel", &[("href", string), ("target", string)], &[], body);
+            self.panel_action = Some(action);
+            action
+        };
+        Ok((action, args))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn handler(
         &mut self,

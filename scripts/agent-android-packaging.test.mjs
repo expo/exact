@@ -4,8 +4,45 @@ import {createHash} from 'node:crypto';
 import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {basename, resolve} from 'node:path';
-import {androidJavaEnv, androidSdk, androidSdkPackages, loadAlignment} from './agent-android.mjs';
+import {androidJavaEnv, androidSdk, androidSdkPackages, extensionArgs, composeArgs, loadAlignment} from './agent-android.mjs';
+import {manifestFragment} from './android-manifest.mjs';
 import {ANDROID_TARGET, androidBakeLibraryName, androidToolchainEnv, stageAndroidBake} from './android-abi.mjs';
+
+test('Gradle receives one permission across the app, a grant and a bound package', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-permission-'));
+  try {
+    const foreground = 'android.permission.FOREGROUND_SERVICE', capture = 'android.permission.DETECT_SCREEN_CAPTURE';
+    const app = { dir, name: 'capture', target: dir, manifest: { host: { android: { permissions: [foreground, capture] } } } };
+    const bound = [{ extension: 'fixture', className: 'fixture.Module', dirs: [dir], manifest: { permissions: [foreground] } }];
+    writeFileSync(resolve(dir, 'compat.json'), JSON.stringify({ reach: { android: [foreground] } }));
+    const args = extensionArgs(app, dir, [], bound, null, true);
+    expect(args.filter(arg => arg.startsWith('-Ppermissions='))).toEqual([`-Ppermissions=${capture},${foreground}`]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Compose follows the plan and the Kotlin source directories Gradle compiles', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-compose-'));
+  const app = resolve(root, 'app'), module = resolve(app, 'modules/android'), pkg = resolve(root, 'pkg');
+  const bound = [{ dirs: [pkg] }];
+  try {
+    mkdirSync(pkg);
+    expect(composeArgs([], app, bound, {})).toEqual([]);
+    expect(composeArgs(['dates'], app, bound, {})).toEqual(['-Pcompose=1']);
+    expect(composeArgs(['dates'], app, bound, { ORG_GRADLE_PROJECT_compose: '0' })).toEqual(['-Pcompose=1']);
+    mkdirSync(resolve(module, 'ui'), { recursive: true });
+    const source = resolve(module, 'ui/Hello.kt');
+    writeFileSync(source, 'import /* UI */ androidx.compose.ui.platform.ComposeView as Host');
+    expect(composeArgs([], app, bound, {})).toEqual(['-Pcompose=1']);
+    expect(composeArgs([], app, bound, { ORG_GRADLE_PROJECT_compose: '0' })).toEqual([]);
+    expect(composeArgs([], app, bound, { ORG_GRADLE_PROJECT_compose: '' })).toEqual(['-Pcompose=1']);
+    expect(composeArgs([], app, bound, { ORG_GRADLE_PROJECT_modulesDir: pkg })).toEqual([]);
+    writeFileSync(source, 'import androidx.composeish.Widget');
+    writeFileSync(resolve(pkg, 'README.md'), '@Composable');
+    expect(composeArgs([], app, bound, {})).toEqual([]);
+    writeFileSync(resolve(pkg, 'Panel.kt'), '@Composable fun Panel() {}');
+    expect(composeArgs([], app, bound, {})).toEqual(['-Pcompose=1']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('only development-trust APKs at the dev profile request shrink-only packaging', async () => {
   const {developmentApkArgs} = await import('./agent-android.mjs');
@@ -87,6 +124,55 @@ test.skipIf(!process.env.ANDROID_NDK_HOME && !existsSync(resolve(releaseSdk, 'nd
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test.skipIf(process.platform === 'win32' || !releaseJavaEnv || !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))(
+  'the release accepts a package POI session and refuses initialization or an allow-all validator on its service', () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-car-service-')), source = resolve(dir, 'car');
+    try {
+      mkdirSync(source);
+      const appSource = resolve(dir, 'modules/android');
+      mkdirSync(appSource, {recursive:true});
+      writeFileSync(resolve(appSource, 'Poi.kt'), 'package fixture.car; class Museum');
+      writeFileSync(resolve(dir, 'package.json'), JSON.stringify({name:'car-fixture'}));
+      writeFileSync(resolve(dir, 'app.json'), JSON.stringify({app:{id:'dev.exact.ci', name:'CI'}}));
+      const name = 'fixture.car.Poi', declaration = {carAppService:{name, category:'POI', minCarApiLevel:1}};
+      writeFileSync(resolve(source, 'exact.json'), JSON.stringify({manifest:declaration}));
+      const fragment = manifestFragment([{extension:'fixture', className:'fixture.car.Module', manifest:declaration}]);
+      writeFileSync(resolve(dir, 'fragment.xml'), fragment);
+      const compile = (body, flags = []) => {
+        writeFileSync(resolve(source, 'Poi.kt'), `package fixture.car
+import androidx.car.app.*
+class Poi : dev.exact.car.PoiCarAppService() {
+    override fun onCreateSession(info: SessionInfo): Session = object : Session() {
+        override fun onCreateScreen(intent: android.content.Intent): Screen = error("fixture")
+    }
+    ${body}
+}
+`);
+        return spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), [':app:checkReleaseCarManifest', '--console=plain',
+          '-PapplicationId=dev.exact.ci', '-PappName=CI', '-Papp=ci', `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`,
+          `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`, `-PextensionDirs=${source}`,
+          `-PcarDeclaration=${source}/exact.json`, `-PcarSourceDirs=${source}`, `-PcarAppService=${name}`, `-PmanifestFragment=${dir}/fragment.xml`,
+          '-Pmaven=androidx.car.app:app:1.7.0', `-PmavenLock=${dir}/gradle.lockfile`, ...flags],
+        {cwd:resolve(import.meta.dir, '../host/android'), encoding:'utf8', timeout:180000, env:{...releaseJavaEnv, ANDROID_HOME:releaseSdk}});
+      };
+      const valid = compile('', ['--write-locks']);
+      expect(valid.status, valid.stdout + valid.stderr).toBe(0);
+      for (const [body, error] of [
+        ['init { android.util.Log.i("Fixture", "initialization") }', 'must have an empty constructor'],
+        ['override fun createHostValidator() = androidx.car.app.validation.HostValidator.ALLOW_ALL_HOSTS_VALIDATOR', 'final and cannot be overridden'],
+      ]) {
+        const refused = compile(body);
+        expect(refused.status).toBe(1);
+        expect(refused.stdout + refused.stderr).toContain(error);
+      }
+      writeFileSync(resolve(dir, 'fragment.xml'), fragment.replace('</application>',
+        '<provider android:name="fixture.car.Init" android:authorities="dev.exact.ci.init" android:exported="false" /></application>'));
+      const startup = compile('');
+      expect(startup.status).toBe(1);
+      expect(startup.stdout + startup.stderr).toContain('cannot start provider fixture.car.Init');
+    } finally { rmSync(dir, {recursive:true, force:true}); }
+  }, 550000);
+
 for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefined, '12', true], ['com.example.android_app', '11'], ['com.example.android_app', '12']]) test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
   !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))(`Android release metadata and signing reach Gradle with ${id ?? 'the default package'} on Android ${minimumOS}, development=${development}`, async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-release-'));
@@ -115,7 +201,7 @@ for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefine
       }
     }`);
     const result = spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), ['--no-daemon', '--console=plain', '-I', init,
-      ':app:processReleaseMainManifest', ':app:inspectRelease', ...(development ? ['-PdevelopmentApk=1', '-PexactDevelopment=1'] : []), `-PapplicationId=${packageId}.dev`, '-PappName=CI Dev', '-Papp=ci', `-Ppermissions=${permissions.join(',')}`,
+      ':app:writeReleaseManifestPermissions', ':app:inspectRelease', ...(development ? ['-PdevelopmentApk=1', '-PexactDevelopment=1'] : []), `-PapplicationId=${packageId}.dev`, '-PappName=CI Dev', '-Papp=ci', `-Ppermissions=${permissions.join(',')}`,
       ...(id ? ['-PandroidFeatures=android.hardware.bluetooth_le required=false,android.software.companion_device_setup'] : []), `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
     { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000,
       env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk,
@@ -129,6 +215,10 @@ for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefine
       .filter(path => /merged_manifest.*AndroidManifest.xml$/.test(path));
     expect(manifests.length).toBeGreaterThan(0);
     const merged = readFileSync(resolve(dir, 'app/intermediates', manifests[0]), 'utf8');
+    const names = JSON.parse(readFileSync(resolve(dir, 'app/manifest-permissions.json'), 'utf8'));
+    const manifestNames = [...merged.matchAll(/<uses-permission\s[^>]*?android:name="([^"]+)"/g)].map(match => match[1]);
+    expect(names).toEqual([...new Set(manifestNames)].sort());
+    expect(names).toContain('android.permission.INTERNET');
     expect(merged).toContain(`package="${packageId}.dev"`);
     expect(merged).toContain('android:label="CI Dev"');
     expect(merged).not.toContain('android:debuggable="true"');
@@ -188,7 +278,7 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
 }, 600000);
 
 test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
-  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('one Maven lock write produces a graph the next strict resolution accepts', () => {
+  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('a written Maven lock accepts the reader it was made for and refuses a newer shell dependency', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-locks-'));
   try {
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({app:{id:'dev.exact.locks', name:'Locks'}}));
@@ -202,9 +292,25 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
           }
         }
       }
+    }
+    gradle.afterProject { p ->
+      if (p.path == ':app' && p.hasProperty('keepBeforeFold')) p.configurations.configureEach {
+        resolutionStrategy.force('androidx.window:window:1.3.0')
+      }
+      if (p.path == ':canvas' && p.hasProperty('unavailableWindow')) {
+        p.configurations.implementation.dependencies.removeIf { it.group == 'androidx.window' && it.name == 'window' }
+        p.dependencies.add('implementation', 'androidx.window:window:999.0.0')
+      }
+      if (p.path == ':canvas' && p.hasProperty('beforeFold')) {
+        p.configurations.implementation.dependencies.removeIf {
+          it.group == 'androidx.window' || it.name == 'kotlinx-coroutines-android'
+        }
+      }
     }`);
     // Push brings older Kotlin transitives into a graph whose reader selects the current stdlib.
     const {maven} = JSON.parse(readFileSync(resolve(import.meta.dir, '../packages/push/android/exact.json'), 'utf8'));
+    // window-java brought Window and coroutines before the reader used either.
+    maven.push('androidx.window:window-java:1.3.0');
     const args = ['--no-watch-fs', '--no-daemon', '--console=plain', '-I', init,
       '-Papp=locks', '-PapplicationId=dev.exact.locks', '-PappName=Locks', `-PappDir=${dir}`,
       `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`,
@@ -213,10 +319,26 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
       cwd: resolve(import.meta.dir, '../host/android'), encoding:'utf8', timeout:180000, maxBuffer: 1 << 28,
       env:{...releaseJavaEnv, ANDROID_HOME:releaseSdk},
     });
-    const written = run([':app:dependencies', ':app:resolveRuntime', '--write-locks']);
+    const written = run(['-PbeforeFold', ':app:dependencies', ':app:resolveRuntime', '--write-locks']);
     expect(written.status, written.stdout + written.stderr).toBe(0);
-    const strict = run([':app:resolveRuntime']);
+    const strict = run(['-PbeforeFold', ':app:resolveRuntime']);
     expect(strict.status, strict.stdout + strict.stderr).toBe(0);
+    const forced = run(['-PkeepBeforeFold', ':app:resolveRuntime']);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    const stale = run([':app:resolveRuntime']);
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toMatch(/androidx.window:window.*1\.5\.0.*locked.*1\.3\.0/);
+    expect(stale.stderr).toContain('--write-locks');
+    const report = run([':app:checkMavenLock']);
+    expect(report.status).toBe(1);
+    expect(report.stderr).toContain('androidx.window:window');
+    const rewrite = run([':app:dependencies', ':app:resolveRuntime', '--write-locks']);
+    expect(rewrite.status, rewrite.stdout + rewrite.stderr).toBe(0);
+    const current = run([':app:checkMavenLock']);
+    expect(current.status, current.stdout + current.stderr).toBe(0);
+    const unchecked = run(['--offline', '-PunavailableWindow', ':app:checkMavenLock']);
+    expect(unchecked.status).toBe(1);
+    expect(unchecked.stderr).toContain('androidx.window:window:999.0.0');
   } finally { rmSync(dir, {recursive:true, force:true}); }
 }, 400000);
 

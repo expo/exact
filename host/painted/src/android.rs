@@ -326,8 +326,10 @@ pub enum Command {
     /// Scroll whatever is under the viewport's center by this many pixels
     /// (the benchmark driver's per-frame step).
     Scroll(f32),
-    /// A touch: 0 down, 1 up, 2 move, 3 cancel; pixels.
-    Touch(i32, f32, f32),
+    /// The embedding app sends the action (0 down, 1 up, 2 move, 3 cancel),
+    /// position in pixels and `MotionEvent` time in uptime nanoseconds. It
+    /// enqueues each historical move before the current sample.
+    Touch(i32, f32, f32, i64),
     /// Paint again (the app attached a surface the painter presents to).
     Repaint,
     /// The surface is going away: stop painting and drop the painter.
@@ -638,6 +640,7 @@ fn run<D: DataSource + Default>(
     let mut first_pixel = false;
     let frame_ms = 1000.0 / 120.0;
     let mut images_woke = true;
+    let mut input = crate::presenter::InputClock::default();
     loop {
         let mut drain = [0u8; 8];
         // SAFETY: a non-blocking read of the eventfd's counter.
@@ -659,12 +662,14 @@ fn run<D: DataSource + Default>(
                     });
                     Ok(())
                 }
-                Command::Touch(action, x, y) => {
+                Command::Touch(action, x, y, at_ns) => {
                     let (x, y) = (x / scale, y / scale);
+                    // Queued touches drain together: each keeps its own time.
+                    let at = input.android(action == 0, at_ns, now);
                     match action {
-                        0 => p.pointer_down(x, y, now).map(|_| ()),
-                        1 => p.pointer_up(x, y, now).map(|_| ()),
-                        2 => p.pointer_move(x, y, now).map(|_| ()),
+                        0 => p.pointer_down_at(x, y, now, at).map(|_| ()),
+                        1 => p.pointer_up_at(x, y, now, at).map(|_| ()),
+                        2 => p.pointer_move_at(x, y, now, at).map(|_| ()),
                         // This shell routes nothing: its cancel is the system's.
                         _ => {
                             p.pointer_released();

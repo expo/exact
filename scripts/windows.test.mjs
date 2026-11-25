@@ -21,6 +21,7 @@ import {buildTreeFile, serveBuildTree, listPublicFiles, publicFileCards, readSta
 import {gameShells} from '../game/app/shells.mjs';
 import {formatProofError, proofFailureRow} from '../game/proof.mjs';
 import {pendingBuildInputs, readManifest} from './app.mjs';
+import {noWindowsHost} from '../host/windows/build.mjs';
 
 test('TypeScript captures accept physical path aliases and reject declarations outside them', async () => {
   const {check, configure} = await import('../js/bake/src/typescript.mjs');
@@ -134,6 +135,13 @@ test('ordinary Windows host manifests admit only the empty host settings object'
   } finally { rmSync(root,{recursive:true,force:true}); }
 });
 
+test('a Windows build refuses an app whose app.json names no windows host', () => {
+  const app=(name,manifest)=>({name,manifest});
+  expect(noWindowsHost(app('caltrain',{host:{ios:{},linux:{}}}))).toBe("caltrain's app.json names no windows host, so it has no Windows build (apps/shelf/app.json names one)");
+  expect(noWindowsHost(app('shelf',{host:{windows:{}}}))).toBeNull();
+  expect(noWindowsHost(app('greybox',{game:{}}))).toBeNull();
+});
+
 test('storage error numbers retain platform meaning and require an exact typed suffix', () => {
   const source=readFileSync(new URL('../js/src/storage.js',import.meta.url),'utf8');
   const mapping=source.slice(source.indexOf('    var windowsStorage ='),source.indexOf('    function storageError('));
@@ -144,14 +152,19 @@ test('storage error numbers retain platform meaning and require an exact typed s
     return code;
   };
   const windows=make(true), unix=make(undefined);
-  for(const [number,code] of [[2,'ENOENT'],[3,'ENOENT'],[32,'EBUSY'],[33,'EBUSY'],[80,'EEXIST'],[145,'ENOTEMPTY'],[170,'EBUSY'],[183,'EEXIST'],[267,'ENOTDIR']])
+  for(const [number,code] of [[2,'ENOENT'],[3,'ENOENT'],[5,'EACCES'],[32,'EBUSY'],[33,'EBUSY'],[80,'EEXIST'],[145,'ENOTEMPTY'],[170,'EBUSY'],[183,'EEXIST'],[267,'ENOTDIR']])
     expect(windows(`filesystem: unavailable (os error ${number})`)).toBe(code);
-  for(const number of [5,17,21,39]) expect(windows(`filesystem: unavailable (os error ${number})`)).toBe('failed');
+  for(const number of [13,17,21,39]) expect(windows(`filesystem: unavailable (os error ${number})`)).toBe('failed');
+  expect(unix('unavailable (os error 5)')).toBe('failed');
+  expect(unix('unavailable (os error 13)')).toBe('EACCES');
   expect(unix('unavailable (os error 17)')).toBe('EEXIST');
   expect(unix('unavailable (os error 39)')).toBe('ENOTEMPTY');
   expect(unix('unavailable (os error 267)')).toBe('failed');
   expect(windows('fs.readFile doc:/1/folder: cannot read a directory (filesystem code EISDIR)')).toBe('EISDIR');
-  expect(windows('(filesystem code EISDIR) then access refused (os error 5)')).toBe('failed');
+  expect(windows('(filesystem code EISDIR) then access refused (os error 5)')).toBe('EACCES');
+  expect(windows('(filesystem code EISDIR) then unavailable (os error 17)')).toBe('failed');
+  expect(windows('access refused (os error 5) (filesystem code EISDIR)')).toBe('EISDIR');
+  expect(windows('denied: fs.read (os error 5)')).toBe('denied');
   expect(windows('denied: fs.read (filesystem code EISDIR)')).toBe('denied');
   expect(unix('(filesystem code EISDIR)')).toBe('failed');
 });

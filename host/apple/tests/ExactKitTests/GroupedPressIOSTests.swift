@@ -34,6 +34,67 @@ final class GroupedPressIOSTests: GroupedListFixture {
         XCTAssertEqual(ink(), .blue)
     }
 
+    /// A row's press ends the editing under way, unless the row or its
+    /// section retains the focus, a carried row's too: then the field stays
+    /// first responder and commits only as it resigns.
+    func testARowsPressLeavesTheEditingAloneUnderRetainFocus() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a field takes first responder only in the hosted app") }
+        for (row, retaining) in [(10, nil), (10, 10), (21, nil), (21, 3)] as [(UInt32, Int?)] {
+            let p = presenter { self.model(custom: true) }
+            p.apply(wireBatch([
+                ["op": "create", "id": 30, "kind": "input", "props": [:], "handlers": ["change", "blur"], "style": ["text_color": [0, 0, 0, 255]]],
+                ["op": "frame", "id": 30, "x": 0.0, "y": 800.0, "w": 300.0, "h": 34.0],
+                ["op": "roots", "ids": [1, 30]],
+            ] + (retaining.map { [["op": "props", "id": $0, "set": ["retainFocus": "true"]]] } ?? [])))
+            window.windowScene = scene
+            window.makeKeyAndVisible()
+            _ = try cell(p, row)
+            XCTAssertEqual(host(p).logicalParent(of: try XCTUnwrap(p.views[row])) != nil, row == 21, "row 21 is carried into its cell")
+            var events: [String] = []
+            p.onPress = { events.append("press \($0)") }
+            p.onChange = { events.append("change \($0) \($1)") }
+            p.onBlur = { events.append("blur \($0)") }
+            let field = try XCTUnwrap(p.views[30]?.field)
+            XCTAssertTrue(field.becomeFirstResponder())
+            field.text = "Hi"
+            p.typed(30, "Hi", input: false)
+            XCTAssertTrue(try list(p).select(row))
+            let step = "row \(row), retainFocus on \(retaining.map(String.init) ?? "nothing")"
+            XCTAssertEqual(field.isFirstResponder, retaining != nil, step)
+            field.resignFirstResponder()
+            let commit = ["change 30 Hi", "blur 30"], press = ["press \(row)"]
+            XCTAssertEqual(events, retaining == nil ? commit + press : press + commit, step)
+            window.isHidden = true
+        }
+    }
+
+    /// Settling focus for a carried button row commits the edit and keeps
+    /// the field first responder even when its authored section sets
+    /// `retainFocus`.
+    func testAPressSettlingItsFocusInACarriedRowCommitsTheEditUnderItsSectionsRetainFocus() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a field takes first responder only in the hosted app") }
+        let p = presenter { self.model(custom: true) }
+        p.apply(wireBatch([
+            ["op": "create", "id": 30, "kind": "input", "props": [:], "handlers": ["change"], "style": ["text_color": [0, 0, 0, 255]]],
+            ["op": "frame", "id": 30, "x": 0.0, "y": 800.0, "w": 300.0, "h": 34.0],
+            ["op": "props", "id": 3, "set": ["retainFocus": "true"]],
+            ["op": "roots", "ids": [1, 30]],
+        ]))
+        window.windowScene = scene
+        window.makeKeyAndVisible()
+        _ = try cell(p, 21)
+        let row = try XCTUnwrap(p.views[21]), field = try XCTUnwrap(p.views[30]?.field)
+        XCTAssertNotNil(host(p).logicalParent(of: row), "the row is carried into its cell")
+        var changed: [String] = []
+        p.onChange = { changed.append($1) }
+        XCTAssertTrue(field.becomeFirstResponder())
+        field.text = "Hi"
+        p.typed(30, "Hi", input: false)
+        row.focusForPress(target: row)?.dispatched()
+        XCTAssertEqual(changed, ["Hi"], "settling the focus commits the edit")
+        XCTAssertTrue(field.isFirstResponder, "the field stays first responder")
+    }
+
     func testHighlightedTranslationFollowsBoundsIncludingAnInitiallyEmptyCell() throws {
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
         window.makeKeyAndVisible()

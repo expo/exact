@@ -161,6 +161,10 @@ fn a_module_lists_what_data_can_give_its_elements() {
     let link = has("button \"Go\" href=url", &["t:a", "t:button"]);
     assert!(!link.iter().any(|t| t == "a:data-exact-switch"), "{link:?}");
     has(
+        "link href=url target=\"hud\" windowKind=\"panel\"\n        text \"Open\"",
+        &["t:a", "t:button", "a:tabindex"],
+    );
+    has(
         "input type=\"checkbox\" role=(big ? \"switch\" : \"checkbox\")",
         &["a:data-exact-switch", "a:switch"],
     );

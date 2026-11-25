@@ -75,6 +75,81 @@ fn outside(p: &mut Presenter<()>) {
 }
 
 #[test]
+fn a_dialog_adds_no_scroll_range_to_its_ancestors() {
+    for width in ["100%", "720px"] {
+        let mut p = boot(&format!(
+            r##"component App
+  view
+    column width="100%" height="100%"
+      button "Open" testId="open" commandfor="notice" command="show-modal"
+      scroll testId="outer" flex=1 min-height=0 width="100%"
+        column box-sizing="border-box" width="100%" padding="0px 24px"
+          scroll testId="inner" height=200 width="100%"
+            column box-sizing="border-box" width="100%" padding="0px 24px"
+              text "Top"
+              dialog id="notice" testId="notice" width="{width}" height=100 background-color="#ccc"
+                button "Close" testId="close" commandfor="notice" command="close"
+              view height=600
+          view height=600
+"##
+        ));
+        for state in ["closed", "open", "closed again"] {
+            match state {
+                "open" => {
+                    tap(&mut p, "open");
+                    assert_eq!(surface(&mut p)["node"], id(&p, "notice"));
+                    assert!(p.rect_of(id(&p, "close")).is_some());
+                }
+                "closed again" => tap(&mut p, "close"),
+                _ => {}
+            }
+            let dialog = p.host().kernel().node(id(&p, "notice")).unwrap();
+            assert_eq!(dialog.frame.width > 0., state == "open");
+            for port in ["inner", "outer"] {
+                let n = p.host().kernel().node(id(&p, port)).unwrap();
+                assert!(
+                    n.content.0 <= n.frame.width,
+                    "{state} {port} {width}: {} > {}",
+                    n.content.0,
+                    n.frame.width
+                );
+                assert!(n.content.1 > n.frame.height);
+                let port = n.id;
+                assert_eq!(p.scroll_to(port, (100., 24.)), Some((0., 24.)));
+                p.scroll_to(port, (0., 0.));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_dialog_can_open_from_inside_a_closed_dialog() {
+    let mut p = boot(
+        r##"component App
+  view
+    column height="100%"
+      button "Open" testId="open" commandfor="inner" command="show-modal"
+      scroll testId="port" height=200
+        dialog width=720 testId="outer"
+          dialog id="inner" testId="inner" width=200 height=100 background-color="#ccc"
+            button "Close" testId="close" commandfor="inner" command="close"
+        view height=400
+"##,
+    );
+    tap(&mut p, "open");
+    assert_eq!(surface(&mut p)["node"], id(&p, "inner"));
+    assert!(p.rect_of(id(&p, "close")).is_some());
+    assert_eq!(
+        p.host().kernel().node(id(&p, "outer")).unwrap().frame.width,
+        0.
+    );
+    let port = id(&p, "port");
+    assert_eq!(p.scroll_to(port, (100., 24.)), Some((0., 24.)));
+    tap(&mut p, "close");
+    assert!(surface(&mut p).is_null());
+}
+
+#[test]
 fn modal_ua_surface_focus_input_inertness_and_every_close_path() {
     let mut p = boot(APP);
     for (n, opener, closer) in [
@@ -600,3 +675,38 @@ fn popover_keeps_the_fitting_option_until_its_size_changes_or_it_reopens() {
 
 #[path = "position_area_region/presenter.rs"]
 mod position_area_region;
+
+/// A dialog is painted out of its ancestors and keeps their scheme (LLP
+/// 1034 §8): its `light-dark()` background, its scrim and what it holds
+/// (expo/exact#1469).
+#[test]
+fn a_dialog_is_painted_in_its_ancestors_scheme() {
+    const SOURCE: &str = r##"component App
+  action ask
+    showModal("confirm")
+  view
+    column width="100%" height="100%" {root}
+      button "Ask" testId="ask" press=ask width=120 height=32
+      dialog id="confirm" role="alertdialog" aria-label="Delete this?" background-color="light-dark(#ffffff, #202020)" width=200 height=100
+        text "It cannot be undone."
+        button commandfor="confirm" command="close"
+          text "OK"
+"##;
+    for (root, device, ink) in [
+        (r#"color-scheme="dark""#, false, [0x20; 3]),
+        (r#"color-scheme="light""#, true, [0xff; 3]),
+        ("", true, [0x20; 3]),
+        ("", false, [0xff; 3]),
+    ] {
+        let mut p = boot(&SOURCE.replace("{root}", root));
+        p.set_system_scheme(device);
+        tap(&mut p, "ask");
+        // Centred in the 480 × 400 page: its lower right, clear of its text.
+        let c = p.frame().pixel(240 + 90, 200 + 40).unwrap();
+        assert_eq!(
+            [c.red(), c.green(), c.blue()],
+            ink,
+            "{root} device dark {device}"
+        );
+    }
+}

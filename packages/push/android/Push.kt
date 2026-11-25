@@ -12,6 +12,7 @@ import com.google.android.gms.common.GoogleApiAvailability
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.installations.FirebaseInstallations
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -56,7 +57,9 @@ class PushModule(context: ExtensionContext) : ExactExtension(context) {
         live = WeakReference(this)
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         unavailable()?.let { why ->
             return when (name) {
                 "pushPermissionState" -> reply(JSONObject().put("available", false).put("state", "unknown"))
@@ -73,7 +76,7 @@ class PushModule(context: ExtensionContext) : ExactExtension(context) {
                 if (granted && prefs(app).contains(ID) && !asked) register { _, failure -> failure?.let { context.log("push: $it") } }
                 reply(JSONObject().put("exact:answer", value ?: JSONObject.NULL))
             }
-            "subscribePush" -> ask {
+            "subscribePush" -> ask(cause) {
                 when (status().getString("state")) {
                     "granted" -> register { id, failure ->
                         reply(if (id != null) id else refused("AbortError", failure ?: "FCM did not register this app"))
@@ -143,9 +146,9 @@ class PushModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** The runtime permission's dialog while it is `prompt` (Android 13 and later), then [done]; at once otherwise. */
-    private fun ask(done: () -> Unit) {
+    private fun ask(cause: Cause, done: () -> Unit) {
         if (Build.VERSION.SDK_INT >= 33 && context.permission(Manifest.permission.POST_NOTIFICATIONS).state == "prompt") {
-            context.askPermission(Manifest.permission.POST_NOTIFICATIONS, done)
+            context.askPermission(cause, Manifest.permission.POST_NOTIFICATIONS, done)
         } else done()
     }
 

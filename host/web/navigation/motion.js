@@ -124,6 +124,7 @@ export function afterPaintPieces(load, o) {
     velocity: (...a) => live?.motion.panVelocity(...a)
   };
   const arrange = {
+    cancel: id => live?.arrange.cancel(id),
     binding: call("arrange", "binding"),
     state: call("arrange", "state"),
     group: call("arrange", "group")

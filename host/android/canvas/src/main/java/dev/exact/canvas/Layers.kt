@@ -95,7 +95,7 @@ internal class Layers(
         val ts = Matrix()
         var px = 0f
         var py = 0f
-        val base = FloatArray(7)
+        val base = FloatArray(8)
         var tracks: Array<Track> = emptyArray()
         /** Its drawing (null before its op 30), to record it again: at a dash phase, in a colour transition's
          * colours, at a pixelated image's scale, or once HWUI let its node's drawing go ([drawn]). HWUI does that to
@@ -132,7 +132,7 @@ internal class Layers(
         var settled = false
         /** What was last set on [node], so an unchanged value is not set again. */
         var alpha = Float.NaN; var pivX = Float.NaN; var pivY = Float.NaN; var tx = Float.NaN; var ty = Float.NaN
-        var rot = Float.NaN; var sc = Float.NaN
+        var rot = Float.NaN; var sc = Float.NaN; var scY = Float.NaN
         /** Drawn through a compositing layer while a scale plays ([sample]). */
         var composited = false
         /** It draws a `pixelated` image (op 49 value 2), whose integer enlargement depends on the node's scale: it is
@@ -150,7 +150,7 @@ internal class Layers(
     private val freeing = ArrayList<Int>()
     /** CLOCK_MONOTONIC (System.nanoTime) at the engine's zero. */
     private var origin = 0L
-    private val v = FloatArray(17)
+    private val v = FloatArray(18)
 
     /** Layer [id]'s node, made on first sight (an op 29 before its op 30 in the same stream). */
     fun node(id: Int): RenderNode = layers.getOrPut(id) {
@@ -207,10 +207,13 @@ internal class Layers(
     /** Not a function type: `(Int) -> Boolean` boxes the row and the answer at every call. */
     fun interface RowShows { fun shows(row: Int): Boolean }
     var rowShows: RowShows? = null
+    var origins: PaintedOrigins? = null
 
     /** Layer [id]'s node over [r] (the stream's pixels), clipped to it, or (null) over everything, unclipped. */
     fun place(id: Int, r: android.graphics.Rect?) {
         val l = layers[id] ?: return
+        if ((r != null) != l.bounded || r != null && (r.left != l.node.left || r.top != l.node.top ||
+            r.right != l.node.right || r.bottom != l.node.bottom)) origins?.moved(l.node)
         if (r == null) { l.node.setPosition(0, 0, 1 shl 14, 1 shl 14); l.node.setClipToBounds(false); l.ox = 0f; l.oy = 0f }
         else { l.node.setPosition(r); l.node.setClipToBounds(true); l.ox = r.left.toFloat(); l.oy = r.top.toFloat() }
         l.bounded = r != null
@@ -238,7 +241,7 @@ internal class Layers(
     private var snapshot: Map<Int, RenderNode>? = null
     fun nodes(): Map<Int, RenderNode> = snapshot ?: layers.mapValues { it.value.node }.also { snapshot = it }
 
-    /** Op 30 at [at] (after id and len, [len] words): the header, then the drawing 16 words on. */
+    /** Op 30 at [at] (after id and len, [len] words): the header, then the drawing. */
     fun set(id: Int, b: IntBuffer, at: Int, len: Int) {
         node(id)
         val l = layers[id]!!
@@ -248,13 +251,13 @@ internal class Layers(
         l.m[0] = f(0); l.m[1] = f(2); l.m[2] = f(4); l.m[3] = f(1); l.m[4] = f(3); l.m[5] = f(5)
         l.settled = false
         l.px = f(6); l.py = f(7)
-        for (k in 0 until 7) l.base[k] = f(8 + k)
-        val dash = b.get(at + 15)
+        for (k in 0 until 8) l.base[k] = f(8 + k)
+        val dash = b.get(at + 16)
         val recolored = dash == -2
         l.dashAt = if (dash == -1 || recolored) -1 else dash
-        contents(l, b, at + 16, at + len)
+        contents(l, b, at + HEADER_WORDS, at + len)
         l.recordedScale = 1f
-        l.ops = IntArray(len - 16) { b.get(at + 16 + it) }
+        l.ops = IntArray(len - HEADER_WORDS) { b.get(at + HEADER_WORDS + it) }
         l.glyphColors = null; l.backgroundAt = -1; l.runs = null
         if (recolored) colors(l)
         l.memo = PathMemo()
@@ -360,7 +363,7 @@ internal class Layers(
             out.add(Track(prop, start, if (held) hold else null, delay, duration, iterations, direction, fill, e, offsets, values, easings))
         }
         l.tracks = out.toTypedArray()
-        l.turns = l.tracks.any { it.prop in 1..5 || it.prop == 7 || it.prop == 8 }
+        l.turns = l.tracks.any { it.prop in 1..5 || it.prop == 7 || it.prop == 8 || it.prop == 17 }
         l.phase = Float.NaN
         l.settled = false
     }
@@ -394,13 +397,14 @@ internal class Layers(
             var scaling = false
             for (k in 0 until 6) v[k] = l.base[k]
             for (k in 6 until 17) v[k] = Float.NaN
+            v[17] = l.base[7]
             // CSS's composite order: a later animation wins for a property both animate.
             for (t in l.tracks) {
                 val local = t.hold ?: (now - t.start)
-                if (t.live(local)) { live = true; if (t.prop == 3) scaling = true }
+                if (t.live(local)) { live = true; if (t.prop == 3 || t.prop == 17) scaling = true }
                 val x = t.sample(local)
                 if (x.isNaN()) continue
-                when (t.prop) { 0 -> v[4] = x; 1 -> v[0] = x; 2 -> v[1] = x; 3 -> v[2] = x; 4 -> v[3] = x; 5 -> v[5] = x; in 6..16 -> v[t.prop] = x }
+                when (t.prop) { 0 -> v[4] = x; 1 -> v[0] = x; 2 -> v[1] = x; 3 -> v[2] = x; 4 -> v[3] = x; 5 -> v[5] = x; in 6..17 -> v[t.prop] = x }
             }
             if (live) moving = true else l.settled = true
             val alpha = v[4].coerceIn(0f, 1f)
@@ -430,7 +434,9 @@ internal class Layers(
                 // In points about the pivot: translate, rotate, scale (a radius as a scale). Into the stream's pixels
                 // through the layer's matrix: the pivot mapped, the translation as a vector; rotation and scale
                 // carry over unchanged when that matrix is a similarity (no skew, one scale), which rows are.
-                val s = v[2] * (if (l.base[5] > 0f) v[5] / l.base[5] else 1f)
+                val radiusScale = if (l.base[5] > 0f) v[5] / l.base[5] else 1f
+                val s = v[2] * radiusScale
+                val sy = v[17] * radiusScale
                 val m = l.m
                 val px = m[0] * l.px + m[1] * l.py + m[2]
                 val py = m[3] * l.px + m[4] * l.py + m[5]
@@ -439,11 +445,14 @@ internal class Layers(
                 val dy = v[1] + (if (v[8].isNaN()) 0f else v[8] - l.py)
                 val tx = m[0] * dx + m[1] * dy
                 val ty = m[3] * dx + m[4] * dy
+                if (px != l.pivX || py != l.pivY || tx != l.tx || ty != l.ty || v[3] != l.rot || s != l.sc || sy != l.scY) origins?.moved(l.node)
                 if (px != l.pivX || py != l.pivY) { l.pivX = px; l.pivY = py; l.node.pivotX = px - l.ox; l.node.pivotY = py - l.oy }
                 if (tx != l.tx || ty != l.ty) { l.tx = tx; l.ty = ty; l.node.translationX = tx; l.node.translationY = ty }
                 if (v[3] != l.rot) { l.rot = v[3]; l.node.rotationZ = v[3] }
-                if (s != l.sc) { l.sc = s; l.node.scaleX = s; l.node.scaleY = s }
-                if (l.pixelated && ops != null && s != l.recordedScale) { l.recordedScale = s; again(l, ops) }
+                if (s != l.sc) { l.sc = s; l.node.scaleX = s }
+                if (sy != l.scY) { l.scY = sy; l.node.scaleY = sy }
+                val samplingScale = maxOf(kotlin.math.abs(s), kotlin.math.abs(sy))
+                if (l.pixelated && ops != null && samplingScale != l.recordedScale) { l.recordedScale = samplingScale; again(l, ops) }
             }
             // While a scale plays, the layer is drawn once into an offscreen layer and that layer scaled: drawn
             // straight, its text was rasterized again at every scale (a dialog's 0.9 -> 1 entrance left ~5 MB of glyph
@@ -460,6 +469,8 @@ internal class Layers(
     fun playing() = layers.values.any { it.tracks.isNotEmpty() }
 
     companion object {
+        const val HEADER_WORDS = 17
+
         private fun progress(e: Easing?, input: Double): Double {
             val x = input.coerceIn(0.0, 1.0)
             e ?: return x

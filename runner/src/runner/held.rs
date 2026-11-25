@@ -93,6 +93,7 @@ impl<D: super::DataSource> Runner<D> {
         // The scheme and root size released, as the app last asked: its own command again, for the host that mirrors it.
         if let (true, Some(s)) = (before.0 && !scheme, asked.scheme) {
             self.commands.push(Command {
+                window_reach: None,
                 name: "setScheme".into(),
                 args: vec![s],
                 source: None,
@@ -102,6 +103,7 @@ impl<D: super::DataSource> Runner<D> {
         if let (true, Some(r)) = (before.2 && !root, asked.root) {
             if self.app_root_font_size(std::slice::from_ref(&r)) {
                 self.commands.push(Command {
+                    window_reach: None,
                     name: "setRootFontSize".into(),
                     args: vec![r],
                     source: None,
@@ -172,6 +174,7 @@ impl<D: super::DataSource> Runner<D> {
         let scheme = Value::str(&scheme);
         self.held.asked.scheme = Some(scheme.clone());
         self.commands.push(Command {
+            window_reach: None,
             name: "setScheme".into(),
             args: vec![scheme],
             source: None,

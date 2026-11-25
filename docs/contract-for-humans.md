@@ -1067,7 +1067,8 @@ browser alone.
 order written. For example, `backdrop-filter="blur(12px) saturate(1.14)"`
 blurs the backdrop, then increases its saturation. `saturate(0)` is grayscale;
 `saturate(180%)` is the same as `saturate(1.8)`. A function may appear only once.
-Web, macOS and Linux apply these functions; iOS/tvOS use the fixed `.light`
+Web, macOS and the painted hosts (Android 12 and later, Windows and Linux)
+apply these functions; iOS/tvOS use the fixed `.light`
 system material approximation. macOS samples only the parent layer's subtree
 and clips children to the filter's border box, so make a glass panel a sibling
 of what it covers (a floating composer beside its scrolling transcript), not a
@@ -1656,8 +1657,14 @@ drags start only from a handle that names its target's `id` with `heightDragFor`
 `transformDragFor` or `reorderFor`, and `reorderdrop` belongs to a vertical
 `list virtualized=true`, whose rows are the only ones a host can drag. The platform owns gesture
 recognition and competition with scrolling; Contract does not define a general
-gesture arena. See [Interaction Gallery](../apps/interaction-gallery/app.contract)
-and [Spark](../apps/spark/app.contract) for complete bindings.
+gesture arena. A `heightDragFor` handle names its unique strict ancestor by `id`.
+The target needs `box-sizing="border-box"` and a finite nonnegative point height
+(such as `height=200`). A percentage, `auto` or an omitted height cannot bind.
+The handle and its ancestors must be displayed, enabled and non-inert.
+The compiler warns with `lower-height-drag-ineligible` when it can prove a
+requirement fails; computed values remain runtime checks.
+See [Interaction Gallery](../apps/interaction-gallery/app.contract) and
+[Spark](../apps/spark/app.contract) for complete bindings.
 
 `frame("id")` reads the last laid-out border box where the viewer sees it, as
 `getBoundingClientRect` does: in the viewport, every scroll offset above it

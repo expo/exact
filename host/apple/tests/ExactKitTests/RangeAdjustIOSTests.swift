@@ -25,7 +25,7 @@ final class RangeAdjustIOSTests: XCTestCase {
         let session = ExactApp.shared.makeSession(label: "range-adjust")
         self.session = session
         let host = UIViewController(), view = ExactView(session: session)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let window = hostedWindowScene().map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)
@@ -56,6 +56,42 @@ final class RangeAdjustIOSTests: XCTestCase {
         waitFor("the spin button's ArrowUp") { floor.accessibilityValue == "4" }
         floor.accessibilityDecrement()
         waitFor("the spin button's ArrowDown") { floor.accessibilityValue == "3" }
+    }
+
+    func testResetOnTheSpinbuttonKeepsItsFocus() throws {
+        guard Presenter.axRuntimeLoaded, hostedWindowScene() != nil else { throw missing("accessibility", "the agent reads UIKit's accessibility elements") }
+        let session = try booted(), floor = try node("floor")
+        let reset = try XCTUnwrap(floor.accessibilityCustomActions?.first)
+        XCTAssertEqual(reset.name, "Reset quantity")
+        let reply = session.agentInstance.accessibilityElementsTree(["target": "floor"])
+        let ax = reply["ax"] as? [String: Any]
+        let elements = try XCTUnwrap(ax?["elements"] as? [[String: Any]])
+        XCTAssertTrue(elements.contains { $0["actions"] as? [String] == ["Reset quantity"] }, "\(elements)")
+        let others = try node("others")
+        let summary = try XCTUnwrap(others.accessibilityElements?.first as? UIAccessibilityElement)
+        XCTAssertEqual(summary.accessibilityCustomActions?.map(\.name), ["Reset quantity"])
+        let back = try node("back")
+        XCTAssertTrue(others.accessibilityElements?.contains { ($0 as? NSObject) === back } == true)
+        let presenter = session.presenter
+        let target = try XCTUnwrap(presenter.views.values.first { $0.props["id"] == "reset" })
+        waitFor("the mounted spinbutton takes focus") {
+            presenter.focusNode(floor)
+            return floor.isFirstResponder
+        }
+        let pressed = presenter.onPress
+        presenter.onPress = { id in
+            presenter.focusNode(target)
+            XCTAssertTrue(target.isFirstResponder, "the press moved focus to Reset")
+            pressed?(id)
+        }
+        defer { presenter.onPress = pressed }
+        XCTAssertEqual(reset.actionHandler?(reset), true)
+        XCTAssertTrue(floor.isFirstResponder)
+        waitFor("the reset press") { floor.accessibilityValue == "1" }
+        XCTAssertNil(floor.accessibilityCustomActions)
+        XCTAssertTrue(others.accessibilityElements?.first as? UIAccessibilityElement === summary)
+        XCTAssertNil(summary.accessibilityCustomActions)
+        XCTAssertEqual(reset.actionHandler?(reset), false)
     }
 
     /// A native range whose `key` handler takes the arrows with

@@ -239,6 +239,15 @@ pub fn create_headless(name: &str) -> u32 {
     with(|m| m.create_headless(name)).flatten().unwrap_or(0)
 }
 
+/// Select input polling for a canvas mounted by the painted host.
+pub fn poll_input_before_draw(id: u32) {
+    with(|m| {
+        if let Some(i) = m.instances.get_mut(&id) {
+            i.surface.poll_input_before_draw();
+        }
+    });
+}
+
 /// Give one canvas its native session's directories before binding it.
 pub fn storage(
     id: u32,
@@ -775,6 +784,16 @@ pub fn dirty(id: u32) -> bool {
     with(|m| m.dirty(id)).unwrap_or(false)
 }
 
+/// Whether a painted display has work for its next callback.
+pub fn frame_pending(id: u32) -> bool {
+    with(|m| m.frame_pending(id)).unwrap_or(false)
+}
+
+/// Poll a retained picture at the display boundary, before acquiring a target.
+pub fn frame_dirty(id: u32, now_ms: f64) -> bool {
+    with(|m| m.frame_dirty(id, now_ms)).unwrap_or(true)
+}
+
 /// Whether a canvas's last render drew into the frame the next flush submits.
 pub fn drew(id: u32) -> bool {
     with(|m| m.drew(id)).unwrap_or(false)
@@ -902,6 +921,16 @@ macro_rules! module {
             let Some(name) = (unsafe { $crate::native::bytes("gpu_create_headless", name, len) }) else { return 0 };
             let Ok(name) = ::std::str::from_utf8(name) else { $crate::native::refuse("gpu_create_headless: invalid UTF-8"); return 0 };
             $crate::native::create_headless(name)
+        }
+
+        /// Create a painted canvas whose host polls input before drawing.
+        /// # Safety
+        /// `name` is readable for `len` bytes.
+        #[no_mangle]
+        pub unsafe extern "C" fn gpu_create_painted(name: *const u8, len: usize) -> u32 {
+            let id = unsafe { gpu_create_headless(name, len) };
+            $crate::native::poll_input_before_draw(id);
+            id
         }
 
         /// Create a canvas's surface on a CAMetalLayer. The canvas id, or 0.
@@ -1321,6 +1350,18 @@ macro_rules! module {
         /// Output address, valid until the next carry, published, agent, messages or error call.
         #[no_mangle]
         pub extern "C" fn gpu_out_ptr() -> *const u8 { EXACT_GPU_OUT.with(|b| b.borrow().as_ptr()) }
+
+        /// Whether the display should request a callback for this canvas.
+        #[no_mangle]
+        pub extern "C" fn gpu_frame_pending(id: u32) -> u32 {
+            u32::from($crate::native::frame_pending(id))
+        }
+
+        /// Whether a retained canvas needs a frame after processing this callback's input.
+        #[no_mangle]
+        pub extern "C" fn gpu_frame_dirty(id: u32, now_ms: f64) -> u32 {
+            u32::from($crate::native::frame_dirty(id, now_ms))
+        }
 
         /// Whether a canvas has unrendered inputs.
         #[no_mangle]

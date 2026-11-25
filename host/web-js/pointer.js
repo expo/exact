@@ -1,30 +1,21 @@
-// DOM's own `pointerdown`, `pointerup` and `pointermove` (LLP 1005 §3; LLP
-// 1056 §3 stage 3), as the web host's input-glue `pointer`: a button (any,
-// studio diary R22) or a touch going down on an element, then up or cancelled (a cancel
-// is an up), and the pointer moving over it or, once down on it, anywhere
-// until it lifts. The down and the up bubble (Charlie, 2026-10-15): every
-// enabled element from the target up that hears either holds the pointer
-// for its up, innermost first, and the innermost hearing any of the three
-// also for its moves. The down goes along the event's own path from one
-// listener at the document's capture, before any element's, so a recognizer
-// that stops the event (a pan taking its contact) takes nothing from the
-// pointer events, as on the native hosts. The up and moves are heard on the
-// document, so they arrive wherever the pointer goes (a pointer capture
-// would retarget the click there too). Each handler gets the `PointerEvent`
-// record; moves go out at most once a frame, the latest.
+// The first enabled element under the pointer holds its moves. Every enabled
+// ancestor with a down, up or cancel handler also holds its end. Fix that path
+// before the down runs, as the native hosts do (LLP 1005 §3). Listening on
+// the document lets a held pointer move outside its element without capture
+// retargeting the click. Moves go out at most once a frame, the latest.
 
 // The record: the point from the element's content box in its own CSS px
 // (a scale undone), DOM's button, buttons and pressure, the device and its id, the
 // viewport point (`frame()`'s space, LLP 1094 D11), the modifiers held.
-import { inertAncestor } from './navigation.js';
+import { inertAncestor, suppressPointerClick } from './navigation.js';
 import { Portals } from './mount.js';
-export function record(e, ev, lifted = false) {
+export function record(e, ev, lifted = false, button = ev.button ?? -1) {
   const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
   const sx = e.offsetWidth ? r.width / e.offsetWidth : 1, sy = e.offsetHeight ? r.height / e.offsetHeight : 1;
   const left = parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft), top = parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop);
   const type = ev.pointerType === "pen" || ev.pointerType === "touch" ? ev.pointerType : "mouse";
   return [(ev.clientX - r.left) / (sx || 1) - left, (ev.clientY - r.top) / (sy || 1) - top,
-    ev.button ?? -1, lifted ? 0 : ev.buttons, lifted ? 0 : Math.min(1, Math.max(0, ev.pressure || 0)), type, ev.pointerId ?? 1, ev.clientX, ev.clientY, ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey];
+    button, lifted ? 0 : ev.buttons, lifted ? 0 : Math.min(1, Math.max(0, ev.pressure || 0)), type, ev.pointerId ?? 1, ev.clientX, ev.clientY, ev.shiftKey, ev.ctrlKey, ev.altKey, ev.metaKey];
 }
 let walking = false;
 export function pointer(e, kind, f) {
@@ -57,16 +48,22 @@ export function pointer(e, kind, f) {
     // The end: an up or cancel anywhere in the document, or the pointer
     // leaving it (out of the window, into a frame) or the window losing
     // focus; never for an element the tree has since removed.
-    const ends = [["pointerup", document], ["pointercancel", document], ["pointerout", document], ["blur", window]];
+    const ends = [["pointerup", document], ["pointercancel", document], ["lostpointercapture", document], ["pointerout", document], ["blur", window]];
     const up = ev => {
       if (ev.type === "blur" ? ev.target !== window : ev.pointerId !== s.held || (ev.type === "pointerout" && ev.relatedTarget && ev.relatedTarget.localName !== "iframe")) return;
+      if (ev.type === "lostpointercapture") {
+        // A pan may take implicit capture from a child as it begins.
+        if (ev.composedPath().some(n => n.exactPanCapturesFrom === ev.target && n.hasPointerCapture?.(ev.pointerId))) return;
+      }
+      const lifted = ev.type === "pointerup";
+      if (!lifted) suppressPointerClick(s.held);
       s.held = null; s.downOf = null;
       for (const [type, target] of ends) target.removeEventListener(type, up, target === document);
       document.removeEventListener("pointermove", held, true);
       flush();
       // Never for a removed element, or one kept only for its exit animation,
       // nor past a handler further in that stopped this up (`$stopped`, rt.js).
-      if (live() && !ev.$stopped) s.pointerup?.(record(e, ev.type === "blur" ? s.last : ev, true), ev);
+      if (live() && !ev.$stopped) s[lifted ? "pointerup" : "pointercancel"]?.(record(e, ev.type === "blur" ? s.last : ev, true, lifted ? ev.button : -1), ev);
     };
     const enabled = () => live() && !e.matches(":disabled") && !e.hasAttribute("disabled") && !inertAncestor(e);
     s.hold = ev => {
@@ -75,7 +72,7 @@ export function pointer(e, kind, f) {
       // The innermost enabled pointer element holds its moves, as the web
       // host's does; an ancestor holds only its up.
       s.owner = !ev.$pointerOwner;
-      if (!s.owner && !s.pointerdown && !s.pointerup) return;
+      if (!s.owner && !s.pointerdown && !s.pointerup && !s.pointercancel) return;
       ev.$pointerOwner = e;
       s.held = ev.pointerId; s.last = ev; s.downOf = ev;
       for (const [type, target] of ends) target.addEventListener(type, up, target === document);

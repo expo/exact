@@ -129,7 +129,7 @@ class BarcodeDetectionTest {
     @Test fun releasingAScanRemovesOnlyItsObserverAndDestroyRemovesTheRest() {
         val observers = LinkedHashSet<dev.exact.canvas.TrackConsumer>()
         val owner = object : dev.exact.canvas.TrackOwner {
-            override fun subscribe(id: String, consumer: dev.exact.canvas.TrackConsumer, start: Boolean, origin: String): () -> Unit =
+            override fun subscribe(id: String, consumer: dev.exact.canvas.TrackConsumer, start: Boolean, cause: dev.exact.canvas.Cause): () -> Unit =
                 throw AssertionError("A barcode scan must never consume the track")
             override fun observe(id: String, observer: dev.exact.canvas.TrackConsumer): () -> Unit {
                 observers += observer

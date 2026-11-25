@@ -14,11 +14,15 @@ import ExactKit
 import ExactComposition
 import ExactLaunchParts
 
+// The session's clock starts with `main` (`ExactEnv.t0`).
+let mainAt = Date().timeIntervalSince1970
+_ = ExactEnv.t0
 AgentLink.install()
 
 ProcessRelaunch.waitIfRequested()
 // The app's preloads leave before AppKit starts (LLP 1162.000 D4).
 ExactLaunch.beginPreloads()
+ExactEnv.stamp("preloads")
 
 // The process's own start (exec), from the kernel: what happened before
 // `main` — dyld, the Swift runtime, the static library's initializers.
@@ -30,7 +34,6 @@ func processStart() -> Double? {
     let t = info.kp_proc.p_starttime
     return Double(t.tv_sec) + Double(t.tv_usec) / 1e6
 }
-let mainAt = Date().timeIntervalSince1970
 let execToMainMs = processStart().map { (mainAt - $0) * 1000 }
 
 let smoke = ExactEnv.smoke
@@ -104,6 +107,7 @@ let appReadyMs = ExactEnv.wall()
 
 /// The one session and its view; the session's clock is the agent's under a script.
 let exact = ExactComposition.app
+ExactEnv.stamp("composition")
 final class Adapter: ExactSessionDelegate {
     /// The capabilities: `setScheme` is the app's appearance — `light`,
     /// `dark`, or `system`, as the web's `color-scheme`, where following the
@@ -125,9 +129,9 @@ final class Adapter: ExactSessionDelegate {
         case "close": windows.first { $0.session === session }?.close()
         // A quit the app holds (LLP 1069.010): its window leaves full screen
         // and fades before the quit, `ExactWindowCommands`.
-        case "exitFullscreen", "setWindowOpacity":
-            guard let window = windows.first(where: { $0.session === session })?.window else { return }
-            if agentMode { session.log("\(name)\(args.isEmpty ? "" : " \(args[0])")") }
+        case "exitFullscreen", "setWindowOpacity", "setBounds", "setWindowAlwaysOnTop", "setWindowIgnoreMouseEvents", "setAspectRatio":
+            guard let window = windows.first(where: { $0.session === session })?.window else { return session.log("\(name) refused: no session window") }
+            if agentMode { session.log(([name] + args.map { String(describing: $0) }).joined(separator: " ")) }
             _ = ExactWindowCommands.perform(name, args, on: window, log: session.log)
         // Bare `focus()`, as the web's `window.focus()` (LLP 1133.025 §8): the
         // session's window shown if hidden, brought forward, and the app asks
@@ -238,11 +242,6 @@ final class ExactWindow: ExactDrivenWindow {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         agentMode ? frameRect : super.constrainFrameRect(frameRect, to: screen)
     }
-    /// A navigation is timed from its input: a mouse-up or key press.
-    override func sendEvent(_ event: NSEvent) {
-        super.sendEvent(event)
-        if [.leftMouseUp, .keyDown].contains(event.type) { ExactLaunch.shared.input(at: event.timestamp) }
-    }
 }
 
 /// One window: its own session and view (LLP 1031 D1). The first is the
@@ -276,11 +275,18 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
     let footprintBefore = footprint()
     private var stamped = false
 
-    init(label: String, first: Bool, rooted: Bool = false) {
+    init(label: String, first: Bool, rooted: Bool = false, panel: Bool = false) {
         self.label = label
         self.rooted = rooted
         session = exact.makeSession(delegate: adapter, label: label)
         session.openWindow = { location, target, resume in openTarget(location, target, resume: resume) }
+        session.openPanel = { [weak session] location, target in
+            if let existing = windows.first(where: { $0.label == target && !$0.closing }), !(existing.window is RoutePanel) {
+                session?.log("panel refused: window \(target) is already open as an ordinary window")
+                return
+            }
+            openTarget(location, target, panel: true)
+        }
         // Each document's window is its session's own; the process is several
         // sessions', so none owns it (LLP 1075.003.000.001 §2.1.1).
         session.hatchesOwnWindow = true
@@ -291,13 +297,18 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
         }
         view = ExactView(session: session)
         if first { ExactEnv.stamp("Presenter (NSScrollView)") }
-        window = ExactWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        // Below the normal level, which alone would make it float across Spaces, out of ⌘`'s cycle.
-        if AgentLink.windowsBehind { window.level = .agentBehind; window.collectionBehavior.formUnion([.managed, .participatesInCycle]) }
+        let rect = NSRect(origin: .zero, size: size)
+        if panel {
+            window = RoutePanel(contentRect: rect, behind: AgentLink.windowsBehind)
+        } else {
+            window = ExactWindow(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            if AgentLink.windowsBehind { window.level = .agentBehind; window.collectionBehavior.formUnion([.managed, .participatesInCycle]) }
+        }
         super.init()
         // AppKit's own opening animation, and window tabs only where documents
         // have windows of their own (LLP 1115.000 D7.9).
-        ExactDocuments.furnish(window)
+        if !panel { ExactDocuments.furnish(window) }
+        else if ExactEnv.agentMode { window.animationBehavior = .none }
         checkLayoutDirection(window)
         // Unused restoration makes AppKit wait on the window server during scrolls.
         window.isRestorable = false
@@ -349,7 +360,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
         // where Chrome's overlay goes too; it comes back once the window is
         // windowed again, as the toolbar's height would otherwise change
         // under AppKit's exit animation.
-        let overlay = windowControlsOverlay && toolbarAttached && !view.hasWindowToolbar
+        let overlay = !(window is RoutePanel) && windowControlsOverlay && toolbarAttached && !view.hasWindowToolbar
             && !enteringFullScreen && !window.styleMask.contains(.fullScreen)
         if overlay, window.toolbar == nil { window.toolbar = overlayToolbar }
         if !overlay, window.toolbar === overlayToolbar { window.toolbar = nil }
@@ -362,7 +373,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
             window.titleVisibility = view.hasWindowToolbar ? .visible : .hidden
             // A translucent page draws no canvas: the window's own shows through it.
             let page = session.pageBackground
-            window.backgroundColor = page.alphaComponent > 0 ? page : .windowBackgroundColor
+            if !(window is RoutePanel) { window.backgroundColor = page.alphaComponent > 0 ? page : .windowBackgroundColor }
             if #available(macOS 11.0, *) { window.titlebarSeparatorStyle = view.hasWindowToolbar ? .automatic : .none }
         } else {
             // A sidebar runs the window's full height, under the title bar
@@ -493,7 +504,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
     func front() {
         if AgentLink.windowsBehind { window.orderFront(nil); return } // in front of its own windows, in its level
         // A covered canvas stops rendering (LLP 1009 D4). Keep live frames visible while the person types elsewhere.
-        if keepsFrontmostApp { window.orderFrontRegardless(); return }
+        if window is RoutePanel || keepsFrontmostApp { window.orderFrontRegardless(); return }
         if app.isHidden { app.unhide(nil) }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
@@ -513,8 +524,10 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
             "edited": window.isDocumentEdited, "representedURL": window.representedURL?.path ?? NSNull(),
             "key": window.isKeyWindow, "visible": window.isVisible, "tabs":window.tabbedWindows?.count ?? 1,
             "fullScreen": window.styleMask.contains(.fullScreen), "opacity": Double(window.alphaValue),
-            "footprintBefore": footprintBefore,
+            "floating": AgentLink.windowsBehind ? window.requestedFloating : window.level == .floating,
+            "clickThrough": window.ignoresMouseEvents, "footprintBefore": footprintBefore,
         ]
+        row.merge(ExactWindowPlacement.observed(window)) { _, value in value }
         // The first window's is from the process's start (what `metrics`
         // reports); a later one's from when it was asked for.
         if let drawn = session.firstDrawMs { row["firstPixelMs"] = ((drawn - (label == "main" ? 0 : openedMs)) * 10).rounded() / 10 }
@@ -528,7 +541,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
 
     /// The window's name, as the page's `name` reads it: empty for one
     /// opened without a name (LLP 1030.004 D2).
-    var name: String { label.hasPrefix("window-") ? "" : label }
+    var name: String { label.isUnnamedWindowLabel ? "" : label }
 
     /// The red button, File ▸ Close Window and ⌘W ask the app first
     /// (`beforeunload`, studio diary R17); a window it keeps stays. The
@@ -549,6 +562,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
     }
     func window(_ window: NSWindow, willEncodeRestorableState coder: NSCoder) {
         coder.encode(session.windowState, forKey: "ExactWindowState")
+        coder.encode(window is RoutePanel, forKey: "ExactWindowPanel")
         coder.encode(name, forKey: "ExactWindowName")
         coder.encode(session.location, forKey: "ExactWindowLocation")
     }
@@ -563,7 +577,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
         }
         let name = state.decodeObject(of: NSString.self, forKey: "ExactWindowName") as String?
         let location = state.decodeObject(of: NSString.self, forKey: "ExactWindowLocation") as String?
-        let restored = openWindow(named: name?.isEmpty == false ? name : nil, at: location, restoring: (identifier, archive))
+        let restored = openWindow(named: name?.isEmpty == false ? name : nil, at: location, panel: state.containsValue(forKey: "ExactWindowPanel") && state.decodeBool(forKey: "ExactWindowPanel"), restoring: (identifier, archive))
         completionHandler(restored.window, nil)
     }
 
@@ -586,6 +600,8 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
             if delegate.quitting?.holding == true
                 || windows.isEmpty && delegate.applicationShouldTerminateAfterLastWindowClosed(app) {
                 closedForQuit.append(self)
+                // AppKit counts ordinary windows when deciding whether to quit.
+                if window is RoutePanel, windows.isEmpty, delegate.quitting?.holding != true { app.terminate(nil) }
                 return
             }
             session.destroy()
@@ -611,14 +627,16 @@ let session = firstWindow.session
 let view = firstWindow.view
 let window = firstWindow.window
 window.center()
+/// A drive's named display (`--display`), which the frame the person left the app at does not move it from.
+let agentScreen = AgentDisplay.named
 /// The frame the window was left at (its autosave). AppKit keeps the content
 /// rect when `.fullSizeContentView` or a toolbar goes in, so a frame restored
-/// only before the window's chrome lost the titlebar's height at every launch
-/// (#113). It is restored before boot, so the plan boots near its size, and
+/// only before the window's chrome lost the titlebar's height at every launch.
+/// It is restored before boot, so the plan boots near its size, and
 /// again once the window has its final style (`finishLaunching`), which is
 /// when the name goes on: setting it saves the current frame. Every app's
 /// is kept, declared size or not, as AppKit apps keep theirs (LLP 1115 D8).
-let frameName = scripted ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + ".main" }
+let frameName = scripted || agentScreen != nil ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + ".main" }
 /// Where a sidebar's width, and whether the person hid it, are kept (LLP
 /// 1115.002 D3): AppKit's autosave, as the frame's is, and not a script's.
 let sidebarName = scripted ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + ".sidebar" }
@@ -626,16 +644,20 @@ if let frameName { window.setFrameUsingName(frameName) }
 // Agent-driven apps run side by side (every session's smoke launches one):
 // centred, each would cover the last and starve its Metal layer of drawables.
 // Spread them by pid so no window is fully hidden.
-if agentMode {
+let agentSpread: NSPoint = {
+    guard agentMode else { return .zero }
     let k = CGFloat(Int(getpid()) % 6)
-    window.setFrameOrigin(NSPoint(x: window.frame.origin.x - 120 + 48 * k, y: window.frame.origin.y + 60 - 24 * k))
-}
+    return NSPoint(x: -120 + 48 * k, y: 60 - 24 * k)
+}()
+if agentScreen != nil { AgentDisplay.place(window, offset: agentSpread) }
+else if agentMode { window.setFrameOrigin(NSPoint(x: window.frame.origin.x + agentSpread.x, y: window.frame.origin.y + agentSpread.y)) }
 ExactEnv.stamp("center")
 
 /// The window documents go to without a new one: the key window's, else
 /// the newest.
-func frontWindow() -> DocumentWindow? {
-    windows.first { $0.window.isKeyWindow } ?? windows.first { $0.window.isMainWindow } ?? windows.last
+func frontWindow(documentsOnly: Bool = false) -> DocumentWindow? {
+    let candidates = documentsOnly ? windows.filter { !($0.window is RoutePanel) } : windows
+    return candidates.first { $0.window.isKeyWindow } ?? candidates.first { $0.window.isMainWindow } ?? candidates.last
 }
 
 /// A window of its own (LLP 1069.010 D4): a new session, booted at the
@@ -646,17 +668,17 @@ func frontWindow() -> DocumentWindow? {
 /// is the whole app, and keeps its frame under that name; `_blank` and
 /// File ▸ New Window have none.
 @discardableResult
-func openWindow(asTab: Bool = false, named: String? = nil, at location: String? = nil,
+func openWindow(asTab: Bool = false, named: String? = nil, at location: String? = nil, panel: Bool = false,
                 restoring: (NSUserInterfaceItemIdentifier, [String: String])? = nil) -> DocumentWindow {
     let beside = frontWindow()
     let label = named ?? { windowCount += 1; return "window-\(windowCount)" }()
-    let w = DocumentWindow(label: label, first: false, rooted: named != nil && named != "main")
+    let w = DocumentWindow(label: label, first: false, rooted: named != nil && named != "main", panel: panel)
     if let (identifier, archive) = restoring {
         w.window.identifier = identifier
         w.session.restoreWindowState(archive)
     }
     w.session.launchWindow(name: w.name, at: location, rooted: w.rooted)
-    if named == "settings" {
+    if named == "settings" && !panel {
         // Apple's Settings window: no minimize, no zoom, never a tab (LLP 1030.004 D5).
         w.window.styleMask.remove(.miniaturizable)
         w.window.standardWindowButton(.zoomButton)?.isEnabled = false
@@ -674,16 +696,18 @@ func openWindow(asTab: Bool = false, named: String? = nil, at location: String? 
     windows.append(w)
     AgentLink.route(w.label, w.session)
     if restoring != nil { return w } // AppKit positions and orders restored windows.
-    // A named window is where the person left it, as `main` is.
-    let frame = scripted || named == nil ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + "." + label }
+    // A named window is where the person left it, as `main` is (not on a drive's named display).
+    let frame = scripted || agentScreen != nil || named == nil ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + "." + label }
     if let frame, w.window.setFrameUsingName(frame) {
         w.window.setFrameAutosaveName(frame)
     } else if let beside {
-        if asTab || beside.window.tabGroup?.isTabBarVisible == true {
+        if !panel && !(beside.window is RoutePanel) && (asTab || beside.window.tabGroup?.isTabBarVisible == true) {
             beside.window.addTabbedWindow(w.window, ordered: .above)
         } else {
             w.window.setFrameTopLeftPoint(beside.window.cascadeTopLeft(from: NSPoint(x: beside.window.frame.minX, y: beside.window.frame.maxY)))
         }
+    } else if agentScreen != nil {
+        AgentDisplay.place(w.window)
     } else {
         w.window.center()
     }
@@ -698,14 +722,14 @@ func openWindow(asTab: Bool = false, named: String? = nil, at location: String? 
 /// rooted window's root replaced, after its `beforeunload`); none open, one
 /// of that name opens there. `resume` (Settings…, D5) brings the window
 /// forward as it stands, or opens it where it last stood.
-func openTarget(_ location: String, _ target: String, resume: Bool = false) {
+func openTarget(_ location: String, _ target: String, resume: Bool = false, panel: Bool = false) {
     guard target != "_blank" else { openWindow(at: location); return }
     guard let open = windows.first(where: { $0.label == target && !$0.closing }) else {
-        openWindow(named: target, at: resume ? lastLocation[target] ?? location : location)
+        openWindow(named: target, at: resume ? lastLocation[target] ?? location : location, panel: panel)
         return
     }
     if !resume, !open.session.shows(location) {
-        if !open.rooted { open.session.navigate(location) }
+        if !open.rooted { open.session.navigate(location, followed: true) }
         else if open.session.beforeUnload() { open.session.reroot(location) }
     }
     open.front()
@@ -716,22 +740,21 @@ func openTarget(_ location: String, _ target: String, resume: Bool = false) {
 /// document lands (LLP 1069.010 D4).
 func route(_ paths: [String]) {
     guard !paths.isEmpty else { return }
-    let front = frontWindow()
     switch ExactDocuments.launchMode {
     case "navigate-new":
         for path in paths {
             // The window in front takes the document when it shows none yet;
             // otherwise the document has a window of its own.
-            let target = frontWindow().flatMap { $0.document == nil ? $0 : nil } ?? openWindow()
+            let target = frontWindow(documentsOnly: true).flatMap { $0.document == nil ? $0 : nil } ?? openWindow()
             if target.deliver([path]) { target.front() }
         }
     case "focus-existing":
-        guard let front else { return }
+        let front = frontWindow(documentsOnly: true) ?? openWindow()
         if front.document == nil { front.deliver(paths) }
         front.front()
     default:
-        guard let front, front.deliver(paths) else { return }
-        front.front()
+        let front = frontWindow(documentsOnly: true) ?? openWindow()
+        if front.deliver(paths) { front.front() }
     }
 }
 ExactDocuments.route = { route($0) }
@@ -790,6 +813,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return true
     }
     override init() {
+        ExactEnv.stamp("delegate init")
         ExactLaunch.shared.delegateInit()
         ExactLaunch.shared.runLaunchParts(ExactLaunchParts.all)
         super.init()
@@ -803,6 +827,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // A window a status item reaches, or that a launch with no window
         // made, is hidden, not gone (LLP 1133.025 D4, D6).
+        if windows.contains(where: { $0.window is RoutePanel && $0.window.isVisible && !$0.closing }) { return false }
         if windows.contains(where: { !$0.closing && ($0.session.placesStatusItems || PageFacts.isUnshown($0.window)) }) { return false }
         return ExactDocuments.endsWithoutWindows(hiding: windows.contains { !$0.closing })
     }
@@ -920,8 +945,8 @@ let delegate = Delegate()
 ExactComposition.installHostEvents(on: exact, applicationDelegate: Delegate.self, sceneDelegate: nil, session: { frontWindow()?.session })
 app.delegate = delegate
 
-// A supervisor's SIGTERM follows the same cancellable quit as the menu
-// (#269). The signal handler does no AppKit work; the retained source runs
+// A supervisor's SIGTERM follows the same cancellable quit as the menu.
+// The signal handler does no AppKit work; the retained source runs
 // on the main queue. A caught signal, unlike SIG_IGN, resets to the default
 // when an executed helper starts, so the helper can still be terminated.
 signal(SIGTERM) { _ in }
@@ -995,6 +1020,10 @@ func finishLaunching() {
     if let frameName {
         window.setFrameUsingName(frameName)
         window.setFrameAutosaveName(frameName)
+    }
+    // Placed again at its final size, and over the frames AppKit restored.
+    if agentScreen != nil {
+        for w in windows where w === firstWindow || !AgentDisplay.holds(w.window) { AgentDisplay.place(w.window, offset: w === firstWindow ? agentSpread : .zero) }
     }
     // Becoming key can synchronously announce readiness. Initialize the guard
     // before ordering the window, not afterward (two stdin readers otherwise).
@@ -1087,4 +1116,5 @@ func agentReady() {
     AgentLink.reply(["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? session.nativeArtifactFailure ?? NSNull()])
     AgentLink.startStdio(sessions: [("main", session)])
 }
+ExactEnv.stamp("run")
 app.run()

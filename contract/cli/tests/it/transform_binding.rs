@@ -1,4 +1,5 @@
 //! Fixed photo-transform authoring: IDREF, four geometry and six release numbers.
+use crate::source::boxed;
 use exact_kernel::{Kernel, PropId};
 use exact_plan::{EventKind, Plan, Value};
 use exact_runner::{agent, DataError, DataSource, Runner};
@@ -34,7 +35,7 @@ fn an_ineligible_transform_target_is_named_with_its_repair() {
     let (plan, warnings) = contract::compile_warned(&src);
     let runner = Runner::boot(
         plan.unwrap(),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -82,7 +83,7 @@ fn eligibility(src: &str, binds: bool) -> Vec<contract::CompileError> {
     let (plan, warnings) = contract::compile_warned(src);
     let runner = Runner::boot(
         plan.unwrap_or_else(|e| panic!("{e}\n{src}")),
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -555,6 +556,52 @@ fn transform_diagnostics_name_statically_inert_or_disabled_path_elements() {
 }
 
 #[test]
+fn transform_diagnostics_keep_delete_disabled_on_the_action() {
+    for grouped in [false, true] {
+        let base = eligibility_source(CLIP, FULL)
+            .replace("  view\n", "  action del()\n    value = 3\n  view\n");
+        let ancestor = under(&base, "column delete=del disabled=true");
+        let list = if grouped {
+            under(&under(&ancestor, "section"), "list appearance=\"auto\"")
+        } else {
+            under(&ancestor, "list")
+        };
+        let handle = if grouped {
+            base.replace(
+                "        column testId",
+                "        list appearance=\"auto\"\n          section\n            column testId",
+            )
+        } else {
+            base.replace(
+                "        column testId",
+                "        list\n          column testId",
+            )
+        }
+        .replace(
+            "testId=\"handle\"",
+            "testId=\"handle\" delete=del disabled=true",
+        );
+        for src in [list, handle] {
+            assert!(eligibility(&src, true).is_empty(), "{src}");
+            for attr in ["inert=true", "display=\"none\""] {
+                let blocked = src.replace("disabled=true", attr);
+                let warnings = eligibility(&blocked, false);
+                assert!(
+                    warnings.iter().any(|w| w.message.contains(attr)),
+                    "{warnings:?}\n{blocked}"
+                );
+            }
+        }
+    }
+    let stray = eligibility_source(CLIP, FULL)
+        .replace("  view\n", "  action del()\n    value = 3\n  view\n")
+        .replace("id=\"photo\"", "id=\"photo\" delete=del disabled=true");
+    assert!(eligibility(&stray, false)
+        .iter()
+        .any(|w| w.message.contains("disabled=true")));
+}
+
+#[test]
 fn transform_diagnostics_check_authored_rows_below_controls_and_collections() {
     for parent in [
         "button appearance=\"none\"",
@@ -640,11 +687,11 @@ fn transform_handlers_compile_bake_roundtrip_and_export_old_and_new_ordinals() {
         ("transformrelease", RELEASE, 16),
     ] {
         let plan = contract::compile(&source(event, params, "receive", "\"photo\"")).unwrap();
-        let plan = contract::bake(plan, NoData).unwrap();
+        let plan = contract::bake(plan, boxed(NoData)).unwrap();
         let plan = Plan::decode(&plan.encode()).unwrap();
         let runner = Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -756,10 +803,10 @@ fn numeric_types_are_rechecked_after_child_action_inlining() {
 #[test]
 fn pixel_translate_literals_and_dynamic_template_reach_kernel_rows() {
     let src = "component App\n  state x = 0\n  state y = 0\n  action move(a: number, b: number)\n    x = a\n    y = b\n  view\n    column\n      column testId=\"literal\" translate=\"-12.5px 3px\"\n      column testId=\"dynamic\" translate=`${x}px ${y}px`\n";
-    let plan = contract::bake(contract::compile(src).unwrap(), NoData).unwrap();
+    let plan = contract::bake(contract::compile(src).unwrap(), boxed(NoData)).unwrap();
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

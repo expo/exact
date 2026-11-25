@@ -58,7 +58,10 @@ pub(crate) fn binder(event: EventKind) -> Option<&'static str> {
         EventKind::Scrolldragstart | EventKind::Scrolldragend => Some("onScrollDrag"),
         EventKind::Refresh => Some("onRefresh"),
         EventKind::Dblclick => Some("onDblclick"),
-        EventKind::Pointerdown | EventKind::Pointerup | EventKind::Pointermove => Some("onPointer"),
+        EventKind::Pointerdown
+        | EventKind::Pointercancel
+        | EventKind::Pointerup
+        | EventKind::Pointermove => Some("onPointer"),
         EventKind::Contextmenu => Some("onContextmenu"),
         EventKind::Wheel => Some("onWheel"),
         EventKind::Drop => Some("onFileDrop"),
@@ -110,6 +113,7 @@ mod tests {
             Dblclick,
             Pointerdown,
             Pointerup,
+            Pointercancel,
             Pointermove,
             Contextmenu,
             Wheel,

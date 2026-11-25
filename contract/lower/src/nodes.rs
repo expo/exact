@@ -11,7 +11,7 @@ pub(super) struct ElementStep<'n> {
     pub(super) enters: bool,
     pub(super) positioned: bool,
     pub(super) button_context: Option<&'static str>,
-    pub(super) popover_child: bool,
+    pub(super) menu_parent: Option<menu_rows::Parent>,
     pub(super) bounded: bool,
     /// Whether this element stacks its children top to bottom.
     pub(super) stacks: bool,
@@ -23,8 +23,9 @@ pub(super) struct ElementStep<'n> {
     pub(super) rows: u8,
 }
 
-pub(super) fn builder(ex: &contract_syntax::Expanded) -> PlanBuilder {
+pub(super) fn builder(places: Option<&contract_syntax::Expanded>) -> PlanBuilder {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, compiler_identity());
+    let Some(ex) = places else { return b };
     for step in &ex.steps {
         use contract_syntax::inline::SourceKind;
         use exact_plan::PlaceKind;
@@ -94,22 +95,28 @@ impl Lowerer<'_> {
         // `class=` expands its style's rows first; the node's own
         // attribute of the same name replaces the style's (LLP 1017 P6).
         // @ref LLP 1084 D7 — a grouped list's sheet, under its classes.
+        let constant =
+            |e: &Expr, string_only| self.constants(scope).template_constant(e, string_only);
+        let literal_bottom = routes::bottom_toolbar::bottom(attrs);
+        let mut authored = std::borrow::Cow::Borrowed(attrs.as_slice());
+        values::fold_attr_templates(&mut authored, &constant);
+        let attrs = authored.as_ref();
         let button_context = grouped::button_context(attrs);
         let separated = grouped::row_separator(attrs);
         let acting = grouped::actions::said(attrs);
         let shadow_part = grouped::shadow::part(attrs);
         let (mut sheet, unmarked) = grouped::split(attrs);
         sheet.retain(|a| grouped::shadow::part(std::slice::from_ref(a)).is_none());
-        let attrs = unmarked.as_ref().unwrap_or(attrs);
+        let attrs = unmarked.as_deref().unwrap_or(attrs);
         // A `delete=` no list row expanded does nothing (`lower-delete-row`).
         let kept = swipe_rows::stray(attrs);
-        let attrs = kept.as_ref().unwrap_or(attrs);
+        let attrs = kept.as_deref().unwrap_or(attrs);
         // The props the tag's package declares, written on the tag, are the
         // module's; nothing below sees them, so a class's rows of the same
         // names stay its box's (LLP 1024 D1).
         let split = native::split_declared(tag, attrs);
         let (declared, attrs) = match &split {
-            Some((declared, rest)) => (declared.as_slice(), rest),
+            Some((declared, rest)) => (declared.as_slice(), rest.as_slice()),
             None => (&[][..], attrs),
         };
         // A class choice's side that sets no row leaves it as the node has
@@ -125,6 +132,9 @@ impl Lowerer<'_> {
             .collect();
         let styles = |name: &str| self.styles.get(name).map(Vec::as_slice);
         let (class_label, mut expanded) = crate::class::rows(attrs, &styles, &unwritten)?.unzip();
+        for a in expanded.iter_mut().flatten() {
+            values::fold_attr_template(a, &constant);
+        }
         if let (Some(rows), Some(card)) = (&mut expanded, shadow_part) {
             grouped::shadow::class_rows(rows, card);
         }
@@ -171,7 +181,7 @@ impl Lowerer<'_> {
                 expanded = Some([sheet.clone(), attrs.to_vec()].concat());
                 expanded.as_deref().expect("just set")
             }
-            None => attrs.as_slice(),
+            None => attrs,
         };
         let face = self.button_context == Some("a native button");
         let inked = crate::symbols::symbol_ink(
@@ -217,7 +227,7 @@ impl Lowerer<'_> {
         }
         let expanded = composed.as_deref().unwrap_or(expanded);
         let in_svg = svg::in_svg(self.svg_depth > 0, parent_tag);
-        let lengths = svg::coerce_lengths(tag, in_svg, expanded);
+        let lengths = svg::coerce_lengths(tag, in_svg, expanded, Some((scope, &self.types.shapes)));
         let expanded = lengths.as_deref().unwrap_or(expanded);
         svg::check_svg_content(tag, in_svg, parent_tag, *span)?;
         // Keep a rejected transform out of the remaining attribute checks,
@@ -410,6 +420,12 @@ impl Lowerer<'_> {
         let sheet_page = self.nav_place.sheet_page(expanded, *span);
         let expanded = sheet_page.as_deref().unwrap_or(expanded);
         // @ref LLP 1013.001 D4 — a route's entrance and exit, by its place.
+        if routes::bottom_toolbar::bottom(expanded) {
+            if !literal_bottom {
+                return err("lower-toolbar-place", "Write `toolbarPlacement=\"bottom\"` directly on the route's toolbar row so its children and placement can be checked", *span);
+            }
+            routes::bottom_toolbar::check_row(&self.nav_place, tag, expanded, *span)?;
+        }
         self.check_route_parts(&self.nav_place, tag, expanded)?;
         let nav_place = self
             .nav_place
@@ -480,6 +496,13 @@ impl Lowerer<'_> {
                     a.span,
                 );
             }
+            if let Some(a) = expanded.iter().find(|a| a.name == "swipe") {
+                return err(
+                    "lower-swipe-direction",
+                    "`swipe` on a run inside a paragraph: the run is drawn in its paragraph's text, with no view of its own for the platform's swipe to be recognized on; put `swipe` on the paragraph or make the run a box (LLP 1057.001 §8)",
+                    a.span,
+                );
+            }
         }
         // The press's absolute opacity is lowering's, from `:active`.
         if let Some(a) = expanded
@@ -496,6 +519,12 @@ impl Lowerer<'_> {
         let expanded = states.as_ref().map_or(expanded, |s| s.attrs.as_slice());
         let mut bindings: Vec<BindingsRow> = Vec::new();
         let mut handlers: Vec<(EventKind, exact_plan::ActionsId, Vec<Code>)> = Vec::new();
+        let panel = expanded.iter().find(|a| a.name == "windowKind");
+        if let Some(kind) = panel {
+            let (action, args) = self.panel_link(tag, kind, expanded, scope, locals)?;
+            bindings.push(prop_row(exact_kernel::PropId::PanelHref, args[0], IMPLIED));
+            handlers.push((EventKind::Press, action, args));
+        }
         let mut surface: Option<exact_plan::SurfacesId> = None;
         for (style, value) in t.fixed_styles {
             bindings.push(style_row(*style, self.fixed(true, value), IMPLIED));
@@ -643,6 +672,9 @@ impl Lowerer<'_> {
         let (custom, refused_custom) = custom_props::merged(expanded, scope, &self.types.shapes);
         self.errors.extend(refused_custom);
         for (index, a) in expanded.iter().enumerate() {
+            if panel.is_some() && matches!(a.name.as_str(), "href" | "target" | "windowKind") {
+                continue;
+            }
             // Its custom properties are bound as one row, after the others
             if exact_kernel::style::safe_area_properties::is_author_name(&a.name) {
                 continue;
@@ -657,7 +689,9 @@ impl Lowerer<'_> {
             {
                 continue;
             }
-            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a) {
+            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a)
+                .or_else(|| crate::handlers::swipe::refusal(expanded, a))
+            {
                 self.errors.push(e);
                 continue;
             }
@@ -1107,8 +1141,8 @@ impl Lowerer<'_> {
             &handler_refs,
             surface,
         );
-        if let Some(step) = place {
-            self.b.set_node_place(id, exact_plan::PlaceStepsId(*step));
+        if let Some(step) = place.filter(|_| self.source_places.is_some()) {
+            self.b.set_node_place(id, exact_plan::PlaceStepsId(step));
         }
         if !look_rows.is_empty() {
             self.b.set_looks(id, &look_rows);
@@ -1151,6 +1185,13 @@ impl Lowerer<'_> {
         } else {
             std::borrow::Cow::Borrowed(authored_children.as_slice())
         };
+        let menu_parent = menu_rows::Parent::of_children(
+            self.menu_parent,
+            native_button || t.node_type == NodeType::Pressable,
+            expanded,
+        );
+        let menu_row =
+            self.menu_parent.is_some() && menu_parent != Some(menu_rows::Parent::Section);
         Ok(ElementStep {
             id,
             children,
@@ -1165,8 +1206,8 @@ impl Lowerer<'_> {
                 || t.fixed_styles
                     .iter()
                     .any(|(id, v)| *id == StyleId::PositionType && *v != "static"),
-            button_context: controls::button_context(tag, control, self.popover_child),
-            popover_child: expanded.iter().any(|a| a.name == "popover"),
+            button_context: controls::button_context(tag, control, menu_row),
+            menu_parent,
             bounded: scroll_bounds::bounded_column(tag, expanded, self.parent_bounded_column),
             stacks: scroll_bounds::stacks(tag, t.fixed_styles, expanded),
             horizontal_flex: if attrs

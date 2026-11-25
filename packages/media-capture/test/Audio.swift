@@ -193,12 +193,15 @@ private struct AudioTests {
 
         let (_, lastTrack) = open(), last = Probe()
         let lastLease = try tracks.subscribe(lastTrack, last, start: true)
-        last.tap?.cancel()
         lastLease.cancel()
+        pcm.send(23104)
+        check(last.received.isEmpty, "a retained tap receives no shared input after its track gives up the lease")
         check(pcm.queue.sync { pcm.taps.isEmpty }, "the last consumer detaches its tap and lease")
         let replacement = Probe()
         let replacementLease = try tracks.subscribe(lastTrack, replacement, start: true)
         pcm.send(23104)
+        check(last.received.isEmpty, "the earlier subscription receives nothing when the track restarts")
+        last.tap?.cancel()
         check(replacement.received.last?.zero == false, "an explicit start can reuse the track's source")
         capture.destroy {}
         check(pcm.queue.sync { pcm.taps.isEmpty }, "session destruction removes all audio subscriptions")

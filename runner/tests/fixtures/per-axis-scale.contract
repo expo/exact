@@ -1,0 +1,17 @@
+keyframes flip
+  from scale="1 1"
+  to scale="1 0"
+
+component App
+  state flat = false
+  action toggle
+    flat = not flat
+  view
+    column
+      button "Toggle" testId="toggle" press=toggle
+      view testId="port" width=120 height=120 overflow="auto" position="relative" background-color="#fff"
+        view testId="squash" width=100 height=100 scale="1 0.5" background-color="#ff0000"
+          view testId="overhang" width=160 height=400 background-color="#0000ff"
+      view testId="animated" press=toggle -exact-press-scale=0.5 width=100 height=100 animation="flip 1s linear both paused" background-color="#ff0000"
+      view testId="transitioned" width=100 height=100 scale=(flat ? "3 0" : "1 1") transition="scale 1s linear"
+      view testId="pressed" width=100 height=100 scale=(flat ? "200% 25%" : "100% 50%") press=toggle -exact-press-scale=0.5 transition="scale 1s linear"

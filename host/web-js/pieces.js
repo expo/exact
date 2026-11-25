@@ -90,7 +90,6 @@ export function gs(e, name, values) {
 let Canvas2d = null;
 const CanvasMounts = new Set();
 export const canvasCommitted = (surface, active = () => true, encoding = {}) => committedCanvas(surface, active, Finishes, () => Canvas2d, CanvasMounts, encoding);
-Link.canvasCommitted = canvasCommitted;
 export function c2(e, name, values, types, names) {
   const c = { e, name, types, names, mounted: clock.now, args: null };
   CanvasMounts.add(c);
@@ -109,6 +108,19 @@ export function c2(e, name, values, types, names) {
     // After the commit applied, as the runner publishes surface inputs, and before the canvas module's restyle
     // (`After`).
     Canvas2d.then(m => m?.args(c));
+  });
+}
+/** A canvas's computed `bitmap-width`, `bitmap-height`, `color-space` or `color-type` (LLP 1056 D6; LLP 1100 D12a), as
+ * the attribute `canvas2d.js` reads: a change is a new size generation there. A size is a whole number of pixels, a
+ * negative one 0; any other number leaves it unset, as the runner's prop bridge refuses it for an integer prop. */
+export function cb(e, name, f) {
+  effect(() => {
+    const v = f();
+    const value = !name.startsWith('data-bitmap') ? (v == null ? null : String(v))
+      : Number.isInteger(v) && Math.abs(v) < 2 ** 63 ? String(Math.min(Math.max(v, 0), 4294967295)) : null;
+    if (value === e.getAttribute(name)) return;
+    if (value == null) e.removeAttribute(name); else e.setAttribute(name, value);
+    Canvas2d?.then(m => m?.resized(e));
   });
 }
 /** When native code may load (LLP 1024 D7): after the browser's first paint entry, or two frames and 250 ms where it
@@ -248,10 +260,12 @@ export function pr(e) {
  * `motion-glue.js`), fetched after the first painted frame by a plan that
  * uses motion; `f(m)` runs at once when it is here, else once it is. */
 let Motion = null,
-  Mo = null;
+  Mo = null,
+  pendingMotion = [];
 function motion(f) {
   if (Mo) return f(Mo);
   if (typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
+  pendingMotion?.push(f);
   if (!Motion) {
     inflight.n++;
     Motion = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
@@ -262,15 +276,15 @@ function motion(f) {
       .then(m => {
         Mo = m;
         After.push(() => Mo.flush());
+        for (const observe of pendingMotion.splice(0)) observe(m);
+        m.flush();
       })
-      .catch(err => say(`motion: ${err.message}`))
+      .catch(err => { pendingMotion = null; say(`motion: ${err.message}`); })
       .finally(() => inflight.n--);
   }
-  Motion.then(() => Mo && f(Mo));
 }
 /** A node the motion engine follows (the kernel's motion seam): `f` gives
- * its `translate`, `scale`, `rotate`, `opacity`, `transition` and release velocity as the
- * plan binds them, told the engine at every commit that changes them. */
+ * its targets, transition and release velocity. A height drag also identifies its possible owner. */
 export function mo(e, f) {
   const id = viewId(e);
   onEnd(() => motion(m => m.gone(id)));
@@ -288,16 +302,6 @@ export function onSwipe(e, f) {
 export function onSwipeLeft(e, f) {
   e.$swipeleft = f;
   motion(m => m.swipe(e));
-}
-/** A height drag's owner (the node a handle's `heightDragFor` names): its
- * numeric height and `transition`, told the motion engine as they change. */
-export function mh(e, f) {
-  const id = viewId(e);
-  onEnd(() => motion(m => m.gone(id)));
-  effect(() => {
-    const v = f();
-    motion(m => m.height(id, v));
-  });
 }
 /** `heightrelease`: motion-glue's height drag on the handle's named ancestor. */
 export function onHeight(e, f) {
@@ -342,6 +346,7 @@ export function onPan(e, f) {
   let p;
   input();
   e.addEventListener('pointerdown', ev => (p ??= Input?.pan(e, id, (t, g) => e.addEventListener(t, g)))?.(ev));
+  onEnd(() => p?.retire?.());
 }
 /** `panrelease`: its velocity is the motion piece's tracker (LLP 1057 §10.6). */
 export function onPanRelease(e, f) {

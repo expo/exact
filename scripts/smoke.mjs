@@ -67,9 +67,7 @@ const shot = argv.includes('--shot') ? argv[argv.indexOf('--shot') + 1] : proces
 // --record-canvas rewrites this host's reference picture of the canvas
 // fixture (step 10) after a deliberate change to what it shows.
 const recordCanvas = argv.includes('--record-canvas');
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const failures = [];
-const check = (ok, what) => { if (!ok) failures.push(what); return ok; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), failures = [], check = (ok, what) => { if (!ok) failures.push(what); return ok; };
 const t0 = Date.now();
 const byTestId = (t, id) => t.nodes.find((n) => n.props.testId === id);
 const box = (l, id) => l.nodes.find((n) => n.testId === id);
@@ -335,6 +333,10 @@ if (host === 'deploy') {
     const deadRow = streams(retired).find((r) => r.compatibilityId === dead);
     check(deadRow?.action === 'binary' && retired.refused.some((r) => r.compatibilityId === dead) && retired.failed.length === 0 && streams(retired).filter((r) => r.compatibilityId !== dead).every((r) => r.action !== 'binary'), `the retired stream: ${JSON.stringify({ row: deadRow?.action, refused: retired.refused.length, failed: retired.failed, others: streams(retired).filter((r) => r.compatibilityId !== dead).map((r) => r.action) })}`);
     check(retired.notes.some((n) => n.includes(dead) && n.includes('does not verify')), 'the table names the retired stream\'s head as one no binary would take');
+    // 7. A native package configuration value (LLP 1133.021 §9 item 7) is a new binary on each native stream, its key unsaid.
+    const native = [...new Set(streams(pub1).map((r) => r.platform))], key = `smoke-config-${process.pid}-sentinel`, save = () => writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n'); manifest.packages = { '@exact/smoke-config': Object.fromEntries(native.map((p) => [p, { apiKey: { env: 'EXACT_SMOKE_CONFIG_KEY' } }])) }; save(); deployEnv.EXACT_SMOKE_CONFIG_KEY = key;
+    try { const r = deploy([app.name, '--origin', origin, '--json', '--dirty']), said = r.stdout + r.stderr, rows = JSON.parse(r.stdout).rows.filter((row) => row.kind === 'binary' && row.pendingInputs?.includes('packages.@exact/smoke-config')); check(native.length && native.every((p) => rows.some((row) => row.platform === p)) && !said.includes(key), `a configuration value is a binary change on ${native.join(', ')}, unsaid: ${JSON.stringify(rows.map((row) => row.platform))}, printed ${said.includes(key)}`);
+    } finally { delete deployEnv.EXACT_SMOKE_CONFIG_KEY; delete manifest.packages; save(); }
   } catch (e) {
     check(false, `the deploy smoke stopped: ${e.message}`);
   }
@@ -639,21 +641,21 @@ try {
   if (caltrainFixture) {
     // 3. The clock: a minute later every countdown still shown is one less —
     // sixty timer fires from one seek, and nothing waited.
-    const before = new Map(countdowns.map((n) => [n.props.testId, Number(n.props.text)]));
+    const before = new Map(countdowns.map((n) => [n.props.testId, Number(n.props.text)])), start = await s.state(); // the clock may have moved: on Apple the deck's push settles in 100 ms
     await s.clock('+60000');
     tree = await s.tree();
     const after = tree.nodes.filter((n) => n.props.testId?.startsWith('countdown-') && before.has(n.props.testId));
     const wrong = after.filter((n) => Number(n.props.text) !== before.get(n.props.testId) - 1).map((n) => `${n.props.testId} ${before.get(n.props.testId)}→${n.props.text}`);
     check(after.length > 0 && wrong.length === 0, `after +60 s every countdown is one less; not: ${wrong.join(', ') || 'none left'}`);
     let state = await s.state();
-    check(state.clock === 60000 && state.slots.nowMs === 1787915400000 + 60000, `state after +60 s: clock ${state.clock}, nowMs ${state.slots.nowMs}`);
+    check(state.clock === start.clock + 60000 && state.slots.nowMs === start.slots.nowMs + 60000, `state after +60 s: clock ${start.clock} to ${state.clock}, nowMs ${start.slots.nowMs} to ${state.slots.nowMs}`);
     journal = await s.logs();
     // A jump stops only after a timer that sends (LLP 1012 §2), and a long one
     // steps by the driver's growing split (clockSpan): sixty fire in all, the
     // last at the seek's end.
-    const fired = journal.lines.map((l) => /^t=(\d+) advance → (\d+) timers? fired/.exec(l)).filter((m) => m && Number(m[1]) > 0 && Number(m[1]) <= 60000);
+    const fired = journal.lines.map((l) => /^t=(\d+) advance → (\d+) timers? fired/.exec(l)).filter((m) => m && Number(m[1]) > start.clock && Number(m[1]) <= start.clock + 60000);
     const firedSum = fired.reduce((n, m) => n + Number(m[2]), 0);
-    check(firedSum === 60 && fired.at(-1)?.[1] === '60000', `the journal does not show sixty timers firing over the seek: ${firedSum} across ${fired.length} advances`);
+    check(firedSum === 60 && fired.at(-1)?.[1] === String(start.clock + 60000), `the journal does not show sixty timers firing over the seek: ${firedSum} across ${fired.length} advances`);
 
   // 4. One interaction through the host's real input path: change station,
   // search, pick, home.

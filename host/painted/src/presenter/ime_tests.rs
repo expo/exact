@@ -23,7 +23,9 @@ fn boot(source: &str) -> (Presenter<()>, ViewId) {
 }
 
 fn fixture(attrs: &str) -> (Presenter<()>, ViewId) {
-    boot(&format!("component App\n  view\n    column\n      textarea testId=\"editor\" value=\"a🦀z\" width=220 height=64 padding=4 appearance=\"none\" outline=\"none\" font-size=16 line-height=\"24px\" {attrs}\n      input testId=\"other\" value=\"other\"\n"))
+    boot(&format!(
+        "component App\n  view\n    column\n      textarea testId=\"editor\" value=\"a🦀z\" width=220 height=64 padding=4 appearance=\"none\" outline=\"none\" font-size=16 line-height=\"24px\" {attrs}\n      input testId=\"other\" value=\"other\"\n"
+    ))
 }
 
 fn replace_crab(p: &mut Presenter<()>, editor: ViewId) -> Target {
@@ -156,15 +158,13 @@ fn input_handlers_hear_composition_but_their_rewrites_wait_until_commit() {
 
 #[test]
 fn ime_requires_an_editable_target_and_commits_with_field_limits() {
-    for attrs in [
-        "readonly=true",
-        "disabled=true",
-        "type=\"password\"",
-        "inputmode=\"none\"",
-    ] {
+    for attrs in ["readonly=true", "disabled=true", "inputmode=\"none\""] {
         let (p, _) = fixture(attrs);
         assert!(p.ime_target().is_none(), "{attrs}");
     }
+    let (p, _) =
+        boot("component App\n  view\n    input testId=\"editor\" type=\"password\" value=\"\"\n");
+    assert!(p.ime_target().is_none(), "a password field");
     let (mut p, editor) = fixture("maxlength=4");
     replace_crab(&mut p, editor);
     p.ime_preedit("にほんご", Some((12, 12)));

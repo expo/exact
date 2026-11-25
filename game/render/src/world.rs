@@ -473,6 +473,15 @@ impl Versions {
     }
 }
 
+/// Renderer inputs for the last complete picture of a resting canvas.
+#[derive(PartialEq)]
+pub(crate) struct IdlePicture {
+    mesh: Option<Versions>,
+    lights: Option<[u64; 7]>,
+    components: [u64; 8],
+    resources: [Option<(u64, u64)>; 5],
+}
+
 /// Persistent bridge from one world to one renderer. World loads invalidate it
 /// automatically; reset it when replacing a World with an unrelated instance.
 /// Replacement invalidates world-derived records, never renderer asset residency.
@@ -607,6 +616,36 @@ impl Feed {
     ) -> Result<(), RenderError> {
         self.feed_to(world, renderer)
     }
+    /// Inputs to the retained picture. Feed already tracks mesh data and lights.
+    /// Draw-time resources and quads are read separately.
+    pub(crate) fn idle_picture(&self, w: &World) -> IdlePicture {
+        use exact_game::{
+            AmbientOcclusion, Emitter, Environment, EnvironmentMap, LightShadows, MouseLook,
+            ParticleLook, Placed, PointerPan, Shadows, SocketFollow, Sprite, Water,
+        };
+        IdlePicture {
+            mesh: self.versions,
+            lights: self.scene.versions,
+            components: [
+                w.revision::<Emitter>(),
+                w.revision::<LightShadows>(),
+                w.revision::<MouseLook>(),
+                w.revision::<ParticleLook>(),
+                w.revision::<Placed>(),
+                w.revision::<PointerPan>(),
+                w.revision::<SocketFollow>(),
+                w.revision::<Sprite>(),
+            ],
+            resources: [
+                w.resource_revision::<AmbientOcclusion>(),
+                w.resource_revision::<Environment>(),
+                w.resource_revision::<EnvironmentMap>(),
+                w.resource_revision::<Shadows>(),
+                w.resource_revision::<Water>(),
+            ],
+        }
+    }
+
     /// The models this feed last drew, a model kept in place of one in flight
     /// included; the surface passes them to `Sim::hold_assets`.
     pub fn drawn_assets(&self) -> &std::collections::BTreeSet<String> {

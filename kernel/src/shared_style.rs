@@ -505,8 +505,8 @@ pub(crate) fn engine_hash(s: &taffy::Style) -> u64 {
         // A calc length is a handle whose low three bits are its tag (0):
         // `tag()` and `value()` would read only its bits 0–7 and 32–63, and
         // the handles that differ only in bits 8–31 would share a bucket.
-        h.write_u64(match l.is_calc() {
-            true => l.calc_value() as usize as u64,
+        h.write_u64(match l.has_calc() {
+            true => l.calc_value().to_bits(),
             false => ((l.tag() as u64) << 32) | u64::from(l.value().to_bits()),
         });
     };

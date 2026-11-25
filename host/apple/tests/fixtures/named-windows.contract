@@ -16,9 +16,13 @@ component NamedWindows
   view
     main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
       for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` testId=`route-${e.name}`
+        column navigationKey=`${e.id}` navigationPresentation=(e.name == "compose" ? "modal" : "push") testId=`route-${e.name}`
           text e.name
+          if e.name == "compose"
+            input testId="filter"
       text page.name testId="name"
+      link href="/compose" target="shortcuts" windowKind="panel" testId="hud"
+        text "Shortcuts"
       link href="/compose" target="compose" testId="named"
         text "New Message"
       link href="/compose" target="_blank" testId="blank"

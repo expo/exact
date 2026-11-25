@@ -71,12 +71,13 @@ let allCapabilities: [(name: String, target: String)] = [
     ("dialogs", "ExactDialogs"),
     ("share", "ExactSharing"),
     ("drag_out", "ExactDragOut"),
+    ("drag_in", "ExactDragIn"),
 ]
 // What a family imports beyond ExactKit and CExact: another family's product,
 // which the roster links with it, or ExactCore's package API. Surfaces' Canvas
 // 2D images fetch and decode through the images family's static API, which
 // needs no install.
-let capabilityNeeds: [String: [Target.Dependency]] = ["ExactCollections": ["ExactCore"], "ExactContentRegions": ["ExactCore"], "ExactPickers": ["ExactCore"], "ExactTraces": ["ExactCore"], "ExactNativeViews": ["ExactFormaBinding", "ExactHeavyLeaves"], "ExactVideo": ["ExactHeavyLeaves"], "ExactWebViews": ["ExactHeavyLeaves"], "ExactSvg": ["ExactCore", "ExactEffects", "ExactAnimations"], "ExactSurfaces": ["ExactImages"], "ExactGradients": ["ExactCore"], "ExactNavigation": ["ExactCore"], "ExactDrag": ["ExactCore"], "ExactTextSelection": ["ExactCore"], "ExactWidgetPublication": ["ExactCore"], "ExactActivities": ["ExactCore", "ExactWidgetPublication"], "ExactIndexMirror": ["ExactCore"], "ExactDragOut": ["ExactCore"], "ExactFlights": ["ExactCore"]]
+let capabilityNeeds: [String: [Target.Dependency]] = ["ExactCollections": ["ExactCore"], "ExactContentRegions": ["ExactCore"], "ExactPickers": ["ExactCore"], "ExactTraces": ["ExactCore"], "ExactNativeViews": ["ExactFormaBinding", "ExactHeavyLeaves"], "ExactVideo": ["ExactHeavyLeaves"], "ExactWebViews": ["ExactHeavyLeaves"], "ExactSvg": ["ExactCore", "ExactEffects", "ExactAnimations"], "ExactSurfaces": ["ExactImages"], "ExactGradients": ["ExactCore"], "ExactNavigation": ["ExactCore"], "ExactDrag": ["ExactCore"], "ExactTextSelection": ["ExactCore"], "ExactWidgetPublication": ["ExactCore"], "ExactActivities": ["ExactCore", "ExactWidgetPublication"], "ExactIndexMirror": ["ExactCore"], "ExactDragOut": ["ExactCore"], "ExactDragIn": ["ExactCore"], "ExactFlights": ["ExactCore"]]
 // The host lowers a box's transitions, drags and motion to the same
 // `animations` op as its CSS animations, which ExactAnimations plays, so any
 // of them links that product without the keyframe grammar the `animations`
@@ -131,17 +132,20 @@ let agentSources = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == 
     "IOS/AgentPanIOS.swift",
     "IOS/AgentPictureIOS.swift",
     "IOS/AgentRevealIOS.swift",
+    "IOS/AgentTitleIOS.swift",
     "Mac/AgentMac.swift",
     "Mac/AgentMouseMac.swift",
     "Mac/AgentNativeMac.swift",
     "Mac/AgentStdio.swift",
 ] : []
 
-// Attached agent sessions (LLP 1012.000 D2): the listener and its Develop
-// items are a local development build's alone. `build.mjs` sets EXACT_ATTACH
-// for one and stamps its Info.plist to match; nothing else compiles the file.
+// Attached agent sessions (LLP 1012.000 D2): the listener and its controls
+// are a local development build's alone, a Mac app or an iOS simulator app.
+// `build.mjs` sets EXACT_ATTACH for one and stamps its Info.plist to match;
+// nothing else compiles the files.
 let attach = ProcessInfo.processInfo.environment["EXACT_ATTACH"] == "1" && ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] != "production"
 let attachSettings: [SwiftSetting] = attach ? [.define("EXACT_ATTACH")] : []
+let attachSources = ["AgentAttach.swift", "Mac/AgentAttachMac.swift", "IOS/AgentAttachIOS.swift"]
 
 let gallery = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] != "production"
     && (testing || ProcessInfo.processInfo.environment["EXACT_WIDGET_GALLERY"] == "1")
@@ -171,7 +175,7 @@ var core: [Target] = [
     // entry's extension, the watch app and a development build's widget
     // gallery; a production presenter never links it.
     .target(name: "ExactSnapshot", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactSnapshot", swiftSettings: [.unsafeFlags(["-application-extension"])] + devTools),
-    .target(name: "ExactKit", dependencies: [.target(name: "ExactCore"), .target(name: "CExact"), .target(name: "CExactLaunch")] + (gallery ? [.target(name: "ExactSnapshot")] : []), path: "Sources/ExactKit", exclude: agentSources + (attach ? [] : ["AgentAttach.swift"]) + (intentFiles ? [] : ["IntentFiles.swift"]), swiftSettings: devTools + attachSettings + gallerySettings + intentFileSettings),
+    .target(name: "ExactKit", dependencies: [.target(name: "ExactCore"), .target(name: "CExact"), .target(name: "CExactLaunch")] + (gallery ? [.target(name: "ExactSnapshot")] : []), path: "Sources/ExactKit", exclude: agentSources + (attach ? [] : attachSources) + (intentFiles ? [] : ["IntentFiles.swift"]), swiftSettings: devTools + attachSettings + gallerySettings + intentFileSettings),
     .target(name: "ExactWatchSync", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactWatchSync"),
     .target(name: "ExactUpdates", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactUpdates"),
     // The binding core (LLP 1121 D12): no roster row of its own; the native
@@ -209,6 +213,8 @@ let executables: [Target] = [
 // loop, and no clock (LLP 1033 D4a).
 let tests: [Target] = [
     .target(name: "ExactPackage", path: "modules", exclude: ["ExactExtensions.swift", "ExactNativeModule.swift", "ExactNativeViews.swift", "ExactNativeTabs.swift", "ExactServices.swift", "ExactForma.swift"], sources: ["ExactPackage.swift"]),
+    .target(name: "CameraImplementation", dependencies: ["ExactPackage"], path: "tests/CameraImplementation", exclude: ["exact.json"]),
+    .target(name: "RecordingImplementation", dependencies: ["ExactPackage"], path: "tests/RecordingImplementation", exclude: ["exact.json"]),
     .target(name: "MediaCaptureImplementation", dependencies: ["ExactPackage"], path: "tests/MediaCaptureImplementation"),
     .target(name: "SignInImplementation", dependencies: ["ExactPackage"], path: "tests/SignInImplementation"),
     .target(name: "PasskeysImplementation", dependencies: ["ExactPackage"], path: "tests/PasskeysImplementation"),
@@ -228,7 +234,7 @@ let tests: [Target] = [
     // The test bundle installs the composition as it loads, before any test
     // (`ExactTestsInstall`, `TestsInstall.swift`).
     .target(name: "ExactTestsInstall", path: "tests/ExactTestsInstall"),
-    .testTarget(name: "ExactKitTests", dependencies: ["ExactWatchSync", "ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactComposition", "ExactTestsInstall"]
+    .testTarget(name: "ExactKitTests", dependencies: ["ExactWatchSync", "ExactPackage", "CameraImplementation", "RecordingImplementation", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactComposition", "ExactTestsInstall"]
                 + allCapabilities.map { .target(name: $0.target) } + ["ExactFormaBinding", "ExactHeavyLeaves", "ExactSoundRender", "ExactNowPlaying", "ExactShare", "ExactSharePlain"], path: "tests/ExactKitTests",
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]

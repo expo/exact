@@ -35,8 +35,9 @@
 //! the runner then discards is not answered again (LLP 1133.022 D19 item 5
 //! is not built).
 
+use super::super::provenance::Cause;
 use super::super::{DataSource, Runner};
-use super::{CallOrigin, Decision, Json, ModulesRow, Waits};
+use super::{Decision, Json, ModulesRow, Waits};
 use crate::agent::{base64, unbase64};
 use crate::HoldAnswer;
 use serde_json::{json, Map};
@@ -756,9 +757,10 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn device_ticket(
         &self,
         row: &ModulesRow,
-        origin: CallOrigin,
+        cause: Cause,
         call: &Json,
     ) -> (String, Json, Vec<String>) {
+        let origin = cause.origin();
         let declared = self.plan.str(row.declared).to_owned();
         match self
             .device_role(row)

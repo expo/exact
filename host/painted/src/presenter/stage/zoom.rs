@@ -47,6 +47,7 @@ pub(super) fn progress(forward: bool, now: f64) -> Glide {
 /// The container's clock as a flight's curve: its emphasized path sampled
 /// into `linear()`, so the elements in the box move as the box does
 /// (LLP 1013.004 D4).
+#[cfg(test)]
 pub(super) fn clock(forward: bool) -> exact_motion::Transition {
     sampled(if forward { ENTER } else { RETURN }, emphasized)
 }
@@ -347,6 +348,7 @@ impl<D: DataSource> Presenter<D> {
             roots: &roots,
             hidden: &|id| host.route_hidden_but(id, &[beneath]),
             presented: &|id| host.presented(id),
+            scaled_presented: host.scaled_presented(),
             paths: &|id| host.presented_path(id),
             filters: &|id| host.presented_filter(id),
             scroll: &self.scroll,

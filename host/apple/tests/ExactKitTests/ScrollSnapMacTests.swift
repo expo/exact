@@ -53,6 +53,32 @@ final class ScrollSnapMacTests: XCTestCase {
         }
     }
 
+    func testABorderedSnapportRestsAtItsPaddingEdge() throws {
+        for vertical in [false, true] {
+            let (node, _) = try strip((0..<4).map { ("start", 96.0 + Double($0) * 300, 80.0) },
+                                      type: vertical ? "y mandatory" : "x mandatory", vertical: vertical)
+            let (first, last) = vertical ? ("top", "bottom") : ("left", "right")
+            for (lead, trail, padLead, padTrail, starts, centers, ends): (Double, Double, Any, Any, CGFloat, CGFloat, CGFloat) in [
+                (0, 0, 0, 0, 96, 286, 176), (8, 12, 0, 0, 88, 288, 188), (8, 12, 10, 6, 78, 286, 194),
+                (8, 12, ["pct": 10], 6, 60, 277, 194), (8, 12, ["pct": 10], ["pct": 10], 60, 288, 216),
+            ] {
+                presenter?.apply(wireBatch([["op": "style", "id": 1, "style": [
+                    "overflow_x": vertical ? "hidden" : "scroll", "overflow_y": vertical ? "scroll" : "hidden",
+                    "scroll_snap_type": vertical ? "y mandatory" : "x mandatory",
+                    "border_width_\(first)": lead, "border_width_\(last)": trail,
+                    "scroll_padding_\(first)": padLead, "scroll_padding_\(last)": padTrail,
+                ]]]))
+                for (align, projected, expected): (String, CGFloat, CGFloat) in [("start", 100, starts), ("center", 300, centers), ("end", 200, ends)] {
+                    presenter?.apply(wireBatch((0..<4).map { ["op": "style", "id": 10 + $0, "style": ["scroll_snap_align": align]] }))
+                    let at = vertical ? CGPoint(x: 0, y: projected) : CGPoint(x: projected, y: 0)
+                    let rest = try XCTUnwrap(node.snappedOrigin(at, release: at))
+                    XCTAssertEqual(vertical ? rest.y : rest.x, expected, accuracy: 0.01, "\(vertical) \(align), borders \(lead)/\(trail), padding \(padLead)/\(padTrail)")
+                }
+            }
+            window?.close(); window = nil; presenter = nil
+        }
+    }
+
     func testAlwaysAndProximity() throws {
         let cards = (0..<6).map { ("start", Double($0) * 150, 150.0) }
         let (always, _) = try strip(cards, stop: "always")

@@ -54,6 +54,9 @@
 //     }
 //     #endif
 import Foundation
+#if canImport(ExactPackage)
+import ExactPackage
+#endif
 import Security
 #if os(macOS)
 import AppKit
@@ -246,7 +249,9 @@ open class ExactModule {
         reply.fail("\(type(of: self)) answers no native.later")
     }
     /// A cheap query answered now (`native.call`), on the main thread and
-    /// inside the asking answer's 100 ms budget. Throw to refuse.
+    /// inside the asking answer's 100 ms budget. Throw to refuse. The page
+    /// cannot lay out until it returns, so an animated frame change of an
+    /// Exact window asked here runs after it (`ExactSessionWindow`).
     open func call(_ request: [String: Any]) throws -> [String: Any] {
         throw ExactNativeRefusal("\(type(of: self)) answers no native.call")
     }
@@ -1389,8 +1394,14 @@ private let moduleSessionView: @convention(c) (UnsafeMutableRawPointer?, UnsafeM
     module(raw)?.context.sessionView = view.map { Unmanaged<AnyObject>.fromOpaque($0).takeUnretainedValue() }
 }
 
-/// The ABI major this artifact was built against; the host refuses others.
-private let major: UInt32 = 4
+private let moduleBindings: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void = { raw, bytes, length in
+    #if canImport(ExactPackage)
+    guard let m = module(raw) else { return }
+    guard let bytes else { return ExactExtensions.tracks(m).endViewBindings() }
+    let snapshot = try? JSONDecoder().decode(ExactTracks.ViewBindings.self, from: Data(bytes: bytes, count: length))
+    if let apply = ExactExtensions.tracks(m).commitViewBindings(snapshot ?? [:]) { DispatchQueue.main.async(execute: apply) }
+    #endif
+}
 
 private let table: UnsafeMutableRawPointer = {
     // Beside the tags, under a key no tag can take (a tag has a hyphen): the
@@ -1401,10 +1412,14 @@ private let table: UnsafeMutableRawPointer = {
         // `app.onLine` is asked of the host (`on_line`), not read from the facts.
         + ",\"facts\":{\"onLine\":\"asks\"}"
     let roster = ExactNativeViewABI.roster
+    // Track views require committed binding delivery. An older host refuses this major at load.
+    let major: UInt32 = roster.values.contains { !$0.trackProps.isEmpty } ? 5 : 4
     let text = "{" + (roster.keys.sorted().map { tag in
-        "\"\(tag)\":{\"snapshot\":\(roster[tag]!.snapshot),\"reuse\":\(roster[tag]!.reuse),\"firstFrame\":\(roster[tag]!.firstFrame)}"
+        let factory = roster[tag]!
+        let trackProps = factory.trackProps.map { "\"\($0)\"" }.joined(separator: ",")
+        return "\"\(tag)\":{\"snapshot\":\(factory.snapshot),\"reuse\":\(factory.reuse),\"firstFrame\":\(factory.firstFrame),\"trackProps\":[\(trackProps)]}"
     } + [words]).joined(separator: ",") + "}"
-    let size = 256
+    let size = 264
     let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
     t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     t.storeBytes(of: major, as: UInt32.self)
@@ -1439,6 +1454,7 @@ private let table: UnsafeMutableRawPointer = {
     t.storeBytes(of: unsafeBitCast(moduleAuthenticate, to: UnsafeRawPointer.self), toByteOffset: 232, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleImage, to: UnsafeRawPointer.self), toByteOffset: 240, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleSessionView, to: UnsafeRawPointer.self), toByteOffset: 248, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(moduleBindings, to: UnsafeRawPointer.self), toByteOffset: 256, as: UnsafeRawPointer.self)
     return t
 }()
 

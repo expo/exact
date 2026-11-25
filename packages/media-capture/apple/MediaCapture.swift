@@ -51,7 +51,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     /// a track no session holds. On the main thread.
     public static func holdsCapture(track id: String) -> ExactSubscription? {
         for m in ProcessCapture.shared.modules where m.tracks[id] != nil {
-            return try? m.subscribe(id, HatchTap(), start: true, origin: "app")
+            return try? m.subscribe(id, HatchTap(), start: true, cause: ExactTrackCause("app"))
         }
         return nil
     }
@@ -70,6 +70,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
 
     private let context: ExactPackageContext
     private let audioSource: ExactAudioSource?
+    private let process: ProcessCapture?
     private var next = 0
     /// The cameras (VideoCapture.swift, LLP 1133.008).
     private lazy var cameras = VideoTracks(context: context) { [unowned self] in next += 1; return next }
@@ -80,28 +81,29 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
 
     final class Track {
         let id: String, stream: String
-        let audio: TrackAudioSource?
-        var enabled = true { didSet { audio?.enabled = enabled } }
+        let source: ExactAudioSource?
+        var enabled = true { didSet { for reader in consumers.values { reader.audio?.enabled = enabled } } }
         var label: String, muted = true, muteReason: String? = "idle", readyState = "live"
         var settings: [String: Any] = [:], options: CaptureOptions
-        var consumers: [ObjectIdentifier: ExactTrackConsumer] = [:]
-        var active = false, used = false, leased = false
+        var consumers: [ObjectIdentifier: (consumer: ExactTrackConsumer, cause: ExactTrackCause, audio: TrackAudioSource?)] = [:]
+        var active = false, used = false, leased = false, pausedForBackground = false
         /// Why the platform mutes it now, if it does (an interruption, the background).
         var platformMute: String?
         init(id: String, stream: String, label: String, options: CaptureOptions, source: ExactAudioSource?) {
             self.id = id; self.stream = stream; self.label = label; self.options = options
-            audio = source.map(TrackAudioSource.init)
+            self.source = source
         }
     }
 
     public convenience init(context: ExactPackageContext) {
-        self.init(context: context, audioSource: context.agent ? nil : ProcessCapture.shared)
+        self.init(context: context, audioSource: context.agent ? nil : ProcessCapture.shared, process: context.agent ? nil : .shared)
     }
 
-    init(context: ExactPackageContext, audioSource: ExactAudioSource?) {
+    init(context: ExactPackageContext, audioSource: ExactAudioSource?, process: ProcessCapture? = nil) {
         self.context = context
         self.audioSource = audioSource
-        if !context.agent { ProcessCapture.shared.listen(self) }
+        self.process = process
+        process?.listen(self)
     }
 
     // MARK: the names
@@ -126,7 +128,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
             guard let t = track(args) else { return reply(["error": "NotFoundError"]) }
             t.enabled = args["enabled"] as? Bool ?? true
             // Turning a track back on is a start: it reopens an idle one that has consumers (D6).
-            if t.enabled, !t.active, !t.consumers.isEmpty, t.readyState == "live" { activate(t) }
+            if t.enabled, !t.active, hasAppConsumer(t), context.origin == "app", context.foreground, t.readyState == "live" { activate(t) }
             announce()
             reply(shape(t))
         case "mediaStreamTrack":
@@ -184,7 +186,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
             next += 1
             let t = Track(id: "track-\(context.session)-\(next)", stream: "stream-\(context.session)-\(next)",
                           label: context.agent ? "Agent microphone" : Permission.inputName, options: options, source: audioSource)
-            t.settings = context.agent ? Self.agentSettings : options.settings(ProcessCapture.shared.format)
+            t.settings = process.map { options.settings($0.format) } ?? Self.agentSettings
             if overlay != nil { t.platformMute = overlay }
             tracks[t.id] = t
             opened = true
@@ -207,14 +209,21 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
 
     // MARK: tracks and leases (D6)
 
-    public func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, origin: String) throws -> ExactSubscription {
-        guard let t = tracks[id] else { throw ExactTrackError("NotFoundError") }
+    public func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, cause: ExactTrackCause) throws -> ExactSubscription {
+        let origin = cause.origin
+        guard cause.current, let t = tracks[id] else { throw ExactTrackError("NotFoundError") }
         if t.readyState == "ended" { consumer.ended(); return ExactSubscription {} }
-        t.consumers[ObjectIdentifier(consumer)] = consumer
-        if t.active, !(start && origin == "app" && !context.agent && !t.leased) {
-            consumer.live(t.audio)
+        let audio = t.source.map { TrackAudioSource($0, cause: cause) }
+        audio?.enabled = t.enabled
+        audio?.delivering = t.active && !t.muted && (process == nil || t.leased)
+        t.consumers[ObjectIdentifier(consumer)]?.audio?.removeTaps()
+        t.consumers[ObjectIdentifier(consumer)] = (consumer, cause, audio)
+        // The app's own call starts the capture, and so does a live recording press the runner admitted (`press`).
+        let person = (origin == "app" && context.foreground) || (origin == "press" && start)
+        if t.active, !(start && person && process != nil && !t.leased) {
+            consumer.live(audio)
             if t.muted { consumer.muted(t.muteReason ?? "idle") }
-        } else if origin == "app", t.enabled, !t.used || start {
+        } else if person, t.enabled, !t.used || start {
             activate(t)
             // A retry can fail with the same mute reason; this new subscription must hear it too.
             if t.muted { consumer.muted(t.muteReason ?? "idle") }
@@ -222,14 +231,20 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
             consumer.muted(t.muteReason ?? "idle")
         }
         return ExactSubscription { [weak self, weak t, weak consumer] in
-            guard let self, let t, let consumer, t.consumers.removeValue(forKey: ObjectIdentifier(consumer)) != nil else { return }
+            guard let self, let t, let consumer, t.consumers[ObjectIdentifier(consumer)]?.cause === cause else { return }
+            t.consumers.removeValue(forKey: ObjectIdentifier(consumer))?.audio?.removeTaps()
             if t.consumers.isEmpty, t.active { self.deactivate(t) }
         }
     }
 
-    private func each(_ t: Track, _ f: (ExactTrackConsumer) -> Void) { for c in Array(t.consumers.values) { f(c) } }
+    private func hasAppConsumer(_ track: Track) -> Bool {
+        track.consumers.values.contains { $0.cause.origin == "app" && $0.cause.holdsCapture }
+    }
+
+    private func each(_ t: Track, _ f: (ExactTrackConsumer) -> Void) { for c in Array(t.consumers.values) { f(c.consumer) } }
 
     private func mute(_ t: Track, _ reason: String, consumersHear heard: String? = nil) {
+        for reader in t.consumers.values { reader.audio?.delivering = false }
         guard !(t.muted && t.muteReason == reason) else { return }
         t.muted = true; t.muteReason = reason
         each(t) { $0.muted(heard ?? reason) }
@@ -237,6 +252,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     }
 
     private func unmute(_ t: Track) {
+        for reader in t.consumers.values { reader.audio?.delivering = t.active && (process == nil || t.leased) }
         guard t.muted else { return }
         t.muted = false; t.muteReason = nil
         each(t) { $0.unmuted() }
@@ -245,18 +261,19 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
 
     /// The platform's mute over a running capture, or none.
     private func settle(_ t: Track) {
-        if let reason = t.platformMute { mute(t, reason) } else { unmute(t) }
+        if t.pausedForBackground { mute(t, "background") }
+        else if let reason = t.platformMute { mute(t, reason) } else { unmute(t) }
     }
 
     /// Take the lease: the capture runs (D6). A capture that will not start
     /// leaves the track muted, `interrupted`, and says why.
     private func activate(_ t: Track) {
         t.active = true; t.used = true
-        if !context.agent, !t.leased {
+        if let process, !t.leased {
             do {
-                try ProcessCapture.shared.lease(t.options, session: context.audioSession, log: context.log)
+                try process.lease(t.options, session: context.audioSession, log: context.log)
                 t.leased = true
-                t.settings = t.options.settings(ProcessCapture.shared.format)
+                t.settings = t.options.settings(process.format)
                 t.platformMute = nil
                 context.changed("media-capture.microphoneStatus")
             } catch {
@@ -264,14 +281,13 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
                 t.platformMute = "interrupted"
             }
         }
-        each(t) { $0.live(t.audio) }
+        for reader in Array(t.consumers.values) where reader.cause.current { reader.consumer.live(reader.audio) }
         settle(t)
     }
 
     /// Give the lease back: the track is idle.
     private func deactivate(_ t: Track) {
-        t.active = false
-        // A recorder reuses its tap when resuming across a lease change.
+        t.active = false; t.pausedForBackground = false
         release(t)
         mute(t, "idle")
     }
@@ -279,13 +295,13 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     private func release(_ t: Track) {
         guard t.leased else { return }
         t.leased = false
-        ProcessCapture.shared.unlease()
+        process?.unlease()
     }
 
     private func end(_ t: Track, _ why: String) {
         guard t.readyState == "live" else { return }
         t.readyState = "ended"; t.active = false
-        t.audio?.removeTaps()
+        for reader in t.consumers.values { reader.audio?.removeTaps() }
         release(t)
         context.log("media-capture: \(t.id) ended (\(why))")
         each(t) { $0.ended() }
@@ -299,13 +315,20 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     func heard(_ event: String) {
         for t in tracks.values where t.readyState == "live" {
             switch event {
+            case "reopening":
+                if t.leased && (!context.foreground || !t.enabled || !hasAppConsumer(t)) { deactivate(t) }
+                continue
             case "interrupted": t.platformMute = "interrupted"
-            case "resumed", "reopened": if t.platformMute == "interrupted" { t.platformMute = nil }
+            case "resumed", "reopened":
+                if t.platformMute == "interrupted" {
+                    t.platformMute = nil
+                    if !t.pausedForBackground && (!context.foreground || !t.enabled || !hasAppConsumer(t)) { deactivate(t); continue }
+                }
             case "reset":
                 // A media-services reset: the capture is let go, and nothing records until a start (D7).
                 t.platformMute = "interrupted"
                 if t.active { mute(t, "interrupted", consumersHear: "media-reset") }
-                t.active = false
+                t.active = false; t.pausedForBackground = false
                 release(t)
                 continue
             default: continue
@@ -321,14 +344,19 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     public func foreground(_ shown: Bool) {
         cameras.foreground(shown)
         if shown { context.changed("media-capture.microphoneStatus"); context.changed("media-capture.cameraStatus") }
+        if shown {
+            for t in tracks.values where t.readyState == "live" && !t.active && !t.used && t.enabled && hasAppConsumer(t) {
+                activate(t)
+            }
+        }
         #if os(iOS)
         guard !Permission.recordsInBackground else { return }
-        for t in tracks.values where t.readyState == "live" && t.active {
+        for t in tracks.values where t.readyState == "live" && t.active && (!shown || t.pausedForBackground) {
+            t.pausedForBackground = !shown
             if shown {
                 t.platformMute = overlay
-                activate(t)
+                if t.enabled, hasAppConsumer(t) { activate(t) } else { deactivate(t) }
             } else {
-                t.platformMute = "background"
                 release(t)
                 settle(t)
             }
@@ -359,7 +387,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     public func destroy(_ done: @escaping () -> Void) {
         for t in tracks.values { end(t, "the session ended") }
         cameras.endAll("the session ended")
-        ProcessCapture.shared.forget(self)
+        process?.forget(self)
         done()
     }
 
@@ -496,9 +524,14 @@ enum Permission {
 
 /// Media Capture's disabled audio is silence, with the source's frames and timestamps (LLP 1133.033 D8).
 final class TrackAudioSource: ExactAudioSource {
-    private let source: ExactAudioSource
-    private let lock = NSLock()
-    private var isEnabled = true
+    private let source: ExactAudioSource, cause: ExactTrackCause
+    private let lock = NSRecursiveLock()
+    private var closed = false
+    private var isEnabled = true, isDelivering = false
+    var delivering: Bool {
+        get { lock.withLock { isDelivering } }
+        set { lock.withLock { isDelivering = newValue } }
+    }
     private var next = 0
     private var taps: [Int: ExactSubscription] = [:]
     var format: AVAudioFormat { source.format }
@@ -508,19 +541,19 @@ final class TrackAudioSource: ExactAudioSource {
         set { lock.lock(); isEnabled = newValue; lock.unlock() }
     }
 
-    init(_ source: ExactAudioSource) { self.source = source }
+    init(_ source: ExactAudioSource, cause: ExactTrackCause) { self.source = source; self.cause = cause }
 
     func tap(_ block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) -> ExactSubscription {
-        lock.lock(); next += 1; let id = next; taps[id] = ExactSubscription {}; lock.unlock()
+        lock.lock()
+        guard !closed && cause.current else { lock.unlock(); return ExactSubscription {} }
+        next += 1; let id = next; taps[id] = ExactSubscription {}; lock.unlock()
         // Only this tap's audio callback accesses the reusable buffer. The shared input is never changed.
         var silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096)!
         let upstream = source.tap { [weak self] buffer, time in
             guard let self else { return }
-            self.lock.lock()
-            let active = self.taps[id] != nil, enabled = self.isEnabled
-            self.lock.unlock()
-            guard active else { return }
-            if enabled { return block(buffer, time) }
+            let enabled = self.lock.withLock { self.isDelivering && self.taps[id] != nil ? self.isEnabled : nil }
+            guard let enabled else { return }
+            if enabled { return self.cause.whileCurrent { block(buffer, time) } }
             if silence.format != buffer.format || silence.frameCapacity < buffer.frameLength {
                 guard let replacement = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
                 silence = replacement
@@ -529,9 +562,12 @@ final class TrackAudioSource: ExactAudioSource {
             for audio in UnsafeMutableAudioBufferListPointer(silence.mutableAudioBufferList) {
                 if let data = audio.mData { memset(data, 0, Int(audio.mDataByteSize)) }
             }
-            block(silence, time)
+            self.cause.whileCurrent { block(silence, time) }
         }
-        lock.lock(); taps[id] = upstream; lock.unlock()
+        lock.lock()
+        guard taps[id] != nil else { lock.unlock(); upstream.cancel(); return ExactSubscription {} }
+        taps[id] = upstream
+        lock.unlock()
         return ExactSubscription { [weak self] in self?.removeTap(id) }
     }
 
@@ -541,7 +577,7 @@ final class TrackAudioSource: ExactAudioSource {
     }
 
     func removeTaps() {
-        lock.lock(); let upstream = Array(taps.values); taps.removeAll(); lock.unlock()
+        lock.lock(); closed = true; let upstream = Array(taps.values); taps.removeAll(); lock.unlock()
         for tap in upstream { tap.cancel() }
     }
 
@@ -583,6 +619,7 @@ final class ProcessCapture: ExactAudioSource {
     /// A lease: the first claims the session and starts the engine with its options.
     func lease(_ options: CaptureOptions, session: ExactAudioSession, log: @escaping (String) -> Void) throws {
         if claim == nil {
+            if leases > 0 { tell("reopening") }
             let options = leases > 0 ? self.options ?? options : options
             self.log = log
             guard let claim = session.claim(mode: options.mode, options: options.categoryOptions, background: options.background,
@@ -699,6 +736,7 @@ final class ProcessCapture: ExactAudioSource {
 
     /// The engine stopped under a configuration change: another one, the gap journaled.
     func reopen() {
+        tell("reopening")
         guard leases > 0, let options else { return }
         let began = Date()
         stop()

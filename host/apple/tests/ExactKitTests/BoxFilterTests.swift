@@ -348,7 +348,7 @@ final class BoxFilterTests: XCTestCase {
         let box = try XCTUnwrap(p.views[1]), first = try drawing(1)
         show([
             ["op": "present", "id": 1, "property": "translate", "x": 40.0, "y": 0.0, "w": 0.0, "h": 0.0],
-            ["op": "present", "id": 1, "property": "scale", "x": 0.8, "y": 0.0, "w": 0.0, "h": 0.0],
+            ["op": "present", "id": 1, "property": "scale", "x": 0.8, "y": 0.8, "w": 0.0, "h": 0.0],
             ["op": "present", "id": 1, "property": "rotate", "x": 10.0, "y": 0.0, "w": 0.0, "h": 0.0],
             ["op": "present", "id": 1, "property": "opacity", "x": 0.4, "y": 0.0, "w": 0.0, "h": 0.0],
         ])

@@ -68,11 +68,21 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.take_requests()
     }
 
+    /// A Kotlin module callback, registered between host turns.
+    pub fn module_after(&mut self, timer: i32, due: f64) {
+        self.p.module_after(timer, due);
+    }
+
     /// What the reader's hatches ask (`hatches::reader::act`), run at once,
     /// between turns: its answer, -1 when refused. A view hosted or let go
     /// paints again.
     pub fn hatch_act(&mut self, node: u32, kind: i32, text: Option<&str>) -> i64 {
         self.p.reader_hatch_act(node, kind, text)
+    }
+
+    /// Preferred content sizes the reader collected during a display frame (LLP 1024).
+    pub fn module_sizes(&mut self, reports: &str) {
+        self.force |= self.p.reader_module_sizes(reports);
     }
 
     /// An app module's event, only for the session and allocation whose view the reader still holds.
@@ -93,6 +103,29 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The reader's iframe finished a document (LLP 1020 §10).
     pub fn frame_loaded(&mut self, id: u32, key: exact_kernel::NodeKey, session: u64) {
         self.force |= self.p.reader_frame_loaded(id, key, session);
+    }
+
+    /// The reader's iframe took the platform's focus or lost it.
+    pub fn frame_focused(
+        &mut self,
+        id: u32,
+        key: exact_kernel::NodeKey,
+        session: u64,
+        focused: bool,
+    ) {
+        self.p.reader_frame_focused(id, key, session, focused);
+    }
+
+    /// The reader's iframe's `FrameNavigation` record (LLP 1020.002 D2).
+    pub fn frame_event(
+        &mut self,
+        id: u32,
+        key: exact_kernel::NodeKey,
+        session: u64,
+        event: &str,
+        record: &str,
+    ) {
+        self.force |= self.p.reader_frame_event(id, key, session, event, record);
     }
 
     /// A media element's event or state (LLP 1042.001 D7), only for the
@@ -129,6 +162,11 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The reader's answer to request `id`, or its cancellation (`None`).
     pub fn answer(&mut self, id: u32, answer: Option<&str>) {
         self.p.answer_request(id, answer);
+    }
+
+    /// The reader refused a module call.
+    pub fn refuse_module(&mut self, id: u32, error: &str, message: Option<&str>) {
+        self.p.refuse_module(id, error, message);
     }
 
     /// How a presence check the reader made ended (LLP 1133.010 D13).
@@ -231,6 +269,53 @@ impl<D: DataSource + Default> CanvasHost<D> {
             runner.log(e);
         }
         self.force = true;
+    }
+
+    /// A person's press of the compiled control `kind`, installed with
+    /// `digest`: a Quick Settings tile's, or with `foreground` the app's in
+    /// front that the tile opened (`Native.press`, LLP 1126.004 D2, D5).
+    /// `{"call": id}`, or `{"error"}`.
+    pub fn press_control(
+        &mut self,
+        kind: &str,
+        digest: &str,
+        foreground: bool,
+        cold: bool,
+        hidden: bool,
+    ) -> String {
+        let how = exact_runner::CallHow {
+            door: "android".into(),
+            cold,
+            hidden,
+            digest: None,
+            foreground,
+        };
+        let runner = self.p.host_mut().runner_mut();
+        let reply = match runner.press_control(kind, digest, how) {
+            Ok(id) => serde_json::json!({ "call": id }),
+            Err(e) => {
+                runner.log(format!("control:{kind}: {e}"));
+                serde_json::json!({ "error": e })
+            }
+        };
+        self.force = true;
+        reply.to_string()
+    }
+
+    /// Press `id` ends: the tile that started it was superseded, the app it
+    /// opened left the front, or the phone locked (`Native.cancelPress`).
+    pub fn cancel_press(&mut self, id: u64) {
+        let request = serde_json::json!({ "op": "cancel", "id": id }).to_string();
+        let runner = self.p.host_mut().runner_mut();
+        if let Some(Err(e)) = runner.call_agent("cancel", &request) {
+            runner.log(format!("control: press {id}: {e}"));
+        }
+        self.force = true;
+    }
+
+    /// Whether press `id` still runs (`Native.pressLive`).
+    pub fn press_live(&mut self, id: u64) -> bool {
+        self.p.host_mut().runner_mut().press_live(id)
     }
 
     /// A line the reader journals (`Native.journal`).

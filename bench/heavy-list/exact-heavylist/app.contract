@@ -76,22 +76,21 @@ component Heavy
   derive motion = match config { case some(c) => c.motion, case none => "" }
   action react(id: string, emoji: string)
     send changed = react(id, emoji)
-  // Every 250 ms: the first tick asks for the launch config; in live mode
-  // each later tick inserts one message at the top and bumps one reaction.
+  action ask
+    send config = config()
+  // Inserts one message at the top and bumps one reaction.
   action tick
-    match config
-      case none
-        send config = config()
-      case some(c)
-        if c.live
-          send changed = tick()
+    send changed = tick()
   action second
-    if live
-      secs = floor(performanceNow() / 1000)
+    secs = floor(performanceNow() / 1000)
 
-  task producer mount
+  task launch mount
+    after(250, ask)
+  // Gated on live mode: outside it no timer is armed, so a still list wakes
+  // nothing.
+  task producer when live
     every(250, tick)
-  task clock mount
+  task clock when live
     every(1000, second)
 
   view

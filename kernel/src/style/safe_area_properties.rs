@@ -14,7 +14,7 @@
 
 use super::calc::Node;
 use super::{Dimension, StyleId, StyleValue};
-use cssparser::{Delimiter, ParseError, Parser, ParserInput, Token};
+use cssparser::{Delimiter, ParseError, Parser, Token};
 use std::sync::Arc;
 
 /// Names the host defines (LLP 1081 D5), which no author declares.
@@ -35,8 +35,7 @@ impl SafeAreaProperties {
     /// one [`Self::value`] takes; `None` otherwise. No declaration at all is
     /// a node that declares none.
     pub fn parse(css: &str) -> Option<Self> {
-        let mut input = ParserInput::new(css);
-        let mut p = Parser::new(&mut input);
+        let mut p = Parser::new(css);
         let mut out: Vec<(Arc<str>, Dimension)> = Vec::new();
         loop {
             p.skip_whitespace();
@@ -51,7 +50,7 @@ impl SafeAreaProperties {
             let start = p.position();
             p.parse_until_before(Delimiter::Semicolon, |p| {
                 while p.next_including_whitespace_and_comments().is_ok() {}
-                Ok::<_, ParseError<'_, ()>>(())
+                Ok::<_, ParseError<()>>(())
             })
             .ok()?;
             let value = Self::value(p.slice_from(start))?;

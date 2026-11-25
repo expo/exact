@@ -36,7 +36,8 @@ import Speech
 public final class SpeechRecognitionModule: ExactPackage {
     static let history = 20, maxHistory = 200, windowBytes = 256 * 1024, fileBytes = 1 << 20, split = 16 * 1024
     static let wordMs = 300.0, finalMs = 500.0, noSpeechMs = 8000.0
-    static let agentStatus: [String: Any] = ["available": true, "state": "granted", "inputs": ["track", "microphone", "file"], "local": true,
+    static let inputs = ["track", "file"]
+    static let agentStatus: [String: Any] = ["available": true, "state": "granted", "inputs": inputs, "local": true,
                                              "apple": NSNull(), "android": NSNull()]
     static let noInfo: [String: Any] = ["id": "", "leavesDevice": false, "finalCount": 0, "transcript": NSNull(), "files": 0, "error": NSNull()]
     static let noRecognition: [String: Any] = ["id": "", "state": "ended", "audio": false, "sound": false, "speech": false, "results": [Any](),
@@ -113,7 +114,7 @@ public final class SpeechRecognitionModule: ExactPackage {
         if context.agent { return Self.agentStatus.merging(overlay) { $1 } }
         let engine = Self.engine(args), local = args["processLocally"] as? Bool == true
         let sf = SFSpeechRecognizer(locale: Self.locale(args))
-        var out: [String: Any] = ["inputs": ["track", "file"], "android": NSNull()]
+        var out: [String: Any] = ["inputs": Self.inputs, "android": NSNull()]
         let auth = Self.authorization()
         if engine == "sfSpeechRecognizer" {
             let state = ["authorized": "granted", "denied": "denied", "restricted": "denied"][auth] ?? "prompt"
@@ -182,17 +183,21 @@ public final class SpeechRecognitionModule: ExactPackage {
     // MARK: starting
 
     private func start(_ args: [String: Any], _ reply: @escaping ([String: Any]) -> Void) {
-        let given = [args["track"] as? String != nil && !(args["track"] as? String ?? "").isEmpty ? "track" : nil,
-                     args["microphone"] as? Bool == true ? "microphone" : nil,
-                     args["path"] as? String != nil && !(args["path"] as? String ?? "").isEmpty ? "file" : nil].compactMap { $0 }
-        guard given.count == 1, let input = given.first else { return reply(["error": "TypeError"]) }
+        let track = args["track"] as? String ?? "", path = args["path"] as? String ?? ""
+        let input: String, source: String
+        switch (!track.isEmpty, args["microphone"] as? Bool == true, !path.isEmpty) {
+        case (true, false, false): (input, source) = ("track", "on \(track)")
+        case (false, true, false): (input, source) = ("microphone", "on the microphone")
+        case (false, false, true): (input, source) = ("file", "of \(path)")
+        default: return reply(["error": "TypeError"])
+        }
         let s = status(args)
         guard s["available"] as? Bool == true, (s["inputs"] as? [String] ?? []).contains(input) else { return reply(["error": "NotSupportedError"]) }
         let engine = Self.engine(args), local = args["processLocally"] as? Bool == true
-        if input == "track", context.tracks.lookup(args["track"] as! String)?.kind != "audio" { return reply(["error": "InvalidStateError"]) }
+        if input == "track", context.tracks.lookup(track)?.kind != "audio" { return reply(["error": "InvalidStateError"]) }
         var file: URL?
         if input == "file", !context.agent {
-            guard let url = context.file(args["path"] as! String), FileManager.default.fileExists(atPath: url.path) else { return reply(["error": "NotFoundError"]) }
+            guard let url = context.file(path), FileManager.default.fileExists(atPath: url.path) else { return reply(["error": "NotFoundError"]) }
             file = url
         }
         // The SF recognizer asks its authorization at the start that needs it (D11).
@@ -209,11 +214,11 @@ public final class SpeechRecognitionModule: ExactPackage {
         let refused = local && s["local"] as? Bool != true
         r.prepareTranscript()
         recognitions[r.id] = r
-        say("\(r.id): \(input == "track" ? "on \(args["track"]!)" : "of \(args["path"]!)")\(r.transcript.map { ", transcript \($0)" } ?? ""), \(leaves ? "may leave the device" : "on the device"), \(engine)")
+        say("\(r.id): \(source)\(r.transcript.map { ", transcript \($0)" } ?? ""), \(leaves ? "may leave the device" : "on the device"), \(engine)")
         if refused { r.finish("service-not-allowed"); return reply(r.info()) }
         if input == "track" {
             do {
-                r.subscription = try context.tracks.subscribe(args["track"] as! String, r, start: true, origin: "app")
+                r.subscription = try context.tracks.subscribe(track, r, start: true, origin: "app")
             } catch {
                 recognitions[r.id] = nil
                 return reply(["error": (error as? ExactTrackError)?.code ?? "InvalidStateError"])
@@ -518,6 +523,8 @@ final class AnalyzerEngine: RecognitionEngine {
     private var input: AsyncStream<AnalyzerInput>.Continuation?
     private var tap: ExactSubscription?, source: ExactAudioSource?
     private var ready = false, aborted = false
+    /// A stop that came while the analyzer started acts once it has one.
+    private var stopped = false
     private let queue = DispatchQueue(label: "exact.speech-recognition.convert")
 
     /// The transcriber `word` names for `locale`, or nil when it supports no equivalent locale.
@@ -557,6 +564,7 @@ final class AnalyzerEngine: RecognitionEngine {
                 let analyzer: SpeechAnalyzer
                 if let file {
                     analyzer = try await SpeechAnalyzer(inputAudioFile: AVAudioFile(forReading: file), modules: [module], analysisContext: context, finishAfterFile: true)
+                    await self?.hold(analyzer)
                 } else {
                     let (stream, input) = AsyncStream.makeStream(of: AnalyzerInput.self)
                     analyzer = SpeechAnalyzer(modules: [module])
@@ -564,7 +572,6 @@ final class AnalyzerEngine: RecognitionEngine {
                     try await analyzer.start(inputSequence: stream)
                     await self?.began(analyzer, input, format)
                 }
-                await self?.hold(analyzer)
                 try await self?.results(module)
                 await self?.end(nil)
             } catch {
@@ -573,12 +580,16 @@ final class AnalyzerEngine: RecognitionEngine {
         }
     }
 
-    @MainActor private func hold(_ analyzer: SpeechAnalyzer) { self.analyzer = analyzer }
+    @MainActor private func hold(_ analyzer: SpeechAnalyzer) {
+        self.analyzer = analyzer
+        if stopped { stop() }
+    }
 
     @MainActor private func began(_ analyzer: SpeechAnalyzer, _ input: AsyncStream<AnalyzerInput>.Continuation, _ format: AVAudioFormat) {
         self.analyzer = analyzer; self.input = input
         ready = true
         if aborted { input.finish(); return }
+        if stopped { return stop() }
         if let source { attach(source, format) } else { self.format = format }
     }
     private var format: AVAudioFormat?
@@ -643,6 +654,7 @@ final class AnalyzerEngine: RecognitionEngine {
     }
 
     func stop() {
+        stopped = true
         tap?.cancel(); tap = nil
         input?.finish()
         let analyzer = analyzer

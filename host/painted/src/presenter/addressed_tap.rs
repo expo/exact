@@ -381,7 +381,7 @@ impl<D: DataSource> Presenter<D> {
             if self.takes_press(n) {
                 return Some(Reach::Node(n));
             }
-            at = self.display.parent(self.host.kernel(), n);
+            at = self.listener_parent(self.host.kernel(), n);
         }
         Some(Reach::Nothing)
     }

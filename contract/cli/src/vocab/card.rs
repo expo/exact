@@ -80,6 +80,31 @@ pub fn function_lines() -> (Vec<String>, String) {
     (lines, intrinsics)
 }
 
+/// Function lines with one form after their name, as one line that names
+/// each: `go|open|push|replace(router, location) -> Router`.
+fn shared_signatures(lines: &[String]) -> Vec<String> {
+    let mut grouped: Vec<(String, String)> = Vec::new();
+    for line in lines {
+        let name_end = line.find('(').filter(|&at| {
+            line[..at]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        let (name, form) = name_end.map_or(("", line.as_str()), |at| line.split_at(at));
+        match grouped
+            .iter_mut()
+            .find(|(names, f)| !name.is_empty() && !names.is_empty() && f == form)
+        {
+            Some((names, _)) => *names += &format!("|{name}"),
+            None => grouped.push((name.to_owned(), form.to_owned())),
+        }
+    }
+    grouped
+        .into_iter()
+        .map(|(names, form)| names + &form)
+        .collect()
+}
+
 /// A `tags` line: the tags, their attributes, their events.
 pub struct TagLine {
     pub tags: Vec<&'static str>,
@@ -102,6 +127,24 @@ pub fn tag_lines() -> Vec<TagLine> {
         .collect()
 }
 
+/// A tag's attributes and events, from every `tags` line naming it.
+pub fn tag_words(tag: &str) -> [(&'static str, Vec<&'static str>); 2] {
+    let lines: Vec<TagLine> = tag_lines()
+        .into_iter()
+        .filter(|l| l.tags.contains(&tag))
+        .collect();
+    [
+        (
+            "attributes",
+            lines.iter().flat_map(|l| l.attrs.clone()).collect(),
+        ),
+        (
+            "events",
+            lines.iter().flat_map(|l| l.events.clone()).collect(),
+        ),
+    ]
+}
+
 /// The test steps: the first cell of each row of the recipe's table.
 pub fn steps() -> Vec<String> {
     TESTS
@@ -116,14 +159,22 @@ pub fn steps() -> Vec<String> {
         .collect()
 }
 
-/// The agent's operations: `agent --help`'s `Ops` block, from its source.
+/// The agent's operations: the lines under `agent --help`'s gallery line
+/// that name one, from its source; a note on a host (capitalized) is left
+/// to `agent --help`.
 pub fn operations() -> String {
     let start = HELP
-        .find("Ops      ")
+        .find("Gallery: ")
+        .and_then(|at| HELP[at..].find('\n').map(|end| at + end + 1))
         .expect("scripts/help.mjs has the agent's operations");
     let block = &HELP[start..];
     let end = block.find("`,").expect("the operations end the text");
-    block[..end].replacen("Ops      ", "ops: ", 1)
+    let ops = block[..end].lines();
+    let ops = ops.filter(|line| {
+        line.trim_start()
+            .starts_with(|c: char| c.is_ascii_lowercase())
+    });
+    format!("ops:\n{}", ops.collect::<Vec<_>>().join("\n"))
 }
 
 /// The `exact:content` parts, each as its call.
@@ -189,7 +240,7 @@ pub fn card() -> String {
     let (functions, intrinsics) = function_lines();
     let mut out = format!("{}\n\n", section("intro"));
     out += "functions: call -> result\n";
-    for l in &functions {
+    for l in shared_signatures(&functions) {
         out += &format!("  {l}\n");
     }
     out += &format!("  {intrinsics}\n\n");
@@ -228,7 +279,7 @@ pub fn card() -> String {
     }
     out += &format!("\nrules\n{}\n", section("rules"));
     out += &format!(
-        "idioms with code (vocab <name>): {}\n",
+        "idioms with code: {}\n",
         super::concepts::concepts()
             .iter()
             .map(|c| c.name)
@@ -282,6 +333,22 @@ mod tests {
             .filter(|f| f.signature.is_some())
             .collect();
         assert_eq!(lines.len(), standard.len());
+        // The card's grouped lines name each function's line again.
+        let mut expanded: Vec<String> = shared_signatures(&lines)
+            .iter()
+            .flat_map(|l| {
+                let (names, form) = l.split_at(l.find('(').unwrap_or(l.len()));
+                let names = names.contains('|').then_some(names);
+                names.map_or_else(
+                    || vec![l.clone()],
+                    |n| n.split('|').map(|n| format!("{n}{form}")).collect(),
+                )
+            })
+            .collect();
+        expanded.sort();
+        let mut sorted = lines.clone();
+        sorted.sort();
+        assert_eq!(expanded, sorted);
         for f in &standard {
             assert!(
                 lines.iter().any(|l| l.starts_with(&format!("{}(", f.name))
@@ -389,6 +456,61 @@ mod tests {
                     .filter(|e| !is_event(e))
                     .map(|e| format!("`{e}` is no event")),
             );
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A form-control attribute the compiler takes on `input` or `textarea` is
+    /// on that tag's lines, which `vocab <tag>` prints too: an agent reads an
+    /// attribute left off as unsupported (#1408). The Markdown editor's
+    /// (`atoms`, `decorations`, …) need declarations and are not checked.
+    #[test]
+    fn the_card_names_every_field_attribute_the_compiler_takes() {
+        let dir = crate::scratch::Scratch::new(format!("exact-fields-{}", std::process::id()));
+        let path = dir.join("app.contract");
+        let compiles = |tag: &str, extra: &str, attr: &str, value: &str| {
+            let app = format!(
+                "component App\n  view\n    {tag}{extra} {attr}={value} aria-label=\"F\"\n"
+            );
+            std::fs::write(&path, app).unwrap();
+            contract::compile_path_all_warned(&path, false).0.is_ok()
+        };
+        let lines = tag_lines();
+        let mut failures = Vec::new();
+        for tag in ["input", "textarea"] {
+            let listed: Vec<&str> = lines
+                .iter()
+                .filter(|l| l.tags.contains(&tag))
+                .flat_map(|l| l.attrs.iter().copied())
+                .collect();
+            // Some of `input`'s belong to one `type`.
+            let types: &[&str] = if tag == "input" {
+                &[
+                    "",
+                    " type=\"checkbox\"",
+                    " type=\"radio\"",
+                    " type=\"file\"",
+                ]
+            } else {
+                &[""]
+            };
+            let fields =
+                contract_lower::CONTROL_PROPS
+                    .iter()
+                    .chain(&["rows", "maxlength", "disabled"]);
+            for attr in fields {
+                let taken = types.iter().any(|extra| {
+                    ["\"none\"", "\"image/*\"", "true", "3"]
+                        .iter()
+                        .any(|value| compiles(tag, extra, attr, value))
+                });
+                if taken && !listed.contains(attr) {
+                    failures.push(format!("`{tag} {attr}` compiles; put it on card.md"));
+                }
+                if !taken && listed.contains(attr) {
+                    failures.push(format!("`{tag} {attr}` is refused; take it off card.md"));
+                }
+            }
         }
         assert!(failures.is_empty(), "{failures:#?}");
     }

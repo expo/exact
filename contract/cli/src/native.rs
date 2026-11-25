@@ -514,6 +514,12 @@ pub fn rust_hatches(
     let directory = if rust(&own) {
         own
     } else {
+        // Watched, so that the platform's first Rust file replaces Linux's.
+        let parent = app_root.join("modules");
+        let watch = [&own, &parent].into_iter().find(|d| d.is_dir());
+        if let Some(watch) = watch.filter(|_| platform != "linux") {
+            println!("cargo:rerun-if-changed={}", watch.display());
+        }
         app_root.join("modules/linux")
     };
     let mut files: Vec<_> = std::fs::read_dir(&directory)

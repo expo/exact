@@ -369,7 +369,7 @@ fn a_modern_colour_moves_in_oklab() {
     assert_eq!(p3_red.to_rgba8()[0], 255, "an 8-bit reader gets the clip");
 }
 
-/// CSS Transitions §3.2: a reversal between a legacy and a modern colour is
+/// CSS Transitions 1 §3.1: a reversal between a legacy and a modern colour is
 /// shortened as one between two legacy colours is, though the running
 /// transition keeps its ends in OKLab.
 #[test]

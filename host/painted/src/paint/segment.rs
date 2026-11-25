@@ -102,7 +102,7 @@ impl Painter {
         shape: &Shape,
         checked: bool,
         focused: bool,
-        pressed_background: Option<[u8; 4]>,
+        pressed_background: super::PressBackground,
         ts: Transform,
     ) -> [u8; 4] {
         let dark = self.dark;
@@ -118,13 +118,11 @@ impl Painter {
         };
         // Disabled too: Compose 1.4's `disabledActiveContainerColor` is the
         // selected container (`SegmentedButtonDefaults`).
-        if checked {
-            // `ButtonFace` is `secondaryContainer` (LLP 1115.001 D4).
-            self.backend.fill(shape, look::role("ButtonFace", dark), ts);
+        let container = checked.then(|| look::role("ButtonFace", dark));
+        if let Some(fill) = pressed_background.mix(container) {
+            self.backend.fill(shape, fill, ts);
         }
-        if let Some(ground) = pressed_background {
-            self.backend.fill(shape, ground, ts);
-        } else if !disabled {
+        if pressed_background.0.is_none() && !disabled {
             // A focus's layer is the pressed state's opacity, as Compose's.
             let layer = if focused {
                 Some(metric::STATE_PRESSED_OPACITY)
@@ -179,13 +177,14 @@ impl Painter {
         node: &NodeRef<'_>,
         shape: &Shape,
         hover: bool,
-        pressed_background: Option<[u8; 4]>,
+        pressed_background: super::PressBackground,
         ts: Transform,
     ) -> [u8; 4] {
         let dark = self.dark;
         let disabled = node.props.bool(PropId::Disabled) == Some(true);
         let checked = chosen(node);
         let em = super::super::neutral::em(node);
+        let mut container = None;
         if checked {
             let (x, y, w, h) = shape.rect;
             let shadow = Shape {
@@ -201,9 +200,9 @@ impl Painter {
             } else {
                 "-exact-background"
             };
-            self.backend.fill(shape, look::role(chip, dark), ts);
+            container = Some(look::role(chip, dark));
         }
-        if let Some(ground) = pressed_background {
+        if let Some(ground) = pressed_background.mix(container) {
             self.backend.fill(shape, ground, ts);
         }
         let ink = if disabled {

@@ -12,7 +12,9 @@ package final class PageScrollView: NSScrollView {
 
     package override init(frame: NSRect) {
         super.init(frame: frame)
-        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification, object: self)
+        for name in [NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(liveScrolled), name: name, object: self)
+        }
         followScrollerStyle()
         styleObserver = NotificationCenter.default.addObserver(forName: NSScroller.preferredScrollerStyleDidChangeNotification,
             object: nil, queue: .main) { [weak self] _ in self?.followScrollerStyle() }
@@ -37,6 +39,9 @@ package final class PageScrollView: NSScrollView {
         let vertical: Bool
         let horizontal: Bool
         let autohides: Bool
+        /// The axes on which the document fit the clip at the completed fit.
+        let fitsWidth: Bool
+        let fitsHeight: Bool
     }
     // One viewport tracking area sees overflowing descendants and exits even
     // when no node's bounds contain the pointer. Nodes use the same hit test.
@@ -85,27 +90,49 @@ package final class PageScrollView: NSScrollView {
     package override func mouseMoved(with event: NSEvent) { pointerTracking?(event) }
     package override func mouseExited(with event: NSEvent) { pointerTracking?(event) }
 
-    @objc private func liveScrollStarted() { personScrolled?() }
+    /// A live scroll's start and each of its moves, which AppKit posts on the
+    /// main thread though it runs the scroll on its own.
+    @objc private func liveScrolled() { personScrolled?() }
+    /// Compatible: the page, and each scroller inside it, moves on AppKit's
+    /// scrolling thread. AppKit withdraws responsive scrolling from every
+    /// scroll view inside one that is not. The override reads nothing past a
+    /// gesture's first event, which is all AppKit then sends here: the live
+    /// scroll's notifications say the rest (`liveScrolled`).
+    package override class var isCompatibleWithResponsiveScrolling: Bool { true }
     package override func scrollWheel(with event: NSEvent) {
         personScrolled?() // A mouse wheel's notches need not begin a live scroll.
+        if event.cgEvent?.getIntegerValueField(.eventSourceUserData) == ChainingScrollView.driverMark { ChainingScrollView.handedDriverWheel(self) }
         super.scrollWheel(with: event)
     }
 
     private var documentFit: DocumentFit?
     private var prefittingDocument = false
+    /// Inside the frame change being made: the document a root fit completed
+    /// for (certified once the change ends), and whether the fit was
+    /// invalidated since that change began.
+    private var fittedInStep: ObjectIdentifier?, invalidatedInStep = false
     var permitsDocumentPrefit: (() -> Bool)?
 
-    func invalidateDocumentFit() { documentFit = nil }
+    func invalidateDocumentFit() {
+        documentFit = nil
+        if prefittingDocument { fittedInStep = nil; invalidatedInStep = true }
+    }
 
     /// Only a completed root fit may certify axes for the next outer shrink.
     func acceptDocumentFit() {
-        guard !prefittingDocument, let document = documentView,
-              document.frame.origin == .zero, document.bounds.size == document.frame.size else { return }
+        guard let document = documentView else { return }
+        if prefittingDocument { fittedInStep = ObjectIdentifier(document); return }
+        let clip = contentView.bounds.size
+        certify(document, fitsWidth: document.frame.width <= clip.width, fitsHeight: document.frame.height <= clip.height)
+    }
+
+    private func certify(_ document: NSView, fitsWidth: Bool, fitsHeight: Bool) {
+        guard document.frame.origin == .zero, document.bounds.size == document.frame.size else { return }
         documentFit = DocumentFit(document: ObjectIdentifier(document), documentFrame: document.frame,
             clipSize: contentView.bounds.size, frameSize: frame.size, magnification: magnification,
             backingScale: window?.backingScaleFactor, style: scrollerStyle,
             border: borderType, vertical: hasVerticalScroller, horizontal: hasHorizontalScroller,
-            autohides: autohidesScrollers)
+            autohides: autohidesScrollers, fitsWidth: fitsWidth, fitsHeight: fitsHeight)
     }
 
     /// A completed fit applies only to the document and viewport geometry it measured.
@@ -123,37 +150,62 @@ package final class PageScrollView: NSScrollView {
     }
 
     package override func setFrameSize(_ newSize: NSSize) {
-        if newSize != frame.size, !prefittingDocument {
-            prefittingDocument = true
-            prefitDocument(for: newSize)
-            super.setFrameSize(newSize)
-            prefittingDocument = false
-        } else {
-            super.setFrameSize(newSize)
+        guard newSize != frame.size, !prefittingDocument else { return super.setFrameSize(newSize) }
+        prefittingDocument = true
+        fittedInStep = nil; invalidatedInStep = false
+        let fit = prefitDocument(for: newSize)
+        super.setFrameSize(newSize)
+        // Layout did not follow (`ExactView.fit` waits while main serves the owner, as in
+        // an animated resize a module's call makes in a window that is not Exact's): what
+        // fit at the last completed fit is the clip's size, as that fit left it, though a
+        // scroller the other axis needs has narrowed the clip, and the fit stands for the
+        // next step. Twice, since a scroller the old size needed goes and the clip grows.
+        var unfollowed: Bool {
+            fittedInStep == nil && !invalidatedInStep && documentView.map(ObjectIdentifier.init) == fit?.document
+        }
+        if let fit, let document = documentView {
+            for _ in 0..<2 where unfollowed {
+                let clip = contentView.bounds.size
+                var size = document.frame.size
+                if fit.fitsWidth { size.width = clip.width }
+                if fit.fitsHeight { size.height = clip.height }
+                if size == document.frame.size { break }
+                document.setFrameSize(size)
+                tile()
+            }
+        }
+        let carried = unfollowed ? fit : nil
+        prefittingDocument = false
+        if let fit = carried, let document = documentView {
+            certify(document, fitsWidth: fit.fitsWidth, fitsHeight: fit.fitsHeight)
+        } else if let fitted = fittedInStep, let document = documentView, ObjectIdentifier(document) == fitted {
+            acceptDocumentFit()
         }
     }
 
     /// An old fitting document must not manufacture gutters during tiling.
     /// Keep overflowing axes and authored root frames untouched; ordinary layout
     /// can still introduce real overflow and its necessary viewport correction.
-    private func prefitDocument(for newSize: NSSize) {
+    /// Returns the fit it applied.
+    private func prefitDocument(for newSize: NSSize) -> DocumentFit? {
         let fit = hasCurrentDocumentFit ? documentFit : nil
-        invalidateDocumentFit()
+        documentFit = nil
         guard permitsDocumentPrefit?() == true, let fit, let document = documentView,
               newSize.width.isFinite, newSize.height.isFinite,
-              newSize.width > 0, newSize.height > 0 else { return }
+              newSize.width > 0, newSize.height > 0 else { return nil }
         // The clip is in CSS px, the frame in points: the change over the page zoom.
         let width = fit.clipSize.width + (newSize.width - fit.frameSize.width) / magnification
         let height = fit.clipSize.height + (newSize.height - fit.frameSize.height) / magnification
-        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return }
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
         var size = document.frame.size
-        if size.width <= fit.clipSize.width, newSize.width < fit.frameSize.width {
+        if fit.fitsWidth, newSize.width < fit.frameSize.width {
             size.width = min(size.width, width)
         }
-        if size.height <= fit.clipSize.height, newSize.height < fit.frameSize.height {
+        if fit.fitsHeight, newSize.height < fit.frameSize.height {
             size.height = min(size.height, height)
         }
         if size != document.frame.size { document.setFrameSize(size) }
+        return fit
     }
 
     /// A click that reached the page, on its empty ground: the field being
@@ -165,7 +217,7 @@ package final class PageScrollView: NSScrollView {
     package override func mouseDown(with event: NSEvent) {
         let hit = window?.contentView?.hitTest(event.locationInWindow)
         if let focused = window?.firstResponder as? NodeView, let hit, hit.isDescendant(of: focused) {} else { pressedGround?() }
-        if TitleBarAreaMac.doubleClicked(event, on: hit) { return }
+        if TitleBarAreaMac.press(event, on: hit, titleGround: true) { return }
         super.mouseDown(with: event)
     }
     /// AppKit turns automatic titlebar insets back on when this view
@@ -234,6 +286,11 @@ extension NSScrollView {
             insets.bottom = isFlipped ? above : below
             insets.left = max(0, min(safe.minX, box.maxX) - box.minX)
             insets.right = max(0, box.maxX - max(safe.maxX, box.minX))
+        }
+        // A `scroll` node's padding edge masks its scroll view: the scrollers keep inside that too.
+        if let clip = (self as? ChainingScrollView)?.clipInsets {
+            insets = NSEdgeInsets(top: max(insets.top, clip.top), left: max(insets.left, clip.left),
+                                  bottom: max(insets.bottom, clip.bottom), right: max(insets.right, clip.right))
         }
         let now = scrollerInsets
         // Setting the insets tiles again, which asks here again: equal, it stops.

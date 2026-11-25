@@ -401,7 +401,9 @@ impl Em<'_> {
                 let text = self.logical_children(self.sites.of_arm(arms[0]), &inner)?;
                 let _ = write!(
                     self.out,
-                    "$vl({parent},{subject},({item},{index})=>{key},(p,{item},{index})=>{{{built}}},{{...{opts},{inputs},text:({item},{index})=>{{{rows_decl}return {text};}}}});"
+                    "$vl({parent},{subject},({item},{index})=>{key},(p,{item},{index})=>{{{}}},{{...{opts},{inputs},text:({item},{index})=>{{{}}}}});",
+                    crate::hoist::mark(&built),
+                    crate::hoist::mark(&format!("{rows_decl}return {text};"))
                 );
             }
             None => {
@@ -419,7 +421,7 @@ impl Em<'_> {
                     self.mount_templates
                         .mount(&params, built, None, Some(region_site(plan, r)))
                 } else {
-                    format!("({params})=>{{{built}}}")
+                    format!("({params})=>{{{}}}", crate::hoist::mark(&built))
                 };
                 let _ = write!(
                     self.out,

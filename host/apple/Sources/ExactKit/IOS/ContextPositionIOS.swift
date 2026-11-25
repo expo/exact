@@ -6,15 +6,20 @@ extension Presenter {
     /// Context actions belong to the existing editing session. Resigning
     /// it before dispatch can move the panel out from under the same tap.
     func contextRetainsFocus(_ view: UIView) -> Bool {
-        var ancestor: UIView? = view
-        while let current = ancestor {
-            if let node = current as? NodeView, node.props["retainFocus"] == "true" { return true }
-            ancestor = eventParent(of: current)
-        }
-        return carrying("contextTarget").contains { preview in
+        retainsFocus(view, through: { self.eventParent(of: $0) }) || carrying("contextTarget").contains { preview in
             guard preview.props["contextTarget"] != nil, let panel = contextPanel(preview) else { return false }
             return view.isDescendant(of: panel)
         }
+    }
+
+    /// Whether `view`, or an ancestor of it through `parent`, writes `retainFocus` (LLP 1001).
+    package func retainsFocus(_ view: UIView, through parent: (UIView) -> UIView?) -> Bool {
+        var ancestor: UIView? = view
+        while let current = ancestor {
+            if let node = current as? NodeView, node.props["retainFocus"] == "true" { return true }
+            ancestor = parent(current)
+        }
+        return false
     }
 
     private func contextPanel(_ preview: NodeView) -> NodeView? {

@@ -104,7 +104,7 @@ impl Painter {
         let base = [
             tx,
             ty,
-            p.scale * p.press,
+            p.scale.0 * p.press,
             p.rotate,
             // The layer's alpha only where its reader plays the opacity: else
             // the painter draws it into the layer's content (`Painter::node`).
@@ -115,6 +115,7 @@ impl Painter {
             },
             0.0,
             0.0,
+            p.scale.1 * p.press,
         ];
         let pivot = (x + origin.0 + dx, y + origin.1 + dy);
         let taken = self
@@ -171,11 +172,12 @@ impl Painter {
                 let base = [
                     t.translate.0,
                     t.translate.1,
-                    t.scale,
+                    t.scale.0,
                     t.rotate,
                     item.opacity,
                     r,
                     dash,
+                    t.scale.1,
                 ];
                 (ts, t.origin, t.reference, ts.pre_concat(list), base)
             }
@@ -184,7 +186,7 @@ impl Painter {
                 (cx, cy),
                 (0., 0.),
                 own,
-                [0.0, 0.0, 1.0, 0.0, item.opacity, r, dash],
+                [0.0, 0.0, 1.0, 0.0, item.opacity, r, dash, 1.0],
             ),
         };
         let taken = self

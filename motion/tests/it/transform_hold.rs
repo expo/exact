@@ -30,7 +30,7 @@ fn engine() -> Engine {
     e.set_transitions(NODE, spring(SpringConfig::default()))
         .unwrap();
     commit(&mut e, PAIR[0], Value::new(-0.0, 0.0));
-    commit(&mut e, PAIR[1], Value::scalar(1.0));
+    commit(&mut e, PAIR[1], Value::new(1.0, 1.0));
     e.frame();
     e
 }
@@ -38,7 +38,7 @@ fn engine() -> Engine {
 fn moving() -> Engine {
     let mut e = engine();
     commit(&mut e, PAIR[0], Value::new(140.0, -50.0));
-    commit(&mut e, PAIR[1], Value::scalar(2.5));
+    commit(&mut e, PAIR[1], Value::new(2.5, 2.5));
     e.advance(0.04).unwrap();
     e.frame();
     e
@@ -69,7 +69,10 @@ fn values(held: TransformHold) -> [Value; 2] {
 
 #[test]
 fn malformed_second_sample_preserves_both_curves_clock_and_pending_frame() {
-    for bad in [Value::scalar(f64::NAN), Value::new(2.0, 1.0)] {
+    for bad in [
+        Value::new(f64::NAN, f64::NAN),
+        Value::four(2.0, 1.0, 1.0, 0.0),
+    ] {
         let mut e = moving();
         let before = snapshot(&e);
         assert!(e
@@ -114,7 +117,11 @@ fn failed_rebegin_preserves_both_existing_tokens_and_presentations() {
     e.frame();
     let before = snapshot(&e);
     assert_eq!(
-        e.begin_transform_hold(NODE, 0.3, Some([Value::ZERO, Value::new(1.0, 1.0)])),
+        e.begin_transform_hold(
+            NODE,
+            0.3,
+            Some([Value::ZERO, Value::four(1.0, 1.0, 1.0, 0.0)])
+        ),
         Err(EngineError::InvalidValueShape)
     );
     assert_eq!(snapshot(&e), before);
@@ -151,7 +158,7 @@ fn catches_both_midcurve_at_one_time_without_zero_displacement_jump() {
     assert!(e.update_transform_hold(held, 0.15, expected).unwrap());
     assert_eq!(PAIR.map(|p| e.value(NODE, p).unwrap()), expected);
     assert_eq!(e.target(NODE, PAIR[0]), Some(Value::new(140.0, -50.0)));
-    assert_eq!(e.target(NODE, PAIR[1]), Some(Value::scalar(2.5)));
+    assert_eq!(e.target(NODE, PAIR[1]), Some(Value::new(2.5, 2.5)));
     assert!(e.quiescent());
     assert!(e.settle_time().is_none());
     e.frame();
@@ -172,10 +179,22 @@ fn capture_matches_single_valid_controls_during_delay_completion_and_existing_ho
                 declarations.0[0].delay = 0.2;
                 e.set_transitions(NODE, declarations).unwrap();
                 commit(&mut e, PAIR[0], Value::new(120.0, 50.0));
-                commit(&mut e, PAIR[1], Value::scalar(2.0));
+                commit(&mut e, PAIR[1], Value::new(2.0, 2.0));
                 if let Some(property) = held_property {
-                    e.begin_hold(NODE, property, 0.05, Some(Value::scalar(0.7)))
-                        .unwrap();
+                    e.begin_hold(
+                        NODE,
+                        property,
+                        0.05,
+                        Some(Value::new(
+                            0.7,
+                            if property == Property::Scale {
+                                0.7
+                            } else {
+                                0.0
+                            },
+                        )),
+                    )
+                    .unwrap();
                 }
                 e
             };
@@ -203,7 +222,7 @@ fn capture_matches_single_valid_controls_during_delay_completion_and_existing_ho
 fn supplied_presentations_preserve_bits_and_scale_remains_generic() {
     for scale in [-2.0, 0.0, 1.75] {
         let mut e = moving();
-        let shown = [Value::new(-0.0, 12.0), Value::scalar(scale)];
+        let shown = [Value::new(-0.0, 12.0), Value::new(scale, scale)];
         let held = e
             .begin_transform_hold(NODE, 0.1, Some(shown))
             .unwrap()
@@ -211,17 +230,25 @@ fn supplied_presentations_preserve_bits_and_scale_remains_generic() {
         assert_eq!(held.translate().value.x.to_bits(), (-0.0_f64).to_bits());
         assert_eq!(values(held), shown);
         assert_eq!(PAIR.map(|p| e.value(NODE, p).unwrap()), shown);
-        assert_eq!(e.target(NODE, PAIR[1]), Some(Value::scalar(2.5)));
+        assert_eq!(e.target(NODE, PAIR[1]), Some(Value::new(2.5, 2.5)));
     }
 }
 
 #[test]
 fn paired_update_validates_both_values_and_time_before_mutation() {
     for (time, value, error) in [
-        (0.3, Value::new(2.0, 1.0), EngineError::InvalidValueShape),
-        (0.3, Value::scalar(f64::INFINITY), EngineError::NonFinite),
-        (f64::NAN, Value::scalar(2.0), EngineError::NonFinite),
-        (0.0, Value::scalar(2.0), EngineError::ClockWentBackwards),
+        (
+            0.3,
+            Value::four(2.0, 1.0, 1.0, 0.0),
+            EngineError::InvalidValueShape,
+        ),
+        (
+            0.3,
+            Value::new(f64::INFINITY, f64::INFINITY),
+            EngineError::NonFinite,
+        ),
+        (f64::NAN, Value::new(2.0, 2.0), EngineError::NonFinite),
+        (0.0, Value::new(2.0, 2.0), EngineError::ClockWentBackwards),
     ] {
         let mut e = moving();
         let held = e.begin_transform_hold(NODE, 0.1, None).unwrap().unwrap();
@@ -244,10 +271,10 @@ fn one_property_rebegin_rejects_old_pair_before_values_or_clock() {
         e.frame();
         let before = snapshot(&e);
         assert!(!e
-            .update_transform_hold(old, f64::NAN, [Value::scalar(f64::NAN); 2])
+            .update_transform_hold(old, f64::NAN, [Value::new(f64::NAN, f64::NAN); 2])
             .unwrap());
         assert!(!e
-            .update_transform_hold(old, 10.0, [Value::ZERO, Value::scalar(1.0)])
+            .update_transform_hold(old, 10.0, [Value::ZERO, Value::new(1.0, 1.0)])
             .unwrap());
         assert_eq!(snapshot(&e), before);
 
@@ -272,7 +299,7 @@ fn pair_rebegin_invalidates_old_callbacks_without_changing_successor() {
         .begin_transform_hold(
             NODE,
             0.2,
-            Some([Value::new(30.0, 10.0), Value::scalar(1.2)]),
+            Some([Value::new(30.0, 10.0), Value::new(1.2, 1.2)]),
         )
         .unwrap()
         .unwrap();
@@ -292,7 +319,7 @@ fn removed_and_readopted_node_cannot_accept_old_pair() {
     let old = e.begin_transform_hold(NODE, 0.1, None).unwrap().unwrap();
     e.remove(NODE);
     commit(&mut e, PAIR[0], Value::new(90.0, 7.0));
-    commit(&mut e, PAIR[1], Value::scalar(3.0));
+    commit(&mut e, PAIR[1], Value::new(3.0, 3.0));
     let new = e.begin_transform_hold(NODE, 0.2, None).unwrap().unwrap();
     let before = snapshot(&e);
     assert!(!e.update_transform_hold(old, 50.0, values(old)).unwrap());
@@ -314,7 +341,7 @@ fn pair_from_another_engine_is_stale_even_with_equal_node_number() {
     let own = e.begin_transform_hold(NODE, 0.0, None).unwrap().unwrap();
     let before = snapshot(&e);
     assert!(!e
-        .update_transform_hold(other, f64::NAN, [Value::scalar(f64::NAN); 2])
+        .update_transform_hold(other, f64::NAN, [Value::new(f64::NAN, f64::NAN); 2])
         .unwrap());
     assert_eq!(snapshot(&e), before);
     assert!(starts(own).iter().all(|start| e.has_hold(start.token)));
@@ -324,9 +351,9 @@ fn pair_from_another_engine_is_stale_even_with_equal_node_number() {
 fn commits_while_both_held_release_to_latest_targets_and_declaration() {
     let mut e = moving();
     let held = e.begin_transform_hold(NODE, 0.1, None).unwrap().unwrap();
-    let shown = [Value::new(40.0, -12.0), Value::scalar(1.6)];
+    let shown = [Value::new(40.0, -12.0), Value::new(1.6, 1.6)];
     e.update_transform_hold(held, 0.2, shown).unwrap();
-    let targets = [Value::new(100.0, 5.0), Value::scalar(2.0)];
+    let targets = [Value::new(100.0, 5.0), Value::new(2.0, 2.0)];
     e.frame();
     for (p, v) in PAIR.into_iter().zip(targets) {
         commit(&mut e, p, v);
@@ -341,7 +368,7 @@ fn commits_while_both_held_release_to_latest_targets_and_declaration() {
     assert!(e.frame().is_empty());
     for (start, velocity) in starts(held)
         .into_iter()
-        .zip([Value::new(45.0, -2.0), Value::scalar(0.3)])
+        .zip([Value::new(45.0, -2.0), Value::new(0.3, 0.3)])
     {
         assert!(e
             .end_hold(start.token, 0.2, HoldEnd::Release { velocity })
@@ -398,14 +425,17 @@ fn a_held_pair_measures_its_own_release_velocity() {
         let t = i as f64 * 0.01;
         let moved = [
             Value::new(300.0 * t, -100.0 * t),
-            Value::scalar(1.0 + 2.0 * t),
+            Value::new(1.0 + 2.0 * t, 1.0 + 2.0 * t),
         ];
         assert!(e.update_transform_hold(pair, t, moved).unwrap());
     }
     let translate = e.hold_velocity(pair.translate().token, 0.05).unwrap();
     let scale = e.hold_velocity(pair.scale().token, 0.05).unwrap();
     assert!((translate.x - 300.0).abs() < 1e-6 && (translate.y + 100.0).abs() < 1e-6);
-    assert!((scale.x - 2.0).abs() < 1e-6, "scale units per second");
+    assert!(
+        (scale.x - 2.0).abs() < 1e-6 && (scale.y - 2.0).abs() < 1e-6,
+        "scale units per second"
+    );
     assert_eq!(
         e.hold_velocity(pair.scale().token, 0.5),
         Some(Value::ZERO),

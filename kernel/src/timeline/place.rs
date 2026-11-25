@@ -242,17 +242,12 @@ fn scrollport(arena: &NodeArena, scroller: u32, x: bool) -> (f64, f64) {
         };
         return (origin as f64, length as f64);
     }
-    let border = arena.inset(scroller).map(|i| i.border).unwrap_or_default();
-    // `border` is left, top, right, bottom.
-    let (origin, length, start, end) = if x {
-        (frame.x, frame.width, border[0], border[2])
+    let port = arena.scrollport(scroller).unwrap_or(frame);
+    if x {
+        (f64::from(port.x), f64::from(port.width))
     } else {
-        (frame.y, frame.height, border[1], border[3])
-    };
-    (
-        (origin + start) as f64,
-        (length - start - end).max(0.0) as f64,
-    )
+        (f64::from(port.y), f64::from(port.height))
+    }
 }
 
 /// A view timeline's insets in points: an `auto` side is the scroller's
@@ -287,13 +282,21 @@ fn insets(
 fn scroll_max(arena: &NodeArena, scroller: u32, x: bool) -> f64 {
     let frame = arena.frame(scroller);
     let axis = |w: f32, h: f32| if x { w } else { h };
+    let (start, port) = scrollport(arena, scroller, x);
     let extent = if scrolls(arena, scroller) {
         // Taffy's block containers do not always count the end padding in
         // their scrollable overflow; CSS's `scrollWidth` does. Floor it with
         // each in-flow child's extent and that padding.
         let (w, h) = arena.content(scroller);
         let pad = arena.inset(scroller).map(|i| i.padding).unwrap_or_default();
-        let mut extent = axis(w, h);
+        // Taffy's overflow already counts from the padding box's scroll origin.
+        // Measure the children's border boxes from that same edge.
+        let rtl = x
+            && arena
+                .computed_source(scroller, crate::StyleId::Direction)
+                .direction
+                == crate::Direction::Rtl;
+        let mut extent = f64::from(axis(w, h));
         for &child in arena.children(scroller) {
             if arena.blocks.holds(child) || arena.flags(child).has(NodeFlags::HIDDEN) {
                 continue;
@@ -304,9 +307,14 @@ fn scroll_max(arena: &NodeArena, scroller: u32, x: bool) -> f64 {
             {
                 0.0
             } else {
-                axis(pad[2], pad[3])
+                axis(if rtl { pad[0] } else { pad[2] }, pad[3])
             };
-            extent = extent.max(axis(c.x - frame.x + c.width, c.y - frame.y + c.height) + end);
+            let far = if rtl {
+                start + port - f64::from(c.x)
+            } else {
+                f64::from(axis(c.x + c.width, c.y + c.height)) - start
+            };
+            extent = extent.max(far + f64::from(end));
         }
         extent
     } else {
@@ -324,14 +332,7 @@ fn scroll_max(arena: &NodeArena, scroller: u32, x: bool) -> f64 {
                 below.extend_from_slice(arena.children(child));
             }
         }
-        extent
+        f64::from(extent)
     };
-    let (_, port) = scrollport(arena, scroller, x);
-    let border = arena.inset(scroller).map(|i| i.border).unwrap_or_default();
-    let start_border = if x { border[0] } else { border[1] };
-    if scrolls(arena, scroller) {
-        extent as f64 - start_border as f64 - port
-    } else {
-        extent as f64 - port
-    }
+    extent - port
 }

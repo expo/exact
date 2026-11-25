@@ -4,16 +4,10 @@
 //! and apart from `press`; and `pointermove`, each with an optional
 //! `PointerEvent` (LLP 1056 §3 stage 3; the paint diary's F1).
 
+use crate::source::{boxed, NoData};
 use exact_kernel::Kernel;
 use exact_plan::{EventKind, Value};
-use exact_runner::{DataError, DataSource, Event, PointerEvent, Runner};
-
-struct NoData;
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
+use exact_runner::{Event, PointerEvent, Runner};
 
 const MIC: &str = r#"component App
   state recording = false
@@ -38,7 +32,7 @@ fn pointer_down_and_up_run_their_actions_beside_press() {
     let plan = contract::compile(MIC).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -104,7 +98,7 @@ fn pointer_events_hand_their_record_to_an_action_that_takes_it() {
     let plan = contract::compile(PAD).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -160,7 +154,7 @@ fn a_press_hears_the_modifiers_held() {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -196,7 +190,7 @@ fn a_press_hears_where_the_pointer_was() {
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -247,7 +241,7 @@ fn a_board_hears_its_menu_point_its_wheel_its_drop_and_its_unload() {
     let plan = contract::compile(BOARD).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -276,7 +270,13 @@ fn a_board_hears_its_menu_point_its_wheel_its_drop_and_its_unload() {
     assert!(r.take_commands().iter().any(|c| c.name == "preventDefault"));
     r.dispatch(
         world,
-        event(38, "12,30,Shift\ndoc:/3/plan.board\ndoc:/4/b.board"),
+        event(
+            38,
+            concat!(
+                "12,30,Shift\n",
+                r#"[["doc:/3/plan.board","doc:/4/b.board"],"",""]"#
+            ),
+        ),
     )
     .unwrap();
     assert_eq!(
@@ -284,11 +284,15 @@ fn a_board_hears_its_menu_point_its_wheel_its_drop_and_its_unload() {
         Some(&Value::str("2 doc:/3/plan.board+doc:/4/b.board 12"))
     );
     assert!(
-        Event::of_host_kind(38, "12,30\n/etc/passwd").is_err(),
+        Event::of_host_kind(38, concat!("12,30\n", r#"[["/tmp/plan.board"],"",""]"#)).is_err(),
         "only minted handles drop"
     );
     // A folder is a handle as a file is (`fs.stat` tells them apart).
-    r.dispatch(world, event(38, "0,0\ndoc:/5/photos")).unwrap();
+    r.dispatch(
+        world,
+        event(38, concat!("0,0\n", r#"[["doc:/5/photos"],"",""]"#)),
+    )
+    .unwrap();
     assert_eq!(r.slot("dropped"), Some(&Value::str("1 doc:/5/photos 0")));
     r.take_commands();
     r.dispatch(world, event(36, "")).unwrap();
@@ -317,7 +321,7 @@ fn a_column_hears_a_file_drag_enter_and_leave() {
     let plan = contract::compile(COLUMN).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",

@@ -57,7 +57,7 @@ extension NavigationHost {
     /// its Back controls and theirs states, whether the root hears
     /// `navigate`, and what is modal. Where none of these moved, only the
     /// router's place beneath can, and a router op says so (the window's
-    /// bar presents for it); `locationBeneath` is a call to the owner.
+    /// bar presents for it); `locationBeneath` comes with that op's batch.
     var backFacts: [UInt32] {
         guard let (root, route) = pushedRoute else { return [offers(back: true) ? 1 : 0] }
         let controls: [UInt32] = backControls(in: route, of: root).flatMap { control -> [UInt32] in
@@ -142,7 +142,7 @@ extension NavigationHost {
         let control = NavigationBack.control(named: root.props["navigationBack"], among: named, id: \.id, htmlID: { $0.props["id"] },
                                                   pressable: { $0.handlers.contains("press") }, disabled: \.disabled, inActiveRoute: { _ in true })
         return NavigationBack.way(control: control?.id, declared: !named.isEmpty, hearsNavigate: root.handlers.contains("navigate"),
-                                    beneath: { [presenter] in route.props["navigationKey"].flatMap { presenter.session?.runtime.locationBeneath($0) } })
+                                    beneath: { [presenter] in route.props["navigationKey"].flatMap { presenter.session?.locationBeneath($0) } })
     }
 
     /// Whether the navigation root offers Back (`back: true`) or Forward

@@ -2,6 +2,7 @@
 //! own lookups, and refuses a name as the compiler would.
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData};
 use serde_json::Value;
 use std::process::{Command, Output};
 
@@ -310,6 +311,13 @@ fn a_handler_and_a_tag_say_what_they_are() {
     let column = stdout(&vocab(&["column"]));
     assert!(column.contains("column: tag, View"), "{column}");
     assert!(column.contains("flex_direction: column"), "{column}");
+    // A tag lists the card's attributes and events for it, from every line naming it.
+    let textarea = stdout(&vocab(&["textarea"]));
+    assert!(textarea.contains(" autocorrect spellcheck "), "{textarea}");
+    assert!(textarea.contains(" rows markup\n"), "{textarea}");
+    let json: Value = serde_json::from_str(&stdout(&vocab(&["--json", "textarea"]))).unwrap();
+    let attributes = json["attributes"].as_array().unwrap();
+    assert!(attributes.iter().any(|a| a == "spellcheck"), "{json}");
 }
 
 /// LLP 1116.003 D2.2: when a route's `header` becomes the iOS navigation
@@ -723,19 +731,9 @@ fn every_function_has_rows_and_every_written_example_holds() {
         "routes nav\n  home \"/\"\n  item \"/item/:id\"\n\ncomponent App\n  view\n    main\n{views}"
     );
     let plan = contract::compile(&src).unwrap_or_else(|e| panic!("{e}\n{src}"));
-    struct NoData;
-    impl exact_runner::DataSource for NoData {
-        fn query(
-            &mut self,
-            source: &str,
-            _: &[exact_runner::Value],
-        ) -> Result<exact_runner::Value, exact_runner::DataError> {
-            Err(exact_runner::DataError::UnknownSource(source.into()))
-        }
-    }
     let r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -827,12 +825,14 @@ fn no_name_prints_the_card_and_all_prints_every_table() {
         "parseNumber(text) -> option<number>",
         "formatNumber(n,",
         "tags: attributes; on events",
-        "input: value type inputmode min max step",
+        "input textarea: value placeholder maxlength inputmode",
+        "input: type min max step",
         "parts: use X from \"exact:content\"",
         "EmptyState(symbol=\"symbol:sparkles\"",
         "test steps",
         "expect text \"id\"",
-        "ops: a target is a testId",
+        "ops:\n  tree [<target>|--ax]",
+        "tap up (testId, exact text or label)",
         "tap <target>",
         "persist",
         "negative `min` gives the pad its ± key",
@@ -1090,6 +1090,7 @@ fn every_concepts_code_compiles_and_its_names_are_its_own() {
         "titlebar",
         "haptics",
         "toast",
+        "live",
         "var",
     ] {
         let one: Value = serde_json::from_str(&stdout(&vocab(&["--json", name]))).unwrap();
@@ -1355,22 +1356,12 @@ fn symbol_lists_the_roles() {
 /// draws only the other caller's (LLP 1121 stage 9 H, theme2 02:15).
 #[test]
 fn an_empty_symbol_name_is_no_symbol() {
-    struct NoData;
-    impl exact_runner::DataSource for NoData {
-        fn query(
-            &mut self,
-            source: &str,
-            _: &[exact_runner::Value],
-        ) -> Result<exact_runner::Value, exact_runner::DataError> {
-            Err(exact_runner::DataError::UnknownSource(source.into()))
-        }
-    }
     let src = "component App\n  view\n    column testId=\"root\"\n      Row(symbol=\"\")\n      Row(symbol=\"close\")\n\ncomponent Row\n  props\n    symbol: string\n  view\n    row\n      if symbol != \"\"\n        image `symbol:${symbol}`\n      text \"a\"\n";
     let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}"));
-    let plan = contract::bake(plan, NoData).unwrap();
+    let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let r = exact_runner::Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -1403,10 +1394,10 @@ fn an_empty_symbol_name_is_no_symbol() {
     // by an empty `sf/` is (Astra's and Grok's round 1).
     let rows = |lead: &str| {
         let src = format!("component App\n  action go\n  view\n    column testId=\"root\" width=402 height=874\n      list appearance=\"auto\" testId=\"list\" flex=1\n        section\n          button press=go\n            image \"{lead}\"\n            text \"Reply\"\n");
-        let plan = contract::bake(contract::compile(&src).unwrap(), NoData).unwrap();
+        let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
         let mut r = exact_runner::Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             exact_kernel::Kernel::with_monospace(),
             Default::default(),
             "/",

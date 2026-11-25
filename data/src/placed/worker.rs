@@ -2,6 +2,17 @@
 use super::*;
 
 impl<D: DataSource + 'static> Placed<D> {
+    /// Publish rules from the executing instance without waiting for it to
+    /// start (LLP 1027.002 D2). Until publication the runner keeps FIFO.
+    pub(super) fn request_send_replacers(&self) {
+        if let Some(owner) = &self.owner {
+            let _ = owner.lock().unwrap().turn(Job::SendReplacers(
+                self.queued_send_names.clone(),
+                self.queued_send_replacers.clone(),
+            ));
+        }
+    }
+
     pub(super) fn sync_generation(&mut self) {
         if self.generation.as_ref().and_then(|m| m.failure()).is_none() {
             return;
@@ -46,6 +57,12 @@ impl<D: DataSource + 'static> Placed<D> {
                     };
                     let (instance, target, name, args, outcome, snapshot, clock, reply) = match job
                     {
+                        Job::SendReplacers(names, rules) => {
+                            if let Ok(source) = &mut source {
+                                let _ = rules.set(SendReplacers::read(source, names));
+                            }
+                            continue;
+                        }
                         Job::Keep {
                             calls,
                             snapshot,

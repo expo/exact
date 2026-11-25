@@ -268,7 +268,7 @@ pub(crate) fn check(file: &File, root: &Path, strings: Option<&Strings>) -> Vec<
             Some(device) if !named(device) => format!("`{last}` to the app's grants"),
             Some(device) => format!("`{last} purpose.{device}` to the app's grants, with its purpose in strings/{base}.json"),
             // A line that names no target (LLP 1020.002 D9).
-            None if matches!(last.as_str(), "browser.automation" | "payment.google-pay") => {
+            None if matches!(last.as_str(), "browser.automation" | "clipboard.read" | "payment.google-pay") => {
                 format!("`{last}` to the app's grants")
             }
             None => format!("`{last} <its target>` to the app's grants"),

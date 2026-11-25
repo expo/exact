@@ -9,6 +9,7 @@ import com.google.android.gms.tasks.TaskCompletionSource
 import com.google.firebase.FirebaseApp
 import com.google.firebase.installations.FirebaseInstallations
 import com.google.firebase.messaging.FirebaseMessaging
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Native
 import org.json.JSONObject
@@ -72,7 +73,7 @@ class PushRegistrationTest {
     private val app: Context get() = RuntimeEnvironment.getApplication()
     private val main get() = shadowOf(Looper.getMainLooper())
     private lateinit var module: PushModule
-    private fun call(name: String, reply: (JSONObject) -> Unit) = module.later(name, JSONObject(), reply)
+    private fun call(name: String, reply: (JSONObject) -> Unit) = module.later(name, JSONObject(), null, Cause("app"), reply)
 
     @Before fun setup() {
         dev.exact.canvas.Exact.owner = null

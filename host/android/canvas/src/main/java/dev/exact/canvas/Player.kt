@@ -272,7 +272,9 @@ internal class Player(private val fonts: Map<Int, Font>) {
 
     /** A filter open in a replay (op 53): the canvas it draws into, its node (null when it draws unfiltered), and
      * the shift before it. */
-    private class Filtered(val outer: Canvas, val node: android.graphics.RenderNode?, val shiftX: Float, val shiftY: Float)
+    private class Filtered(val outer: Canvas, val node: android.graphics.RenderNode?, val shiftX: Float, val shiftY: Float) {
+        var parentPlacements: ArrayList<PaintedOrigins.Placement>? = null
+    }
     private val filters = ArrayList<Filtered>()
 
     /**
@@ -865,6 +867,26 @@ internal class Player(private val fonts: Map<Int, Font>) {
         // The shift a scroller's rows are drawn with: their node is recorded in the page's own
         // coordinates and then drawn shifted, so nothing inside it is shifted again.
         var groupShift = 0f to 0f
+        var groupParent = placements
+        // Each edge carries the enclosing canvas clip in its recording's coordinates.
+        fun placed(child: android.graphics.RenderNode, x: Float, y: Float, saves: Int = 0, kept: Matrix? = null) {
+            val list = children ?: return
+            val clipped = origins?.frameClips == true && c.saveCount > (if (c === canvas) base + 1 else 1) + saves
+            val clip = if (clipped) {
+                val save = c.save()
+                c.setMatrix(null)
+                c.clipBounds.also { c.restoreToCount(save) }
+            } else null
+            list.add(PaintedOrigins.Placement(child, x, y, clip, kept))
+        }
+        fun closeFilter() {
+            val filter = filters.last()
+            filter.parentPlacements?.let { parent ->
+                children?.let { origins?.record(filter.node, it) }
+                children = parent
+            }
+            c = filterClose(c)
+        }
         var i = from
         while (i < n) {
             when (b.get(i)) {
@@ -887,8 +909,17 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 }
                 27 -> { backdrop(c, b, from, i); i += 14 }
                 42 -> { backdrop(c, b, from, i); i += 14 + 2 * b.get(i + 1) }
-                53 -> { c = filterOpen(c, b, i); i += 2 + b.get(i + 1) }
-                54 -> { c = filterClose(c); i += 1 }
+                53 -> {
+                    val inner = filterOpen(c, b, i)
+                    val filter = filters.last()
+                    if (filter.node != null && children != null) {
+                        placed(filter.node, 0f, 0f)
+                        filter.parentPlacements = children
+                        children = ArrayList()
+                    }
+                    c = inner; i += 2 + b.get(i + 1)
+                }
+                54 -> { closeFilter(); i += 1 }
                 40 -> { shadow(c, b, i); i += 27 }
                 28 -> {
                     native(b.get(i + 1))?.let { node ->
@@ -897,7 +928,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         if (square) c.clipRect(rect) else { path.rewind(); path.addRoundRect(rect, radii, Path.Direction.CW); c.clipPath(path) }
                         current.mapRect(backdropBounds, rect)
                         val m = Matrix(); m.setTranslate(Math.round(backdropBounds.left).toFloat(), Math.round(backdropBounds.top).toFloat())
-                        children?.add(PaintedOrigins.Placement(node, Math.round(backdropBounds.left).toFloat(), Math.round(backdropBounds.top).toFloat()))
+                        placed(node, Math.round(backdropBounds.left).toFloat(), Math.round(backdropBounds.top).toFloat())
                         c.setMatrix(m)
                         c.drawRenderNode(node)
                         c.restore()
@@ -991,21 +1022,32 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 26 -> i += 3 + (b.get(i + 2) + 3) / 4
                 9 -> {
                     val font = fonts[b.get(i + 1)]
-                    val count = b.get(i + 5)
+                    // The runs that follow in the same font, size, colour and slant (a paragraph's lines) are drawn
+                    // with this one: HWUI makes a text blob of each call, and the RenderThread looks each one up
+                    // again every frame. A blurred run is drawn alone. Legacy draws each run as a filled path.
+                    val drawGlyphs = android.os.Build.VERSION.SDK_INT >= 31
+                    var count = 0
+                    var j = i
+                    while (j < n && b.get(j) == 9 && (j == i || drawGlyphs && glyphBlur == 0f && b.get(j + 1) == b.get(i + 1) &&
+                            b.get(j + 2) == b.get(i + 2) && b.get(j + 3) == b.get(i + 3) && b.get(j + 4) == b.get(i + 4))) {
+                        val k = b.get(j + 5)
+                        if (glyphIds.size < count + k) { glyphIds = glyphIds.copyOf((count + k) * 2); positions = positions.copyOf((count + k) * 4) }
+                        var at = j + 6
+                        for (g in count until count + k) {
+                            glyphIds[g] = b.get(at); positions[2 * g] = f(b, at + 1); positions[2 * g + 1] = f(b, at + 2); at += 3
+                        }
+                        count += k
+                        j = at
+                    }
                     if (font != null && count > 0) {
                         glyphPaint.textSize = f(b, i + 2)
                         glyphPaint.color = b.get(i + 3)
                         glyphPaint.textSkewX = f(b, i + 4)
                         glyphPaint.maskFilter = blurFilter(glyphBlur); glyphBlur = 0f
-                        if (glyphIds.size < count) { glyphIds = IntArray(count * 2); positions = FloatArray(count * 4) }
-                        var at = i + 6
-                        for (g in 0 until count) {
-                            glyphIds[g] = b.get(at); positions[2 * g] = f(b, at + 1); positions[2 * g + 1] = f(b, at + 2); at += 3
-                        }
-                        if (android.os.Build.VERSION.SDK_INT >= 31) c.drawGlyphs(glyphIds, 0, positions, 0, count, font, glyphPaint)
+                        if (drawGlyphs) c.drawGlyphs(glyphIds, 0, positions, 0, count, font, glyphPaint)
                         else LegacyGlyphs.draw(c, glyphIds, positions, count, font, glyphPaint)
                     }
-                    i += 6 + 3 * count
+                    i = j
                 }
                 10 -> i += 5 + (b.get(i + 4) + 3) / 4
                 41 -> i = fontAxesEnd(b, i)
@@ -1076,7 +1118,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         c.save()
                         matrix.setTranslate(f(b, i + 2) - shiftX, f(b, i + 3) - shiftY)
                         c.setMatrix(matrix)
-                        children?.add(PaintedOrigins.Placement(r, f(b, i + 2) - shiftX, f(b, i + 3) - shiftY))
+                        placed(r, f(b, i + 2) - shiftX, f(b, i + 3) - shiftY, saves = 1)
                         c.drawRenderNode(r)
                         c.restore()
                     }
@@ -1092,6 +1134,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         matrix.setValues(t)
                         if (shiftX != 0f || shiftY != 0f) matrix.postTranslate(-shiftX, -shiftY)
                         c.setMatrix(matrix)
+                        if (children != null) placed(r, 0f, 0f, saves = 1, kept = Matrix(matrix))
                         c.drawRenderNode(r)
                         c.restore()
                     }
@@ -1108,7 +1151,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 29 -> {
                     // A layer the reader moves and fades: drawn in the stream's coordinates, as a slot is.
                     layer(b.get(i + 1))?.let { s ->
-                        children?.add(PaintedOrigins.Placement(s, -shiftX, -shiftY))
+                        placed(s, -shiftX, -shiftY)
                         c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore()
                     }
                     i += 2
@@ -1136,6 +1179,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         groupShift = shiftX to shiftY; shiftX = 0f; shiftY = 0f
                         saveMatrix()
                         c = g.beginRecording()
+                        groupParent = children
                         children = origins?.let { ArrayList<PaintedOrigins.Placement>() }
                         current.reset(); c.setMatrix(current)
                     }
@@ -1145,12 +1189,12 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         if (!reuseGroups) {
                             g.endRecording()
                             children?.let { origins?.record(g, it) }
-                            children = placements
+                            children = groupParent
                             c = outer!!
                             restoreMatrix()
                             shiftX = groupShift.first; shiftY = groupShift.second
                         }
-                        children?.add(PaintedOrigins.Placement(g, -shiftX, -shiftY))
+                        placed(g, -shiftX, -shiftY)
                         c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(holder?.invoke(grouped) ?: g); c.restore()
                     }
                     node = null
@@ -1167,7 +1211,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
             }
         }
         // A backdrop's replay of what is under it can stop inside a filter.
-        while (filters.size > filterBase) c = filterClose(c)
+        while (filters.size > filterBase) closeFilter()
         canvas.restoreToCount(base)
         matrixDepth = matrixBase
         placements?.let { origins?.record(into, it) }

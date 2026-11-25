@@ -1,7 +1,7 @@
 use Hit from "./shapes.contract"
 
 style FooterLink
-  font-size="var(--text-sm)" color="var(--color-text-secondary)"
+  font-size="var(--text-xs)" font-weight=500 line-height=1.6 color="var(--color-text-secondary)"
 
 component ThemeButton
   props
@@ -23,9 +23,9 @@ component Footer
     choose: action
   view
     footer appearance="none" display="flex" flex-wrap="wrap" align-items="center" justify-content="space-between" gap=16
-      padding="24px 0 8px" border-top="1px solid var(--color-border-secondary)" testId="footer"
-      row flex-wrap="wrap" gap=20 align-items="center"
-        text `© ${year} Exact` font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="copyright"
+      padding="24px 0 8px" border-top="0.5px solid var(--color-border-default)" testId="footer"
+      row flex-wrap="wrap" gap=16 align-items="center"
+        text `© ${year} Exact` font-size="var(--text-xs)" font-weight=500 line-height=1.6 color="var(--color-text-secondary)" testId="copyright"
         link href="https://github.com/expo/exact" class=Hit
           row align-items="center" gap=6
             image "symbol:icon.github" aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
@@ -34,7 +34,7 @@ component Footer
           row align-items="center" gap=6
             image "symbol:document" aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
             text "View llms.txt" class=FooterLink
-      row role="radiogroup" aria-label="Theme" gap=2 padding=2 border="1px solid var(--color-border-secondary)" border-radius="var(--radius-full)"
+      row role="radiogroup" aria-label="Theme" gap=4 padding=4 border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)"
         ThemeButton(value="system", label="System theme", icon="symbol:icon.desktop", theme=theme, choose=choose)
         ThemeButton(value="light", label="Light theme", icon="symbol:icon.sun", theme=theme, choose=choose)
         ThemeButton(value="dark", label="Dark theme", icon="symbol:icon.moon", theme=theme, choose=choose)

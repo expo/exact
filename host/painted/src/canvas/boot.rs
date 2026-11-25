@@ -55,11 +55,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
         crate::surfaces::prepare_gpu(compat);
         // The device's colours, before anything is resolved by a role (D4).
         let palette = colors::palette();
-        if let Some(palette) = &palette {
-            palette.tell();
+        if let Some(colors) = &palette {
+            colors.roles.tell();
         }
         let mut config = crate::app::Config::from_env_static(plan, compat);
         config.preferences = device::configured().map(|d| exact_runner::Preferences {
+            orientation: d.orientation,
             screen_reader: if config.agent {
                 exact_runner::ScreenReader::Unknown
             } else {
@@ -77,6 +78,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
                 Err(e) => eprintln!("exact update: {e}"),
             }
         }
+        config.page = Some(exact_runner::time::PageFacts::new(reader_page));
         let painter = crate::presenter::PainterBoot::canvas(
             crate::presenter::PainterChoice::from_baked(compat),
         )?;
@@ -108,10 +110,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // The reader takes what the presenter asks of the platform (D5),
         // and makes the top layer's windows (D10) and the bars (D11).
         p.serve_requests();
-        p.serve_share_sheet();
+        p.serve_frame_partitions(super::frame_partitions::kept);
         surface::serve(&mut p);
-        if let Some(palette) = &palette {
-            p.set_palette(palette);
+        if let Some(colors) = &palette {
+            p.set_reader_palette(colors);
         }
         eprintln!(
             "exact: canvas {}x{} px, scale {scale}, boot {:.1} ms",
@@ -134,6 +136,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             settling: false,
             force: false,
             scroll_hold: super::scroll::ScrollHold::default(),
+            input_clock: Default::default(),
             prefetching: false,
             quiet: None,
             travel: crate::travel::Travel::default(),
@@ -152,6 +155,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             origin_ns,
             tracks: Default::default(),
             feed: None,
+            told: None,
             presents: Default::default(),
             launch,
             lead: false,
@@ -166,4 +170,16 @@ impl<D: DataSource + Default> CanvasHost<D> {
         }
         Ok(host)
     }
+}
+
+/// What `exactPage()` says from the reader's first settlement: its share
+/// sheet takes text, a link and `app:/` files, and no element's picture (LLP
+/// 1094.000 D7); whether its WebView keeps partitions (LLP 1020.002 D1).
+fn reader_page(plan: &exact_plan::Plan) -> exact_runner::Page {
+    let page = exact_runner::Page {
+        can_share: true,
+        can_share_files: true,
+        ..Default::default()
+    };
+    crate::presenter::with_partitions(page, plan, super::frame_partitions::kept)
 }

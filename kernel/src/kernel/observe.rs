@@ -64,6 +64,9 @@ pub(crate) struct Observations {
     /// block's space: its raw band less Exact's contributions (D11); `None`
     /// while it is unavailable.
     bands: IdMap<u32, Option<[f32; 4]>>,
+    /// Each owner root's own additional insets as its host measured their effect, where it wrote
+    /// them (D11, D3): UIKit's floor can hold a negative one on a child controller.
+    pub(crate) root_effects: IdMap<u32, [f32; 4]>,
     /// The session view's band, in the document's space.
     session: [f32; 4],
     /// Each reader's input, what its lengths resolve against.
@@ -101,6 +104,8 @@ pub(crate) struct Observations {
     passing_keyboard: IdSet<u32>,
     /// The bars (D12): which boxes are styled as one, and their slots' depths.
     pub(crate) bars: super::bar::Bars,
+    /// The navigation chrome beside each route, in points on the physical left and right.
+    side_bars: IdMap<u32, [f32; 2]>,
     /// What each owner's host reports of its margins (D8).
     pub(crate) margins: IdMap<u32, super::margins::OwnerMargins>,
     /// The native targets owners and the session report.
@@ -109,6 +114,11 @@ pub(crate) struct Observations {
     pub(crate) segments: IdMap<u32, std::sync::Arc<crate::style::env::SegmentGrid>>,
     /// The keyboard each owner's host reports, and the policy (D7).
     pub(crate) keyboards: super::keyboard::Keyboards,
+    /// The chrome each owner's host reports (D6).
+    pub(crate) chrome: IdMap<u32, super::owner_update::OwnerChrome>,
+    /// Each owner's map into its window, and the document's (D6's `"window"` space).
+    pub(crate) window_maps: IdMap<u32, super::window_map::WindowMap>,
+    pub(crate) session_window_map: Option<super::window_map::WindowMap>,
 }
 
 impl Observations {
@@ -183,14 +193,15 @@ impl Observations {
     }
 
     /// What a reset keeps: what the host reported for the session, its band,
-    /// its view's targets, the registered targets, its keyboard and the
-    /// keyboard policy, as the arena keeps the environment. What the tree
+    /// its view's targets, the registered targets, its keyboard, the
+    /// keyboard policy and its window map, as the arena keeps the environment. What the tree
     /// held goes with it.
     pub(crate) fn after_reset(&mut self) -> Self {
         Observations {
             session: self.session,
             targets: self.targets.after_reset(),
             keyboards: self.keyboards.after_reset(),
+            session_window_map: self.session_window_map,
             ..Default::default()
         }
     }
@@ -226,6 +237,7 @@ impl Observations {
     pub(crate) fn forget(&mut self, slot: u32) {
         self.targets.forget(slot);
         self.bands.remove(&slot);
+        self.root_effects.remove(&slot);
         self.spaces.remove(&slot);
         self.forget_taken(slot);
         self.passing.remove(&slot);
@@ -233,7 +245,10 @@ impl Observations {
         self.bars.forget(slot);
         self.keyboards.forget(slot);
         self.margins.remove(&slot);
+        self.side_bars.remove(&slot);
         self.segments.remove(&slot);
+        self.chrome.remove(&slot);
+        self.window_maps.remove(&slot);
         self.stopped_reading(slot);
     }
 
@@ -254,6 +269,42 @@ impl Observations {
 }
 
 impl Kernel {
+    /// Set the physical widths of host navigation beside a route (LLP 1123 D9).
+    /// A change owes a layout only where the route has readers of this family.
+    pub fn set_route_bar_insets(
+        &mut self,
+        view: ViewId,
+        sides: [f32; 2],
+    ) -> Result<bool, KernelError> {
+        let slot = self
+            .arena
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        if !sides.iter().all(|v| v.is_finite() && *v >= 0.0) {
+            return Err(LayoutError::InvalidEnv.into());
+        }
+        let observations = &mut self.arena.observations;
+        if observations
+            .side_bars
+            .get(&slot)
+            .copied()
+            .unwrap_or_default()
+            == sides
+        {
+            return Ok(false);
+        }
+        if sides == [0.0; 2] {
+            observations.side_bars.remove(&slot);
+        } else {
+            observations.side_bars.insert(slot, sides);
+        }
+        Ok(
+            observations.forget_readings(&self.arena.readers.observed, Family::Bar.bits(), |o| {
+                o == Some(slot)
+            }),
+        )
+    }
+
     /// Set the band of the content owner whose root is `view`, top right
     /// bottom left in its block's space: its controller view's raw
     /// `safeAreaInsets` (LLP 1123 D2's owner update, D9), with Exact's
@@ -282,10 +333,23 @@ impl Kernel {
             .ok_or(LayoutError::UnknownView(view))?;
         check_band(band.as_ref(), contributions)?;
         let cleared = super::block::clearance(&self.arena, slot);
-        let observations = &mut self.arena.observations;
         let band = band.map(|raw| provenance::incoming(raw, contributions));
+        // The root's own additional insets as UIKit applied them, which D3 clears
+        let root = self.arena.local_id(slot);
+        let effect = (contributions.iter())
+            .find(|c| c.node == root && c.operation == provenance::Operation::AdditionalInsets)
+            .map(|c| c.effect);
+        let observations = &mut self.arena.observations;
+        let effect_moved = match effect {
+            Some(e) => observations.root_effects.insert(slot, e) != Some(e),
+            None => observations.root_effects.remove(&slot).is_some(),
+        };
         if observations.bands.insert(slot, band) == Some(band) {
-            return Ok(false);
+            // The root's own effect alone moved: what it moves is the clearance and its slots
+            let moved = effect_moved && super::block::clearance(&self.arena, slot) != cleared;
+            return Ok(
+                moved || effect_moved && super::block::Blocks::slots_moved(&self.arena, slot)
+            );
         }
         observations.invalidate_band(Some(slot));
         let moved = super::block::clearance(&self.arena, slot) != cleared;
@@ -977,6 +1041,17 @@ fn measure_families(arena: &NodeArena, slot: u32, space: &Space, read: Component
                 depths[at + e] = (sides[e][1] - sides[e][0]).max(0.0);
             }
         }
+    }
+    if read & Family::Bar.bits() != 0 {
+        let [left, right] = space
+            .owner
+            .and_then(|owner| arena.observations.side_bars.get(&owner))
+            .copied()
+            .unwrap_or_default();
+        let at = Family::Bar as usize * 4;
+        let physical = [0.0, right, 0.0, left];
+        observed[at..at + 4].copy_from_slice(&physical.map(Some));
+        depths[at..at + 4].copy_from_slice(&physical);
     }
     let keyboard = super::keyboard::reads_keyboard(read)
         .then(|| super::keyboard::readings(arena, slot, space))

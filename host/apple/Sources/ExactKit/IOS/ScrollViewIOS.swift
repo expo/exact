@@ -31,22 +31,126 @@ package final class PlainView: UIView {
     }
 }
 
+extension UIEdgeInsets {
+    /// Each side with `other`'s added.
+    func adding(_ other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(top: top + other.top, left: left + other.left, bottom: bottom + other.bottom, right: right + other.right)
+    }
+    /// Each side less `other`'s.
+    func less(_ other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(top: top - other.top, left: left - other.left, bottom: bottom - other.bottom, right: right - other.right)
+    }
+}
+
+/// A scroll view whose indicators take its own safe area where UIKit's adjustment gives them none
+/// (`SafeIndicatorTerm`): Exact's `ScrollView` and a grouped list's collection.
+package protocol SafeIndicators: UIScrollView {
+    /// D14's writer writes the indicator insets whole (`ScrollInsetsIOS.write`), the side bands among its terms, and
+    /// the term is none of them.
+    var writtenWhole: Bool { get set }
+}
+
+/// What a scroll view's own safe area adds to its indicators' insets while UIKit's adjustment, which adds its top and
+/// bottom itself, is off: its top and bottom, and the horizontal indicator its sides, so that one's track keeps within
+/// the area. A page band turns the adjustment off while it bands the scroll view, so the band and the safe area are
+/// each counted once (`NodeView.bandScroll`). The vertical indicator takes no side. UIKit's adjustment adds the side
+/// safe area again to a side inset written; with none, the vertical indicator lies where UIKit's own scroll view's
+/// does, outside the layout margins and so never over content that keeps to them: on the iPhone Duo's cover screen
+/// under the strip, at the screen's edge (460 of 466), the adjustment on or off; under a controller's additional side
+/// inset, at the inset's inner edge while the adjustment is on and at the scroll view's side while it is off. The
+/// term moves as a difference, as the padding edge's (`ScrollView.paddingInset`), the keyboard's and a page band's
+/// do, so each leaves the others' in place; its scroll view syncs it as its safe area, its adjustment or
+/// `writtenWhole` changes.
+package struct SafeIndicatorTerm {
+    private var applied = (vertical: UIEdgeInsets.zero, horizontal: UIEdgeInsets.zero)
+
+    package init() {}
+
+    package mutating func sync(_ scroll: some SafeIndicators) {
+        let safe = scroll.safeAreaInsets
+        let off = !scroll.writtenWhole && !scroll.automaticallyAdjustsScrollIndicatorInsets
+        let vertical = off ? UIEdgeInsets(top: safe.top, left: 0, bottom: safe.bottom, right: 0) : .zero
+        let horizontal = off ? safe : .zero
+        if vertical != applied.vertical {
+            scroll.verticalScrollIndicatorInsets = scroll.verticalScrollIndicatorInsets.adding(vertical.less(applied.vertical))
+            applied.vertical = vertical
+        }
+        if horizontal != applied.horizontal {
+            scroll.horizontalScrollIndicatorInsets = scroll.horizontalScrollIndicatorInsets.adding(horizontal.less(applied.horizontal))
+            applied.horizontal = horizontal
+        }
+    }
+}
+
 /// A scroll container — the viewport over the document, and a node whose
 /// effective `overflow` scrolls. The platform pans it (LLP 1002 D4: scroll
 /// always wins; UIKit does not chain a pan out of a nested scroll view at
 /// its edge). Which axes it scrolls comes from the node's rows; a tap's
 /// wheel (the agent's) applies the web's chaining rule itself
 /// (`AgentIOS.swift`).
-package class ScrollView: UIScrollView {
+package class ScrollView: UIScrollView, SafeIndicators {
     var scrollingNode: NodeView? { (superview as? NodeView) ?? (self as? Viewport)?.documentNode }
     /// Where it last came to rest along x and y, and on which snap area (`ScrollSnapIOS.swift`).
     var snapRested = [ScrollSnap.Rested(), ScrollSnap.Rested()]
     /// UIKit's paging is on because its snap is a pager's (`ScrollSnapIOS.swift`).
-    var snapPages = false
+    package internal(set) var snapPages = false
     package override func layoutSubviews() {
         super.layoutSubviews()
         syncIndicators()
         keepPlatformViewsOver()
+        holdPaddingClip()
+    }
+    /// Its node's padding edge, in the node's coordinates, while a border puts that edge inside the scroll view
+    /// (`NodeView.syncScrollCorner`), `inset` from its sides by the border's widths. It masks the layer, whose
+    /// coordinates scroll with the bounds, so each layout, which UIKit runs as the bounds move, puts it back over
+    /// the node's box, in that layout's own transaction and with no animation of its own. The mask cuts everything
+    /// in the layer, UIKit's scroll indicators too, which lie at the scroll view's edge: they keep inside it by the
+    /// same widths (`paddingInset`), between the border and the padding edge, where
+    /// [CSS has a scrollbar](https://drafts.csswg.org/css-overflow-3/#scrollbar-gutter-property).
+    private var paddingClip: CAShapeLayer?
+    func clip(toPaddingEdge edge: CGPath?, inset: UIEdgeInsets) {
+        guard let edge else {
+            if let clip = paddingClip, layer.mask === clip { layer.mask = nil }
+            paddingClip = nil
+            return paddingInset = .zero
+        }
+        let clip = paddingClip ?? CAShapeLayer()
+        if paddingClip == nil {
+            clip.anchorPoint = .zero
+            clip.fillColor = CGColor(gray: 1, alpha: 1)
+            // It is where the scroll is at once: a layer no view owns would ease to each new position.
+            clip.actions = ["position": NSNull(), "path": NSNull()]
+            paddingClip = clip
+        }
+        if clip.path != edge { clip.path = edge }
+        if layer.mask !== clip { layer.mask = clip }
+        holdPaddingClip()
+        paddingInset = inset
+    }
+    private func holdPaddingClip() {
+        guard let clip = paddingClip, layer.mask === clip else { return }
+        let origin = CGPoint(x: bounds.minX - frame.minX, y: bounds.minY - frame.minY)
+        if clip.position != origin { clip.position = origin }
+    }
+    /// What the padding edge's mask adds to both indicators' insets on each side: the border's widths while it
+    /// masks, else none. It moves as a difference, as the keyboard's and a page band's terms do
+    /// (`KeyboardAvoidanceIOS.swift`, `PageEdgesIOS.swift`), so each leaves the others' in place and the insets are
+    /// as they were once the border goes. D14's writer, which writes them whole, adds it (`ScrollInsetsIOS.write`).
+    var paddingInset = UIEdgeInsets.zero {
+        didSet {
+            guard paddingInset != oldValue else { return }
+            let moved = UIEdgeInsets(top: paddingInset.top - oldValue.top, left: paddingInset.left - oldValue.left,
+                                     bottom: paddingInset.bottom - oldValue.bottom, right: paddingInset.right - oldValue.right)
+            verticalScrollIndicatorInsets = verticalScrollIndicatorInsets.adding(moved)
+            horizontalScrollIndicatorInsets = horizontalScrollIndicatorInsets.adding(moved)
+        }
+    }
+    private var safeIndicators = SafeIndicatorTerm()
+    package var writtenWhole = false { didSet { safeIndicators.sync(self) } }
+    package override var automaticallyAdjustsScrollIndicatorInsets: Bool { didSet { safeIndicators.sync(self) } }
+    package override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        safeIndicators.sync(self)
     }
     /// UIKit exposes an indicator and its thumb to accessibility even when
     /// the axis has no range. Keep the requested visibility across resizes
@@ -82,7 +186,7 @@ package class ScrollView: UIScrollView {
     package override var bounds: CGRect {
         get { super.bounds }
         set {
-            guard UIView.inheritedAnimationDuration > 0, let node = scrollingNode, let presenter = node.presenter else { return super.bounds = newValue }
+            guard Presenter.animationMayBeOpen, let node = scrollingNode, let presenter = node.presenter else { return super.bounds = newValue }
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
     }
@@ -204,7 +308,7 @@ package class ScrollView: UIScrollView {
     /// The direction is the velocity, or the movement that crossed the slop
     /// while UIKit has none yet, as a photo's yield reads it (LLP 1057.001
     /// rule 2), so the drag it steps aside from is taken here.
-    func admitsPan(velocity: CGPoint, translation: CGPoint, start: CGPoint) -> Bool {
+    package func admitsPan(velocity: CGPoint, translation: CGPoint, start: CGPoint, chain: Bool = true) -> Bool {
         let direction = velocity == .zero ? translation : velocity
         var view = hitTest(start, with: nil)
         if CanvasInputs.owns(view) { return false }
@@ -216,7 +320,7 @@ package class ScrollView: UIScrollView {
             view = current.superview
         }
         if let owner = scrollingNode, !owner.allowsTouchPan(direction) { return false }
-        return !handsOff(direction)
+        return !chain || !handsOff(direction)
     }
     #if os(iOS)
     /// A zoomable scroller's pinch (LLP 1057.001.000 §3): rule 2, where
@@ -249,6 +353,9 @@ package class ScrollView: UIScrollView {
         // axis this view scrolls under `none`.
         let still = { (axis: String) in owner.style["overscroll_behavior_\(axis)"]?.string == "none" }
         bounces = !(behavior == "none" || (scrollsX && still("x")) || (scrollsY && still("y")))
+        #if os(iOS)
+        if (owner.heightRecognizer as? SheetScrollGesture)?.takesEdge(in: self, direction: velocity) == true { return false }
+        #endif
         return chains(velocity)
     }
     /// `handsOff`'s answer without its side effect: whether a drag in

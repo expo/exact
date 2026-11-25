@@ -4,7 +4,7 @@ import Foundation
 
 private final class Camera: ExactTrackOwner {
     var consumers = 0
-    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, origin: String) throws -> ExactSubscription {
+    func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, cause: ExactTrackCause) throws -> ExactSubscription {
         consumers += 1
         consumer.live(video: nil)
         return ExactSubscription { self.consumers -= 1 }

@@ -20,7 +20,7 @@ export function grantLines(grants, table = readFileSync(resolve(ROOT, 'runner/sr
   };
   const device = (name) => row(name).purpose ? `device.${name} purpose.<key>` : `device.${name}`;
   const targets = { 'auth.apple': '<client id>', 'auth.google': '<client id>', 'auth.passkey': '<rp id>', 'payment.apple-pay': '<merchant id>' };
-  const alone = ['browser.automation', 'payment.google-pay', 'doc.keep'];
+  const alone = ['browser.automation', 'clipboard.read', 'payment.google-pay', 'doc.keep'];
   return grants.map((grant) => {
     if (grant.startsWith('device.')) {
       const name = grant.slice('device.'.length), { needs } = row(name);

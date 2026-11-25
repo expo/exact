@@ -364,8 +364,8 @@ final class MarkupEditorTests: XCTestCase {
         XCTAssertEqual(f.selectedRange(), NSRange(location: 9, length: 0), "clamped as HTML clamps it")
     }
 
-    /// Each `setRangeText` is one native undo step of its own (LLP 1045 D1,
-    /// issue #792): two in one action are two, and the typing before them,
+    /// Each `setRangeText` is one native undo step of its own (LLP 1045 D1):
+    /// two in one action are two, and the typing before them,
     /// whose event group is still open, stays a step of its own.
     func testEachRangeEditIsOneUndoStep() throws {
         let (p, node, f, window) = markdownField("")

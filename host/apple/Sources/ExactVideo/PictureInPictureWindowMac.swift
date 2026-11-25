@@ -179,7 +179,7 @@ final class PictureInPictureWindow: NSObject, NSWindowDelegate {
 
     // MARK: Geometry
 
-    private static var screen: NSRect { (NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900) }
+    private static var screen: NSRect { (AgentDisplay.named ?? NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900) }
 
     /// Where the window opens, for a picture of `size` pixels.
     private func openingFrame(_ size: NSSize) -> NSRect {

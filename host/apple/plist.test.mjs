@@ -358,3 +358,33 @@ test('every app plist takes the version inputs, defaulting only unset variables'
     }
   }
 });
+
+test('vendor keys reach the app bundle last and as typed, never a clip or the sample host, and a package key is not overwritten', async () => {
+  const { withVendorReach } = await import('../../scripts/install-page.mjs');
+  const ios = { GADApplicationIdentifier: 'ca-app-pub-0~1' };
+  const macos = { SUFeedURL: 'https://example.com/appcast.xml', SUPublicEDKey: 'a+b/c=', SUScheduledCheckInterval: 86400, SUEnableAutomaticChecks: false, Vendor: { list: [1, 2.5, 'three'] } };
+  const app = { id: 'dev.exact.vendor', displayName: 'Vendor', name: 'vendor', manifest: { host: { ios: { infoPlist: ios }, macos: { infoPlist: macos } } } };
+  const mac = flat(macInfoPlist(app));
+  assert.match(mac, /<key>SUFeedURL<\/key><string>https:\/\/example.com\/appcast.xml<\/string><key>SUPublicEDKey<\/key><string>a\+b\/c=<\/string><key>SUScheduledCheckInterval<\/key><integer>86400<\/integer><key>SUEnableAutomaticChecks<\/key><false\/><key>Vendor<\/key><dict><key>list<\/key><array><integer>1<\/integer><real>2.5<\/real><string>three<\/string><\/array><\/dict><\/dict>/);
+  assert.doesNotMatch(mac, /GADApplicationIdentifier/);
+  for (const plist of [infoPlist(app), infoPlist(app, false, { tv: true })]) {
+    assert.match(flat(plist), /<key>GADApplicationIdentifier<\/key><string>ca-app-pub-0~1<\/string><\/dict>/);
+    assert.doesNotMatch(plist, /SUFeedURL/);
+  }
+  for (const options of [{ id: 'dev.exact.vendor.Clip', clip: true }, { clip: true }, { id: 'dev.exact.vendor.host' }]) assert.doesNotMatch(infoPlist(app, false, options), /GADApplicationIdentifier/);
+  assert.doesNotMatch(macInfoPlist(app, { vendor: false }), /SUFeedURL/);
+  const proto = flat(macInfoPlist({ ...app, manifest: { host: { macos: { infoPlist: JSON.parse('{"__proto__": "kept"}') } } } }));
+  assert.match(proto, /<key>__proto__<\/key><string>kept<\/string>/);
+  const reach = { packages: [{ extension: 'purchases', key: 'SUFeedURL', value: true }] };
+  assert.throws(() => macInfoPlist(app, { reach }), /host\.macos\.infoPlist\.SUFeedURL: purchases's Apple implementation writes this key/);
+  if (process.platform === 'darwin') {
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-vendor-plist-'));
+    try {
+      writeFileSync(resolve(dir, 'Info.plist'), macInfoPlist(app));
+      const lint = childProcess.spawnSync('plutil', ['-extract', 'SUScheduledCheckInterval', 'raw', resolve(dir, 'Info.plist')], { encoding: 'utf8' });
+      assert.equal(lint.stdout.trim(), '86400', lint.stderr);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+  assert.deepEqual(withVendorReach([], app.manifest).map(r => r.grant), ['Info.plist GADApplicationIdentifier (iOS)', ...Object.keys(macos).map(k => `Info.plist ${k} (macOS)`)]);
+  assert.equal(withVendorReach(null, app.manifest), null);
+});

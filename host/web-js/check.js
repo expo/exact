@@ -6,7 +6,7 @@
 // the viewport's sides. Read from the page, never a second model; the
 // background a text stands on is the nearest fill painted under it (LLP
 // 1116.006 D5), else the driver's, from the pixels.
-import { inertAncestor } from './navigation.js';
+import { inertAncestor, viewChildren } from './navigation.js';
 const CONTROL = 'button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [data-exact-on~="press"]';
 // A user agent's own control at its own size (WCAG 2.5.8's exception), unless the author sized it.
 const AGENT_SIZED = 'input[type="checkbox"], input[type="radio"], input[type="range"], input[type="color"], input[type="date"], input[type="time"], input[type="datetime-local"], select, progress';
@@ -41,14 +41,14 @@ export function observe(views, inactive = () => false) {
     const words = document.createRange(); words.selectNodeContents(el);
     return words.getBoundingClientRect();
   };
-  const shown = (el, b) => {
+  const shown = (el, b, allowEmptyAxis = false) => {
     let rendered = el;
     if (getComputedStyle(el).display === 'contents') {
       if (getComputedStyle(el).visibility !== 'visible') return false;
       do { rendered = rendered.parentElement; } while (rendered && getComputedStyle(rendered).display === 'contents');
       if (!rendered || getComputedStyle(rendered).contentVisibility === 'hidden') return false;
     }
-    return b.width > 0 && b.height > 0
+    return (allowEmptyAxis ? b.width > 0 || b.height > 0 : b.width > 0 && b.height > 0)
       && (!rendered.checkVisibility || rendered.checkVisibility({ opacityProperty: true, visibilityProperty: rendered === el }))
       && !inertAncestor(el) && !el.closest('[data-exiting]') && (!modal || modal.contains(el)) && !inactive(el);
   };
@@ -161,6 +161,63 @@ export function observe(views, inactive = () => false) {
     const room = parent.clientWidth - parseFloat(ps.paddingLeft) - parseFloat(ps.paddingRight), past = content + pad - room;
     return pad > 0.5 && past > 1.5 && content <= room + 1.5 ? { by: viewOf(parent), dx: r2(past), pad: r2(pad), width: written } : null;
   };
+  const fixedHeightBetween = (el, sheet) => {
+    for (let e = el.parentElement; e && e !== sheet; e = e.parentElement) {
+      if (/^[\d.]+(?:px|rem|em)$/.test(authored(e, 'height'))) return true;
+    }
+    return false;
+  };
+  // A zero-length port still has a position. It may lie on its parent's edge, provided the parent itself is visible.
+  const observeScroll = (el, cs, b, item) => {
+    const list = el.$list;
+    if (list && (!list.index.len || list.portUnknown)) return;
+    const scrollable = value => value === 'auto' || value === 'scroll';
+    const horizontal = scrollable(cs.overflowX) && scrollable(authored(el, 'overflow-x'));
+    for (const axis of ['y', 'x']) {
+      const y = axis === 'y', size = y ? 'height' : 'width', client = y ? el.clientHeight : el.clientWidth;
+      const content = y ? el.scrollHeight : el.scrollWidth;
+      if (list ? list.axis !== axis : !(y ? scrollable(cs.overflowY) : horizontal)) continue;
+      if (client > 44 || content <= client) continue;
+      // CSSOM rounds client sizes. Restore the fractional part of the padding box without counting a scrollbar in the port.
+      const sides = y ? ['Top', 'Bottom'] : ['Left', 'Right'];
+      const paddingBox = sides.reduce((n, side) => n + (cs.boxSizing === 'border-box' ? -parseFloat(cs['border' + side + 'Width']) : parseFloat(cs['padding' + side])), parseFloat(cs[size]));
+      const port = Math.max(0, r2(client + paddingBox - Math.round(paddingBox)));
+      const implicitY = y && horizontal && !scrollable(authored(el, 'overflow-y'));
+      if (port >= 44 || (implicitY && content - port < 44)) continue;
+      const clip = visible(el, { left: 0, top: 0, right: W, bottom: H });
+      const overlaps = (lo, hi, start, length, allowZero) => length > 0 && (allowZero && hi === lo
+        ? lo >= start && lo <= start + length : Math.min(hi, start + length) > Math.max(lo, start));
+      if (!overlaps(b.left, b.right, clip.x, clip.w, !y) || !overlaps(b.top, b.bottom, clip.y, clip.h, y)) continue;
+      const sheet = el.closest('[navigationPresentation="modal"], [data-exact-in-sheet]');
+      if (y && sheet && W < 900 && H >= 480 && (sheet.getAnimations().some(a => a.playState === 'running') ||
+          sheet.$sheetCanGrow && sheet.getBoundingClientRect().height < H - 12 && !fixedHeightBetween(el, sheet))) continue;
+      // Only a measured row supports a claim about a positive port. A zero port hides even an unmounted row.
+      let first;
+      if (list && !port) first = 44;
+      else {
+        let children = viewChildren(el);
+        if (!el.hasAttribute('data-exact-list') && children.length === 1 && children[0].childElementCount > 1) children = viewChildren(children[0]);
+        for (const child of children) {
+          if (list && !child.hasAttribute('data-listitemkey')) continue;
+          const bounds = box(child);
+          if (shown(child, bounds)) { first = bounds[size]; break; }
+        }
+      }
+      if (!(port < Math.min(44, first))) continue;
+      const parent = getComputedStyle(el.parentElement);
+      const alongFlex = parent.display.includes('flex') && parent.flexDirection.startsWith('column') === y;
+      const props = [size, 'max-' + size];
+      if (alongFlex && cs.flexGrow === '0' && cs.flexShrink === '0') props.push('flex-basis');
+      const sized = props.some(prop => {
+        const said = authored(el, prop);
+        if (!said) return false;
+        const value = el.computedStyleMap?.().get(prop)?.toString() ?? said;
+        if (['auto', 'none', 'initial', 'unset'].includes(value)) return false;
+        return !value.endsWith('px') || parseFloat(value) <= parseFloat(cs[size]) + 0.5;
+      });
+      if (!sized) items.push({ ...item, squeezed: { axis, port, content } });
+    }
+  };
   const page = document.scrollingElement;
   // The box that covers `el` where `hit` is: the subtree beside `el` that `hit` is in. A subtree drawn around `el`, as a web
   // sheet's header is (one grid over the whole sheet, its title above the content and its buttons at its foot), covers only
@@ -210,9 +267,13 @@ export function observe(views, inactive = () => false) {
   const all = [...document.querySelectorAll('#exact-root *')];
   for (const el of all) {
     if (!ids.has(el) || el.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue;
-    const b = box(el);
-    if (!shown(el, b)) continue;
+    const b = box(el), scroller = el.dataset.scroll === 'true';
+    if (!shown(el, b, scroller)) continue;
     const cs = getComputedStyle(el), item = { id: ids.get(el), x: r2(b.x), y: r2(b.y), w: r2(b.width), h: r2(b.height) };
+    if (scroller) {
+      observeScroll(el, cs, b, item);
+      if (!b.width || !b.height) continue;
+    }
     // A run of a paragraph that wraps is a box per line (CSS Inline 3 §2): its box bounds them all, and takes in the ends of
     // lines it shares with the runs before and after it. The driver judges such a run by its lines.
     const lines = cs.display === 'inline' ? [...el.getClientRects()].filter((r) => r.width > 0 && r.height > 0) : [];

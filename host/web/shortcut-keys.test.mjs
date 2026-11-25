@@ -1,34 +1,28 @@
-import { viewParent, viewChildren } from './navigation/lists.js';
 // Issue #110: an aria-keyshortcuts chord whose key types no Latin character
 // (Korean 2-Set's ㅠ on KeyB, Russian, Greek) is its physical key's (`code`),
 // as web apps match; a Latin character is the key wherever it is (AZERTY,
 // Dvorak, German's ö), so one chord fires, never two.
 import { test, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { formatShortcut, resolveShortcuts } from './navigation/environment.js';
+import { glueDeclarations, hostFixtureFile, inputFixtureSource } from './tests/glue-fixture.mjs';
 import { Script } from 'node:vm';
 
-let inputSource = readFileSync(new URL('./input-glue.js', import.meta.url), 'utf8').replace(/^import \{ viewChildren, viewParent \} from '\.\/navigation\.js';\n/m, '');
-for (const name of ['prompt-glue', 'alert-message']) {
-  const stripped = inputSource.replace(new RegExp(`^import\\s+["']\\./${name}\\.js["'];[^\\n]*\\n`, 'm'), '');
-  if (stripped === inputSource) throw new Error(`input glue must retain its ${name} side-effect import`);
-  inputSource = stripped;
-}
-const inputCode = inputSource.replace(/^export (async function|function|const) /gm, '$1 ');
-const inputScript = new Script(`${inputCode}\ncreateInputHandlers({ root, views: new Map(), retiredViews: new WeakSet(), ready: () => true, inertAncestor: () => false, dispatch() {} });`, { filename: 'input-glue.js' });
+const inputScript = new Script(`${await inputFixtureSource()}\nexact.createInputHandlers({ root, views: new Map(), retiredViews: new WeakSet(), ready: () => true, inertAncestor: () => false, dispatch() {} });`, { filename: 'input-glue.js' });
 // `shown`: the buttons have boxes; `marked`: each is a Back control its route's bar stands for (navigation.js).
 function page(chords, { shown = true, marked = false } = {}) {
   const clicks = [], listeners = [];
   const buttons = chords.map(chord => ({ isConnected: true, disabled: false, getClientRects: () => (shown ? [{}] : []),
     hasAttribute: name => marked && name === 'data-exact-bar-back', getAttribute: () => chord, click() { clicks.push(chord); } }));
-  const context = { viewParent, viewChildren,
-    document: { addEventListener(kind, fn, capture) { if (kind === 'keydown' && capture) listeners.push(fn); }, activeElement: { closest: () => null },
+  const querySelectorAll = selector => selector === 'button[aria-keyshortcuts]' ? buttons : [];
+  const context = { exact: {},
+    document: { querySelectorAll, addEventListener(kind, fn, capture) { if (kind === 'keydown' && capture) listeners.push(fn); }, activeElement: { closest: () => null },
       getElementById: id => (id === 'exact-snap' ? {} : null), styleSheets: [], documentElement: { dataset: {} } },
     getComputedStyle: () => ({ visibility: 'visible' }),
     // What the input glue reads as it starts that no chord here touches: its sheets' observers, hover, looks.
     MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
     queueMicrotask, Element: class {}, matchMedia: () => ({ matches: false, addEventListener() {} }),
     addEventListener() {}, removeEventListener() {},
-    root: { querySelectorAll: s => (s.includes('aria-modal') ? [] : buttons), addEventListener() {}, contains: () => true },
+    root: { querySelectorAll, addEventListener() {}, contains: () => true },
   };
   inputScript.runInNewContext(context);
   const key = (key, code, extra = {}) => {
@@ -68,4 +62,37 @@ test('the fallback keeps the chord\'s modifiers and refuses keys it cannot name'
 test('a Back control the bar stands for keeps its chord', () => {
   const hidden = page(['Meta+['], { shown: false }), marked = page(['Meta+['], { shown: false, marked: true });
   expect([hidden.key('[', 'BracketLeft'), hidden.clicks, marked.key('[', 'BracketLeft'), marked.clicks]).toEqual([false, [], true, ['Meta+[']]);
+});
+
+test('the Wasm prop writer resolves a portable list when setting and updating it', () => {
+  const source = hostFixtureFile(new URL('./wasm/views.js', import.meta.url), 'utf8');
+  const write = new Script(glueDeclarations(source, ['applyProps']) + '\napplyProps');
+  const element = { setAttribute(k, v) { this[k] = v; }, removeAttribute(k) { delete this[k]; } };
+  const key = 'aria-keyshortcuts';
+  for (const [nav, primary] of [[{ platform: 'iPad' }, 'Meta'], [{ userAgentData: { platform: 'Linux' } }, 'Control']]) {
+    const apply = write.runInNewContext({ host: { inputReady: true }, HTMLIFrameElement: class {}, HTMLImageElement: class {}, HTMLMediaElement: class {},
+      syncMedia() {}, syncMarkup() {}, resolveShortcuts: chords => resolveShortcuts(chords, nav) });
+    apply(element, { [key]: 'Escape\u0085Mod+O' });
+    expect(element[key]).toBe('Escape ' + primary + '+O');
+    apply(element, { [key]: 'Control+Mod\uFEFFMod+P' });
+    expect(element[key]).toBe(primary + '+P');
+    apply(element, { [key]: 'Escape Mod+Hyper+K Mod+𐐀' });
+    expect(element[key]).toBe('Escape');
+    apply(element, { [key]: 'Control+Mod' });
+    expect(element[key]).toBeUndefined();
+  }
+});
+
+test('named keys, functions and modifier order use the reader’s notation', () => {
+  for (const [chord, apple, windows] of [
+    ['Meta+Shift+Alt+Control+ArrowUp', '⌃⌥⇧⌘↑', 'Windows logo key+Ctrl+Alt+Shift+Up arrow'],
+    ['Mod+ß', '⌘ß', 'Ctrl+ß'], ['Mod+Insert', '⌘Insert', 'Ctrl+Insert'], ['Mod+𐐀', '', ''],
+    ['Mod+Enter', '⌘↩', 'Ctrl+Enter'], ['Space', 'Space', 'Spacebar'], ['Escape', '⎋', 'Esc'],
+    ['Mod++', '⌘+', 'Ctrl+Plus sign'], ['F35', 'F35', 'F35'], ['F36', '', ''],
+    ['Mod+Meta+O', '', ''], ['Mod+Control+O', '', ''], ['Hyper+O', '', ''], ['Mod+O Mod+P', '', ''],
+  ]) {
+    expect(formatShortcut(chord, { platform: 'MacIntel' })).toBe(apple);
+    expect(formatShortcut(chord, { platform: 'Win32' })).toBe(windows);
+    expect(formatShortcut(chord, {})).toBe('');
+  }
 });

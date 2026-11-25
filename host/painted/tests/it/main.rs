@@ -19,6 +19,7 @@ mod image;
 mod list_rows;
 mod live;
 mod media_session;
+mod per_axis_scale;
 mod presence;
 mod svg;
 mod timeline;

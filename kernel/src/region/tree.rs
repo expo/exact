@@ -1,4 +1,7 @@
-use super::{BoxFacts, RegionFrame, RegionGeometry, RegionOffset, OWNER, REGION_NODES};
+use super::{
+    BoxFacts, RegionFrame, RegionGeometry, RegionMoves, RegionOffset, RegionPosition, OWNER,
+    REGION_NODES,
+};
 use crate::{
     arena::NodeArena, layout::LayoutTree, style::taffy_style, Frame, LayoutError, NodeType, Offer,
     TextMeasurer,
@@ -161,95 +164,112 @@ impl Derived {
         cut: Option<u32>,
         branch: Option<u32>,
     ) -> Result<RegionGeometry, LayoutError> {
-        let mut frames = Vec::with_capacity(self.slots.len());
-        let mut offsets = Vec::with_capacity(self.slots.len());
-        let mut facts = BoxFacts::default();
-        // Each box with the origin it is placed from and its parent's
-        // frame's origin, which differ for a table's parts.
-        let mut stack = vec![(root, (0., 0.), OWNER, false, (0., 0.))];
-        while let Some((s, (x, y), parent, hidden, (px, py))) = stack.pop() {
+        let mut geometry = RegionGeometry {
+            frames: Vec::with_capacity(self.slots.len()),
+            offsets: Vec::with_capacity(self.slots.len()),
+            provisional_chrome: self.provisional_chrome(),
+            ..Default::default()
+        };
+        let mut stack = vec![(root, OWNER, (0., 0.), None, false)];
+        while let Some((s, parent, from, grid, hidden)) = stack.pop() {
             let Some(&node) = self.nodes.get(&s) else {
                 continue;
             };
             let hidden = hidden || arena.style(s).display == crate::Display::None;
             let l = self.tree.layout(node);
-            let inline = arena.is_inline_run(s);
             let o = l.scrollable_overflow_rect;
-            let (frame, content) = if inline {
-                (Frame::default(), (o.right, o.bottom))
+            let extent = crate::layout::overflow_extent(&l);
+            let (position, mut frame, safe_area, content) = if hidden {
+                (RegionPosition::Hidden, Frame::default(), None, (0., 0.))
+            } else if arena.is_inline_run(s) {
+                (RegionPosition::Inline, Frame::default(), None, extent)
             } else {
-                let frame = Frame {
-                    x: x + l.location.x,
-                    y: y + l.location.y,
+                let size = Frame {
                     width: l.size.width,
                     height: l.size.height,
+                    ..Frame::default()
                 };
-                let (frame, _, content) =
-                    crate::kernel::ignore::place(arena, s, frame, (o.right, o.bottom));
-                (frame, content)
+                let (frame, taken, content) =
+                    crate::kernel::ignore::place(arena, s, size, extent, o.is_reversed());
+                (
+                    RegionPosition::Box((l.location.x, l.location.y)),
+                    frame,
+                    arena.ignoring.contains(s).then_some(taken),
+                    content,
+                )
             };
+            let moves = RegionMoves {
+                grid,
+                safe_area,
+                flat: self.tree.part_displacement(arena, s, Some(node)),
+            };
+            let (border, children) = position.place(from, &moves)?;
+            (frame.x, frame.y) = border;
             if ![
-                frame.x,
-                frame.y,
                 frame.width,
                 frame.height,
-                l.scrollable_overflow_rect.right,
-                l.scrollable_overflow_rect.bottom,
+                o.left(),
+                o.right(),
+                o.top(),
+                o.bottom(),
+                content.0,
+                content.1,
             ]
             .into_iter()
             .all(f32::is_finite)
             {
                 return Err(LayoutError::ContentRegion("nonfinite candidate geometry"));
             }
-            // The constrained owner supplies only the external origin/size.
-            // Omit it from publication, keeping direct-child parent=OWNER.
-            let next_parent = if s == root {
-                if frame.x != 0. || frame.y != 0. || inline {
+            let ordinal = if s == root {
+                if frame.x != 0. || frame.y != 0. || !matches!(position, RegionPosition::Box(_)) {
                     return Err(LayoutError::ContentRegion("nonzero derived owner origin"));
                 }
                 OWNER
             } else {
-                if frames.len() == REGION_NODES {
+                let index = geometry.frames.len();
+                if index == REGION_NODES {
                     return Err(LayoutError::ContentRegion("mounted node limit"));
                 }
-                let ordinal = frames.len() as u32;
-                facts.record(arena, &self.tree, s, node, hidden);
-                frames.push(RegionFrame {
+                let moves = if moves == RegionMoves::default() {
+                    None
+                } else {
+                    geometry.moves.push(moves);
+                    std::num::NonZeroU16::new(geometry.moves.len() as u16)
+                };
+                geometry.offsets.push(RegionOffset {
+                    parent,
+                    position,
+                    moves,
+                });
+                geometry.facts.record(arena, &self.tree, s, node, hidden);
+                geometry.frames.push(RegionFrame {
                     node: arena.key(s),
                     frame,
                     content,
                     height_measured: self.tree.height_measured(node),
                 });
-                offsets.push(RegionOffset {
-                    parent,
-                    x: frame.x - px,
-                    y: frame.y - py,
-                    inline,
-                });
-                ordinal
+                index as u16
             };
-            let at = (frame.x, frame.y);
-            let origin = if inline {
-                at
-            } else {
-                self.tree.parts_origin(arena, s, node, (x, y), at)
+            let mut push = |child| {
+                stack.push((
+                    child,
+                    ordinal,
+                    children,
+                    self.tree.grid_offset(s, child),
+                    hidden,
+                ))
             };
             if Some(s) == cut {
                 if let Some(b) = branch {
-                    stack.push((b, origin, next_parent, hidden, at))
+                    push(b);
                 }
             } else {
                 for &c in arena.children(s).iter().rev() {
-                    stack.push((c, origin, next_parent, hidden, at))
+                    push(c);
                 }
             }
         }
-        Ok(RegionGeometry {
-            frames,
-            offsets,
-            facts,
-            provisional_chrome: self.provisional_chrome(),
-        })
+        Ok(geometry)
     }
 }
 
@@ -318,15 +338,18 @@ pub(super) fn shell(
             height: l.size.height,
         };
         let o = l.scrollable_overflow_rect;
+        let extent = crate::layout::overflow_extent(&l);
         let (frame, _, content) =
-            crate::kernel::ignore::place(arena, s, frame, (o.right, o.bottom));
+            crate::kernel::ignore::place(arena, s, frame, extent, o.is_reversed());
         if ![
             frame.x,
             frame.y,
             frame.width,
             frame.height,
-            l.scrollable_overflow_rect.right,
-            l.scrollable_overflow_rect.bottom,
+            o.left(),
+            o.right(),
+            o.top(),
+            o.bottom(),
         ]
         .into_iter()
         .all(f32::is_finite)
@@ -386,6 +409,7 @@ mod tests {
         assert_eq!(geometry.frames.len(), REGION_NODES - 1);
         assert!(geometry.facts.field_content.is_empty());
         assert_eq!(geometry.facts.field_content.capacity(), 0);
+        assert_eq!(geometry.moves.capacity(), 0);
         assert_eq!(geometry.facts.insets.capacity(), 0);
         assert_eq!(
             geometry.project(Frame::default()).unwrap().len(),

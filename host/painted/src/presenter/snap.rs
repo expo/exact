@@ -288,7 +288,8 @@ impl<D: DataSource> Presenter<D> {
             (b.rect.0, b.rect.2, bl, br, s.max.0, (painted.0, s.offset.0))
         };
         let env = self.host.kernel().env_of(id);
-        let pad = |i: usize| padding[i].at_basis(&env, length).max(0.0);
+        let scrollport = (length - before - after).max(0.0);
+        let pad = |i: usize| padding[i].at_basis(&env, scrollport).max(0.0);
         let (pad_before, pad_after) = if vertical {
             (pad(0), pad(2))
         } else {
@@ -297,7 +298,7 @@ impl<D: DataSource> Presenter<D> {
         // Positions are where the snapport's start is in the scroller's
         // border box: an offset plus `lead`.
         let lead = before + pad_before;
-        let port = (length - before - after - pad_before - pad_after).max(1.0);
+        let port = (scrollport - pad_before - pad_after).max(1.0);
         let range = (lead, max + lead);
         let mut areas = Vec::new();
         for (c, align, stop, grow) in found {

@@ -37,6 +37,7 @@ export function fixture(agentMode = true) {
     innerWidth: 300, innerHeight: 200, devicePixelRatio: 1, scrollX: 0, scrollY: 0,
     routeFlags: () => () => 0, INHERITED_CSS: {}, getComputedStyle: () => ({}), inertAncestor: () => false,
     viewBox: element => element.getBoundingClientRect(),
+    textBaseline: () => undefined, // The VM has no browser text layout.
     navigation: { observation: () => ({ location: '/' }), reset() {} },
     presence: { live: null, pending: () => null, landed: async () => true },
     ask: req => req.op === 'state' ? state : req.op === 'logs' ? logs : req.op === 'node' ? { id: req.id, type: 'Text' }

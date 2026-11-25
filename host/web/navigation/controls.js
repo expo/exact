@@ -148,3 +148,24 @@ export function controlEvent(el, kind, on, dispatch) {
     settleValue(el, true);
   });
 }
+
+// Capture may move to another element before the physical up. Suppress that
+// contact's click wherever it lands. A new down with the same id supersedes it.
+let cancelledClick = null;
+export function suppressPointerClick(id) {
+  if (cancelledClick === null) {
+    const clear = () => {
+      cancelledClick = null;
+      window.removeEventListener("click", click, true);
+      window.removeEventListener("pointerdown", down, true);
+    };
+    const down = e => { if (e.pointerId === cancelledClick) clear(); };
+    const click = e => {
+      if (!e.isTrusted || !(e.pointerId === cancelledClick || e.pointerId == null && e.detail > 0)) return;
+      clear(); e.preventDefault(); e.stopImmediatePropagation();
+    };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("click", click, true);
+  }
+  cancelledClick = id;
+}

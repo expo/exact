@@ -1,6 +1,5 @@
 // Mounting the view: its regions (`when`, `match`, `each`), the adoption of a rendered page, in slices once its budget
 // runs out, the boot, and the page's checkpoint.
-import { checkpointFaults } from '../web/faults.js';
 import { inOrder, rowKey } from './rows.js';
 import { reloadOnGone } from './generation-reload.js';
 import { viewChildren, listRow, listOwner, unwrapListItem, sheetLeaves } from './navigation.js';
@@ -31,7 +30,6 @@ import {
   Why,
   startLate,
 } from './rt.js';
-import { canonical } from './route-pattern.js';
 import { clock, agentMode } from './clock.js';
 import { at, mark, Mismatch } from './tree.js';
 import { Leave, exiting } from './pieces.js';
@@ -127,9 +125,11 @@ function adoptArm(p, f, own) {
   return [s, mark(p)];
 }
 // An owning task can refuse a new instance. Prepare its detached subtree during
-// settlement, before any existing scope or DOM range is replaced.
-export let PrepareTasks = false;
-export function taskRegions() { PrepareTasks = true; }
+// settlement, before any existing scope or DOM range is replaced. Null until the
+// plan owns a task (schedule.js `ownedTasks`); then what a commit that stands
+// runs to retire the preparations it superseded.
+export let PrepareTasks = null;
+export function taskRegions() { PrepareTasks = finishTaskScopes; }
 const PreparedScopes = new Set();
 /** Task owners follow the candidate regions, even while their DOM update waits. */
 export function taskScopeLive(s) {
@@ -151,7 +151,7 @@ function prepareScope(s, current, used, forget) {
   stood(keep);
 }
 /** Once validation succeeds, retire preparations superseded before publication. */
-export function finishTaskScopes() {
+function finishTaskScopes() {
   for (const p of PreparedScopes) {
     if (p.s.gone || p.used()) PreparedScopes.delete(p);
     else if (!untracked(() => taskScopeLive(p.s))) {
@@ -339,6 +339,8 @@ export function each(p, list, key, row, pure) {
           }
           r.frag = frag;
         }
+        r.start.$rowKey = k;
+        if (r.start !== r.end) r.start.$rowEnd = r.end;
         r.k = k;
         if (PrepareTasks && r.s) r.s.taskCurrent = () => (prepared()?.next ?? rows).get(k) === r;
         next.set(k, r);
@@ -489,6 +491,8 @@ function adoptLazy(x) {
     }
     old.replaceWith(frag);
   } finally {
+    r.start.$rowKey = r.k;
+    if (r.start !== r.end) r.start.$rowEnd = r.end;
     Adopt = a;
     p.$n = save;
   }
@@ -540,6 +544,7 @@ export function mount(f) {
   });
   // Under the agent, and in a render, the clock is the driver's: no timer runs by itself.
   clock.agent = agentMode();
+  if (clock.agent) clock.clipboard = { item: null };
   // (a build kept no more: the page again, once)
   if (!clock.agent && typeof window !== 'undefined') reloadOnGone(window);
   Store.load();
@@ -554,16 +559,15 @@ export function mount(f) {
     }
   }
   let built = false;
-  if (checkpoint().elsewhere) root.textContent = '';
+  // A document whose page links no reader (page-checkpoint.js: its plan renders none) is built afresh, as one
+  // rendered at another location.
+  if (checkpoint().elsewhere || (!Documents && document.querySelector('script[type="application/vnd.exact.checkpoint"]')))
+    root.textContent = '';
   Adopt = !!(checkpoint().kept && root.firstElementChild);
   // Elapsed time continues from where a render's clock stopped.
   start = clock.start = performance.now() - clock.now;
   const adopting = Adopt;
-  // What the reader did before the runtime ran (the capture script), and
-  // what each edited control showed then: the commit writes the state's
-  // values, which the reader had changed.
-  const early = globalThis.exact?.taps?.() ?? [];
-  const shown = early.filter(t => t.type !== 'click').map(t => [t.target, t.target.value, t.target.checked]);
+  const replay = Documents?.early(adoptAt);
   AdoptBy = performance.now() + ADOPT_MS;
   Booting = true;
   let booted = commit(
@@ -615,57 +619,19 @@ export function mount(f) {
     LazyTask = post(slice);
   }
   root.dataset.bootMs = String(Math.round(performance.now()));
-  // Replayed once, in order, on the same elements (LLP 1048.001 D5), each
-  // edited control first showing what the reader left in it (its row, if it
-  // waits for a slice, adopted first, so adoption doesn't write over it).
-  for (const t of early) adoptAt(t.target);
-  for (const [e, v, c] of shown)
-    if (e.isConnected) {
-      if (e.type === 'checkbox' || e.type === 'radio') e.checked = c;
-      else if (e.type !== 'file') e.value = v;
-    }
-  for (const t of early)
-    if (t.target.isConnected)
-      t.type === 'click' ? t.target.click() : t.target.dispatchEvent(new Event(t.type, { bubbles: true }));
+  replay?.();
 }
-/** The page's checkpoint (LLP 1048.000 D6): the time the render stopped at, and by resource name the `source` and
- * `answers` its document used, each `[args, value, open, reads]`: one, or a list's elements', where a new element
- * looks first at `next`; or `elsewhere`, and nothing kept, for a page rendered at another location. */
-export let Checkpoint = null,
-  // A document's answer from the reader's own device was the render's: `res` asks it again, as a bake's
-  // (LLP 1048.007 D2).
-  READER = new Set(['exactViewport', 'exactPage']);
-export function checkpoint() {
-  if (Checkpoint) return Checkpoint;
-  Checkpoint = { kept: null };
-  const el =
-    typeof document !== 'undefined' && document.querySelector('script[type="application/vnd.exact.checkpoint"]');
-  if (!el) return Checkpoint;
-  const cp = JSON.parse(el.textContent);
-  // Render fresh, seeding nothing, where the browser's path is not the page's once both are canonical, the query aside
-  // (LLP 1048.000 D6): a page a static host serves at another path, its `404.html` or its fallback to `/`, is another
-  // location's document, and its answers are another location's. Both paths keep a mounted build's base.
-  if (canonical(location.pathname) !== canonical(cp.location).split('?')[0]) {
-    Checkpoint.elsewhere = true;
-    say(`document: rendered at ${cp.location}, not ${location.pathname}; rendering fresh`);
-    return Checkpoint;
-  }
-  const open = new Set(cp.open),
-    readers = new Set(cp.readers);
-  // A drive starts at zero even when its document was rendered on a wall clock.
-  const driven = typeof location !== 'undefined' && agentMode() && !globalThis.__exactRender;
-  if (driven) for (const k of checkpointFaults(cp)) open.add(k);
-  Checkpoint.revalidate = !!cp.revalidate;
-  Checkpoint.kept = new Map();
-  cp.answers.forEach(([name, source, args, value], k) => {
-    if (!Checkpoint.kept.has(name)) {
-      Checkpoint.kept.set(name, { source, answers: [], next: 0 });
-    }
-    Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k)]);
-  });
-  Checkpoint.time = clock.now = driven ? 0 : cp.time || 0;
-  return Checkpoint;
-}
+/** The page's checkpoint (LLP 1048.000 D6; page-checkpoint.js `read`), read once: none on a page whose plan renders no
+ * document, which links no reader. */
+let Checkpoint = null,
+  Documents = null;
+// A document's answer from the reader's own device was the render's: `res` asks it again, as a bake's
+// (LLP 1048.007 D2).
+export const READER = new Set(['exactViewport', 'exactPage']);
+export const documents = d => {
+  Documents = d;
+};
+export const checkpoint = () => (Checkpoint ??= Documents?.read() ?? { kept: null });
 /** A declared resource's page answer when it names `source` and fits `type` (a list's element's: each.js
  * `keptMember`). */
 export function keptAnswer(name, source, type) {
@@ -673,17 +639,3 @@ export function keptAnswer(name, source, type) {
     answer = kept?.source === source ? kept.answers[0] : undefined;
   return answer && (!type || conforms(answer[1], type)) ? answer : undefined;
 }
-/** A checkpoint value (`push_value`, host/web/src/page.rs) as a runtime value: lists and records are arrays, unit and
- * `none` null, `some(v)` v. */
-const value_ = v =>
-  v === null || typeof v !== 'object'
-    ? v
-    : Array.isArray(v)
-      ? v.map(value_)
-      : 'r' in v
-        ? v.r.map(value_)
-        : 's' in v
-          ? value_(v.s)
-          : 'n' in v
-            ? Number(v.n)
-            : null;

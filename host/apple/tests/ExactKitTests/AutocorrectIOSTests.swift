@@ -3,7 +3,7 @@ import UIKit
 import XCTest
 @testable import ExactKit
 
-/// HTML's `autocorrect="off"` on UIKit (#111): the text is kept as typed,
+/// HTML's `autocorrect="off"` on UIKit: the text is kept as typed,
 /// so a textarea and an input ask for no smart quotes or dashes as well as
 /// no correction; without it each is the keyboard's default.
 final class AutocorrectIOSTests: XCTestCase {

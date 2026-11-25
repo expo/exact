@@ -10,17 +10,10 @@
 #![cfg(unix)]
 
 use crate::scratch::Scratch;
+use crate::source::{boxed, NoData, Source};
 use exact_kernel::{Kernel, PropId};
-use exact_runner::{DataError, DataSource, Event, Runner, Value};
+use exact_runner::{Event, Runner};
 use std::path::{Path, PathBuf};
-
-struct NoData;
-
-impl DataSource for NoData {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-}
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -128,17 +121,17 @@ component App
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap_or_else(|e| panic!("{e}"));
     let mut r = Runner::boot(
         plan,
-        NoData,
+        boxed(NoData),
         Kernel::with_monospace(),
         Default::default(),
         "/",
     )
     .unwrap();
-    let view = |r: &Runner<NoData>, t: &str| {
+    let view = |r: &Runner<Source>, t: &str| {
         let key = r.kernel().find_by_test_id(t)[0];
         r.kernel().node_by_key(key).unwrap().id
     };
-    let said = |r: &Runner<NoData>| {
+    let said = |r: &Runner<Source>| {
         ["pill", "round"].map(|t| {
             let node = r.kernel().node(view(r, t)).unwrap();
             (
@@ -186,7 +179,7 @@ fn an_app_recolours_the_primary_fill_and_ink_by_full_name_and_not_the_overlay() 
     // The colour of `row` on the node `path` below the button `id` (each
     // step a child index): `[]` the button, `[0, 0]` its icon's image, `[1]`
     // its label (icon "both": the icon box first, then the label).
-    let colour = |r: &Runner<NoData>, id: &str, path: &[usize], row: StyleId| -> ColorValue {
+    let colour = |r: &Runner<Source>, id: &str, path: &[usize], row: StyleId| -> ColorValue {
         let key = r.kernel().find_by_test_id(id)[0];
         let mut node = r.kernel().node_by_key(key).unwrap();
         for &k in path {
@@ -206,7 +199,7 @@ fn an_app_recolours_the_primary_fill_and_ink_by_full_name_and_not_the_overlay() 
             contract::compile_path(&dir.join("app.contract")).unwrap_or_else(|e| panic!("{e}"));
         Runner::boot(
             plan,
-            NoData,
+            boxed(NoData),
             Kernel::with_monospace(),
             Default::default(),
             "/",
@@ -214,7 +207,7 @@ fn an_app_recolours_the_primary_fill_and_ink_by_full_name_and_not_the_overlay() 
         .unwrap()
     };
     // [light, dark] of the fill, the icon's ink and the label's ink.
-    let read = |r: &Runner<NoData>, id: &str| {
+    let read = |r: &Runner<Source>, id: &str| {
         [false, true].map(|dark| {
             [
                 colour(r, id, &[], StyleId::BackgroundColor).resolve(dark),

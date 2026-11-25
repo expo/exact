@@ -6,6 +6,7 @@
 //! `action`, which owns its work until that work ends or the platform's
 //! time does.
 
+use crate::source::{boxed, Source};
 use exact_runner::{agent, Runner, Value, WakeHow};
 use std::path::PathBuf;
 
@@ -22,13 +23,14 @@ impl App {
             std::env::temp_dir().join(format!("exact-actions-{name}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("node_modules/@exact")).unwrap();
-        let package =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/notifications");
-        std::os::unix::fs::symlink(
-            package.canonicalize().unwrap(),
-            path.join("node_modules/@exact/notifications"),
-        )
-        .unwrap();
+        for package in ["notifications", "quick-actions"] {
+            let to = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+            std::os::unix::fs::symlink(
+                to.join(package).canonicalize().unwrap(),
+                path.join("node_modules/@exact").join(package),
+            )
+            .unwrap();
+        }
         Self(path.canonicalize().unwrap())
     }
     fn compile(&self, body: &str) -> Result<exact_plan::Plan, Vec<contract::CompileError>> {
@@ -120,11 +122,11 @@ impl exact_runner::DataSource for Later {
     }
 }
 
-fn boot(app: &App) -> Runner<Later> {
+fn boot(app: &App) -> Runner<Source> {
     let plan = app.compile(&app_text()).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Later,
+        boxed(Later),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -136,20 +138,20 @@ fn boot(app: &App) -> Runner<Later> {
     r
 }
 
-fn by(r: &mut Runner<Later>, ms: f64) {
+fn by(r: &mut Runner<Source>, ms: f64) {
     let at = r.now_ms() + ms;
     r.advance(at).unwrap();
 }
 
-fn state(r: &Runner<Later>) -> serde_json::Value {
+fn state(r: &Runner<Source>) -> serde_json::Value {
     serde_json::from_str(&agent::handle(r, r#"{"op":"state"}"#)).unwrap()
 }
 
-fn logs(r: &Runner<Later>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     agent::handle(r, r#"{"op":"logs"}"#)
 }
 
-fn tap(r: &mut Runner<Later>, ticket: u64, choice: Option<&str>) -> String {
+fn tap(r: &mut Runner<Source>, ticket: u64, choice: Option<&str>) -> String {
     let mut request = serde_json::json!({ "op": "tap", "ticket": ticket });
     if let Some(c) = choice {
         request["choice"] = c.into();
@@ -158,7 +160,7 @@ fn tap(r: &mut Runner<Later>, ticket: u64, choice: Option<&str>) -> String {
 }
 
 /// A post, allowed at the permission's ticket, and its listed entry.
-fn posted(r: &mut Runner<Later>) -> serde_json::Value {
+fn posted(r: &mut Runner<Source>) -> serde_json::Value {
     r.act("review", Vec::new()).unwrap();
     let ticket = (r.device_holds().iter())
         .find(|h| h.capability == "permission")
@@ -168,7 +170,7 @@ fn posted(r: &mut Runner<Later>) -> serde_json::Value {
     state(r)["notifications"][0].clone()
 }
 
-fn acted(r: &Runner<Later>) -> String {
+fn acted(r: &Runner<Source>) -> String {
     format!("{:?}", r.slot("acted"))
 }
 
@@ -323,7 +325,7 @@ fn the_host_raises_a_background_action_and_reads_its_end() {
         .unwrap();
     by(&mut r, 0.0);
     assert_eq!(r.take_requests().len(), 1, "{}", logs(&r));
-    let ended = |r: &Runner<Later>| -> serde_json::Value {
+    let ended = |r: &Runner<Source>| -> serde_json::Value {
         serde_json::from_str(&agent::handle(r, r#"{"op":"actions"}"#)).unwrap()
     };
     assert_eq!(ended(&r)["ended"], serde_json::json!([]));
@@ -643,15 +645,15 @@ impl exact_runner::DataSource for ActionWork {
     }
 }
 
-fn action_work(app: &App, callback: Option<&'static str>, hidden: bool) -> Runner<ActionWork> {
+fn action_work(app: &App, callback: Option<&'static str>, hidden: bool) -> Runner<Source> {
     let plan = app.compile(&app_text()).unwrap();
     let mut r = Runner::boot(
         plan,
-        ActionWork {
+        boxed(ActionWork {
             callback,
             storage: false,
             storage_sent: false,
-        },
+        }),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -726,4 +728,76 @@ fn a_completed_notification_handler_keeps_its_deadline_while_storage_drains() {
         1,
         "expiry does not roll back storage"
     );
+}
+
+/// LLP 1133.023 D7a: a background action's grants end at its wake's
+/// deadline, whether or not the runner has expired the wake yet. Its
+/// approval's answer arrives on the host's clock and runs its `then`, which
+/// asks for a name held to the app: admitted before the deadline, refused
+/// after it.
+#[test]
+fn a_background_actions_work_past_its_deadline_holds_no_grant() {
+    const PIN: &str = r#"use requestPinShortcut, ShortcutItem, PinShortcutResult from "@exact/quick-actions"
+
+shape Approved
+  n: number
+
+component App
+  mutation approved as shape Approved then pin
+  mutation pinned as shape PinShortcutResult
+  action clicked(tag: string, e: NotificationEvent)
+    send approved = approve(tag)
+  action pin
+    send pinned = requestPinShortcut(shortcut=ShortcutItem(name="Pinned", short_name=none, description=none, url="/", icons=none, apple=none, android=none))
+  view
+    column notificationclick=clicked
+      text "inbox"
+"#;
+    let refused = "requestPinShortcut: refused, person-required (action origin)";
+    for late in [false, true] {
+        let app = App::new("deadline");
+        let plan = app.compile(PIN).unwrap_or_else(|e| panic!("{e:?}"));
+        let mut r = Runner::boot(
+            plan,
+            boxed(Later),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        r.set_module_target("ios");
+        by(&mut r, 0.0);
+        r.apply_announced();
+        let args = r#"["p1",{"tag":"p1","data":null,"title":"Coffee","body":null,"action":"approve","reply":null}]"#;
+        let how = WakeHow {
+            id: 0,
+            cold: true,
+            hidden: true,
+        };
+        r.raise_action("notifications", "notificationclick", args, how, "n-1")
+            .unwrap();
+        by(&mut r, 0.0);
+        let out = r.take_requests();
+        assert_eq!(out.len(), 1, "the approval in flight: {}", logs(&r));
+        // The host's clock, which the answer's arrival reads, is past the
+        // action's 30 s, or within it.
+        let at = r.now_ms() + if late { 30_001.0 } else { 1_000.0 };
+        r.set_live_clock(Some(Box::new(move || at)));
+        let ok = exact_runner::Outcome::Response(exact_runner::Response {
+            status: 200,
+            headers: Vec::new(),
+            body: b"7".to_vec(),
+        });
+        r.fulfill(out[0].ticket, ok).unwrap();
+        r.land_then();
+        // Admitted, the substitute answers it.
+        let sent = "quick-actions.requestPinShortcut: NotSupportedError";
+        assert_eq!(logs(&r).contains(sent), !late, "late {late}: {}", logs(&r));
+        assert_eq!(
+            logs(&r).contains(refused),
+            late,
+            "late {late}: {}",
+            logs(&r)
+        );
+    }
 }

@@ -17,7 +17,7 @@ struct PressPath {
             if let node = view as? NodeView { nodes.append((HeldNode(node), crossed, node.pressEpoch, node.pressCancellationEpoch, node.window != nil)) }
             if view === target { break }
             if trackOpenings, let open = presenter.menus.pressLifetime(of: view) { openings.append(open) }
-            let parent = presenter.listenerParent(of: view)
+            let parent = presenter.pressParent(of: view)
             crossed = crossed || parent !== view.superview
             at = parent
         }
@@ -85,18 +85,24 @@ extension Presenter {
         return navigation.lifted?.parent(of: view) ?? view.superview
     }
 
+    /// The next view a press bubbles to (`listenerParent`), through a
+    /// `portal` mover's declaration (LLP 1013.002 D1).
+    package func pressParent(of view: UIView) -> UIView? {
+        declaredParent(of: view) ?? listenerParent(of: view)
+    }
+
     package func authored(_ view: UIView, inside ancestor: UIView) -> Bool {
         sequence(first: view, next: listenerParent).contains { $0 === ancestor }
     }
 
-    /// The view a press on `target`, reached from `start` (`listenerParent`),
+    /// The view a press on `target`, reached from `start` (`pressParent`),
     /// must land in: the target, or, when the walk left a presentation for a
     /// logical ancestor in another mount, whose own box is not under the
     /// finger (LLP 1123 D2), the content where the press began.
     func pressBox(of target: UIView, from start: UIView) -> UIView {
         var at: UIView? = start, box: UIView?
         while let cur = at, cur !== target {
-            let up = listenerParent(of: cur)
+            let up = pressParent(of: cur)
             // Panel siblings stay within their parent's box. Bar items and the
             // tab accessory are held apart from it.
             if box == nil, up !== cur.superview {
@@ -115,6 +121,7 @@ extension Presenter {
         var lifetimes: [() -> Bool] = [], at: UIView? = start
         while let view = at, view !== target {
             if let open = menus.pressLifetime(of: view) { lifetimes.append(open) }
+            // The openings around where the press is shown, not its declaration's.
             at = listenerParent(of: view)
         }
         return lifetimes
@@ -159,8 +166,10 @@ extension Presenter {
     /// wrapper: reveal its caret, not that wrapper's far edge. The input keeps
     /// its own internal scrolling.
     func revealFocusedEditor() {
-        // While a finger drags the keyboard away, the offset is the finger's
-        guard let editor, !interactiveKeyboardDrag else { return }
+        guard let editor else { revealOwed = false; return }
+        // Hold the reveal while a finger drags the keyboard, whose offset is the finger's, and run it as the drag ends
+        guard !interactiveKeyboardDrag else { revealOwed = true; return }
+        revealOwed = false
         if editor.field == nil, editor.textArea == nil,
            let native = FirstResponder.current as? UIView, let input = native as? UITextInput,
            let end = input.selectedTextRange?.end, let view = input.textInputView {
@@ -174,6 +183,17 @@ extension Presenter {
             }
         }
         reveal(editor)
+    }
+
+    /// A finger's drag of a scroller ended (`KeyboardDrag`): a reveal the drag held runs on the main queue's next turn,
+    /// once UIKit has ended the scroll view's drag and set the keyboard's end, unless another drag holds it still.
+    func keyboardDragEnded() {
+        guard revealOwed else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.revealOwed, !self.interactiveKeyboardDrag else { return }
+            self.revealOwed = false
+            self.revealSettledEditor()
+        }
     }
 
     /// Reveal after native blocks and any pending list fill have settled.
@@ -214,6 +234,9 @@ package final class OwnerBlocks {
     /// How the routes were last told they show against their stacks' tops,
     /// where not in their stack (`NavigationHosting.routesShown`).
     private(set) var toldShown: [UInt32: BlockShown] = [:]
+    /// The given blocks told as a navigation bar's items (LLP 1141.004 D3).
+    private var toldBarItems: Set<UInt32> = []
+    private var toldSideBars: [UInt32: UIEdgeInsets] = [:]
     private var resetting = false, revealOwed = false
     private var viewChanges = 0
     /// Each block's rectangle in its root's coordinates (`BatchOp.blockRect`),
@@ -296,8 +319,8 @@ package final class OwnerBlocks {
     }
 
     /// UIKit may report several routes while a viewport change lays out its containers.
-    func beginViewChange() { viewChanges += 1 }
-    func endViewChange() {
+    package func beginViewChange() { viewChanges += 1 }
+    package func endViewChange() {
         viewChanges -= 1
         if viewChanges == 0 { publish() }
     }
@@ -350,6 +373,7 @@ package final class OwnerBlocks {
         for pane in presenter.navigation.paneBlocks { now[pane.id] = (pane.block, pane.placement) }
         for (id, block) in presenter.navigation.barItemBlocks { now[id] = (block, nil) }
         for (id, block) in presenter.dialogs.containingBlocks { now[id] = (block, nil) }
+        var sideBars: [UInt32: UIEdgeInsets] = [:]
         for (route, view, block, shown, presented) in routes {
             let id = route.node.id
             guard shown else {
@@ -362,10 +386,24 @@ package final class OwnerBlocks {
                 }
                 continue
             }
+            #if os(iOS)
+            if !presented, !ExactEnv.authoredChrome, let tabs = presenter.navigation.tabController, route.tabBarController === tabs {
+                let insets = tabs.barInsets(beside: view)
+                if insets != .zero { sideBars[id] = insets }
+            }
+            #endif
             now[id] = (.size(block.size), presented ? nil : placement(of: route, block: block, in: view))
         }
         #if os(iOS)
-        if #available(iOS 27.1, *) { now.merge(presenter.arrangements.blocks) { _, pane in pane } }
+        if #available(iOS 27.1, *) {
+            for (id, pane) in presenter.arrangements.blocks {
+                now[id] = pane
+                guard pane.placement?.rect.isEmpty == false, !ExactEnv.authoredChrome,
+                      let tabs = presenter.navigation.tabController, let view = presenter.views[id]?.superview else { continue }
+                let insets = tabs.barInsets(beside: view)
+                if insets != .zero { sideBars[id] = insets }
+            }
+        }
         #endif
         var blocks: [(UInt32, HostBlock?)] = [], placements: [(UInt32, BlockPlacement?)] = []
         for (id, entry) in now {
@@ -378,13 +416,25 @@ package final class OwnerBlocks {
         // in its stack in the kernel, so how it shows is told again (LLP 1127 D8)
         for id in Array(toldShown.keys) where now[id] == nil { toldShown[id] = nil }
         told = now
+        // A bar item's block is told as one; one taken back is none
+        let items = Set(presenter.navigation.barItemBlocks.keys)
+        let barItems = items.subtracting(toldBarItems).map { ($0, true) }
+            + toldBarItems.subtracting(items).filter { presenter.views[$0] != nil }.map { ($0, false) }
+        toldBarItems = items
+        let given = Set(blocks.compactMap { id, block in block == nil ? nil : id })
+        let sideChanges = Set(sideBars.keys).union(toldSideBars.keys).compactMap { id -> (UInt32, (CGFloat, CGFloat))? in
+            guard sideBars[id] != toldSideBars[id] || given.contains(id), presenter.views[id] != nil else { return nil }
+            let sides = sideBars[id] ?? .zero
+            return (id, (sides.left, sides.right))
+        }
+        toldSideBars = sideBars
         guard withShown else {
             if !shownChanges().isEmpty { publish() }
-            return Runtime.blockRecords(blocks, placements: placements)
+            return Runtime.blockRecords(blocks, placements: placements, barItems: barItems, sideBars: sideChanges)
         }
         let shown = shownChanges()
         toldShown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
-        return Runtime.blockRecords(blocks, placements: placements, shown: shown)
+        return Runtime.blockRecords(blocks, placements: placements, shown: shown, barItems: barItems, sideBars: sideChanges)
     }
 
     /// How the routes with a block show against their stacks' tops, where
@@ -432,6 +482,8 @@ package final class OwnerBlocks {
         resetting = false
         told = [:]
         toldShown = [:]
+        toldBarItems = []
+        toldSideBars = [:]
         blockRects = [:]
         revealOwed = false
     }

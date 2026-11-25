@@ -471,7 +471,7 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
                 if node === pressing || node === row { return false }
                 if node.pressable || node.isButton || node.isSurfaceControl || node.scroll != nil || node.field != nil || node.textArea != nil
                     || ["control", "input", "textarea", "canvas", "native", "video", "iframe"].contains(node.kind)
-                    || !node.handlers.isDisjoint(with: ["pointerdown", "pointerup", "pointermove", "contextmenu", "dblclick"]) { return true }
+                    || !node.handlers.isDisjoint(with: ["pointerdown", "pointerup", "pointercancel", "pointermove", "contextmenu", "dblclick"]) { return true }
             } else if current is NSControl || current is NSText || current is NSScrollView { return true }
             view = current.superview
         }

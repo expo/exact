@@ -26,7 +26,7 @@ public final class ExactView: NSView {
     /// Edit ▸ Cut, Copy and Paste with nothing focused, after the window in its responder chain.
     private lazy var rootEdits: RootEdits = { let edits = RootEdits(); edits.presenter = session.presenter; return edits }()
     /// Edit ▸ Speech over the selected text, as a browser speaks a page's
-    /// selection (#141); a field's `NSTextView` answers first while it has
+    /// selection; a field's `NSTextView` answers first while it has
     /// the focus. Spoken Content's voice and rate, as AppKit's own.
     @objc public func startSpeaking(_ sender: Any?) {
         let text = session.presenter.selection.selectedText()
@@ -38,6 +38,7 @@ public final class ExactView: NSView {
     }
     @objc public func stopSpeaking(_ sender: Any?) { Self.speech.stopSpeaking(at: .immediate) }
     private static let speech = AVSpeechSynthesizer()
+    private weak var hud: NSVisualEffectView?
     private var lastSize = CGSize.zero
     private var lastScreen: CGSize?
     private var fitPending = false
@@ -326,6 +327,21 @@ public final class ExactView: NSView {
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window is RoutePanel {
+            if hud == nil {
+                let effect = NSVisualEffectView(frame: bounds)
+                effect.material = .hudWindow
+                effect.blendingMode = .behindWindow
+                effect.state = .active
+                effect.autoresizingMask = [.width, .height]
+                addSubview(effect, positioned: .below, relativeTo: session.presenter.viewport)
+                hud = effect
+                session.presenter.navigation.resync()
+            }
+        } else {
+            if let hud { hud.removeFromSuperview(); session.presenter.navigation.resync() }
+        }
+        session.presenter.paintCanvas(session.presenter.canvasColor())
         ExactApp.shared.refreshDevPills() // in the window it joined, or another's (DevPill.swift)
         observeEnvironment()
         toolbarVisibilityObservation = nil
@@ -337,7 +353,7 @@ public final class ExactView: NSView {
         session.natives.scopesChanged()
         if window == nil { session.presenter.menus.reset(); session.presenter.dialogs.reset() }
         session.tellPreferences()
-        session.tellPage() // `hasFocus` is this window's (#114)
+        session.tellPage() // `hasFocus` is this window's
         session.rasters?.setPaused(window == nil)
         session.canvases.refreshLifecycle()
         if session.presenter.toolbar.window !== window { session.presenter.toolbar.detach() }
@@ -369,7 +385,7 @@ public final class ExactView: NSView {
                 if event.type == .otherMouseUp, event.window === self.window,
                    self.bounds.contains(self.convert(event.locationInWindow, from: nil)) { self.session.presenter.historyButton(event) }
                 // A modifier pressed is a keydown on the web (`"Shift"`), and
-                // released a keyup (#140); to AppKit a flags change, which
+                // released a keyup; to AppKit a flags change, which
                 // goes on to it either way.
                 if event.type == .flagsChanged {
                     if self.ownsShortcutFocus(in: event.window) { _ = self.session.presenter.keyDown(event); self.session.presenter.keyUp(event) }
@@ -388,19 +404,26 @@ public final class ExactView: NSView {
                     self.session.presenter.menus.pointer(event)
                     // A click on the window behind a `closedby="any"` sheet is the sheet's.
                     if self.session.presenter.dialogs.pointer(event) { return nil }
+                    if event.type == .leftMouseDown, let window = event.window,
+                       let frame = window.contentView?.superview ?? window.contentView,
+                       let hit = TableRowCell.whatIsThere({ frame.hitTest(frame.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow) }),
+                       hit.isDescendant(of: self), TitleBarAreaMac.press(event, on: hit, titleGround: false) { return nil }
                     // A press in an editor: its `pointerdown` before NSWindow focuses it (LLP 1005).
                     // Prevented there, the window does not get the down: the focus stays where it is.
                     if self.session.presenter.pressEditorFirst(event) { return nil }
                     return event
                 }
-                if event.type == .keyDown { self.session.presenter.flushKeyViewLoop() }
+                let presenter = self.session.presenter
+                let deferredEditor = presenter.prepareKeyViewLoop(for: event, in: event.window)
                 let focused = self.ownsShortcutFocus(in: event.window)
                 let code=KeyCodes.mac[Int(event.keyCode)] ?? "Unidentified"
                 if focused, event.modifierFlags.intersection([.command,.control]).isEmpty,
                    self.session.canvases.pressedControlKey(code,down:event.type == .keyDown,timestamp:event.timestamp) {return nil}
                 // Shortcuts, then the `key` handlers (before a field editor can
                 // take the key), then the menus' and dialogs' defaults.
-                return self.session.presenter.routeKey(event, focused: focused) ? nil : self.session.presenter.dialogs.appKitEvent(event)
+                guard !presenter.routeKey(event, focused: focused) else { return nil }
+                if let deferredEditor, event.window?.firstResponder !== deferredEditor { presenter.flushKeyViewLoop() }
+                return presenter.dialogs.appKitEvent(event)
             }
         }
         // Mounted and visible participate in frame demand (D3): an unmounted

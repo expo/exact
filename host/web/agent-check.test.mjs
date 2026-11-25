@@ -938,3 +938,138 @@ test("a row resting under a web sheet's foot buttons scrolls clear of them, so i
     expect(under).toBeDefined();
   } finally { await session.close(); }
 }, 900000);
+
+const SQUEEZED = `routes nav
+  home "/"
+    sheet "/sheet"
+component SqueezedFixture
+  action follow(url: string)
+    nav = go(nav, url)
+  view
+    main navigationKey=\`\${top(nav).id}\` navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "sheet"
+          column navigationKey=\`\${e.id}\` navigationPresentation="modal" navigationDetent="200 large" position="absolute" inset=0 display="flex" flex-direction="column"
+            text "Sheet heading" height=300 flex-shrink=0
+            list testId="sheet-list" flex=1 min-height=0
+              for i in range(40) key=i
+                text \`Row \${i}\` padding=16
+        else
+          scroll navigationKey=\`\${e.id}\` position="absolute" inset=0
+            column gap=4
+              link href=path("sheet") testId="open"
+                text "Open sheet"
+              column height=100 flex-shrink=0 display="flex" flex-direction="column"
+                text "Fixed" height=100 flex-shrink=0
+                scroll testId="sq-scroll" flex=1 min-height=0
+                  column
+                    for i in range(20) key=i
+                      text \`Row \${i}\` padding=16
+              column height=100 flex-shrink=0 display="flex" flex-direction="column"
+                text "Fixed" height=100 flex-shrink=0
+                list testId="sq-list" virtualized=true estimated-item-height=48 flex=1 min-height=0
+                  for i in range(20) key=i
+                    text \`Row \${i}\` padding=16
+              column height=100 flex-shrink=0 display="flex" flex-direction="column"
+                text "Fixed" height=100 flex-shrink=0
+                list testId="empty" virtualized=true estimated-item-height=48 flex=1 min-height=0
+                  for i in range(0) key=i
+                    text \`Row \${i}\`
+              column height=100 flex-shrink=0 display="flex" flex-direction="column"
+                text "Fixed" height=90 flex-shrink=0
+                scroll testId="fits" flex=1 min-height=0
+                  column height=5
+              column height=32 display="flex" flex-direction="column"
+                scroll testId="small-rows" flex=1 min-height=0
+                  for i in range(8) key=i
+                    text "A" height=8
+              scroll testId="chips" overflow-x="auto" overflow-y="hidden" height=36 flex-shrink=0
+                row gap=8
+                  for i in range(20) key=i
+                    text \`Chip \${i}\` padding=8 flex-shrink=0
+              row testId="tabs" gap=6 padding=4 overflow-x="scroll" flex-shrink=0
+                for i in range(20) key=i
+                  text \`Tab \${i}\` padding=4 flex-shrink=0
+              scroll testId="sized" height=20 flex-shrink=0
+                column
+                  for i in range(20) key=i
+                    text \`Row \${i}\` padding=16
+              column display="none"
+                column height=100 display="flex" flex-direction="column"
+                  text "Fixed" height=100 flex-shrink=0
+                  scroll testId="hidden" flex=1 min-height=0
+                    column
+                      for i in range(20) key=i
+                        text \`Row \${i}\` padding=16
+              row height=60 flex-shrink=0
+                text "Fixed" width="23.5rem" flex-shrink=0
+                scroll testId="sq-x" overflow-x="auto" overflow-y="hidden" flex=1 min-width=0
+                  row
+                    for i in range(20) key=i
+                      text \`Chip \${i}\` padding=8 flex-shrink=0
+              scroll testId="pager" overflow-x="scroll" overflow-y="hidden" height=100 flex-shrink=0
+                row
+                  column width="100vw" height=100 flex-shrink=0
+                    text "Page one"
+                  column width="100vw" height=100 flex-shrink=0 display="flex" flex-direction="column"
+                    text "Fixed" height=100 flex-shrink=0
+                    scroll testId="off" flex=1 min-height=0
+                      column
+                        for i in range(20) key=i
+                          text \`Row \${i}\` padding=16
+`;
+
+test('a scroller squeezed along its axis to less than a row is squeezed; one short on purpose or with nothing past its port is not', async () => {
+  const session = await open({ host: 'web', url: await built('squeezed', SQUEEZED), size: [402, 874] });
+  try {
+    const squeezed = (run) => run.findings.filter((f) => f.kind === 'squeezed').map((f) => f.node).sort();
+    const run = (await checkOp(session, ['light'])).check[0];
+    expect(squeezed(run)).toEqual(['sq-list', 'sq-scroll', 'sq-x']);
+    const list = run.findings.find((f) => f.node === 'sq-list');
+    expect(list.detail).toMatchObject({ axis: 'y', port: 0, unit: 'px' });
+    expect(list.detail.content).toBeGreaterThan(44);
+    expect(run.findings.find(f => f.node === 'sq-x').detail.axis).toBe('x');
+    const update = css => session.carrier.evaluate(`document.querySelector('[data-testid="sq-scroll"]').style.cssText = ${JSON.stringify(css)}`);
+    // An unrelated ceiling leaves a squeeze. An author-chosen flex basis gives a small port on purpose.
+    await update('max-height:600px');
+    expect(squeezed((await checkOp(session)).check[0])).toContain('sq-scroll');
+    await update('flex:0 0 20px');
+    expect(squeezed((await checkOp(session)).check[0])).not.toContain('sq-scroll');
+    await update('');
+    await session.carrier.evaluate(`(() => {
+      const e = document.querySelector('[data-testid="sq-scroll"]');
+      e.parentElement.style.cssText = 'width:10px;height:110px';
+      e.style.overflowX = 'auto';
+      e.firstElementChild.style.width = '800px';
+    })()`);
+    expect((await checkOp(session)).check[0].findings.filter(f => f.node === 'sq-scroll' && f.kind === 'squeezed').map(f => f.detail.axis).sort()).toEqual(['x', 'y']);
+    await session.carrier.evaluate(`(() => {
+      const e = document.querySelector('[data-testid="sq-scroll"]');
+      for (const node of [e, e.parentElement, e.firstElementChild]) node.style.cssText = '';
+    })()`);
+    // The same squeezed port disappears under an inert ancestor, a closed disclosure or a clipped, parked page.
+    for (const wrap of [
+      "const w = document.createElement('div'); w.inert = true",
+      "const w = document.createElement('details')",
+      "const w = document.createElement('div'); w.style.cssText = 'height:0;width:0;overflow:hidden'",
+    ]) {
+      await session.carrier.evaluate(`(() => {
+        const s = document.querySelector('[data-testid="sq-scroll"]'), group = s.parentElement;
+        ${wrap}; group.before(w); w.append(group);
+      })()`);
+      expect(squeezed((await checkOp(session)).check[0])).not.toContain('sq-scroll');
+      await session.carrier.evaluate(`(() => {
+        const group = document.querySelector('[data-testid="sq-scroll"]').parentElement;
+        group.parentElement.replaceWith(group);
+      })()`);
+    }
+    await session.prefer({ 'root-font-size': 53 });
+    await session.clock('settle');
+    expect(squeezed((await checkOp(session, ['light'])).check[0])).toEqual(['sq-list', 'sq-scroll']);
+    await session.prefer({ 'root-font-size': 16 });
+    await session.tap('open');
+    expect(squeezed((await checkOp(session)).check[0])).toEqual([]);
+    await session.clock('settle');
+    expect(squeezed((await checkOp(session, ['light'])).check[0])).toEqual([]);
+  } finally { await session.close(); }
+}, 900000);

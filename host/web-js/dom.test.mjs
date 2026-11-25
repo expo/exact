@@ -1,13 +1,12 @@
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createDocument } from './dom.js';
 import { webCompiler } from './module.mjs';
-import { renderer } from './render.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { engineTests } from '../../scripts/coverage.mjs';
-import { standIns } from '../web/tests/stand-ins.mjs';
+import { stageRuntime } from '../web/tests/stand-ins.mjs';
 
 const engineTest = await engineTests(['chromium']);
 
@@ -159,8 +158,7 @@ async function withRenderRuntime(run) {
   globalThis.document = doc;
   try {
     const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js'];
-    for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));
-    for (const [name, source] of standIns(real)) writeFileSync(resolve(dir, name), source);
+    stageRuntime(dir, real);
     await run(doc, await import(resolve(dir, 'rt.js')));
   } finally {
     globalThis.document = previous;
@@ -329,13 +327,18 @@ engineTest.chromium('Bun-rendered links and icons preserve their attributes and 
     const dist = resolve(dir, 'dist');
     const wideSymbol = 'symbol:icon||0 0 400 100|M0 0H400V100H0Z|';
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'DOM Render Test', app: { id: 'test.dom-render', name: 'DOM Render Test' }, host: { web: {} } }));
-    writeFileSync(resolve(dir, 'app.contract'), `component App
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=build
+
+component App
   state url = "https://example.com/a"
   state role = "person"
+  state externalLabel = "make it external"
   action local
     url = "/about"
   action external
     url = "https://example.com/a"
+    externalLabel = "external selected"
   view
     column
       link href=url testId="lnk"
@@ -352,14 +355,11 @@ engineTest.chromium('Bun-rendered links and icons preserve their attributes and 
       button press=local testId="local"
         text "make it local"
       button press=external testId="external"
-        text "make it external"
+        text externalLabel
 `);
     const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', dir, '--out', dist, '--render', 'js'], { cwd: root, env: process.env, stdout: 'pipe', stderr: 'pipe' });
     const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
     expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
-    const render = renderer(dist);
-    render.ahead = false;
-    writeFileSync(resolve(dist, 'index.html'), (await render('/')).html);
     server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
       const path = new URL(req.url).pathname;
       return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
@@ -384,7 +384,8 @@ engineTest.chromium('Bun-rendered links and icons preserve their attributes and 
     });
     const before = await read();
     await page.getByTestId('external').click();
-    await page.waitForFunction(() => globalThis.exact?.journal?.some(line => line.endsWith('adopted the document')));
+    await page.waitForFunction(() => document.querySelector('[data-testid="external"]').textContent === 'external selected');
+    expect(await page.evaluate(() => globalThis.exact.journal.some(line => line.endsWith('adopted the document')))).toBe(true);
     expect(await page.evaluate(() => renderedLink === document.querySelector('[data-testid="lnk"]'))).toBe(true);
     const adopted = await read();
     await page.getByTestId('local').click();
@@ -393,6 +394,7 @@ engineTest.chromium('Bun-rendered links and icons preserve their attributes and 
     await page.getByTestId('external').click();
     await page.waitForFunction(() => document.querySelector('[data-testid="lnk"]').getAttribute('href') === 'https://example.com/a');
     const external = await read();
+    expect(await page.evaluate(() => renderedLink === document.querySelector('[data-testid="lnk"]'))).toBe(true);
     // An authored `rel` keeps its tokens, and the ones a new browsing context needs join it (LLP 1141.002 D1).
     const expected = (link, kept) => ({
       attrs: { link, authored: ['_self', null], kept, symbols: ['', 'A person'], wide: [20, 5, 5] },
@@ -467,8 +469,7 @@ component App
     const built = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', dir], { cwd: root, encoding: 'utf8', env: compiler.env });
     expect({ status: built.status, error: built.status ? built.stdout + built.stderr : '' }).toEqual({ status: 0, error: '' });
     const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js', 'rows.js', 'router.js', 'route-pattern.js', 'schedule.js'];
-    for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));
-    for (const [name, source] of standIns(real)) writeFileSync(resolve(dir, name), source);
+    stageRuntime(dir, real);
     const rows = resolve(dir, 'rows.js');
     writeFileSync(rows, readFileSync(rows, 'utf8').replace('export function inOrder(list) {',
       'export let orderingPasses = 0; export function inOrder(list) { orderingPasses++;'));

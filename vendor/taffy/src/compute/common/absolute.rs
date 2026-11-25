@@ -16,9 +16,11 @@
 use crate::compute::common::sizing_keyword::resolve_absolute_sizing_keywords;
 use crate::compute::ratio::{floors_height, Ratio};
 use crate::geometry::{AbsoluteAxis, Line, Point, Rect, Size};
-use crate::style::{AvailableSpace, BoxSizing, CoreStyle, Dimension, Direction, Overflow};
+use crate::style::{AvailableSpace, BoxSizing, CalcHandle, CoreStyle, Dimension, Direction, Overflow};
 #[cfg(feature = "content_size")]
-use crate::compute::common::scrollable_overflow::compute_scrollable_overflow_contribution;
+use crate::compute::common::scrollable_overflow::{
+    compute_scrollable_overflow_contribution, ScrollableOverflowContainer,
+};
 use crate::tree::{
     Layout, LayoutOutput, LayoutPartialTree, LayoutPartialTreeExt, NodeId, SizingMode, StaticAlignment, StaticPosition,
 };
@@ -105,6 +107,9 @@ pub(crate) struct AbsolutePass {
     /// Whether the container scrolls, for the overflow its boxes add.
     #[cfg(feature = "content_size")]
     pub(crate) is_scroll_container: bool,
+    /// The container's scroll-origin reversal in each physical axis.
+    #[cfg(feature = "content_size")]
+    pub(crate) reversed: Point<bool>,
 }
 
 impl AbsolutePass {
@@ -157,7 +162,7 @@ impl AbsolutePass {
         }
         drop(style);
         #[cfg(feature = "content_size")]
-        let (overflow, contain) = (absolute.overflow, absolute.contain);
+        let (overflow, contain, border) = (absolute.overflow, absolute.contain, absolute.border);
         #[cfg_attr(not(feature = "content_size"), allow(unused_variables))]
         // CSS 2.1 §10.3.7: the inset is the static position before the box is sized, so the
         // space runs from the static edge to the containing block's far edge; for a centred
@@ -188,21 +193,23 @@ impl AbsolutePass {
 
         #[cfg(feature = "content_size")]
         {
-            // Measured from the scroll origin (the inline-start edge: the right side in RTL).
-            let from_area =
+            let location =
                 Point { x: placed.location.x - self.area_offset.x, y: placed.location.y - self.area_offset.y };
-            let location = if self.direction.is_rtl() {
-                Point { x: self.area_size.width - from_area.x - placed.size.width, y: from_area.y }
-            } else {
-                from_area
+            let overflow_container = ScrollableOverflowContainer {
+                parent_is_scroll_container: self.is_scroll_container,
+                parent_size: self.area_size,
+                reversed: self.reversed,
+                padding: Rect::ZERO,
             };
             compute_scrollable_overflow_contribution(
                 location,
                 placed.size,
-                placed.output.scrollable_overflow_rect,
+                placed.output.scrollable_overflow_rect.rect(),
+                border,
                 overflow,
                 contain,
-                self.is_scroll_container,
+                &overflow_container,
+                None,
             )
         }
         #[cfg(not(feature = "content_size"))]
@@ -227,7 +234,7 @@ impl AbsoluteBox {
     fn of(
         style: &impl CoreStyle,
         area_size: Size<f32>,
-        calc: impl Fn(*const (), f32) -> f32 + Copy,
+        calc: impl Fn(CalcHandle, f32) -> f32 + Copy,
     ) -> Option<Self> {
         if style.box_generation_mode() == BoxGenerationMode::None {
             return None;

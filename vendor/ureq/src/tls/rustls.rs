@@ -253,6 +253,8 @@ impl Transport for RustlsTransport {
         self.stream.get_mut().set_timeout(timeout);
 
         let output = &self.buffers.output()[..amount];
+        // Keep normal EINTR retry semantics. A permanent cancellation from
+        // the socket adapter must use a terminal I/O error.
         self.stream.write_all(output)?;
 
         Ok(())

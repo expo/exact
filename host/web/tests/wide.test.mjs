@@ -111,6 +111,49 @@ check('a root tab bar left unsaid is a sidebar on a wide window and a bar on a p
   expect(await evaluate(`document.getElementById('nav').hasAttribute('data-exact-sidebar')`)).toBe(true);
 }), 60000);
 
+// LLP 1123 D9: the box that ends at the root's bar along the bottom has no bottom inset, as the bar keeps the home
+// indicator clear; a box laid over the window keeps the window's, and a box in the flow after the bar takes the bottom
+check('the root bar along the bottom clears the home indicator for the box above it, not for an overlay', () => {
+  const overlay = '<div id="overlay" style="position:fixed;inset:0;pointer-events:none"></div>';
+  return inChrome(page(tabs(overlay + BAR)), async (evaluate, size, click, call) => {
+    await call('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: 34 } });
+    await evaluate(`window.bottoms = ids => ids.map(id => getComputedStyle(document.getElementById(id))).map((style, i) => i ? style.getPropertyValue('--exact-safe-area-inset-bottom').trim() : style.paddingBottom); select(document.getElementById('nav').getAttribute('navigationKey'))`);
+    expect(await evaluate(`bottoms(['bar', 'panels', 'overlay'])`)).toEqual(['34px', '0px', '34px']);
+    // A sheet, fixed to the window, reaches its bottom; a full-screen route stays in the panels' box
+    expect(await evaluate(`{ const route = document.getElementById('r2'); route.setAttribute('navigationPresentation', 'fullscreen'); const seen = bottoms(['bar', 'r2', 'r3']); route.removeAttribute('navigationPresentation'); seen }`)).toEqual(['34px', '0px', '34px']);
+    // A box in the flow that takes the overlay's place ends at the bar instead of the panels
+    expect(await evaluate(`document.getElementById('overlay').replaceWith(Object.assign(document.createElement('div'), { id: 'strip', textContent: 'Strip' })); select(2); bottoms(['bar', 'panels', 'strip'])`)).toEqual(['34px', '34px', '0px']);
+    // A box after the bar laid over the window leaves the bar the bottom, until it joins the flow
+    expect(await evaluate(`document.getElementById('nav').append(Object.assign(document.createElement('footer'), { id: 'after', textContent: 'After', style: 'position:fixed' })); select(2); bottoms(['bar', 'strip', 'after'])`)).toEqual(['34px', '0px', '34px']);
+    expect(await evaluate(`document.getElementById('after').style.position = 'static'; select(2); bottoms(['bar', 'strip', 'after'])`)).toEqual(['0px', '34px', '34px']);
+    // A box laid out nowhere neither takes the bottom after the bar nor ends at it
+    expect(await evaluate(`document.getElementById('after').style.display = 'none'; document.getElementById('bar').before(Object.assign(document.createElement('div'), { id: 'gone', style: 'display:none' })); select(2); bottoms(['bar', 'strip', 'gone'])`)).toEqual(['34px', '0px', '34px']);
+    // Nor is a bar an `order` moves off the bottom
+    expect(await evaluate(`{ const strip = document.getElementById('strip'); strip.style.order = '1'; select(2); const seen = bottoms(['bar', 'strip', 'panels']); strip.style.order = ''; select(2); seen }`)).toEqual(['0px', '34px', '34px']);
+    // A bar already clear of the bottom inset takes no more, and a bar an `order` keeps last is still along the bottom
+    expect(await evaluate(`{ const nav = document.getElementById('nav'); nav.style.boxSizing = 'border-box'; nav.style.paddingBottom = '34px'; select(2); const seen = bottoms(['bar', 'strip']); nav.style.boxSizing = nav.style.paddingBottom = ''; select(2); seen }`)).toEqual(['0px', '34px']);
+    expect(await evaluate(`{ const bar = document.getElementById('bar'); bar.style.order = '1'; select(2); const seen = bottoms(['bar', 'strip']); bar.style.order = ''; select(2); seen }`)).toEqual(['34px', '0px']);
+    // A bar whose nav lies out of the root's flow is no bar along its bottom
+    expect(await evaluate(`{ const bar = document.getElementById('bar'), nav = Object.assign(document.createElement('nav'), { id: 'rail', style: 'position:absolute;left:0;right:0;bottom:0' }); bar.before(nav); nav.append(bar, Object.assign(document.createElement('footer'), { id: 'foot' })); select(2); bottoms(['bar', 'strip', 'panels']) }`)).toEqual(['0px', '34px', '34px']);
+  }, 390);
+}, 60000);
+
+// LLP 1123 D9: the marks follow the edges they read, and a box in the top layer reads the window's inset
+check('the root bar along the bottom follows its edges and leaves the window its inset over the panel', () => {
+  return inChrome(page(tabs(BAR + '<footer id="strip"><div id="grow" style="height:0"></div></footer>')), async (evaluate, size, click, call) => {
+    await call('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: 34 } });
+    await evaluate(`window.bottoms = ids => ids.map(id => getComputedStyle(document.getElementById(id))).map((style, i) => i ? style.getPropertyValue('--exact-safe-area-inset-bottom').trim() : style.paddingBottom); window.frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))); select(document.getElementById('nav').getAttribute('navigationKey'))`);
+    expect(await evaluate(`bottoms(['bar', 'panels'])`)).toEqual(['34px', '0px']);
+    // A box after the bar that grows with no commit lifts the bar off the bottom, and the panel has its inset back
+    expect(await evaluate(`document.getElementById('grow').style.height = '64px'; frames().then(() => bottoms(['bar', 'panels']))`)).toEqual(['0px', '34px']);
+    expect(await evaluate(`document.getElementById('grow').style.height = '0px'; frames().then(() => bottoms(['bar', 'panels']))`)).toEqual(['34px', '0px']);
+    // A dialog in the top layer from within the panel reads the window's inset
+    expect(await evaluate(`{ const d = Object.assign(document.createElement('dialog'), { id: 'dialog' }); document.getElementById('panels').append(d); d.showModal(); const seen = bottoms(['bar', 'dialog']); d.close(); d.remove(); seen }`)).toEqual(['34px', '34px']);
+    // A bar laid out wholly below the window takes nothing from the panel before it
+    expect(await evaluate(`document.getElementById('panels').style.flex = '0 0 800px'; frames().then(() => bottoms(['bar', 'panels']))`)).toEqual(['0px', '34px']);
+  }, 390);
+}, 60000);
+
 check('a root nav keeps its footer below the scrolling sidebar and hides it in the bottom bar', () => {
   const foot = '<footer id="foot"><button id="account" onclick="calls.push(this.id)">Account</button></footer>';
   const bar = BAR.replace('</div>', '<button role="tab">More</button>'.repeat(30) + '</div>');

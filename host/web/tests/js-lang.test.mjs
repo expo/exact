@@ -6,12 +6,12 @@
 // real render of its one page.
 import { test, expect, afterAll } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { renderer } from '../../web-js/render.mjs';
 import { fileURLToPath } from 'node:url';
-import { standIns } from './stand-ins.mjs';
+import { stageRuntime } from './stand-ins.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-lang-'));
@@ -44,8 +44,7 @@ test('a chosen language commits atomically, persists, and initializes the next l
     const here = resolve(dir, `runtime-${boots++}`);
     mkdirSync(here);
     const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'chosen.js', 'shape.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'resource-inspection.js', 'held.js', 'uploads.js'];
-    for (const file of real) copyFileSync(resolve(ROOT, 'host/web-js', file), resolve(here, file));
-    for (const [file, source] of standIns(real)) writeFileSync(resolve(here, file), source);
+    stageRuntime(here, real);
     const nav = resolve(here, 'navigation.js');
     writeFileSync(nav, readFileSync(nav, 'utf8').replace('reportPlace = () => {}', 'reportPlace = () => "en-US\\0UTC\\0seed\\0en-US"'));
     const rt = await import(resolve(here, 'rt.js'));

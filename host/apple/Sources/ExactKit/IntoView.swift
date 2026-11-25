@@ -30,19 +30,38 @@ package enum IntoView {
         return !ExactEnv.agentFreezes && !DisplayPreferences.reducedMotion
             && behavior != "instant"
     }
-    static func inset(_ rect: CGRect, style: [String: BatchValue], family: String, outward: Bool = false) -> CGRect {
-        let top = style["\(family)_top"]?.length(basis: rect.height) ?? 0
-        let bottom = style["\(family)_bottom"]?.length(basis: rect.height) ?? 0
-        let left = style["\(family)_left"]?.length(basis: rect.width) ?? 0
-        let right = style["\(family)_right"]?.length(basis: rect.width) ?? 0
-        let sign: CGFloat = outward ? -1 : 1
-        return CGRect(x: rect.minX + sign * left, y: rect.minY + sign * top,
-                      width: max(0, rect.width - sign * (left + right)), height: max(0, rect.height - sign * (top + bottom)))
+    static func area(_ rect: CGRect, style: NodeStyle) -> CGRect {
+        let top = style["scroll_margin_top"]?.length(basis: 0) ?? 0
+        let bottom = style["scroll_margin_bottom"]?.length(basis: 0) ?? 0
+        let left = style["scroll_margin_left"]?.length(basis: 0) ?? 0
+        let right = style["scroll_margin_right"]?.length(basis: 0) ?? 0
+        return CGRect(x: rect.minX - left, y: rect.minY - top, width: max(0, rect.width + left + right),
+                      height: max(0, rect.height + top + bottom))
     }
     /// The options as the command carries them: block, inline, `none` the web's default.
     static func options(_ args: [Any]) -> (block: String, inline: String) {
         let text = { (i: Int) in args.count > i ? args[i] as? String : nil }
         return (text(1) ?? "start", text(2) ?? "nearest")
+    }
+}
+
+extension NodeView {
+    /// The insets from the border box to the snapport on one axis. CSS Scroll Snap §4.2
+    /// resolves both percentages against the padding box before platform insets.
+    func snapportInsets(_ size: CGFloat, vertical: Bool) -> (CGFloat, CGFloat) {
+        let (first, last) = vertical ? ("top", "bottom") : ("left", "right")
+        let uniform = number("border_width")
+        let before = number("border_width_\(first)", uniform), after = number("border_width_\(last)", uniform)
+        let basis = max(0, size - before - after)
+        func padding(_ side: String) -> CGFloat { max(0, style["scroll_padding_\(side)"]?.length(basis: basis) ?? 0) }
+        return (before + padding(first), after + padding(last))
+    }
+
+    func snapport(in bounds: CGRect) -> CGRect {
+        let (left, right) = snapportInsets(bounds.width, vertical: false)
+        let (top, bottom) = snapportInsets(bounds.height, vertical: true)
+        return CGRect(x: bounds.minX + left, y: bounds.minY + top, width: max(0, bounds.width - left - right),
+                      height: max(0, bounds.height - top - bottom))
     }
 }
 
@@ -58,7 +77,7 @@ extension Presenter {
     }
 
     /// `given`: the node to align, found by its caller (a fragment's, in its route: `Fragment.swift`).
-    func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
+    package func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
         if given == nil { cancelFragment() }
         guard let name = args.first as? String,
               let target = given ?? views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }),
@@ -69,11 +88,11 @@ extension Presenter {
         let (block, inline) = IntoView.options(args)
         var moves: [(NSClipView, NodeView?, NSPoint)] = []
         var from: NSView = target
-        var frame = IntoView.inset(target.bounds, style: target.style, family: "scroll_margin", outward: true)
+        var frame = IntoView.area(target.bounds, style: target.style)
         for case let clip as NSClipView in sequence(first: target.superview, next: { $0?.superview }).compactMap({ $0 }) {
             frame = from.convert(frame, to: clip)
             let owner = (clip.superview?.superview as? NodeView)
-            let port = IntoView.inset(clip.bounds, style: owner?.style ?? [:], family: "scroll_padding")
+            let port = owner?.snapport(in: clip.bounds) ?? clip.bounds
             let origin = NSPoint(
                 x: IntoView.aligned(inline, target: frame.minX, frame.maxX, port: port.minX, size: port.width) - (port.minX - clip.bounds.minX),
                 y: IntoView.aligned(block, target: frame.minY, frame.maxY, port: port.minY, size: port.height) - (port.minY - clip.bounds.minY))
@@ -284,7 +303,7 @@ extension Presenter {
     }
 
     /// `given`: the node to align, found by its caller (a fragment's, in its route: `Fragment.swift`).
-    func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
+    package func scrollElementIntoView(_ args: [Any], target given: NodeView? = nil) {
         if given == nil { cancelFragment() }
         guard let name = args.first as? String,
               let target = given ?? views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }) else {
@@ -413,9 +432,11 @@ extension Presenter {
         } else {
             frame = target.convert(target.bounds, to: sv)
         }
-        let area = IntoView.inset(frame, style: target.style, family: "scroll_margin", outward: true)
+        let area = IntoView.area(frame, style: target.style)
         let inset = owner?.scrollPortInsets(sv) ?? elementPageInsets(sv)
-        var port = IntoView.inset(sv.pageBounds.inset(by: inset), style: owner?.style ?? [:], family: "scroll_padding")
+        let css = owner?.snapport(in: sv.pageBounds) ?? sv.pageBounds
+        var port = CGRect(x: css.minX + inset.left, y: css.minY + inset.top, width: max(0, css.width - inset.left - inset.right),
+                          height: max(0, css.height - inset.top - inset.bottom))
         if let grouped, sv === grouped, let pinned = pinnedHeader(over: frame, in: grouped) {
             port.origin.y += pinned
             port.size.height = max(0, port.height - pinned)

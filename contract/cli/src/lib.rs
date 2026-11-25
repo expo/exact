@@ -65,11 +65,11 @@ mod surface;
 use surface::fact_shape;
 mod symbols;
 pub use contract_analyze::SuggestionCheck;
-pub use properties::resolve_test_states_path;
 pub use properties::{
     check_properties, check_properties_path, check_suggestions_path, properties, property_program,
-    resolve_properties_path, tests,
+    resolve_properties_path, tests, tests_with_defaults,
 };
+pub use properties::{check_test_substitutes, resolve_test_states_path};
 mod tests_json;
 pub use tests_json::{authored_json, tests_json};
 pub mod forma_levels;
@@ -82,6 +82,7 @@ mod typescript;
 pub mod watch;
 pub mod watch_sync;
 pub use contract_lower::vocab::collection_edge_refusal;
+use contract_lower::SourceOutput;
 pub use contract_types::strings::Strings;
 /// The data seam, re-exported for an app's build script: the bake asks the
 /// crate its grants for the compatibility id (`Caltrain.grants()`).
@@ -93,7 +94,7 @@ pub use logic::{
 };
 pub use manifest::{Activity, Choices, Configuration, Manifest, Parameter, RustData, Widget};
 pub use manifest::{Control, ControlAction};
-pub use map::{plan_digest, SourceMap};
+pub use map::{compile_for_comparison, plan_digest, ComparisonInput, SourceMap};
 pub use module_rust::{build_module_rust, module_rust, module_rust_path};
 pub use preload::preload_expression;
 pub use resolve::Origin;
@@ -327,10 +328,11 @@ fn vars(file: &mut contract_syntax::File) -> Result<Vec<CompileError>, CompileEr
         .map(CompileError::warning)
         .collect())
 }
-/// Compile one source text to a validated plan. A text has no path, so a
-/// `use … from "./file.contract"` in it cannot be resolved: compile a file
-/// that uses others with [`compile_path`].
+/// Compile standalone text to a validated plan. Use [`compile_path`] for relative imports.
 pub fn compile(src: &str) -> Result<Plan, CompileError> {
+    compile_text(src, SourceOutput::Places)
+}
+fn compile_text(src: &str, output: SourceOutput) -> Result<Plan, CompileError> {
     let mut file = contract_syntax::parse(src)?;
     contract_syntax::resolve_clock_timelines(&mut file)?;
     params(&mut file)?;
@@ -349,7 +351,13 @@ pub fn compile(src: &str) -> Result<Plan, CompileError> {
             related: Box::new([]),
         });
     }
-    compile_file(file, None)
+    // Media alone: a text has no app, so no `file_handlers` (LLP 1069.002 D1).
+    picker::check(&file, None)
+        .and(orientationlock::check(&file, None))
+        .map_err(first)?;
+    compile_file_output(&file, None, None, output, contract_lower::Profile::Web)
+        .map(|(plan, _)| plan)
+        .map_err(first)
 }
 /// [`compile`], with the warnings beside its result (LLP 1116 D6): every
 /// one the text earns once it type-checks, whether it then compiled or not.
@@ -878,7 +886,7 @@ fn compile_path_output(
 fn compile_path_checked(
     path: &Path,
     src: &str,
-    mapped: bool,
+    mapped: impl Into<SourceOutput>,
     surfaces: bool,
     profile: contract_lower::Profile,
 ) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
@@ -888,7 +896,7 @@ fn compile_path_checked(
 fn compile_path_warned(
     path: &Path,
     src: &str,
-    mapped: bool,
+    mapped: impl Into<SourceOutput>,
     surfaces: bool,
     profile: contract_lower::Profile,
     warned: Option<&mut Vec<CompileError>>,
@@ -922,7 +930,7 @@ fn compile_loaded(
     app_root: &Path,
     file: File,
     sources: sources::Sources,
-    mapped: bool,
+    mapped: impl Into<SourceOutput>,
     surfaces: bool,
     profile: contract_lower::Profile,
     warned: Option<(usize, &mut Vec<CompileError>)>,
@@ -1022,16 +1030,6 @@ fn compile_loaded(
     Ok((plan, sites.map(|sites| SourceMap::new(sites, sources))))
 }
 
-fn compile_file(file: File, asset_root: Option<&Path>) -> Result<Plan, CompileError> {
-    // Media alone: a text has no app, so no `file_handlers` (LLP 1069.002 D1).
-    picker::check(&file, None)
-        .and(orientationlock::check(&file, None))
-        .map_err(first)?;
-    compile_file_output(&file, asset_root, None, false, contract_lower::Profile::Web)
-        .map(|(plan, _)| plan)
-        .map_err(first)
-}
-
 impl From<CompileError> for Vec<CompileError> {
     fn from(e: CompileError) -> Self {
         vec![e]
@@ -1042,7 +1040,7 @@ fn compile_file_output(
     file: &File,
     asset_root: Option<&Path>,
     strings: Option<std::sync::Arc<contract_types::strings::Strings>>,
-    mapped: bool,
+    mapped: impl Into<SourceOutput>,
     profile: contract_lower::Profile,
 ) -> Result<(Plan, Option<contract_lower::Sites>), Vec<CompileError>> {
     compile_file_warned(file, asset_root, strings, mapped, profile, None)
@@ -1057,7 +1055,7 @@ fn compile_file_warned(
     file: &File,
     asset_root: Option<&Path>,
     strings: Option<std::sync::Arc<contract_types::strings::Strings>>,
-    mapped: bool,
+    mapped: impl Into<SourceOutput>,
     profile: contract_lower::Profile,
     warned: Option<(&contract_lower::WarningSelection, &mut Vec<CompileError>)>,
 ) -> Result<(Plan, Option<contract_lower::Sites>), Vec<CompileError>> {
@@ -1072,6 +1070,8 @@ fn compile_file_warned(
             .map(|e| hint(e.into()))
             .collect()
     }
+    let output = mapped.into();
+    let mapped = output == SourceOutput::Mapped;
     let hint = |error| symbols::authored_action_hint(file, error);
     // Lowering needs what types and analysis establish; when either refuses,
     // what it would find without them (tags, attribute names, literal values)
@@ -1119,7 +1119,7 @@ fn compile_file_warned(
             &checked,
             &analysis,
             asset_root,
-            mapped,
+            output,
             profile,
             warned
                 .as_ref()
@@ -1129,7 +1129,7 @@ fn compile_file_warned(
         .and_then(|built| {
             // A component nothing uses is not lowered; its literal values
             // are checked as the lint checks them (LLP 1156.005 D3).
-            let unused = contract_lower::lint_unused(file);
+            let unused = contract_lower::lint_unused(file, &checked.types.shapes);
             if !unused.is_empty() {
                 return Err(each(unused, |e| e));
             }
@@ -1354,7 +1354,7 @@ fn first_frame<D: DataSource>(
 /// nothing bounding it (it grows, and never scrolls — 0102, 0103), and a
 /// pressable with zero area (nothing can press it — valet 0003). A pressable
 /// holding an image or a canvas is exempt: their size is the host's.
-/// A pressable hidden by `display: none` on itself or an ancestor is skipped.
+/// A pressable under `display: none` or in a closed `dialog` has no box and is skipped.
 ///
 /// Unanswered (`answered` false, [`check`]), a verdict that could rest on a
 /// placeholder is not given: an empty list's `scroll`, or a button whose
@@ -1491,7 +1491,7 @@ fn has_zero_dimension(node: exact_kernel::NodeRef<'_>) -> bool {
 fn hidden(kernel: &Kernel, node: exact_kernel::NodeRef<'_>) -> bool {
     let mut at = Some(node);
     while let Some(n) = at {
-        if matches!(n.style.display, exact_kernel::Display::None) {
+        if matches!(n.style.display, exact_kernel::Display::None) || kernel.is_closed_dialog(n.id) {
             return true;
         }
         at = n.parent.and_then(|p| kernel.node(p));

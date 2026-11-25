@@ -41,12 +41,17 @@ impl<D: DataSource> Bridge<D> {
             .map_or_else(not_booted, |h| h.reorder_group_step(token, step, now));
         self.emit(out)
     }
-    /// The contact ended: drop (nonzero) or cancel.
+    /// A native list supplies UIKit's final successor in the input buffer.
     pub fn reorder_group_end(&mut self, token: u64, drop: u32, now: f64) -> u32 {
-        let out = self
-            .host
-            .as_mut()
-            .map_or_else(not_booted, |h| h.reorder_group_end(token, drop != 0, now));
+        let out = self.host.as_mut().map_or_else(not_booted, |h| {
+            if drop == 2 {
+                if let Ok(bytes) = self.input.as_slice().try_into() {
+                    return h.reorder_drop_before(token, u32::from_le_bytes(bytes), now);
+                }
+                return h.reorder_group_end(token, false, now);
+            }
+            h.reorder_group_end(token, drop != 0, now)
+        });
         self.emit(out)
     }
     /// The ghost landed or faded.

@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // The JS target's count of held fetches (LLP 1016.000 D9), ts-fetch.js and held.js as they are, over a stand-in
 // `fetchWith` whose replies the test lets through: on the page an answer counts for no clock only while every piece of
@@ -12,8 +13,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 test.each([['on the page', false], ['in a render', true]])('an answer is held only while its held fetch is all it awaits, and counts again for the work after it, %s', async (_where, rendering) => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-held-count-'));
-  for (const name of ['ts-fetch.js', 'held.js']) cpSync(resolve(ROOT, 'host/web-js', name), resolve(dir, name));
-  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, signalDeadline, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
+  for (const name of ['ts-fetch.js', 'held.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
+  writeFileSync(resolve(dir, 'admission.js'), `export { fetchTarget, ownWithout, redirectOf, signalDeadline, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
 export class FetchError extends Error {} export const overlaying = { on: false }; export const inOverlay = what => new Error(what);
 export const fetchWith = (grants, input) => globalThis.heldGates(String(input));\n`);
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};\n');

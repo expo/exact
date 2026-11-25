@@ -1,0 +1,24 @@
+// PlatformDefaultsIOSTests (LLP 1115.000 D9.2): Next fields whose `submit`
+// moves the focus through the runner. `rf-a` focuses `rf-b`; `rf-b` shows
+// `rf-c` after `rf-d` and focuses it in the same action; `rf-c` opens a
+// dialog sheet and focuses its field, which waits for the presentation.
+component App
+  state more = false
+  action toB
+    focus("rf-b")
+  action reveal
+    more = true
+    focus("rf-c")
+  action away
+    showModal("rf-sheet")
+    focus("rf-far")
+  view
+    column padding=16 gap=8
+      input id="rf-a" testId="rf-a" enterkeyhint="next" submit=toB aria-label="A" height=40
+      input id="rf-b" testId="rf-b" enterkeyhint="next" submit=reveal aria-label="B" height=40
+      input id="rf-d" testId="rf-d" aria-label="D" height=40
+      if more
+        input id="rf-c" testId="rf-c" enterkeyhint="next" submit=away aria-label="C" height=40
+      input id="rf-e" testId="rf-e" aria-label="E" height=40
+      dialog id="rf-sheet"
+        input id="rf-far" testId="rf-far" aria-label="Far" height=40

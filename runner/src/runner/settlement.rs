@@ -611,6 +611,7 @@ impl<D: DataSource> Runner<D> {
                         pending_res[i] = upload;
                         self.resources[i].failed_args = None;
                         awaiting[i] = false;
+                        self.forget_deferred(i);
                         if let Some(waiting) = &mut self.resources[i].waiting {
                             waiting.slept = true;
                         }
@@ -805,11 +806,11 @@ impl<D: DataSource> Runner<D> {
                         .failed_args
                         .as_ref()
                         .is_some_and(failed_for);
-                    // On its way under a ticket kept for other arguments (the same
-                    // request, LLP 1054.000.000 D3): these arguments' again.
+                    // A ticket kept for other arguments (LLP 1054.000.000 D3) takes these, joined.
                     if let Some(super::UploadEnd::Sent(t)) = &mark {
                         if let Some(p) = self.pending.iter_mut().find(|p| p.ticket == *t) {
                             p.args.clone_from(&args);
+                            self.note_kept(Target::Resource(i), *t);
                         }
                     }
                     // @ref LLP 1027.005 D3/D4 — only a persisted boot seed, or an entry waiting
@@ -1002,13 +1003,15 @@ impl<D: DataSource> Runner<D> {
                             self.inspect_request(i);
                             // An upload's arguments answer as it ended (D10).
                             let ledger = self.ledger_answer(i, mark.as_ref());
-                            let asked = match ledger.unwrap_or_else(|| self.query(i, &args)) {
+                            let asked = match ledger.unwrap_or_else(|| self.query_caused(i, &args))
+                            {
                                 Ok(Answer::Now(v)) => {
                                     checked = true;
                                     self.shaped_answer(i, v)
                                 }
                                 other => other,
                             };
+                            self.note_ask(i);
                             let answer = match asked {
                                 // A Rust module's seam that could not carry
                                 // the call (an answer over its bound, a trap)

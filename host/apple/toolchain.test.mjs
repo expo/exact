@@ -500,7 +500,7 @@ async function iosRunsFixture(body) {
   }
 }
 
-for (const [prior, bootFails] of [['1', false], ['0', false], [null, false], ['1', true]]) test(`hosted accessibility preserves ${prior ?? 'an absent setting'} when simulator boot ${bootFails ? 'fails' : 'succeeds'}`, () => iosRunsFixture(async ({ root, options }) => {
+for (const [prior, bootFails, busy] of [['1', false], ['0', false], [null, false], ['1', true], [null, false, true]]) test(`hosted accessibility preserves ${prior ?? 'an absent setting'} when ${busy ? 'the display is busy during cleanup' : bootFails ? 'simulator boot fails' : 'simulator boot succeeds'}`, () => iosRunsFixture(async ({ root, options }) => {
   writeFileSync(resolve(options.pkg, 'tests/ExactKitTests/FixtureTests.swift'), `class FixtureTests: XCTestCase {
     func testHosted() { throw missing("accessibility", "UIKit") }
   }`);
@@ -518,7 +518,14 @@ for (const [prior, bootFails] of [['1', false], ['0', false], [null, false], ['1
     'esac',
   ].join('\n'));
   const bootFailure = new Error('simulator boot failed'), ran = [];
-  let reported;
+  let reported, lock;
+  if (busy) {
+    const touches = await import('./touches.mjs'), acquire = touches.withAccessibilityLock;
+    lock = spyOn(touches, 'withAccessibilityLock').mockImplementation((udid, fn) => {
+      if (ran.includes('hosted')) throw new Error('display busy');
+      return acquire(udid, fn);
+    });
+  }
   try {
     await iosTestRuns({ ...options, run: (command, args) => {
       if (args[1] === 'bootstatus') {
@@ -536,10 +543,11 @@ for (const [prior, bootFails] of [['1', false], ['0', false], [null, false], ['1
       } else if (args.includes('-only-testing:ExactKitTests/Canvas2DGpuStressTests')) ran.push('gpu');
     } });
   } catch (error) { reported = error; }
+  finally { lock?.mockRestore(); }
   expect(ran).toEqual(bootFails ? ['gpu'] : ['hosted', 'gpu']);
   expect(reported).toBe(bootFails ? bootFailure : undefined);
   expect(readFileSync(eventsFile, 'utf8').trim().split('\n').filter(Boolean))
-    .toEqual(bootFails ? [] : ['read', 'write', prior === null ? 'delete' : 'write']);
+    .toEqual(bootFails ? [] : prior === '1' ? ['read'] : ['read', 'write', prior === null ? 'delete' : 'write']);
   expect(existsSync(setting) ? readFileSync(setting, 'utf8').trim() : null).toBe(prior);
 }));
 

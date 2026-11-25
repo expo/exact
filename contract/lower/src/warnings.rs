@@ -210,9 +210,11 @@ pub(crate) fn with_text_styles(
     // @ref LLP 1116.016 D4 — a row that searches another data list; LLP 1017.003 D3, its own; LLP 1142 D6, a key by position.
     out.extend(rows::row_lookup(&checking));
     // @ref LLP 1116.020 D1 — a `delete=` no list row holds.
+    let mut drag_rows = BTreeMap::new();
     out.extend(crate::swipe_rows::unplaced(
         &root.view,
         &checked.file.styles,
+        &mut drag_rows,
     ));
     // @ref LLP 1116.011 D2.1 — a RoundButton label of more than a word.
     out.extend(parts::round_button_label(&checking));
@@ -220,6 +222,11 @@ pub(crate) fn with_text_styles(
     out.extend(parts::empty_state_in_list(&checking));
     // @ref LLP 1116.021 D7 — a summary card in a grouped list's card.
     out.extend(parts::summary_card_in_list(&checking));
+    // @ref LLP 1057.001 §8.1 — a swipe inside a grouped list, which UIKit draws itself.
+    out.extend(crate::handlers::swipe::unseen_in_grouped(
+        &checking,
+        &checked.file.styles,
+    ));
     // @ref LLP 1121 D8 — a node's own state part it never meets.
     states::dead(&checked_view, &mut out);
     performance_now(root, &checked.file.fns, &mut out);
@@ -227,7 +234,7 @@ pub(crate) fn with_text_styles(
     geometry::unnamed(&checking, &mut out);
     navigation_back::unnamed(&checked_view, &mut out);
     transform::owners(checked, &mut out);
-    transform_drag::check(&checked_view, &checked.file.styles, &mut out);
+    transform_drag::check(&checked_view, &checked.file.styles, &drag_rows, &mut out);
     // @ref LLP 1027.005 D6 — an identifying argument of the launch's own.
     launch::launch_identity(root, &checked.file.fns, &mut out);
     width::width_padding(&checked_view, &checked.file.styles, &mut out);

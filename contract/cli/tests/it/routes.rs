@@ -1,4 +1,5 @@
 //! @ref LLP 1038 D2/D3, D5/D6 — compiled declarations, visits and keyed screens.
+use crate::source::{boxed, Read, Source};
 use exact_kernel::{Kernel, PropId};
 use exact_plan::Plan;
 use exact_runner::{agent, DataError, DataSource, Runner, Value};
@@ -41,17 +42,17 @@ impl DataSource for Data {
         }
     }
 }
-fn boot(plan: Plan, launch: &str) -> Runner<Data> {
+fn boot(plan: Plan, launch: &str) -> Runner<Source> {
     Runner::boot(
         plan,
-        Data::default(),
+        boxed(Data::default()),
         Kernel::with_monospace(),
         Default::default(),
         launch,
     )
     .unwrap()
 }
-fn state(r: &Runner<Data>) -> Json {
+fn state(r: &Runner<Source>) -> Json {
     serde_json::from_str(&agent::state(r)).unwrap()
 }
 fn selected(nav: &Json) -> &Vec<Json> {
@@ -64,7 +65,7 @@ fn selected(nav: &Json) -> &Vec<Json> {
         .as_array()
         .unwrap()
 }
-fn rows(r: &Runner<Data>) -> Vec<(String, u32)> {
+fn rows(r: &Runner<Source>) -> Vec<(String, u32)> {
     let root = r.kernel().roots()[0];
     r.kernel()
         .node(root)
@@ -77,7 +78,7 @@ fn rows(r: &Runner<Data>) -> Vec<(String, u32)> {
         })
         .collect()
 }
-fn assert_rows(r: &Runner<Data>) {
+fn assert_rows(r: &Runner<Source>) {
     let s = state(r);
     let entries = selected(&s["slots"]["nav"]);
     let ids: Vec<_> = entries.iter().map(|e| e["id"].to_string()).collect();
@@ -119,7 +120,7 @@ fn interview_table_shapes_roundtrip_and_launch_fill() {
         serde_json::from_str(include_str!("../../../../route/tests/corpus.json")).unwrap();
     let actual: Vec<_> = plan.routes.iter().map(|r| json!({"name":plan.str(r.name),"pattern":plan.str(r.pattern),"parent":r.parent.map(|p|p.0),"tab":r.tab,"notfound":r.notfound})).collect();
     assert_eq!(json!(actual), corpus["tables"]["interview"]["routes"]);
-    let baked = contract::bake(plan, Data::default()).unwrap();
+    let baked = contract::bake(plan, boxed(Data::default())).unwrap();
     for (url, names) in [
         ("/", vec!["home"]),
         ("/prompt/5/write", vec!["prompts", "question", "write"]),
@@ -157,12 +158,12 @@ fn interview_table_shapes_roundtrip_and_launch_fill() {
         assert!(r.take_router_change().is_none());
         if url == "/" {
             assert!(
-                r.data_ref().asked.is_empty(),
+                r.source_ref::<Data>().asked.is_empty(),
                 "same baked arguments use the cache"
             );
         } else {
             assert_eq!(
-                r.data_ref().asked,
+                r.source_ref::<Data>().asked,
                 vec![vec![Value::list(vec![Value::str("5"), Value::str("5")])]]
             );
             assert_eq!(s["resources"]["questions"], json!(["5", "5"]));

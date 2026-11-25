@@ -25,13 +25,13 @@ pub fn concepts() -> Vec<Concept> {
     for section in SOURCE.split("\n## ").skip(1) {
         let (head, rest) = section.split_once('\n').unwrap_or((section, ""));
         let (name, title) = head.split_once(": ").unwrap_or((head, ""));
-        let (names, answer) = match rest.strip_prefix("names: ") {
-            Some(list) => {
-                let (line, answer) = list.split_once('\n').unwrap_or((list, ""));
-                (line.split(", ").map(str::trim).collect(), answer)
-            }
-            None => (Vec::new(), rest),
-        };
+        let mut names = Vec::new();
+        let mut answer = rest;
+        while let Some(list) = answer.strip_prefix("names: ") {
+            let (line, tail) = list.split_once('\n').unwrap_or((list, ""));
+            names.extend(line.split(", ").map(str::trim));
+            answer = tail;
+        }
         out.push(Concept {
             name: name.trim(),
             title: title.trim(),

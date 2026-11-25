@@ -4,6 +4,15 @@ The fixture is `packages/clipboard/test/fixture`, made into an app by
 `fixture.mjs` (`EXACT_CLIPBOARD_FIXTURE=<dir>` keeps it). Build it from the
 commit under test. Each step says what you should see.
 
+## iOS paste permission
+
+Build the fixture on an iOS simulator with `bun exact.mjs ios --sim <udid>`.
+Put text on its pasteboard with `printf %s 'External paste' | xcrun simctl pbcopy <udid>`.
+Open the fixture and tap **Paste**. On iOS 26.5 the system names both apps in its
+paste prompt. **Allow Paste** displays the seeded text. Tap **Copy with Contract**
+and then **Paste**. The fixture displays “Contract copy” without another prompt.
+The agent round trip uses a private pasteboard and needs no system permission.
+
 ## macOS, the real pasteboard
 
 Run the fixture with `EXACT_DEVICE=real` (`bun exact.mjs agent macos`
@@ -179,7 +188,9 @@ writeFileSync(join(dir, 'linear.png'), Buffer.concat([
    and press **png**: `DataError`, prior clipboard unchanged. Repeat with an
    over-64-MiB file. Press the existing **large** button for a 9000×9000
    header: `DataError`, prior clipboard unchanged. **png-bytes** is deliberately
-   unsupported on Windows; it must answer `NotSupportedError`.
+   unsupported on Windows; it must answer `NotSupportedError`. Press **html**
+   or **html-only**. Each must refuse with `Type text/html not supported on write.`
+   and leave the previous copy available.
 9. Copy a valid image again, close the writer, and paste into Paint and a
    PNG-preferring editor. Reopen and repeat **both**. Eager clipboard data
    must remain pastable after the writer exits.

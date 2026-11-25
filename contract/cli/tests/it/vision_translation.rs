@@ -1,11 +1,12 @@
 //! Vision and translation admission in the runner (LLP 1133.027 D4, D16,
 //! §9), through this checkout's `@exact/barcode-detection`,
-//! `@exact/text-detection` and `@exact/translation` installed beside the
+//! `@exact/face-detection`, `@exact/text-detection` and `@exact/translation` installed beside the
 //! app, each implementation played by the test as the host's native slot
 //! under the agent: a create is the app's foreground act, a still's path is
 //! admitted against the grants before dispatch, the targets a name does not
 //! exist on, and the agent-only words of translation's script.
 
+use crate::source::{boxed, Source};
 use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
@@ -15,7 +16,15 @@ use std::os::windows::fs::symlink_dir;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+const PACKAGES: [&str; 4] = [
+    "barcode-detection",
+    "face-detection",
+    "text-detection",
+    "translation",
+];
+
 const APP: &str = r#"use detectBarcodes, detectedBarcodes, DetectedBarcodeList, BarcodeScan from "@exact/barcode-detection"
+use detectFaces, DetectedFaceList from "@exact/face-detection"
 use detectText, DetectedTextList from "@exact/text-detection"
 use createTranslator, translate, TranslatorInfo, TranslatorResult from "@exact/translation"
 
@@ -23,6 +32,7 @@ component App
   state track = "track-1"
   resource scan = detectedBarcodes(track=track) as shape BarcodeScan else empty()
   mutation found as shape DetectedBarcodeList
+  mutation faces as shape DetectedFaceList
   mutation read as shape DetectedTextList
   mutation translator as shape TranslatorInfo
   mutation translated as shape TranslatorResult
@@ -30,6 +40,8 @@ component App
     send found = detectBarcodes(image="app:/tmp/picked/1-1.png")
   action outside
     send found = detectBarcodes(image="app:/data/none.png")
+  action face(path: string)
+    send faces = detectFaces(image=path)
   action readText
     send read = detectText(image="app:/tmp/picked/1-1.png")
   action create
@@ -50,7 +62,7 @@ impl App {
         let _ = std::fs::remove_dir_all(&path);
         let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
         std::fs::create_dir_all(path.join("node_modules/@exact")).unwrap();
-        for package in ["barcode-detection", "text-detection", "translation"] {
+        for package in PACKAGES {
             let to = packages.join(package).canonicalize().unwrap();
             symlink_dir(to, path.join("node_modules/@exact").join(package)).unwrap();
         }
@@ -82,15 +94,15 @@ const PICKED: &str = "fs.read app:/tmp/picked\n";
 
 type Calls = Arc<Mutex<Vec<Json>>>;
 
-/// A runner over the app, the three implementations bound under the agent
+/// A runner over the app, the implementations bound under the agent
 /// and played by the native slot, which answers each call with its own body.
-fn boot(name: &str, target: &str) -> (App, Runner<Grants>, Calls) {
+fn boot(name: &str, target: &str) -> (App, Runner<Source>, Calls) {
     let app = App::new(name);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Grants(PICKED),
+        boxed(Grants(PICKED)),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -104,6 +116,7 @@ fn boot(name: &str, target: &str) -> (App, Runner<Grants>, Calls) {
             seen.lock().unwrap().push(v.clone());
             let answer = match (v["send"].as_str(), v["source"].as_str()) {
                 (Some("detectBarcodes"), _) => json!({ "barcodes": [], "width": 1, "height": 1 }),
+                (Some("detectFaces"), _) => json!({ "faces": [], "width": 1, "height": 1 }),
                 (Some("detectText"), _) => json!({ "texts": [], "width": 1, "height": 1 }),
                 (Some("createTranslator"), _) => {
                     json!({ "id": "translator-1", "sourceLanguage": "ja", "targetLanguage": "en" })
@@ -118,13 +131,13 @@ fn boot(name: &str, target: &str) -> (App, Runner<Grants>, Calls) {
             }));
         })));
     r.set_module_target(target);
-    r.bind_extensions(&[], &["barcode-detection", "text-detection", "translation"]);
+    r.bind_extensions(&[], &PACKAGES);
     (app, r, calls)
 }
 
 /// The host's part: each request dispatched, released work run, each
 /// outcome fulfilled, until nothing is left to do.
-fn pump(r: &mut Runner<Grants>) {
+fn pump(r: &mut Runner<Source>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         let released = r.release_work();
@@ -146,7 +159,7 @@ fn pump(r: &mut Runner<Grants>) {
     }
 }
 
-fn run(r: &mut Runner<Grants>, ticket: u64, dispatch: Dispatch) {
+fn run(r: &mut Runner<Source>, ticket: u64, dispatch: Dispatch) {
     let outcome = match dispatch {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
@@ -167,7 +180,7 @@ fn sent(calls: &Calls, name: &str) -> Vec<Json> {
         .collect()
 }
 
-fn logs(r: &Runner<Grants>) -> String {
+fn logs(r: &Runner<Source>) -> String {
     exact_runner::agent::handle(r, r#"{"op":"logs"}"#)
 }
 
@@ -255,6 +268,42 @@ fn text_detection_is_absent_where_d18_says() {
             "{target}: {}",
             logs(&r)
         );
+    }
+}
+
+#[test]
+fn a_face_read_checks_the_path_and_dispatches_only_on_supported_hosts() {
+    for target in [
+        "ios", "tvos", "macos", "android", "web", "linux", "windows", "terminal", "watchos",
+    ] {
+        let (_app, mut r, calls) = boot("faces", target);
+        let supported = !matches!(target, "linux" | "windows" | "terminal" | "watchos");
+        for (path, granted) in [
+            ("app:/data/face.jpg", false),
+            ("app:/tmp/picked/face.jpg", true),
+        ] {
+            r.act("face", vec![path.into()]).unwrap();
+            pump(&mut r);
+            assert_eq!(
+                sent(&calls, "detectFaces").len(),
+                usize::from(granted && supported),
+                "{target}: {}",
+                logs(&r)
+            );
+            if granted && !supported {
+                assert!(
+                    logs(&r).contains("face-detection.detectFaces: NotSupportedError"),
+                    "{}",
+                    logs(&r)
+                );
+            } else if !granted && supported {
+                assert!(
+                    logs(&r).contains("face-detection.detectFaces: NotAllowedError"),
+                    "{}",
+                    logs(&r)
+                );
+            }
+        }
     }
 }
 

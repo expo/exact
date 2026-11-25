@@ -120,7 +120,7 @@ class AttachmentTest {
         CameraCapture.add(preview)
         module = BarcodeDetectionModule(ExtensionContext(RuntimeEnvironment.getApplication(), "barcode-detection"))
         module.context.tracks.add(TrackEntry("scan", "video", owner = object : TrackOwner {
-            override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String): () -> Unit {
+            override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit {
                 consumer.liveVideo(if (Host.agent) null else CameraCapture)
                 return {}
             }
@@ -196,7 +196,7 @@ class AttachmentTest {
             override fun ended() {}
         }
         try {
-            val leave = videos.subscribe(track.id, consumer, false, "app")
+            val leave = videos.subscribe(track.id, consumer, false, Cause("app"))
             assertTrue(track.leased)
             leave()
             assertFalse(track.leased)
@@ -214,7 +214,7 @@ class AttachmentTest {
         val photoArgs = JSONObject().put("track", "scan").put("android", JSONObject().put("shutterSound", true))
         repeat(2) {
             val attempts = Provider.attempts
-            camera.later("takePhoto", photoArgs) { photos += it }
+            camera.later("takePhoto", photoArgs, null, Cause("app")) { photos += it }
             shadowOf(Looper.getMainLooper()).idle()
             assertEquals("UnknownError", photos.last().getString("error"))
             assertEquals(setOf(preview, analysis), Provider.bound.toSet())
@@ -229,7 +229,7 @@ class AttachmentTest {
         assertEquals(1, closes())
         assertEquals(1, first.single().getInt("frame"))
         Provider.refusePhoto = false
-        camera.later("takePhoto", photoArgs) { photos += it }
+        camera.later("takePhoto", photoArgs, null, Cause("app")) { photos += it }
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(1, Provider.bound.count { it is androidx.camera.core.ImageCapture })
     }
@@ -248,8 +248,8 @@ class AttachmentTest {
         val camera = exact.camera.CameraModule(ExtensionContext(RuntimeEnvironment.getApplication(), "camera"))
         val view = camera.view("exact-camera", "1", "finder", module.context.application,
             JSONObject().put("srcObject", "scan")) { _, _ -> } as android.widget.ImageView
-        camera.bound("1", "finder", "srcObject", "app")
-        camera.displayed("1", "finder", true, "app")
+        camera.bound("1", "finder", "srcObject", "scan", Cause("app"))
+        camera.displayed("1", "finder", true, Cause("app"))
         fun bitmap() = (view.drawable as android.graphics.drawable.BitmapDrawable).bitmap
         try {
             val drawn = bitmap()
@@ -286,7 +286,7 @@ class AttachmentTest {
             assertEquals(1, second.single().getJSONArray("seen").length())
             assertEquals(2, disclosedScan("upc_a").getInt("frames"))
             val inFlight = call(args("upc_a"))
-            camera.displayed("1", "finder", false, "app")
+            camera.displayed("1", "finder", false, Cause("app"))
             assertEquals("idle", inFlight.single().getString("state"))
             Detectors.pending.last().setResult(emptyList())
             shadowOf(Looper.getMainLooper()).idle()

@@ -1,13 +1,23 @@
 //! Apple paragraph projection: inline kernel identities cross as values, never views.
 //! @ref LLP 1044.000 §6 S1
 use super::*;
+#[cfg(test)]
+#[path = "portal_tests.rs"]
+mod portal_tests;
 
 impl<D: DataSource> Host<D> {
-    /// Every node, parents before children: the order a whole tree's views
-    /// are made in.
+    /// Every live node, parents before children: the order a whole tree's
+    /// views are made in.
     pub(super) fn preorder(&self) -> Vec<ViewId> {
         let kernel = self.runner.kernel();
-        let mut stack: Vec<ViewId> = self.runner.roots().into_iter().rev().collect();
+        // A hidden `portal` mover is live and unattached (LLP 1013.002 D5):
+        // the host makes and updates its views as it does an attached one's.
+        let tops = self
+            .runner
+            .roots()
+            .into_iter()
+            .chain(self.runner.hidden_movers());
+        let mut stack: Vec<ViewId> = tops.rev().collect();
         let mut order = Vec::new();
         while let Some(id) = stack.pop() {
             order.push(id);
@@ -530,6 +540,42 @@ impl<D: DataSource> Host<D> {
         self.emit_separators_beside(id, batch);
     }
 
+    /// A placement moves a `portal` mover without touching it: each mover
+    /// whose declaration parent changed, or that became or stopped being one,
+    /// has its `declaredParent` (`props_of`) said again.
+    pub(super) fn tell_declared_parents(&mut self, batch: &mut Batch) {
+        let now = self.runner.declared_parents();
+        if now == self.declared_told {
+            return;
+        }
+        let told = std::mem::replace(&mut self.declared_told, now);
+        let mut changed: Vec<ViewId> = (self.declared_told.iter())
+            .filter(|pair| told.binary_search(pair).is_err())
+            .chain(
+                told.iter()
+                    .filter(|pair| self.declared_told.binary_search(pair).is_err()),
+            )
+            .map(|&(id, _)| id)
+            .collect();
+        changed.sort_unstable();
+        changed.dedup();
+        for id in changed {
+            if self.mirror.contains_key(&id) && self.runner.kernel().node(id).is_some() {
+                self.update(id, batch);
+            }
+        }
+    }
+
+    /// Whether `id`'s kernel children include one of `movers` it does not
+    /// show yet.
+    pub(super) fn receives(&self, id: ViewId, movers: &[ViewId]) -> bool {
+        let Some(node) = self.runner.kernel().node(id) else {
+            return false;
+        };
+        let held = self.mirror.get(&id).map(|m| &m.children);
+        (node.children().iter()).any(|c| movers.contains(c) && held.is_none_or(|h| !h.contains(c)))
+    }
+
     pub(super) fn emit_children(&mut self, id: ViewId, batch: &mut Batch) {
         if self.flat.nodes.contains(&id) {
             if let Some(parent) = self.presented_parent(id) {
@@ -725,6 +771,11 @@ impl<D: DataSource> Host<D> {
             if let Some(parent) = node.parent.filter(|p| self.native_protected_id(*p)) {
                 props.insert("popoverParent", parent.to_string());
             }
+        }
+        // A `portal` mover's events bubble through its declaration (LLP
+        // 1013.002 D1); the presenter walks that path itself.
+        if let Some(parent) = self.runner.declared_parent(node.id) {
+            props.insert("declaredParent", parent.to_string());
         }
         if let Some(line) = super::layout::separator::json(self.runner.kernel(), node.id) {
             props.insert(super::layout::separator::PROP, line);

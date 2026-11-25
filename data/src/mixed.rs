@@ -269,6 +269,21 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
     }
 
     fn owner(&self, source: &str) -> Result<bool, DataError> {
+        if source == exact_runner::SCRIPT_MESSAGE {
+            // The union of the two modules' grants cannot admit delivery to either child.
+            for (rust, grants) in [
+                (false, self.javascript.grants()),
+                (true, self.rust.grants()),
+            ] {
+                if grants
+                    .lines()
+                    .any(|line| line.trim() == "browser.automation")
+                {
+                    return Ok(rust);
+                }
+            }
+            return Err(unavailable("script.message requires browser.automation"));
+        }
         self.sources
             .get(source)
             .copied()
@@ -569,6 +584,18 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
 }
 
 impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, R> {
+    fn queued_send_replacer(
+        &mut self,
+        source: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        let name = source?;
+        if self.owner(name).ok()? {
+            self.rust.queued_send_replacer(source)
+        } else {
+            self.javascript.queued_send_replacer(source)
+        }
+    }
+
     fn prepare_snapshot(
         &mut self,
         module: Option<exact_runner::SnapshotModule<'_>>,

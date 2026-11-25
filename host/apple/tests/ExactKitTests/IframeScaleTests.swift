@@ -49,7 +49,7 @@ final class IframeScaleTests: XCTestCase {
         let node = try XCTUnwrap(session.presenter.views[7101])
         until(5) { node.web != nil }
         XCTAssertNotNil(node.web, "the frame's web view is made")
-        node.scale = scale
+        node.scale = CGPoint(x: scale, y: scale)
         node.applyTransform()
         return node
     }
@@ -85,7 +85,7 @@ final class IframeScaleTests: XCTestCase {
         var local = try pageLocal(node, at: NSPoint(x: 10, y: 5))
         XCTAssertEqual(local.x, 40, accuracy: 0.01)
         XCTAssertEqual(local.y, 20, accuracy: 0.01)
-        node.scale = 1
+        node.scale = CGPoint(x: 1, y: 1)
         node.applyTransform()
         local = try pageLocal(node, at: NSPoint(x: 10, y: 5))
         XCTAssertEqual(local.x, 10, accuracy: 0.01)

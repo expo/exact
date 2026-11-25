@@ -2,7 +2,7 @@
 //! modules' code (`module_seam.rs`).
 
 use super::super::module_seam::{Modules, Readers};
-use super::super::provenance::CallOrigin;
+use super::super::provenance::{CallOrigin, Cause};
 use super::super::{CommitReceipt, DataError, DataSource, Runner, RunnerError, Target};
 use super::AppState;
 use crate::request::{Answer, Dispatch, Outcome, Request};
@@ -19,6 +19,51 @@ pub(crate) struct LinkedModules;
 impl<D: DataSource> Modules<D> for LinkedModules {
     fn state(&self) -> Box<dyn std::any::Any> {
         Box::new(super::Extensions::default())
+    }
+
+    fn launch_substitutes(&self, r: &mut Runner<D>) -> Result<(), RunnerError> {
+        if !crate::agent::carried() {
+            return Ok(());
+        }
+        let Ok(spec) = std::env::var("EXACT_AGENT_SUBSTITUTES") else {
+            return Ok(());
+        };
+        let spec = if let Some(path) = spec.strip_prefix('@') {
+            let path = if let Some(relative) = path.strip_prefix("~/") {
+                std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| {
+                        RunnerError::InvalidSubstitutes("no app home for the launch fixture".into())
+                    })?
+                    .join(relative)
+            } else {
+                std::path::PathBuf::from(path)
+            };
+            std::fs::read_to_string(path)
+                .map_err(|e| RunnerError::InvalidSubstitutes(e.to_string()))?
+        } else {
+            spec
+        };
+        let snapshot: Json = serde_json::from_str(&spec)
+            .map_err(|e: serde_json::Error| RunnerError::InvalidSubstitutes(e.to_string()))?;
+        let group = snapshot["values"]
+            .as_object()
+            .ok_or_else(|| RunnerError::InvalidSubstitutes("expected a substitute table".into()))?;
+        if group.is_empty() {
+            return Ok(());
+        }
+        if let Some(target @ ("linux" | "windows" | "android" | "ios" | "macos" | "tvos")) =
+            snapshot["target"].as_str()
+        {
+            r.module_target = Some(target.to_owned());
+        }
+        r.check_substitutes(group, true, snapshot["restore"] == true)
+            .map_err(RunnerError::InvalidSubstitutes)?;
+        for (key, value) in group {
+            r.note_track(key, value);
+            r.extensions.preferred.insert(key.clone(), value.clone());
+        }
+        Ok(())
     }
 
     fn abort_held_of(&self, r: &mut Runner<D>, id: u64, message: &str) {
@@ -179,6 +224,14 @@ impl<D: DataSource> Modules<D> for LinkedModules {
 
     fn listed_choice(&self, r: &mut Runner<D>, body: &str) {
         r.listed_choice_linked(body)
+    }
+
+    fn next_list_show(&self, r: &Runner<D>) -> Option<f64> {
+        r.next_list_show()
+    }
+
+    fn show_listed(&self, r: &mut Runner<D>) -> Result<Option<CommitReceipt>, RunnerError> {
+        r.show_listed()
     }
 
     fn listed_due(&self, r: &mut Runner<D>, now_ms: f64) {
@@ -401,8 +454,8 @@ impl<D: DataSource> Modules<D> for LinkedModules {
         r.tool_landed_linked(ticket, outcome)
     }
 
-    fn tool_origin(&self, r: &Runner<D>) -> Option<CallOrigin> {
-        r.tool_origin_linked()
+    fn tool_cause(&self, r: &Runner<D>) -> Option<crate::runner::provenance::Cause> {
+        r.tool_cause_linked()
     }
 
     fn tool_refusal(&self, r: &mut Runner<D>, allow_ordered: bool) -> Option<(u64, &'static str)> {
@@ -413,8 +466,17 @@ impl<D: DataSource> Modules<D> for LinkedModules {
         r.tool_tickets_linked()
     }
 
-    fn view_origin(&self, r: &Runner<D>, id: ViewId, prop: Option<&str>) -> Option<CallOrigin> {
+    fn view_origin(&self, r: &Runner<D>, id: ViewId, prop: Option<&str>) -> Option<Cause> {
         r.view_origin_linked(id, prop)
+    }
+
+    fn observe_view_bindings(
+        &self,
+        r: &mut Runner<D>,
+        props: &[(&str, &str)],
+        observer: Option<crate::Announce>,
+    ) {
+        r.observe_view_bindings_linked(props, observer);
     }
 
     fn views_committed(&self, r: &mut Runner<D>) {

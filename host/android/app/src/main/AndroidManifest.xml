@@ -53,6 +53,16 @@
         <!-- What a notification's tap starts (LLP 1133.004.000 D4): the activity under a name no other app may start, so
              an activation is read only from an intent to it, and needs no secret (`Activations.kt`). -->
         <activity-alias android:name=".Notify" android:targetActivity=".MainActivity" android:exported="false" />
+        <!-- What a control's tile starts to press it from the app in front (LLP 1126.004 D5, `Controls.kt`): unexported,
+             and the press it names is a record the tile left in this process. -->
+        <activity-alias android:name=".Control" android:targetActivity=".MainActivity" android:exported="false" />
+        <!-- What a locked control's tile starts to run its tool once the person unlocks (`Controls.kt`, ControlPress): a
+             transparent window, out of Recents, that finishes itself once it has pressed or the unlock is turned down; not
+             `noHistory`, which would end it under the credential screen, and kept across a rotation, which would drop
+             the press. -->
+        <activity android:name="dev.exact.canvas.ControlPress" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:taskAffinity="" android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|density|keyboard|keyboardHidden|navigation" />
         <!-- Only adb shell selects a development loop for subsequent starts of this APK. -->
         <activity-alias android:name=".DevLoop" android:targetActivity=".MainActivity" android:enabled="${exactDevelopment}"
             android:exported="true" android:permission="android.permission.DUMP" />

@@ -159,6 +159,12 @@ named here pass.
     the face must cover the original characters. An empty composed form counted as
     full coverage and made fallback stop at a face missing both glyphs (expo/exact#1203).
 
+22. **Emoji presentation.** Font selection uses Unicode emoji presentation and
+    the grapheme’s selector before shaping the original text. An authored face
+    keeps its glyph for an unqualified character. For a bare text-default
+    symbol the platform can choose the fallback presentation. A covering face
+    of the other presentation remains available when the preferred one is missing.
+
 `Cargo.toml` also carries the empty `[workspace]` boundary described below;
 retain it when updating. All remaining archive files are byte-for-byte upstream.
 The upstream test suite (not in the archive) passed with patches 1–4 applied; with 4–7, five tests

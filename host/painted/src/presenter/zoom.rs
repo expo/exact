@@ -13,6 +13,7 @@
 use super::*;
 use crate::paint::zoom::{range, Fit};
 use contact::Contact;
+use exact_kernel::NodeKey;
 
 /// An animated zoom's length, ms: a glide's (`glide.rs`) and the web's.
 const ZOOM_MS: f64 = 300.;
@@ -38,6 +39,8 @@ pub(super) struct Zooms {
     /// The contact that is down is a double tap's second: no press, and its
     /// lift zooms (the presenter's recognizer).
     second: Option<ViewId>,
+    last_handler_tap: Option<(NodeKey, (f32, f32), f64)>,
+    handler_down: Option<HandlerTap>,
     /// A shell recognizes the double tap itself (Android's reader, with
     /// `GestureDetector`) and says so through [`Presenter::zoom_tap_down`].
     pub(super) shell_taps: bool,
@@ -74,6 +77,13 @@ struct Animation {
     to: f32,
     focal: (f32, f32),
     start: f64,
+}
+
+struct HandlerTap {
+    listener: NodeKey,
+    origin: (f32, f32),
+    down: f64,
+    second: bool,
 }
 
 struct HeldTap {
@@ -263,11 +273,13 @@ impl<D: DataSource> Presenter<D> {
     /// The innermost zoomable scroller under a viewport point: what a
     /// shell's second finger there pinches (Windows's `touch.rs`).
     pub fn zoomable_under(&mut self, x: f32, y: f32) -> Option<ViewId> {
-        self.hit(x, y).and_then(|hit| self.zoomable_from(hit))
+        self.hit(x, y)
+            .filter(|&hit| self.allows_touch_zoom(hit, self.zoomable_from(hit)))
+            .and_then(|hit| self.zoomable_from(hit))
     }
 
     /// The innermost zoomable container from `hit` out.
-    fn zoomable_from(&self, hit: ViewId) -> Option<ViewId> {
+    pub(super) fn zoomable_from(&self, hit: ViewId) -> Option<ViewId> {
         let kernel = self.host.kernel();
         let mut at = Some(hit);
         while let Some(id) = at {
@@ -566,11 +578,79 @@ impl<D: DataSource> Presenter<D> {
             .err()
     }
 
+    fn double_tap_listener(&mut self, at: (f32, f32)) -> Option<NodeKey> {
+        let hit = self.hit(at.0, at.1)?;
+        let listener = self.pointer_node(hit, &[EventKind::Dblclick])?;
+        let key = self.host.kernel().node(listener)?.key;
+        self.input_live(key).then_some(key)
+    }
+
+    pub(super) fn handler_tap_moved(&mut self, at: (f32, f32), now: f64) {
+        if self.zooms.handler_down.as_ref().is_some_and(|tap| {
+            now - tap.down > DOUBLE_TAP_MS
+                || (at.0 - tap.origin.0).hypot(at.1 - tap.origin.1) > self.slop as f32
+        }) {
+            self.zooms.handler_down = None;
+        }
+    }
+
+    /// The ordinary second press is delivered before its double click. A press
+    /// that removes the listener cannot send the double click to its replacement.
+    pub(super) fn press_and_double_tap(
+        &mut self,
+        contact: Contact,
+        x: f32,
+        y: f32,
+        now: f64,
+        event: f64,
+    ) -> Result<bool, String> {
+        let tap = self
+            .zooms
+            .handler_down
+            .take()
+            .filter(|tap| self.double_tap_listener((x, y)) == Some(tap.listener));
+        let pressed = self.press_lifted(contact, x, y, now)?;
+        if let Some(tap) = tap.filter(|tap| self.input_live(tap.listener)) {
+            if tap.second {
+                if let Some(id) = self.host.kernel().node_by_key(tap.listener).map(|n| n.id) {
+                    if let Some(e) =
+                        self.pointer_dispatch(id, EventKind::Dblclick, Event::Dblclick, now)
+                    {
+                        return Err(e);
+                    }
+                }
+            } else {
+                self.zooms.last_handler_tap = Some((tap.listener, (x, y), event));
+            }
+        }
+        Ok(pressed)
+    }
+
     /// A touch landed at `at` (viewport points): when it is a double tap's
     /// second (the presenter's recognizer), the first tap's press never
     /// fires and this one presses nothing; its lift zooms.
-    pub(super) fn zoom_contact_down(&mut self, at: (f32, f32), now: f64) {
+    pub(super) fn zoom_contact_down(&mut self, at: (f32, f32), now: f64, event: f64) {
         self.zooms.second = None;
+        let last = self.zooms.last_handler_tap.take();
+        self.zooms.handler_down = if self.pointer_kind == PointerKind::Touch {
+            self.double_tap_listener(at).map(|listener| {
+                // Android GestureDetector excludes the first 40 ms after the first up.
+                let minimum = if self.zooms.shell_taps { 40. } else { 0. };
+                let second = last.is_some_and(|(key, point, when)| {
+                    key == listener
+                        && (minimum..=DOUBLE_TAP_MS).contains(&(event - when))
+                        && (at.0 - point.0).hypot(at.1 - point.1) <= DOUBLE_TAP_SLOP
+                });
+                HandlerTap {
+                    listener,
+                    origin: at,
+                    down: event,
+                    second,
+                }
+            })
+        } else {
+            None
+        };
         if self.zooms.shell_taps || !self.contact_is_direct() {
             return;
         }
@@ -697,8 +777,17 @@ impl<D: DataSource> Presenter<D> {
             let Some(scale) = scale.as_f64().filter(|s| s.is_finite() && *s > 0.) else {
                 return fail("pinch: expected a positive finite scale");
             };
-            let Some(container) = container else {
-                return fail(&format!("unsupported: no zoomable scroller under view {id}: this host pinches only a zoomable scroller (LLP 1057.001.000 §5; LLP 1057.001 §4)"));
+            let previous = self.pointer_kind;
+            self.set_pointer_kind(PointerKind::Touch);
+            let took = self.drive_transform_pinch(at, scale);
+            self.set_pointer_kind(previous);
+            match took {
+                Ok(true) => return Some(serde_json::json!({"tapped":id, "at":[at.0,at.1], "pinch":scale, "delivery":"presenter", "native":"Presenter.drive_transform_pinch"}).to_string()),
+                Err(e) => return fail(&e),
+                Ok(false) => {}
+            }
+            let Some(container) = self.zoomable_under(at.0, at.1) else {
+                return fail(&format!("unsupported: no zoomable scroller or eligible transform binding under view {id}"));
             };
             self.zoom_pinch_began(container);
             let step = (scale as f32).powf(1. / 8.);
@@ -716,6 +805,8 @@ impl<D: DataSource> Presenter<D> {
                 .to_string(),
             );
         }
+        let previous = self.pointer_kind;
+        self.set_pointer_kind(PointerKind::Touch);
         let shell = std::mem::replace(&mut self.zooms.shell_taps, false);
         let now = self.host.now();
         let mut error = None;
@@ -725,6 +816,7 @@ impl<D: DataSource> Presenter<D> {
             error = error.or(down).or(up);
         }
         self.zooms.shell_taps = shell;
+        self.set_pointer_kind(previous);
         if let Some(e) = error {
             return fail(&e);
         }

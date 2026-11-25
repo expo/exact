@@ -204,7 +204,7 @@ final class ImageRenderingTests: XCTestCase {
                 let displayScale = node.traitCollection.displayScale
                 #endif
                 for scale in [2.0, 2.5] {
-                    node.scale = scale; node.applyTransform()
+                    node.scale = CGPoint(x: scale, y: scale); node.applyTransform()
                     #if os(macOS)
                     Capture.prepareBackingLayers(of: p.viewport)
                     p.viewport.displayIfNeeded()
@@ -240,7 +240,7 @@ final class ImageRenderingTests: XCTestCase {
                     }
                     XCTAssertEqual(mismatches, 0, "the composited scale \(scale) samples the source pixels; actual \(columns.map { a[(row * size + $0) * 4] }), expected \(columns.map { e[$0 * 4] })")
                 }
-                node.scale = 1; node.applyTransform()
+                node.scale = CGPoint(x: 1, y: 1); node.applyTransform()
             } else {
                 let layer = try XCTUnwrap(node.imageLayer)
                 let pixels = layer.contents != nil ? layer : try XCTUnwrap(layer.sublayers?.first)

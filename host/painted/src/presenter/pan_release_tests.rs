@@ -22,9 +22,9 @@ const SOURCE: &str = r#"component App
         text "drag me"
       text `${x} ${vx} ${vy} ${releases} ${presses}` testId="out"
 "#;
-fn boot() -> Presenter<()> {
+fn boot(source: &str) -> Presenter<()> {
     let (p, error) = Presenter::boot_with(
-        &crate::test_plan(SOURCE),
+        &crate::test_plan(source),
         (),
         (400., 500.),
         1.,
@@ -50,7 +50,7 @@ fn out(p: &Presenter<()>) -> Vec<f64> {
 
 #[test]
 fn a_flick_releases_once_at_the_trackers_velocity() {
-    let mut p = boot();
+    let mut p = boot(SOURCE);
     assert!(p.pointer_down(100., 100., 0.).unwrap());
     for i in 1..=5 {
         p.pointer_move(100. + 20. * i as f32, 100., 16. * i as f64)
@@ -67,7 +67,7 @@ fn a_flick_releases_once_at_the_trackers_velocity() {
 
 #[test]
 fn a_tap_presses_and_releases_nothing() {
-    let mut p = boot();
+    let mut p = boot(SOURCE);
     assert!(p.pointer_down(100., 100., 0.).unwrap());
     p.pointer_move(102., 101., 10.).unwrap();
     p.pointer_up(102., 101., 20.).unwrap();
@@ -76,7 +76,7 @@ fn a_tap_presses_and_releases_nothing() {
 
 #[test]
 fn a_wheel_before_pan_recognition_preserves_the_press() {
-    let mut p = boot();
+    let mut p = boot(SOURCE);
     assert!(p.pointer_down(100., 100., 0.).unwrap());
     p.pointer_move(102., 101., 10.).unwrap();
     p.wheel_at(102., 101., 0., 40.);
@@ -87,7 +87,7 @@ fn a_wheel_before_pan_recognition_preserves_the_press() {
 
 #[test]
 fn a_wheel_cancels_a_recognized_pan_with_one_release_at_rest() {
-    let mut p = boot();
+    let mut p = boot(SOURCE);
     assert!(p.pointer_down(100., 100., 0.).unwrap());
     p.pointer_move(150., 100., 16.).unwrap();
     p.pointer_move(200., 100., 32.).unwrap();
@@ -99,15 +99,40 @@ fn a_wheel_cancels_a_recognized_pan_with_one_release_at_rest() {
 
 #[test]
 fn a_cancelled_pan_releases_at_rest() {
-    let mut p = boot();
+    let mut p = boot(
+        r#"component App
+  state x = 0
+  state origin = 0
+  state drops = 0
+  state releases = 0
+  state releasedAt = 0
+  state speed = 0
+  action begin
+    origin = x
+  action moved(dx: number, dy: number)
+    x = x + dx
+  action rollback(e: PointerEvent)
+    x = origin
+  action drop
+    drops = drops + 1
+  action release(vx: number, vy: number)
+    releasedAt = x
+    speed = vx
+    releases = releases + 1
+  view
+    column
+      box width=400 height=300 pan=moved panrelease=release pointerdown=begin pointercancel=rollback pointerup=drop
+      text `${x} ${releasedAt} ${speed} ${releases} ${drops}` testId="out"
+"#,
+    );
     assert!(p.pointer_down(100., 100., 0.).unwrap());
     p.pointer_move(150., 100., 16.).unwrap();
     p.pointer_move(200., 100., 32.).unwrap();
     p.pointer_cancel(40.).unwrap();
-    assert_eq!(out(&p), vec![100., 0., 0., 1., 0.]);
+    assert_eq!(out(&p), vec![0., 0., 0., 1., 0.]);
     // A held contact that stops before lifting releases at rest too.
     assert!(p.pointer_down(100., 100., 100.).unwrap());
     p.pointer_move(160., 100., 116.).unwrap();
     p.pointer_up(160., 100., 500.).unwrap();
-    assert_eq!(out(&p), vec![160., 0., 0., 2., 0.]);
+    assert_eq!(out(&p), vec![60., 60., 0., 2., 1.]);
 }

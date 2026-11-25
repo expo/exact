@@ -35,7 +35,7 @@ const page = sheet + `<style id="exact-looks">${rules}</style>
 <script type="module">
   import { createInputHandlers } from './input-glue.js';
   addEventListener('exact-hold', () => { window.announced = [...(window.announced ?? []), typeof globalThis.exact?.hold]; });
-  createInputHandlers({ root: document.getElementById('exact-root'), views: new Map(), retiredViews: new Set(), ready: () => true, inertAncestor: () => false, dispatch() {} });
+  createInputHandlers({ root: document.getElementById('exact-root'), views: new Map(), retiredViews: new Set(), ready: () => true, inertAncestor: el => el.closest('[inert]') !== null, dispatch() {} });
   window.dropped = []; window.ready = true;
 </script>`;
 
@@ -65,7 +65,12 @@ check('a held state is the real one, until real input, its disabling or its goin
   };
   try {
     await readyPage(cdp, sessionId, `http://127.0.0.1:${server.address().port}/`);
-    const settle = () => evaluate(`(document.getAnimations().forEach(a => a.finish()), new Promise(r => requestAnimationFrame(() => r())))`);
+    const settle = () => evaluate(`(async () => {
+      const frame = () => new Promise(requestAnimationFrame);
+      await frame(); await frame();
+      document.getAnimations().forEach(a => a.finish());
+      await frame();
+    })()`);
     // As rgb(), whichever form it computes to (the press paint's is its look beneath's).
     const face = async () => { await settle(); return evaluate(`(c => c.replace(/^color\\(srgb ([\\d.]+) ([\\d.]+) ([\\d.]+)( \\/ [\\d.]+)?\\)$/, (_, r, g, b, a) => { const v = [r, g, b].map(x => x * 255); return v.every(Number.isInteger) && !a ? 'rgb(' + v.join(', ') + ')' : _; }))((exact.pressShown?.(document.getElementById('card')) ?? getComputedStyle(document.getElementById('card'))).backgroundColor)`); };
     const hold = (id, state) => evaluate(`(r => ({ held: r.held ?? null, reason: r.reason ?? null, el: r.el?.id ?? null }))(exact.hold(document.getElementById('${id}'), ${JSON.stringify(state)}, reason => dropped.push(reason)))`);
@@ -84,6 +89,16 @@ check('a held state is the real one, until real input, its disabling or its goin
     expect(asked.held).toEqual({ state: 'active', node: 3, site: 4, instance: [], rows: [{ name: 'press_background_color', value: '#0000ff', token: { names: ['ink'], text: 'ink', modes: '', implied: false } }] });
     // The element it was named on answers too, with the press's rows.
     expect((await evaluate('exact.heldOf(document.getElementById("label"))')).held.rows).toEqual([{ name: 'press_background_color', value: 'rgba(0,0,255,1)' }]);
+    // A design hold survives environmental cancellation, including a repaint while its ancestor is inert.
+    await evaluate("dispatchEvent(new Event('blur'))");
+    expect(await face()).toBe('rgb(0, 0, 255)');
+    await evaluate("document.getElementById('exact-root').inert = true");
+    expect(await face()).toBe('rgb(0, 0, 255)');
+    await evaluate("document.getElementById('card').style.setProperty('--exact-press-background-color', 'rgb(0,128,0)')");
+    expect(await face()).toBe('rgb(0, 128, 0)');
+    expect((await evaluate('exact.heldOf(document.getElementById("card"))')).held.state).toBe('active');
+    expect(await dropped()).toEqual([]);
+    await evaluate("document.getElementById('exact-root').inert = false; document.getElementById('card').style.setProperty('--exact-press-background-color', 'rgba(0,0,255,1)')");
     // A JS link's `data-view` is an empty marker: no node 0 (the runtime names it, as the agent does).
     expect((await hold('lnk', 'active')).held).toBe('active');
     expect((await evaluate('exact.heldOf(document.getElementById("lnk"))')).held.node).toBe(null);

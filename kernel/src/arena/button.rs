@@ -82,8 +82,7 @@ impl NodeArena {
     /// Whether a slot is a `<button>` element on the web: a Pressable,
     /// whatever its ARIA role, unless an `href` makes it an `<a>`.
     pub(crate) fn is_button(&self, slot: u32) -> bool {
-        self.node_type(slot) == NodeType::Pressable
-            && self.props(slot).str(crate::PropId::Href).is_none()
+        self.node_type(slot) == NodeType::Pressable && !self.props(slot).has_link_destination()
     }
 
     pub(crate) fn is_native_button(&self, slot: u32) -> bool {

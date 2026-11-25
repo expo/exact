@@ -76,7 +76,7 @@ impl DataSource for Granted {
 }
 
 /// A shell that makes windows and keeps nothing they draw.
-struct Blank;
+pub(super) struct Blank;
 impl SurfacePainter for Blank {
     fn record(&mut self, _: (f32, f32), _: f32, _: &mut dyn FnMut(&mut dyn Backend)) -> Vec<u32> {
         Vec::new()
@@ -217,7 +217,7 @@ fn a_field_inside_keeps_its_contact_and_draggable_false_drags_nothing() {
 }
 
 /// The reader's sheet takes `app:/` files once it says so
-/// ([`Presenter::serve_share_sheet`]), and still no element's picture.
+/// (`canvas/boot.rs`), and still no element's picture.
 #[test]
 fn the_share_sheet_is_given_app_files_where_it_says_so_and_no_picture() {
     let mut p = boot();
@@ -233,16 +233,12 @@ fn the_share_sheet_is_given_app_files_where_it_says_so_and_no_picture() {
         &p,
         "share: refused: files are not carried to this host's share sheet"
     ));
-    p.serve_share_sheet();
-    let page = p.host().runner().page();
-    assert_eq!(
-        (
-            page.can_share,
-            page.can_share_files,
-            page.can_share_pictures
-        ),
-        (true, true, false)
-    );
+    let page = exact_runner::Page {
+        can_share: true,
+        can_share_files: true,
+        ..p.host().runner().page()
+    };
+    assert!(p.set_page(page).is_none());
     tap(&mut p, "send");
     let shares = taken(&mut p, 4);
     let [words] = shares.as_slice() else {
@@ -326,12 +322,12 @@ fn a_held_finger_moving_on_from_a_menu_lifts_the_drag() {
     let drags = taken(&mut p, 23);
     assert!(drags.is_empty() && p.surface().is_some(), "its menu");
     let slop = exact_motion::gesture::SLOP as f32;
-    p.reader_touch(2, x + slop - 1., y, 120.).unwrap();
+    p.reader_touch(2, x + slop - 1., y, 120., 120.).unwrap();
     assert!(
         taken(&mut p, 23).is_empty() && p.surface().is_some(),
         "within the slop"
     );
-    p.reader_touch(2, x + slop + 1., y, 140.).unwrap();
+    p.reader_touch(2, x + slop + 1., y, 140., 140.).unwrap();
     let drags = taken(&mut p, 23);
     assert_eq!(drags.len(), 1, "past it");
     assert_eq!(drags[0][0], held as i32);
@@ -342,8 +338,8 @@ fn a_held_finger_moving_on_from_a_menu_lifts_the_drag() {
     assert_eq!(p.long_presses(), before.wrapping_add(2));
     // Lifted, the finger lifts nothing more.
     assert!(p.long_press(x, y, 200.));
-    p.reader_touch(1, x, y, 210.).unwrap();
-    p.reader_touch(2, x + 40., y, 220.).unwrap();
+    p.reader_touch(1, x, y, 210., 210.).unwrap();
+    p.reader_touch(2, x + 40., y, 220., 220.).unwrap();
     assert!(taken(&mut p, 23).is_empty());
 }
 
@@ -384,9 +380,9 @@ fn a_press_or_a_picture_inside_lifts_the_node_and_a_control_that_follows_keeps_i
     // A press the finger armed on the button presses nothing once the drag lifts.
     let rect = p.box_of(id(&p, "kid-button")).unwrap().rect;
     let (x, y) = (rect.0 + 3., rect.1 + 3.);
-    p.reader_touch(0, x, y, 0.).unwrap();
+    p.reader_touch(0, x, y, 0., 0.).unwrap();
     assert!(p.long_press(x, y, 500.));
-    p.reader_touch(1, x, y, 600.).unwrap();
+    p.reader_touch(1, x, y, 600., 600.).unwrap();
     p.run_commands(|| Granted);
     assert_eq!(taken(&mut p, 23).len(), 1);
     let menus = p.host().kernel().node(id(&p, "menus")).unwrap();
@@ -408,7 +404,7 @@ fn a_menu_stays_when_the_node_carries_nothing_and_a_new_contact_ends_the_lift() 
     let rect = p.box_of(id(&p, "empty")).unwrap().rect;
     let (x, y) = (rect.0 + 10., rect.1 + 10.);
     assert!(p.long_press(x, y, 100.));
-    p.reader_touch(2, x + 40., y, 120.).unwrap();
+    p.reader_touch(2, x + 40., y, 120., 120.).unwrap();
     p.run_commands(|| Granted);
     assert!(
         taken(&mut p, 23).is_empty() && p.surface().is_some(),
@@ -419,8 +415,8 @@ fn a_menu_stays_when_the_node_carries_nothing_and_a_new_contact_ends_the_lift() 
     let (x, y) = (rect.0 + 10., rect.1 + 10.);
     for end in [0, 3] {
         assert!(p.long_press(x, y, 200.));
-        p.reader_touch(end, x, y, 210.).unwrap();
-        p.reader_touch(2, x + 40., y, 220.).unwrap();
+        p.reader_touch(end, x, y, 210., 210.).unwrap();
+        p.reader_touch(2, x + 40., y, 220., 220.).unwrap();
         p.run_commands(|| Granted);
         assert!(taken(&mut p, 23).is_empty(), "action {end}");
         p.close_surface(230.);

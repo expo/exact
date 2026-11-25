@@ -38,3 +38,17 @@ export function keptModules({ root, moduleTarget, target, profile, env, sdk, met
   };
   return { find: (crate) => kept(spec(crate)).find(), keep: (crate, started) => kept(spec(crate)).keep(started) };
 }
+
+/**
+ * Cargo's arguments for module `crate`'s dylib. Each module's Cargo.toml
+ * declares an rlib alone, which `cargo rustc` makes a cdylib here. Cargo
+ * names a cdylib package's rlib without its unit hash (`use_extra_filename`,
+ * src/compiler/build_runner/compilation_files.rs), so two builds in one
+ * target directory would share one rlib, and a host linking a module's rlib
+ * would get the other build's. `cargo rustc` takes one package a run; runs
+ * started together wait for one another on Cargo's lock of `targetDir`, in
+ * their own processes. `target` null is the machine's own.
+ */
+export function dylibArgs(crate, profile, target, targetDir, manifest) {
+  return ['rustc', '--crate-type', 'cdylib', '--profile', profile, '-p', crate, '--lib', ...(target ? ['--target', target] : []), '--target-dir', targetDir, '--manifest-path', manifest];
+}

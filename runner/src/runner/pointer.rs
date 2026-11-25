@@ -1,4 +1,4 @@
-//! `pointerdown`, `pointerup` and `pointermove`'s record (LLP 1005 §3; LLP
+//! The pointer events' record (LLP 1005 §3; LLP
 //! 1056 §3 stage 3, as built): a subset of DOM's `PointerEvent`, by its own
 //! names, which an action takes as an optional last parameter (the paint
 //! diary's F1: a drawing app had no coordinates, movement or pressure).
@@ -179,9 +179,9 @@ pub struct WheelEvent {
     pub held: super::KeyModifiers,
 }
 
-/// Files dropped on a node from outside the app (DOM's `drop` with its
-/// `DataTransfer`'s files): each a `doc:` handle the host minted, as a
-/// picker's choice is (LLP 1069.010 D1).
+/// What a drag drops on a node (DOM's `drop` with its `DataTransfer`): its
+/// files, each a `doc:` handle the host minted, as a picker's choice is
+/// (LLP 1069.010 D1), its plain text and its link (LLP 1094.001 D1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DropEvent {
     /// From the left of the node's content box, CSS px.
@@ -190,6 +190,10 @@ pub struct DropEvent {
     pub offset_y: f64,
     /// The dropped files' handles, in the order the platform gave them.
     pub files: Vec<String>,
+    /// The drag's plain text, `""` when it carries none.
+    pub text: String,
+    /// The drag's first link that is not a file, `""` when it carries none.
+    pub url: String,
     /// The modifier keys held.
     pub held: super::KeyModifiers,
 }
@@ -240,30 +244,35 @@ impl WheelEvent {
 }
 
 impl DropEvent {
-    /// Decode the point line and the handles under it; `None` without a
-    /// file, or for a line that is not a `doc:` handle — a host mints every
-    /// dropped file before it is delivered.
+    /// Decode the point line and the JSON line under it, `[files, text,
+    /// url]`, which no text or file name can split; `None` for a drop that
+    /// carries nothing, or a file that is not a `doc:` handle — a host mints
+    /// every dropped file before it is delivered.
     pub fn parse(payload: &str) -> Option<DropEvent> {
-        let mut lines = payload.split('\n');
-        let ([offset_x, offset_y], held) = numbers(lines.next()?)?;
-        let files: Vec<String> = lines.map(str::to_owned).collect();
-        let valid = !files.is_empty() && files.iter().all(|f| f.starts_with("doc:/"));
-        valid.then_some(DropEvent {
+        let (point, data) = payload.split_once('\n')?;
+        let ([offset_x, offset_y], held) = numbers(point)?;
+        let (files, text, url): (Vec<String>, String, String) = serde_json::from_str(data).ok()?;
+        let carries = !files.is_empty() || !text.is_empty() || !url.is_empty();
+        (carries && files.iter().all(|f| f.starts_with("doc:/"))).then_some(DropEvent {
             offset_x,
             offset_y,
             files,
+            text,
+            url,
             held,
         })
     }
 
-    /// A file drag's `dragenter` or `dragleave`: the point line alone, no
-    /// files (the DOM's are protected until the drop).
+    /// A drag's `dragenter` or `dragleave`: the point line alone, no data
+    /// (the DOM keeps a drag's data from a page until the drop).
     pub fn parse_point(payload: &str) -> Option<DropEvent> {
         let ([offset_x, offset_y], held) = numbers(payload)?;
         Some(DropEvent {
             offset_x,
             offset_y,
             files: Vec::new(),
+            text: String::new(),
+            url: String::new(),
             held,
         })
     }
@@ -274,6 +283,8 @@ impl DropEvent {
             Value::Number(self.offset_x),
             Value::Number(self.offset_y),
             Value::list(self.files.iter().map(|f| Value::str(f)).collect()),
+            Value::str(&self.text),
+            Value::str(&self.url),
             Value::Bool(self.held.shift),
             Value::Bool(self.held.ctrl),
             Value::Bool(self.held.alt),
@@ -283,13 +294,13 @@ impl DropEvent {
 }
 
 impl Event {
-    /// Decode ABI kind 29 (`pointerdown`), 30 (`pointerup`) or 31
-    /// (`pointermove`).
+    /// Decode a pointer dispatch from the host (exact.h).
     pub fn pointer_payload(kind: u32, payload: &str) -> Option<Event> {
         let pointer = PointerEvent::parse(payload)?;
         match kind {
             29 => Some(Event::Pointerdown(pointer)),
             30 => Some(Event::Pointerup(pointer)),
+            65 => Some(Event::Pointercancel(pointer)),
             31 => Some(Event::Pointermove(pointer)),
             _ => None,
         }
@@ -365,10 +376,28 @@ mod tests {
         for bad in ["", "1,2,3,4", "1,2,3,4,3", "1,2,NaN,4,0", "1,2,3,4,0,Hyper"] {
             assert!(WheelEvent::parse(bad).is_none(), "{bad}");
         }
-        let d = DropEvent::parse("5,6,Shift\ndoc:/1/a.board\ndoc:/2/b, c.board").unwrap();
-        assert_eq!(d.files, ["doc:/1/a.board", "doc:/2/b, c.board"]);
-        assert!(d.held.shift);
-        for bad in ["5,6", "5,6\n/tmp/a.board", "x\ndoc:/1/a"] {
+        let d = DropEvent::parse(
+            "5,6,Shift\n[[\"doc:/1/a.board\",\"doc:/2/b, c\\n.board\"],\"\",\"\"]",
+        )
+        .unwrap();
+        assert_eq!(d.files, ["doc:/1/a.board", "doc:/2/b, c\n.board"]);
+        assert!(d.held.shift && d.text.is_empty() && d.url.is_empty());
+        // Text and a link, with no file; a line break stays inside the text.
+        let t = DropEvent::parse("1,2\n[[],\"Mount Fuji\\nJapan\",\"https://example.com/fuji\"]")
+            .unwrap();
+        assert!(t.files.is_empty());
+        assert_eq!(
+            (t.text.as_str(), t.url.as_str()),
+            ("Mount Fuji\nJapan", "https://example.com/fuji")
+        );
+        for bad in [
+            "5,6",
+            "5,6\n[[],\"\",\"\"]",
+            "5,6\n[[\"/tmp/a.board\"],\"\",\"\"]",
+            "x\n[[],\"a\",\"\"]",
+            "5,6\ndoc:/1/a",
+            "5,6\n[[],\"a\"]",
+        ] {
             assert!(DropEvent::parse(bad).is_none(), "{bad}");
         }
         // A drag's enter or leave is the point alone.

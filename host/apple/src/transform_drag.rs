@@ -1,9 +1,11 @@
 //! Apple admission of the fixed photo pair. @ref LLP 1041 §8.5 / LLP 1002 D4.
 //!
-//! Frozen wire v2 is EXACTLY 120 LE bytes: version/op u32 at 0/4;
+//! Wire v3 is EXACTLY 128 LE bytes: version/op u32 at 0/4;
 //! runtime/handle/target/clip/geometry-sequence u64 at 8/16/24/32/40;
 //! original Translate/Scale serials u64 at 48/56; six f64 values at 64..104;
-//! clock-ms f64 at 112. All JSON u64s are decimal strings, never JS Numbers.
+//! clock-ms f64 at 112; sample-ms f64 at 120, the input's own time carried
+//! onto the clock from where the drag began, which the release velocity
+//! reads (LLP 1057.001 §3). All JSON u64s are decimal strings, never JS Numbers.
 //! Ops 10 geometry=[bw,bh,pw,ph,0,0], 11 begin=[x,y,s,0,0,0],
 //! 12 move=[x,y,s,0,0,0], 13 action=[x,y,s,0,0,0], 14 invalidate=[0;6].
 //! Op 13's velocities are the engine's own, measured over every value the
@@ -295,7 +297,12 @@ impl<D: DataSource> Host<D> {
         if still
             && !self
                 .engine
-                .update_transform_hold(active.held, input.now_ms / 1000.0, input.samples())
+                .update_transform_hold_at(
+                    active.held,
+                    input.now_ms / 1000.0,
+                    input.at_ms / 1000.0,
+                    input.samples(),
+                )
                 .map_err(|_| "transform move refused")?
         {
             return Ok(self.transform_stale());
@@ -311,11 +318,12 @@ impl<D: DataSource> Host<D> {
         }
         self.now_ms = input.now_ms;
         // The release velocity is the engine's, over every value the pair was
-        // given (LLP 1057.001 §3); finite samples give a finite slope.
-        let now_s = input.now_ms / 1000.0;
+        // given at the times they were sampled (LLP 1057.001 §3); finite
+        // samples give a finite slope.
+        let at_s = input.at_ms / 1000.0;
         let [translate, scale] = [active.held.translate(), active.held.scale()].map(|s| {
             self.engine
-                .hold_velocity(s.token, now_s)
+                .hold_velocity(s.token, at_s)
                 .unwrap_or(exact_motion::Value::ZERO)
         });
         let measured = [translate.x, translate.y, scale.x];

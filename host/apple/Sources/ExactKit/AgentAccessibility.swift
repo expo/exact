@@ -328,7 +328,8 @@ extension Presenter {
             if count > room { w.stopped = true }
             return (0..<min(count, room)).compactMap { o.accessibilityElement(at: $0) as AnyObject? }
         }
-        let subviews = (o as? UIView)?.subviews ?? []
+        // A box's extension view, hidden from accessibility, spends none of the walk (LLP 1123 D13)
+        let subviews = (o as? UIView)?.heldSubviews ?? []
         if subviews.count > room { w.stopped = true }
         return Array(subviews.prefix(room))
     }

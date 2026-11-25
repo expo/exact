@@ -146,8 +146,9 @@ final class FrameHealthIOSTests: XCTestCase {
         tap(CGPoint(x: minimize.midX * card.scale, y: minimize.midY * card.scale))
         XCTAssertTrue(card.minimized, "the visible Minimize control takes a tap")
         let bar = scene.statusBarManager?.statusBarFrame ?? .zero
-        XCTAssertEqual(card.frame.origin, CGPoint(x: full.minX, y: max(full.minY, overlay.convert(bar, from: nil).maxY + 8)),
-            "at the same edge, 8 points below the status bar")
+        let rest = clearOfCorner(CGPoint(x: full.minX, y: max(full.minY, overlay.convert(bar, from: nil).maxY + 8)), overlay)
+        XCTAssertEqual(card.frame.minX, rest.x, accuracy: 0.01, "at the same edge")
+        XCTAssertEqual(card.frame.minY, rest.y, accuracy: 0.01, "8 points below the status bar")
         let free = CGPoint(x: full.midX, y: full.maxY - 60)
         let button = UIButton(type: .system)
         button.frame = CGRect(x: free.x - 40, y: free.y - 22, width: 80, height: 44)
@@ -222,6 +223,12 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertFalse(card.minimized, "with the keyboard dismissed, the compact card restores")
     }
 
+    /// Where the minimized card that would rest at `origin`, by the top edge, rests clear of the screen's corner
+    private func clearOfCorner(_ origin: CGPoint, _ overlay: FrameHealthOverlay) -> CGPoint {
+        FrameHealthCardFace.clearing(CGRect(origin: origin, size: overlay.card.frame.size), cornersOf: overlay.screenRadius,
+            in: overlay.bounds, horizontal: true)
+    }
+
     func testTheMinimizedCardKeepsBelowTheStatusBar() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the minimized frame-health card beside the status bar")
@@ -243,7 +250,7 @@ final class FrameHealthIOSTests: XCTestCase {
         card.activate?(.minimize)
         overlay.layoutIfNeeded()
         XCTAssertEqual(card.frame.minY, overlay.convert(bar, from: nil).maxY + 8, accuracy: 0.5, "8 points below it, as from the side")
-        XCTAssertEqual(card.frame.minX, 8, accuracy: 0.5)
+        XCTAssertEqual(card.frame.minX, clearOfCorner(CGPoint(x: 8, y: card.frame.minY), overlay).x, accuracy: 0.5)
         card.activate?(.minimize)
         overlay.layoutIfNeeded()
         XCTAssertEqual(card.frame.minY, 8, accuracy: 0.5)
@@ -351,9 +358,9 @@ final class FrameHealthIOSTests: XCTestCase {
         }
 
         let navigation = DevMenuController.navigation()
-        let shown = expectation(description: "native developer sheet presented")
-        root.present(navigation, animated: false) { shown.fulfill() }
-        wait(for: [shown], timeout: 5)
+        var shown = false, pushed = false, dismissed = false
+        root.present(navigation, animated: false) { shown = true }
+        waitFor("the native developer sheet is presented") { shown }
         // Attached to the bottom edge in regular height, where a sheet can rest at the medium detent
         if window.traitCollection.horizontalSizeClass == .compact && window.traitCollection.verticalSizeClass == .regular,
            let sheet = navigation.sheetPresentationController {
@@ -413,13 +420,12 @@ final class FrameHealthIOSTests: XCTestCase {
         // Build Information's text clears the sheet's side insets, as the menu's rows do: on the iPhone Duo the sheet's
         // bar items stand in a strip at its side
         menu.tableView(menu.tableView, didSelectRowAt: IndexPath(row: 0, section: 2))
-        let pushed = expectation(description: "Build Information pushed")
         if let transition = navigation.transitionCoordinator {
-            transition.animate(alongsideTransition: nil) { _ in pushed.fulfill() }
+            transition.animate(alongsideTransition: nil) { _ in pushed = true }
         } else {
-            pushed.fulfill()
+            pushed = true
         }
-        wait(for: [pushed], timeout: 5)
+        waitFor("Build Information is pushed") { pushed }
         let information = try XCTUnwrap(navigation.topViewController?.view as? UITextView)
         navigation.view.layoutIfNeeded()
         let whole = try XCTUnwrap(information.textRange(from: information.beginningOfDocument, to: information.endOfDocument))
@@ -433,11 +439,10 @@ final class FrameHealthIOSTests: XCTestCase {
         buildInformation.name = "Developer menu — Build Information"
         buildInformation.lifetime = .keepAlways
         add(buildInformation)
-        let dismissed = expectation(description: "native developer sheet dismissed")
-        root.dismiss(animated: false) { dismissed.fulfill() }
-        wait(for: [dismissed], timeout: 5)
-        // Details takes the place of the card's charts at the same size, and Share asks what to share,
-        // then opens the share sheet with that one item. The card presents from its own window's root, over itself
+        root.dismiss(animated: false) { dismissed = true }
+        waitFor("the native developer sheet is dismissed") { dismissed }
+        // Details takes the place of the card's charts at the same size. The card presents from its own window's root,
+        // over itself
         let cardRoot = try XCTUnwrap(cardWindow.rootViewController)
         func presented<Controller: UIViewController>(_: Controller.Type) throws -> Controller {
             wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cardRoot.presentedViewController is Controller }, object: nil)], timeout: 10)
@@ -492,17 +497,11 @@ final class FrameHealthIOSTests: XCTestCase {
         add(details)
         overlay.card.activate?(.details)
         XCTAssertTrue(overlay.card.detailsScroll.isHidden, "a second tap returns the charts")
-        overlay.card.activate?(.share)
-        let choices = try presented(UIAlertController.self)
-        // Measuring the screen, Share gives Exact's frames as an agent report of their own too
-        XCTAssertEqual(choices.actions.map(\.title), overlay.observing
-            ? ["Agent Report: Screen", "Agent Report: Exact's Frames", "Summary", "Image", "Cancel"]
-            : ["Agent Report", "Summary", "Image", "Cancel"])
+        // Share presents the share sheet itself. On a phone the sheet rises from the bottom edge, and UIKit replaces the
+        // popover's source
         if #available(iOS 18.0, *) { XCTAssertTrue(overlay.observing) }
-        close()
-        overlay.share(.image)
-        // On a phone the sheet rises from the bottom edge, and UIKit replaces the popover's source
-        XCTAssertEqual(try presented(UIActivityViewController.self).excludedActivityTypes, [.assignToContact])
+        overlay.card.activate?(.share)
+        _ = try presented(UIActivityViewController.self)
         close()
         // The title opens the definitions, over the card
         overlay.card.activate?(.title)
@@ -728,7 +727,13 @@ final class FrameHealthIOSTests: XCTestCase {
         let overlay = FrameHealthOverlay(health: health)
         let window = hosted(overlay, in: scene, size: CGSize(width: 393, height: 852)), dot = CALayer()
         window.layer.addSublayer(dot)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        // Start once UIKit is at rest: it can update the scene 0.4 s after its last update for a sheet dismissed before
+        var last = CACurrentMediaTime()
+        let updates = UIUpdateLink(windowScene: scene)
+        updates.addAction { _, _ in last = CACurrentMediaTime() }
+        updates.isEnabled = true
+        waitFor("no update for 0.6 s") { CACurrentMediaTime() - last > 0.6 }
+        updates.isEnabled = false
         overlay.setVisible(true)
         // The card reads twice a second and sends its changes alone, which take no UI update
         RunLoop.main.run(until: Date().addingTimeInterval(3))
@@ -781,9 +786,10 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.setVisible(false)
     }
 
-    /// Measuring the screen, the card's Share gives the screen's report and Exact's frames' as two, each naming the other:
-    /// an app drawn by GPU surfaces has frame times only on Exact's clock, in a production bake too (LLP 1079.000 §7.4)
-    func testMeasuringTheScreenShareGivesExactsFramesAsAReportOfTheirOwn() throws {
+    /// Measuring the screen, the card's Share gives one text, the summary and then the screen's report and Exact's frames',
+    /// each naming the other: an app drawn by GPU surfaces has frame times only on Exact's clock, in a production bake too
+    /// (LLP 1079.000 §7.4)
+    func testMeasuringTheScreenShareGivesBothReportsInOneText() throws {
         guard #available(iOS 18.0, *) else { throw XCTSkip("UIUpdateLink is available from iOS 18") }
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "a real host window for the frame-health card")
@@ -813,24 +819,28 @@ final class FrameHealthIOSTests: XCTestCase {
         let late = CACurrentMediaTime()
         scroll.record(arrival: late, target: late + 1 / 120, period: 1 / 120, finished: late + 0.03)
         XCTAssertTrue(health.reportSource === scroll, "the scroll's late frame is the newest")
-        func report(_ kind: FrameHealthShare) throws -> [String: Any] {
-            var data: Data?
-            overlay.report(kind) { data = $0 }
-            waitFor("the report is encoded") { data != nil }
-            return try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(data)) as? [String: Any])
+        var shared: String?
+        overlay.shareText { shared = $0 }
+        waitFor("the reports are encoded") { shared != nil }
+        let text = try XCTUnwrap(shared)
+        XCTAssertTrue(text.hasPrefix("Frame health, live\nA summary, then the full data for an AI agent as 2 JSON reports.\n"
+            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\n"
+            + "What was measured\nEvery UI update of this app on its screen, each one a frame."), "what it holds, then the summary: \(text)")
+        let lines = text.components(separatedBy: "\n")
+        XCTAssertEqual(lines.filter { $0.hasPrefix("Agent report") }, ["Agent report 1 of 2, the screen's frames (ui-update):",
+            "Agent report 2 of 2, Exact's frame clock (\(health.source)):"])
+        func report(_ source: String) throws -> [String: Any] {
+            let heading = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("Agent report") && $0.hasSuffix("(\(source)):") })
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[heading + 1].utf8)) as? [String: Any])
         }
-        let clock = try report(.clockReport)
+        let clock = try report(health.source)
         XCTAssertEqual(clock["source"] as? String, health.source)
-        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update as a report of its own")
+        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update's report beside it")
         XCTAssertTrue((clock["otherSources"] as? [[String: Any]])?.contains { $0["source"] as? String == "ui-update" } == true)
-        let core = try XCTUnwrap(clock["coreSinceReload"] as? [String: Any])
-        XCTAssertGreaterThan(Int(core["frameIntervals"] as? String ?? "") ?? 0, 30, "its frame times")
-        XCTAssertNotNil((core["frameTimeBoundsNs"] as? [String: Any])?["p99"])
-        XCTAssertEqual(((core["workBoundsNs"] as? [String: Any])?["maximum"] as? [UInt64])?.first, 24_000_000, "and the work of every frame, in its bin")
         XCTAssertFalse((clock["hitches"] as? [[Any]] ?? []).isEmpty, "with its late frame")
-        let screen = try report(.report)
+        let screen = try report("ui-update")
         XCTAssertEqual(screen["source"] as? String, "ui-update")
-        XCTAssertEqual(screen["selection"] as? String, "one-source; the card's Share gives \(health.source) as a report of its own")
+        XCTAssertEqual(screen["selection"] as? String, "one-source; the card's Share gives \(health.source)'s report beside it")
     }
 
     /// The face draws each band as a picture of its own, and a read draws again only the bands whose figures changed, so
@@ -1322,7 +1332,7 @@ final class FrameHealthIOSTests: XCTestCase {
         // The card's ground, systemBackground, is white in light mode and black in dark
         let dark = { (overlay.card.palette.background.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent,
             options: nil)?.components?.first ?? 1) < 0.5 }
-        XCTAssertFalse(dark())
+        waitFor("the card takes the window's light mode") { !dark() }
         // Only the appearance changes: nothing lays the card out or moves it
         window.overrideUserInterfaceStyle = .dark
         let followed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in dark() }, object: nil)

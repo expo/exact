@@ -41,11 +41,11 @@ impl<D: DataSource> Runner<D> {
             .filter(|e| !real.contains(e))
             .map(|e| e.to_string())
             .collect();
+        self.publish_view_bindings();
         self.presence_rebound();
         if real.is_empty() && agent.is_empty() {
             return;
         }
-        self.retell_views(&[real, agent].concat());
         if !real.is_empty() {
             self.log(format!("modules bound here: {}", real.join(", ")));
         }
@@ -73,6 +73,7 @@ impl<D: DataSource> Runner<D> {
         for extension in &answering {
             self.tell_preferred(extension);
         }
+        self.retell_views(&[real, agent].concat());
         self.hand_over_all();
         if self.page.in_background() {
             self.tell_foreground();
@@ -152,9 +153,9 @@ impl<D: DataSource> Runner<D> {
         args: Json,
         reader: Option<usize>,
     ) -> Request {
-        let origin = self.call_origin();
+        let cause = self.cause();
         let body = self.forward_body(row, args, reader);
-        self.anchor_body(row, &body, origin);
+        self.anchor_body(row, &body, cause);
         Request::native(body)
     }
 
@@ -236,12 +237,24 @@ impl<D: DataSource> Runner<D> {
                 }
             }
         }
-        let origin = match reader {
-            Some(i) => self.origin_for(Some(crate::runner::Target::Resource(i))),
-            None => self.call_origin(),
+        let cause = match reader {
+            Some(i) => self.cause_for(crate::runner::Target::Resource(i)),
+            None => self.cause(),
         };
+        let origin = cause.origin();
+        // A capture a live recording press may start (LLP 1126.004 D4): the
+        // implementation opens the microphone for it as for the app. Every
+        // call names its origin, so a host reads a call that names none as no
+        // one's (LLP 1133.023 D7a).
+        let press =
+            origin == super::CallOrigin::Action && self.press_starts_audio(row, &args, cause);
+        body["origin"] = json!(if press { "press" } else { origin.word() });
+        // Which press, so a host can ask whether it still runs where it
+        // acquires the device.
+        if press {
+            body["press"] = json!(cause.invocation());
+        }
         if origin != super::CallOrigin::App {
-            body["origin"] = json!(origin.word());
             // A call not the app's that would ask (LLP 1133.002 D12): the
             // host reads the status first and refuses it while `prompt`,
             // since only the implementation knows the platform's state.
@@ -259,7 +272,7 @@ impl<D: DataSource> Runner<D> {
         }
         // A person's input stands (`provenance.rs`): the implementation may take
         // the call as their act.
-        if self.user_activation(origin) {
+        if self.user_activation(cause) {
             body["userActivation"] = json!(true);
         }
         // A send's number, which `cancel` names if it is let go (LLP 1133.016 D15 item 2).

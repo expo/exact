@@ -20,7 +20,8 @@ impl<D: DataSource> Presenter<D> {
             // A path as written; a URL with a scheme as the platform delivers
             // one from outside, as Apple's `typedLocation`.
             let location = if has_scheme(text) {
-                crate::app::incoming_location_at(text, self.host.web_mount.as_ref())
+                crate::app::incoming_location_at(text, &self.host.incoming_links)
+                    .ok_or_else(|| format!("open {text}: URL is outside this app"))?
             } else {
                 text.to_owned()
             };
@@ -57,7 +58,10 @@ impl<D: DataSource> Presenter<D> {
             return Err(format!("view {id} is readonly"));
         }
         if node.props.bool(PropId::EmojiPicker) == Some(true) {
-            return Err("emoji selection is not supported on the Linux host".into());
+            return Err(format!(
+                "emoji selection is not supported on the {} host",
+                crate::agent::HOST_NAME
+            ));
         }
         let now = self.host.now();
         if let Some(e) = self.set_focus(Some(id), now) {
@@ -181,11 +185,19 @@ impl<D: DataSource> Presenter<D> {
             if !fitted.is_empty() || text.is_empty() || removes {
                 edit.data = Some(fitted.to_owned());
                 edit.cancelable = false;
-                if let Some(e) = self.apply_field_edit(target, next, caret, bound, now, edit) {
+                if let Some(e) = self.apply_field_edit(
+                    target,
+                    next,
+                    field::EditSelection::Presenter(caret),
+                    bound,
+                    now,
+                    edit,
+                ) {
                     return Err(e);
                 }
             } else if caret != self.field_selection(target) {
                 self.mark_field(target, &value, caret, false);
+                self.hosted_commanded(target, caret);
             }
         }
         let value = self.field_text(target);

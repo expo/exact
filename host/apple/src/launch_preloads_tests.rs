@@ -1431,6 +1431,8 @@ fn manifest_settings_leave_at_launch_and_equal_reads_take_the_reply() {
     };
     let mut request = exact_runner::Request::get(&format!("{value}/feed"));
     request.headers = vec![("X-Note".into(), "built".into())];
+    // The app's own read, as the runner stamps it.
+    request.reach.origin = exact_runner::CallOrigin::App;
     let out = exact_runner::RequestOut {
         completion: None,
         ticket: 1,

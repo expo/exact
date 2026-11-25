@@ -89,6 +89,8 @@ struct App<D: DataSource> {
     desktop: Rc<crate::desktop::Desktop>,
     /// The app called `close()`: the window closes, never hides.
     closing: bool,
+    /// The app has started to end (`App::end`): nothing more is served.
+    ended: bool,
     /// Closing the window hides it (`keepRunning`).
     keep_running: bool,
     /// The window is not shown: hidden by a close, or since a hidden launch.
@@ -376,6 +378,7 @@ pub(super) fn run<D: DataSource + Default + 'static, const DEVELOPMENT: bool>(
         desktop,
         refit_after_scale: false,
         closing: false,
+        ended: false,
         keep_running: opening.keep_running,
         hidden,
         pending_show: None,
@@ -986,8 +989,19 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 self.dialogs
                     .install(handle.hwnd.get(), self.modal.clone(), self.proxy.clone());
                 self.desktop.set_window(handle.hwnd.get());
-                crate::displays::install(handle.hwnd.get(), self.min_size);
-                if let Err(error) = self.clicks.install(handle.hwnd.get()) {
+                let proxy = self.proxy.clone();
+                crate::displays::install(handle.hwnd.get(), self.min_size, move || {
+                    let _ = proxy.send_event(crate::accessibility::Event::DisplayChanged);
+                });
+                self.config
+                    .preferences
+                    .get_or_insert_with(Default::default)
+                    .orientation = crate::displays::orientation();
+                if let Err(error) = self
+                    .clicks
+                    .install(handle.hwnd.get())
+                    .and_then(|()| self.touches.observe(handle.hwnd.get()))
+                {
                     self.fail(events, error);
                     return;
                 }
@@ -1079,6 +1093,9 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
     }
     fn user_event(&mut self, events: &ActiveEventLoop, event: crate::accessibility::Event) {
         let _span = crate::probe::Span::new("user event", 0);
+        if self.ended {
+            return;
+        }
         if matches!(event, crate::accessibility::Event::Close) {
             self.closing = true;
             if let Some(window) = &self.window {
@@ -1089,6 +1106,18 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
         match event {
             crate::accessibility::Event::TrayAccess(request) => {
                 return self.tray_access(events, request)
+            }
+            crate::accessibility::Event::DisplayChanged => {
+                if let Some(p) = self.presenter.as_mut() {
+                    let mut prefs = p.host().runner().viewport().preferences;
+                    let orientation = crate::displays::orientation();
+                    if prefs.orientation != orientation {
+                        prefs.orientation = orientation;
+                        if let Some(error) = p.set_preferences(prefs) {
+                            eprintln!("exact-windows: {error}");
+                        }
+                    }
+                }
             }
             crate::accessibility::Event::Focus => self.bring_forward(),
             crate::accessibility::Event::Hide => self.hide_by_app(),
@@ -1146,6 +1175,9 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
     }
     fn window_event(&mut self, events: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let _span = crate::probe::Span::new("window event", 0);
+        if self.ended {
+            return;
+        }
         if counters::enabled() {
             self.service_causes |= match event {
                 WindowEvent::MouseWheel { .. } => counters::WHEEL,
@@ -1425,15 +1457,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
         }
     }
     fn about_to_wait(&mut self, events: &ActiveEventLoop) {
-        self.file_dialog_answers();
-        self.handed_launches();
-        self.tray_input(events);
-        self.unshown_first_pixel();
-        self.wait(events, |p| {
-            (p.painter_retry_deadline(), p.painter_present_deadline())
-        });
-        self.queue_file_dialogs();
-        self.tray_sync();
+        self.serve(events);
     }
 }
 

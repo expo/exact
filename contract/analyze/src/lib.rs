@@ -373,7 +373,7 @@ fn check_tasks(c: &Component) -> Vec<AnalyzeError> {
 
 /// The handler attributes (the web's events, LLP 1005 §3): `press`,
 /// `change`, `input`, `hover`, `focus`, `blur`, `key`, `submit`, `load`, `message`.
-pub const HANDLERS: [&str; 87] = [
+pub const HANDLERS: [&str; 89] = [
     "press",
     "change",
     "input",
@@ -390,7 +390,7 @@ pub const HANDLERS: [&str; 87] = [
     "key",
     "keycapture",
     // DOM's `keyup`: the key's release, a modifier's included, bubbling as
-    // `key` (keydown) does, with the same name and `KeyboardEvent` (#140).
+    // `key` (keydown) does, with the same name and `KeyboardEvent`.
     "keyup",
     "submit",
     "load",
@@ -406,6 +406,7 @@ pub const HANDLERS: [&str; 87] = [
     // hand its action a `PointerEvent`.
     "pointerdown",
     "pointerup",
+    "pointercancel",
     "pointermove",
     // DOM's clipboard events at the focused node (spreadsheet F4, F14);
     // each may hand its action a `ClipboardEvent`.
@@ -438,6 +439,9 @@ pub const HANDLERS: [&str; 87] = [
     "swiperight",
     // Its mirror (Charlie, 2026-11-10).
     "swipeleft",
+    // The platform's discrete swipe in the node's `swipe-direction` (LLP
+    // 1057.001 §8); no payload.
+    "swipe",
     "refresh",
     "scroll",
     // DOM's `scrollend`: a scroll finished, its momentum or animation

@@ -44,7 +44,7 @@ impl<D: DataSource> Host<D> {
             .and_then(|n| self.runner.reorder_binding(n.key));
         let Some((binding, geometry)) = binding.and_then(|b| {
             let g = self.runner.reorder_geometry(b.list)?;
-            (g.scroll_top == scroll_top).then_some((b, g))
+            (b.unwrapped() || g.scroll_top == scroll_top).then_some((b, g))
         }) else {
             return self.group_refused(None);
         };
@@ -91,7 +91,13 @@ impl<D: DataSource> Host<D> {
         let (Some(target), Some(geometry), true) = (target, geometry, inside) else {
             return self.group_reply(Vec::new(), None);
         };
-        if geometry.scroll_top != target_scroll_top {
+        if self
+            .runner
+            .kernel()
+            .node_by_key(target)
+            .is_none_or(|n| n.props.str(exact_kernel::PropId::ListStyle).is_none())
+            && geometry.scroll_top != target_scroll_top
+        {
             return self.group_reply(Vec::new(), None);
         }
         match self
@@ -124,6 +130,15 @@ impl<D: DataSource> Host<D> {
             Ok(receipts) => self.group_reply(receipts, None),
             Err(e) => self.group_reply(Vec::new(), Some(format!("{e:?}"))),
         }
+    }
+
+    /// Drop at the successor UIKit chose in the lifted row's section.
+    pub fn reorder_drop_before(&mut self, serial: u64, before: ViewId, now: f64) -> String {
+        let accepted = self.group_token(serial).is_some_and(|token| {
+            self.runner
+                .native_section_gap(token, (before != 0).then_some(before))
+        });
+        self.reorder_group_end(serial, accepted, now)
     }
 
     /// The contact ended (D8): `drop` into the session's target, which may
@@ -211,11 +226,15 @@ impl<D: DataSource> Host<D> {
             self.group = None;
             return Some(format!("{{\"op\":\"reorder\",\"group\":true,\"token\":\"{serial}\",\"list\":{list},\"wrapper\":{wrapper},\"phase\":\"finished\",\"dispatched\":{dropped},\"ending\":null,\"target\":0,\"row\":0}}"));
         };
+        let anchor = self
+            .runner
+            .section_step_anchor(g.token)
+            .map_or(0, |(row, _)| row);
         let ending = frame
             .ending
             .map_or("null".to_owned(), |e| format!("\"{}\"", e.name()));
         Some(format!(
-            "{{\"op\":\"reorder\",\"group\":true,\"token\":\"{serial}\",\"list\":{list},\"wrapper\":{wrapper},\"phase\":\"{}\",\"dispatched\":{},\"ending\":{ending},\"target\":{},\"row\":{}}}",
+            "{{\"op\":\"reorder\",\"group\":true,\"token\":\"{serial}\",\"list\":{list},\"wrapper\":{wrapper},\"phase\":\"{}\",\"dispatched\":{},\"ending\":{ending},\"target\":{},\"row\":{},\"anchor\":{anchor}}}",
             frame.phase.name(),
             dropped,
             id(frame.target),

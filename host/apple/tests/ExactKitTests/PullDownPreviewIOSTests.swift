@@ -162,6 +162,31 @@ final class PullDownPreviewIOSTests: XCTestCase {
         }
     }
 
+    /// A filled invoker that extends (LLP 1123 D13) lends the fill its picture holds, as one does that extends after the
+    /// menu opens: its extension ends while the menu has the fill and comes back after it.
+    func testAnExtendedInvokerLendsItsFillAndExtendsAgainAfter() throws {
+        guard #available(iOS 26, *) else { throw XCTSkip("UIBackgroundExtensionView needs iOS 26") }
+        let p = presenter(glass: false)
+        defer { p.menus.reset() }
+        let invoker = try XCTUnwrap(p.views[2])
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["appearance": "none", "border_radius": 22, "background_color": [255, 0, 0, 255]]]]))
+        invoker.layer.displayIfNeeded()
+        invoker.setExtension(UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
+        XCTAssertNotNil(invoker.boxExtension)
+        XCTAssertNil(invoker.layer.backgroundColor, "the picture holds the fill")
+        let button = try XCTUnwrap(invoker.subviews.compactMap { $0 as? MenuButton }.first)
+        let interaction = try XCTUnwrap(button.contextMenuInteraction)
+        let configuration = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in button.menu }
+        _ = try XCTUnwrap(button.contextMenuInteraction(interaction, previewForHighlightingMenuWithConfiguration: configuration))
+        let lent = try XCTUnwrap(invoker.extras?.lentFill, "the fill is lent")
+        XCTAssertEqual(lent.fillColor?.components?.first ?? 0, 1, accuracy: 0.01, "the picture's fill")
+        XCTAssertNil(invoker.boxExtension, "no extension while the menu has the fill")
+        button.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
+        button.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
+        XCTAssertNil(invoker.extras?.lentFill)
+        XCTAssertNotNil(invoker.boxExtension, "the extension comes back after the menu")
+    }
+
     func testAnInvokerOutOfTheWindowHasNoPreview() throws {
         let p = presenter()
         defer { p.menus.reset() }

@@ -21,11 +21,23 @@ final class ArrangementPaneController: UIViewController {
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // Tell the pane's inset and block in this layout, as a route's block is, so that its content moves in the animation
+        // UIKit lays it out in
+        Presenter.inPaneLayout { [presenter = node.presenter] in
+            if #available(iOS 27.1, *) { presenter?.arrangements.reportInsets() }
+            presenter?.owners.publish()
+        }
         changed()
     }
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         SafeAreaSteps.react(self) { [weak self] in self?.changed() }
+    }
+    /// UIKit hides a pane by taking its controller out of the arrangement and shows it by putting it back, either of which
+    /// can leave its sibling's layout, and so the calls above, untouched
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        changed()
     }
 }
 
@@ -176,8 +188,13 @@ package final class ArrangementHost {
     /// A sync asked for while one runs, by a UIKit callback inside its writes: the running one queues a pass as it ends.
     private var syncOwed = false
     private var layoutPending = false
-    /// The panes UIKit hides, as last reported covered whole.
-    private var toldHidden: Set<UInt32> = []
+    /// The panes UIKit hid at the last pass, after its layout, which the covers read: a report can find UIKit's views
+    /// partway through a change
+    package private(set) var hidden: Set<UInt32> = []
+    /// Each pane's own safe area, which its content reads (LLP 1123 D9), as UIKit gives its controller's view
+    private(set) var insets = LocalInsetsReport()
+    /// Those the kernel is told are covered whole
+    package var covered: Set<UInt32> { hidden.filter { presenter.views[$0] != nil && !presenter.menus.ownsCover($0) } }
     private var reaches: [UInt32: BottomReach] = [:]
     private var children: [UInt32: [UInt32]] = [:]
     private(set) var entries: [UInt32: Entry] = [:]
@@ -195,7 +212,7 @@ package final class ArrangementHost {
             controller.setViewController(holders[1], for: .secondary)
         }
         func isHidden(_ holder: ArrangementPaneController) -> Bool {
-            // Read view visibility because an overlay can report hidden while its views remain visible
+            // Read view visibility because an overlay's `state(for:)` reports both panes hidden while both stay on screen
             var current: UIView? = holder.view
             while let view = current {
                 if view.isHidden { return true }
@@ -285,6 +302,10 @@ package final class ArrangementHost {
     private func retire(_ entry: Entry) {
         // Before the panes move, whose callbacks a pass may be running under
         for pane in entry.panes { reaches[pane.id] = nil }
+        // Exact's part on each pane goes with it, what an app set there staying (LLP 1123 D11)
+        for holder in entry.holders {
+            ContributionsIOS.existing(on: holder)?.write(ContributionsIOS.Identity(node: holder.node.id, operation: .containerClearance), .zero)
+        }
         let ids = children[entry.node.id] ?? entry.panes.map(\.id)
         let held = entry.holders.filter { $0.node.superview === $0.view }.map(\.node)
         for pane in held where presenter.views[pane.id] !== pane || !ids.contains(pane.id) { pane.removeFromSuperview() }
@@ -316,13 +337,27 @@ package final class ArrangementHost {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             layoutPending = false
-            guard !entries.isEmpty || !insetScrollers.isEmpty else { return reportHiddenPanes() }
-            syncInsets()
-            refreshContentSizes()
-            presenter.owners.publish()
-            reportHiddenPanes()
+            // With nothing arranged too: the panes of a retired arrangement give their covers up
+            hidden = Set(hiddenPanes)
+            if !entries.isEmpty || !insetScrollers.isEmpty {
+                syncInsets()
+                refreshContentSizes()
+                reportInsets()
+                presenter.owners.publish()
+            }
             presenter.navigation.coversChanged()
         }
+    }
+
+    /// Tell each pane's own safe area where it changed. One out of a window keeps its last.
+    func reportInsets() {
+        var wanted: [UInt32?: [CGFloat]] = [:]
+        for holder in entries.values.flatMap(\.holders) {
+            let id = holder.node.id, safe = holder.view.safeAreaInsets
+            wanted[id] = holder.view.window == nil ? insets.wanted[id] : [safe.top, safe.right, safe.bottom, safe.left].map { max(0, $0) }
+        }
+        insets.wanted = wanted
+        presenter.session?.localInsets(insets.take { presenter.views[$0] != nil })
     }
 
     /// Panes touching a route edge own its inset; interior panes must already clear that edge.
@@ -458,8 +493,10 @@ package final class ArrangementHost {
     private func syncSafeAreas() {
         for entry in entries.values {
             guard let route = route(of: entry.node), let window = route.surface.window else { continue }
+            // Exact's part, on each pane's ledger, what an app set there staying (LLP 1123 D11)
+            let id = { (holder: ArrangementPaneController) in ContributionsIOS.Identity(node: holder.node.id, operation: .containerClearance) }
             if entry.controller.parent === route {
-                for holder in entry.holders where holder.additionalSafeAreaInsets != .zero { holder.additionalSafeAreaInsets = .zero }
+                for holder in entry.holders { ContributionsIOS.existing(on: holder)?.write(id(holder), .zero) }
                 continue
             }
             for holder in entry.holders where holder.view.window === window {
@@ -467,25 +504,13 @@ package final class ArrangementHost {
                 let room = route.surface.bounds.inset(by: route.surface.safeAreaInsets)
                 let expected = UIEdgeInsets(top: max(0, min(frame.height, room.minY - frame.minY)), left: 0,
                                            bottom: max(0, min(frame.height, frame.maxY - room.maxY)), right: 0)
-                let actual = holder.view.safeAreaInsets, extra = holder.additionalSafeAreaInsets
+                // What Exact's part did to the pane's safe area, as measured, which UIKit's floor can hold
+                let actual = holder.view.safeAreaInsets, extra = ContributionsIOS.existing(on: holder)?.effect(of: id(holder)) ?? .zero
                 let needed = UIEdgeInsets(top: max(0, expected.top - max(0, actual.top - extra.top)), left: 0,
                                          bottom: max(0, expected.bottom - max(0, actual.bottom - extra.bottom)), right: 0)
-                if needed != extra { holder.additionalSafeAreaInsets = needed }
+                ContributionsIOS.of(holder).write(id(holder), needed)
             }
         }
-    }
-
-    /// A pane UIKit hides takes no room in the authored layout: it is covered
-    /// whole, told with what changed since the last report. A scroller's least
-    /// content height follows its cover (`scrollFloor`).
-    private func reportHiddenPanes() {
-        let now = Set(hiddenPanes)
-        guard now != toldHidden else { return }
-        let changes = now.subtracting(toldHidden).map { ($0, HostCover.whole as HostCover?) }
-            + toldHidden.subtracting(now).filter { presenter.views[$0] != nil }.map { ($0, nil as HostCover?) }
-        toldHidden = now
-        for (id, _) in changes { presenter.views[id]?.fitScroll() }
-        presenter.onCovers?(changes)
     }
 
     /// Native-hidden panes take no room in the authored edge chain.
@@ -518,7 +543,7 @@ package final class ArrangementHost {
 
     func reset() {
         for entry in entries.values { retire(entry) }
-        entries = [:]; requests = [:]; children = [:]; toldHidden = []
+        entries = [:]; requests = [:]; children = [:]; hidden = []; insets = LocalInsetsReport()
         syncInsets()
     }
 }

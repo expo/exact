@@ -6,7 +6,7 @@ const journal = [], effects = [];
 let Adopting = false;
 mock.module('./rt.js', () => ({
   GPU_PLACEMENT: false,
-  adopting: () => Adopting, effect: f => { effects.push(f); f(); }, say: l => journal.push(l),
+  adopting: () => Adopting, effect: f => { effects.push(f); f(); }, invalidStyle: (_, p, v) => journal.push([p, v]),
   // As rt.js's: a number takes its unit, a blank explicitly clears.
   cssText: (prop, unit, v) => v == null ? null : typeof v === 'number' ? v + unit : !String(v).trim() && !prop.startsWith('--') ? 'unset' : String(v),
   normal: (prop, t) => t === 'bogus' ? '' : t,
@@ -56,7 +56,7 @@ test('a refused value falls to unset, as css does, and is said once', async () =
   Pc(element(), () => 0, '', 'xatwo', [['bogus', 400]], ['color', 'font-weight'], recipe);
   const st = document.getElementById('exact-arms').sheet.cssRules[0].cssRules[0].style;
   expect(st.getPropertyValue('color')).toBe('unset');
-  expect(journal).toEqual(['unset color: "bogus" is not a value it takes']);
+  expect(journal).toEqual([['color', 'bogus']]);
 });
 
 test('a recipe that throws caches nothing; a name that stood for other content throws on a test page', async () => {

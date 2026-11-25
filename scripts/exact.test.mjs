@@ -1,4 +1,4 @@
-// `exact release` signs every nested Mach-O file and bundle, innermost first (#119); `exact contract build`
+// `exact release` signs every nested Mach-O file and bundle, innermost first; `exact contract build`
 // refreshes an app's types (LLP 1116.001 D4.5).
 // `bun test ./scripts/exact.test.mjs`.
 import { test, spyOn } from 'bun:test';
@@ -699,7 +699,7 @@ test.skipIf(!tools)('production executables keep matching dSYMs without an IPA; 
 
 // An executable is named for its app (955b0463d), and an app may be named
 // "T3 Code (Exact)": otool reads a path ending in `name(member)` as an
-// archive's member, so the SDK check read nothing and refused the build (#234).
+// archive's member, so the SDK check read nothing and refused the build.
 test.skipIf(!tools)('an executable whose name ends in parentheses is read as a file, its SDK checked and its release stripped', () => inDir((dir) => {
   writeFileSync(resolve(dir, 'main.c'), 'int main(void){return 0;}\n');
   const executable = resolve(dir, 'Demo (Beta)');

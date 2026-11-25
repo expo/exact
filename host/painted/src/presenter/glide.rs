@@ -24,6 +24,7 @@ pub(super) struct Glide {
     from: (f32, f32),
     to: (f32, f32),
     start: f64,
+    coast: Option<f64>,
     /// Where the last step put the port: a port found elsewhere was moved
     /// by something else, which ends the glide.
     last: (f32, f32),
@@ -54,6 +55,7 @@ impl Glides {
                 from,
                 to,
                 start: now,
+                coast: None,
                 last,
             },
         );
@@ -111,6 +113,37 @@ impl<D: DataSource> Presenter<D> {
         self.glides.begin(id, from, to, now);
     }
 
+    /// A shared list released on a shell without a native scroll reader.
+    /// GtkScrolledWindow uses exponential deceleration with friction 4/s.
+    pub(super) fn coast_list(&mut self, id: ViewId, velocity: f64) {
+        let from = self.scroll_of(id);
+        let max = self.scroll_range(id, &self.collection_scroll_limits()).1;
+        let to = (from.0, (from.1 + (velocity / 4.) as f32).clamp(0., max));
+        if let Some(snap) = self.snap(id, true) {
+            if let Some(y) = super::snap::rest(&snap.areas, to.1, from.1, snap.mandatory, snap.port)
+            {
+                if y != from.1 {
+                    self.begin_glide(id, from, (from.0, y));
+                    self.dirty = true;
+                }
+                return;
+            }
+        }
+        if to != from && velocity.abs() >= 1. {
+            self.glides.running.insert(
+                id,
+                Glide {
+                    from,
+                    to,
+                    start: self.host.now(),
+                    last: from,
+                    coast: Some(velocity),
+                },
+            );
+            self.dirty = true;
+        }
+    }
+
     /// Stop the glide on `id` where its port is.
     pub(super) fn stop_glide(&mut self, id: ViewId) {
         self.glides.stop(id);
@@ -139,18 +172,27 @@ impl<D: DataSource> Presenter<D> {
                 landed_list |= id != PAGE && self.host.collection(id).is_some();
                 continue;
             }
-            let t = ((now - g.start) / GLIDE_MS).clamp(0., 1.);
-            let k = ease(t) as f32;
-            let next = if t >= 1. {
-                g.to
+            let elapsed = (now - g.start).max(0.);
+            let (next, finished) = if let Some(v) = g.coast {
+                let remaining = (-4. * elapsed / 1000.).exp();
+                let y = g.from.1 + (v * (1. - remaining) / 4.) as f32;
+                let end = (v * remaining).abs() < 1. || (y - g.to.1) * v as f32 >= 0.;
+                ((g.from.0, if end { g.to.1 } else { y }), end)
             } else {
-                (
-                    g.from.0 + (g.to.0 - g.from.0) * k,
-                    g.from.1 + (g.to.1 - g.from.1) * k,
-                )
+                let t = (elapsed / GLIDE_MS).min(1.);
+                let k = ease(t) as f32;
+                let next = if t >= 1. {
+                    g.to
+                } else {
+                    (
+                        g.from.0 + (g.to.0 - g.from.0) * k,
+                        g.from.1 + (g.to.1 - g.from.1) * k,
+                    )
+                };
+                (next, t >= 1.)
             };
             let list = id != PAGE && self.host.collection(id).is_some();
-            if t >= 1. {
+            if finished {
                 self.glides.running.remove(&id);
                 landed_list |= list;
             } else if let Some(g) = self.glides.running.get_mut(&id) {

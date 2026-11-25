@@ -448,8 +448,16 @@ pub(crate) fn style_json_rows(
             | RowValue::DashArray(_)
             | RowValue::Transform(_)
             | RowValue::PaintOrder(_)
-            | RowValue::Marker(_)
-            | RowValue::Animations(_) => false,
+            | RowValue::Marker(_) => false,
+            // A route's own entrance or exit (LLP 1013.001): only that it
+            // declares one, so the host asks the runner to pose it only then.
+            RowValue::Animations(_)
+                if matches!(id, StyleId::ViewTransitionNew | StyleId::ViewTransitionOld) =>
+            {
+                out.push_str("true");
+                true
+            }
+            RowValue::Animations(_) => false,
             // @ref LLP 1055.000 D14 — CSS `filter` on a box: its chain over a
             // box of no size (the region is how far past the box it reaches)
             // and how far it reads; the presenter adds the box's size.
@@ -1071,11 +1079,17 @@ fn style_json_shown(
     // PlaceholderColor's and BackdropColor's initial payloads are unread
     // sentinels; absence selects the platform's placeholder colour or dim,
     // including after a clear. So for the pressed paint: a cleared row is no
-    // pressed look (LLP 1061 D7).
+    // pressed look (LLP 1061 D7). And for the edge effect's style and hidden
+    // edges: a form the author clears (`unset`) gives its aspect back to the
+    // retired `-exact-scroll-edge-effect` until activation, so each crosses
+    // only while the kernel holds it set (LLP 1123 D14, §"What it replaces").
     computed.mask = computed.mask.union(
         computed.written.minus(
             StyleMask::of(StyleId::PlaceholderColor)
                 .union(StyleMask::of(StyleId::BackdropColor))
+                .union(StyleMask::of(StyleId::ScrollEdgeEffectSoft))
+                .union(StyleMask::of(StyleId::ScrollEdgeEffectHard))
+                .union(StyleMask::of(StyleId::ScrollEdgeEffectHidden))
                 .union(crate::looks::press_paint_rows()),
         ),
     );
