@@ -19,7 +19,9 @@
 //!   window, and each icon is added again
 //!   ([Taskbar Creation Notification](https://learn.microsoft.com/windows/win32/shell/taskbar#taskbar-creation-notification)).
 //!   The icons' window is therefore a hidden top-level window, not a
-//!   message-only one, which broadcasts do not reach.
+//!   message-only one, which broadcasts do not reach. A display scale change
+//!   broadcasts it too, with every icon still shown, and the shell refuses to
+//!   add a shown icon again, so each is removed first.
 //! - **An icon's identity** is its window and an id hashed from the
 //!   button's `id`, else its `testId`, so that the person's choice to show
 //!   or hide it in the taskbar follows it across launches, as the Mac's
