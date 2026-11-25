@@ -282,6 +282,11 @@ final class NativeListNavigationIOSTests: XCTestCase {
             return 0
         }
         let automaticCover = topCover()
+        XCTAssertTrue(p.scrollsToTopTarget() === automatic)
+        automatic.scrollsToTop = false
+        p.syncScrollsToTop()
+        XCTAssertFalse(automatic.scrollsToTop, "the app's own setting stands while the authored list stays the choice")
+        automatic.scrollsToTop = true
         let firstNative = UIScrollView(frame: route.view.bounds), secondNative = UIScrollView(frame: route.view.bounds)
         firstNative.scrollsToTop = false; secondNative.scrollsToTop = false
         firstNative.contentInsetAdjustmentBehavior = .always
@@ -306,6 +311,10 @@ final class NativeListNavigationIOSTests: XCTestCase {
         XCTAssertEqual(topCover(), automaticCover)
         XCTAssertTrue(firstNative.scrollsToTop, "a selected native view is enabled even when its flag was false")
         XCTAssertFalse(automatic.scrollsToTop)
+        firstNative.scrollsToTop = false
+        p.apply(wireBatch([]))
+        XCTAssertFalse(firstNative.scrollsToTop, "the app's own setting stands through a batch that keeps the choice")
+        firstNative.scrollsToTop = true
         route.view.layoutIfNeeded()
         XCTAssertNotEqual(topCover(), automaticCover, "the authored list leaves the bar's edge, so the route is covered for the bar")
         p.navigationHost.prepareRoutes([route], in: nav)
