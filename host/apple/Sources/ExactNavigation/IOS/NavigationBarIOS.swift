@@ -208,7 +208,7 @@ extension NavigationHost {
     func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool = { _ in true }) -> [String: Any]? {
         guard !ExactEnv.authoredChrome else { return nil }
         let id = Int(node.id)
-        #if os(iOS)
+        #if os(iOS) && EXACT_AGENT
         if let button = collapsedSearch(node) {
             let point = button.view.convert(CGPoint(x: button.box.midX, y: button.box.midY), to: nil)
             guard before(point), !node.disabled, !node.inert, presenter.views[node.id] === node,
