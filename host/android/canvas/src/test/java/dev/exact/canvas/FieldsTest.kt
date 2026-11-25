@@ -24,9 +24,18 @@ class FieldsTest {
         private val family = File("../../painted/tests/fonts/Inter-Regular.ttf").canonicalPath + "#0"
 
         /** A statement of one field, id 1, with these font features; with a size, placed in that box. */
-        fun statement(features: String = "", x: Float = 0f, y: Float = 0f, w: Float = 0f, h: Float = 0f, flags: Int = 0, align: Int = 0): IntArray {
-            val placed = if (w > 0f) 1 else 0
-            val words = mutableListOf(1, 1, 0, placed, 0, x.toBits(), y.toBits(), w.toBits(), h.toBits(), 0, 0, (-1f).toBits(), (-1f).toBits(), 0)
+        fun statement(features: String = "", x: Float = 0f, y: Float = 0f, w: Float = 0f, h: Float = 0f, flags: Int = 0, align: Int = 0, revision: Int = 0, caret: Int = 0): IntArray =
+            statement(listOf(Told(1, x, y, w, h, if (w > 0f) 1 else 0, flags, "1111", features, align, revision, caret)))
+
+        /** One field of a statement: its id, box, state (1 placed, 2 inert, 4 its node takes drops, 8 one above it
+         * does), look flags, value, font features, alignment, selection revision and caret, and its clip
+         * (x, y, width, height; none when null). */
+        data class Told(val id: Int, val x: Float, val y: Float, val w: Float, val h: Float, val state: Int, val flags: Int = 0,
+            val value: String = "$id", val features: String = "", val align: Int = 0, val revision: Int = 0, val caret: Int = 0,
+            val clip: FloatArray? = null)
+
+        fun statement(told: List<Told>): IntArray {
+            val words = mutableListOf(told.size)
             fun string(s: String) {
                 val bytes = s.toByteArray(Charsets.UTF_8)
                 words.add(bytes.size)
@@ -34,11 +43,27 @@ class FieldsTest {
                     words.add(part.foldIndexed(0) { i, word, b -> word or ((b.toInt() and 255) shl (i * 8)) })
                 }
             }
-            string("1111")
-            words.addAll(listOf(flags, 0, 0, 0, -1, align, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, 0, 0, 0))
-            for (s in listOf("", "", family, "", features)) string(s)
+            for (t in told) {
+                val clip = t.clip ?: floatArrayOf(0f, 0f, -1f, -1f)
+                words.addAll(listOf(t.id, 0, t.state, 0, t.x.toBits(), t.y.toBits(), t.w.toBits(), t.h.toBits()) + clip.map(Float::toBits) + 0)
+                string(t.value)
+                words.addAll(listOf(t.flags, 0, 0, 0, -1, t.align, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, t.revision, t.caret, t.caret))
+                for (s in listOf("", "", family, "", t.features)) string(s)
+            }
             return words.toIntArray()
         }
+    }
+
+    @Test fun anOlderStatementCannotMoveTheCaretInANewerEdit() {
+        val fields = Fields(RuntimeEnvironment.getApplication())
+        fields.told(statement())
+        val text = (fields.getChildAt(0) as FrameLayout).getChildAt(0) as EditText
+        text.append("x")
+        text.setSelection(5)
+        fields.told(statement(revision = 1, caret = 2))
+        assertEquals("1111x", text.text.toString())
+        assertEquals(5, text.selectionStart)
+        assertEquals(5, text.selectionEnd)
     }
 
     @Test fun fieldsApplyDirectionWithoutReversingPhysicalAlignment() {
@@ -52,9 +77,10 @@ class FieldsTest {
                 fields.measure(android.view.View.MeasureSpec.makeMeasureSpec(400, android.view.View.MeasureSpec.EXACTLY),
                     android.view.View.MeasureSpec.makeMeasureSpec(200, android.view.View.MeasureSpec.EXACTLY))
                 fields.layout(0, 0, 400, 200)
-                val text = (fields.getChildAt(0) as FrameLayout).getChildAt(0) as EditText
-                assertEquals(24f, text.x, 0.01f)
-                assertEquals(16f, text.y, 0.01f)
+                val port = fields.getChildAt(0) as FrameLayout
+                val text = port.getChildAt(0) as EditText
+                // Where it stands among the fields: its port is its box (`Fields.position`)
+                assertEquals(listOf(24f, 16f, 24f, 16f), listOf(port.x + text.x, port.y + text.y, port.x, port.y))
                 assertEquals(if (rtl) android.view.View.LAYOUT_DIRECTION_RTL else android.view.View.LAYOUT_DIRECTION_LTR, text.layoutDirection)
                 assertEquals(if (rtl) android.view.View.TEXT_DIRECTION_RTL else android.view.View.TEXT_DIRECTION_LTR, text.textDirection)
                 assertEquals(if (align == 2) android.view.Gravity.RIGHT else android.view.Gravity.LEFT,

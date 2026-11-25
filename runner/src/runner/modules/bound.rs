@@ -46,7 +46,6 @@ impl<D: DataSource> Runner<D> {
         if real.is_empty() && agent.is_empty() {
             return;
         }
-        self.retell_views(&[real, agent].concat());
         if !real.is_empty() {
             self.log(format!("modules bound here: {}", real.join(", ")));
         }
@@ -74,6 +73,7 @@ impl<D: DataSource> Runner<D> {
         for extension in &answering {
             self.tell_preferred(extension);
         }
+        self.retell_views(&[real, agent].concat());
         self.hand_over_all();
         if self.page.in_background() {
             self.tell_foreground();

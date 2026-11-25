@@ -94,8 +94,7 @@ extension GroupedListView {
         let order = snapshot.itemIdentifiers(inSection: section)
         guard let index = order.firstIndex(of: id) else { return }
         let before = order.dropFirst(index + 1).first { rows[$0]?.reorderKey != nil }
-        // The drop action can apply a snapshot. Let UIKit finish its transaction first.
-        DispatchQueue.main.async { movement.drop(before: before) }
+        movement.queueDrop(before: before)
     }
 
     func lift(at path: IndexPath) -> Bool {

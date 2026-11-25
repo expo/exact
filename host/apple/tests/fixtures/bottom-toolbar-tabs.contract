@@ -1,0 +1,51 @@
+routes nav
+  tab labs "/"
+    typography "/typography"
+    swift "/swift"
+    single "/single"
+  tab controls "/controls"
+  tab sound "/sound"
+
+component ToolbarTabs
+  state last = ""
+  action pressItem(name: string)
+    last = name
+  action back
+    nav = back(nav)
+  action pick(name: string)
+    nav = select(nav, name)
+  view
+    main navigationBack="back" navigationKey=`${top(nav).id}` width="100%" height="100%" display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` navigationScroll="content" position="absolute" inset=0 background-color="-exact-background"
+                header
+                  text (e.name == "typography" ? "Type & glass" : e.name == "swift" ? "SwiftUI playground" : t.name == "labs" ? "Labs" : t.name == "controls" ? "Controls" : "Sound") role="heading" aria-level=2
+                scroll id="content" flex=1 min-height=0
+                  if e.name == "labs"
+                    link href="/typography" testId="open-type"
+                      text "Type & glass"
+                    link href="/single" testId="open-single"
+                      text "Single action"
+                    link href="/swift" testId="open-swift"
+                      text "SwiftUI playground"
+                  text last testId="last"
+                if e.name == "typography" or e.name == "swift" or e.name == "single"
+                  row role="toolbar" toolbarPlacement="bottom"
+                    if e.name != "single"
+                      button testId="reshape" press=pressItem("Reshape")
+                        text "Reshape"
+                      spacer
+                    if e.name == "swift"
+                      button testId="animate" press=pressItem("Animate symbol")
+                        text "Animate symbol"
+                      spacer
+                    button testId="widget" press=pressItem("Widget")
+                      text "Widget"
+      row role="tablist"
+        for t in nav.tabs key=t.name
+          button role="tab" aria-controls=`panel-${t.name}` aria-selected=(nav.tab == t.name) press=pick(t.name) testId=`tab-${t.name}`
+            image (t.name == "labs" ? "symbol:sf/flask" : t.name == "controls" ? "symbol:sf/slider.horizontal.3" : "symbol:sf/speaker.wave.2")
+            text (t.name == "labs" ? "Labs" : t.name == "controls" ? "Controls" : "Sound")

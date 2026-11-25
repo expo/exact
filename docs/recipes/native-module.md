@@ -1,43 +1,49 @@
-# Recipe: a native module in Swift
+# Answer a native call in Swift or Kotlin
 
 Put an `ExactModule` in `modules/apple/*.swift`; `let exactModule` names its class.
-No app.json entry. A native module is for what only the platform knows, through public API
-alone; this one reads `ProcessInfo.thermalState`, which TypeScript cannot.
+On Android, put `class exact.app.Module : ExactModule()` in `modules/android/Module.kt`.
 
-For a value supplied at launch, mark
-`{ "name": "API_BASE_URL", "launch": true }` in app.json's `env`. In `app.ts` or an app-local
-module it imports transitively, declare `const API = import.meta.env.API_BASE_URL`, which
-holds its value before the first request. A launch sets it in the process's environment
-(`SIMCTL_CHILD_API_BASE_URL=…` on a simulator;
-`contract vocab env` has the rest); `-API_BASE_URL value` as an argument sets `UserDefaults`
-instead. Android and the web read the build's value.
 
-Declare device access in the activating source's `grants`
-([permissions](permissions.md)). `device.photos-add purpose.savePhoto` derives
-`NSPhotoLibraryAddUsageDescription` from that strings key. Grants derive
-entitlements too. Apple `infoPlist` takes only a vendor SDK's keys, `entitlements` none
-([bundle metadata](../reference.md#apple-bundle-metadata)).
-
-**Kept answers:** a resource reading `native.available` or calling `native.call`
-reads device state; its answer is kept across launches. Keep native access out of
-fetch sources.
+Declare device [grants](permissions.md) in the activating source for permissions and entitlements.
+On Apple, `device.photos-add purpose.savePhoto` derives `NSPhotoLibraryAddUsageDescription` from that strings key. Fetch sources cannot use native.
 
 ```swift
 import Foundation
 
 final class Thermal: ExactModule {
     override func call(_ request: [String: Any]) -> [String: Any] {
-        let states: [ProcessInfo.ThermalState: String] = [
-            .nominal: "nominal", .fair: "fair", .serious: "serious", .critical: "critical",
-        ]
-        return ["state": states[ProcessInfo.processInfo.thermalState] ?? "unknown"]
+        if context.agent { return ["state": "nominal"] }
+        let state = ProcessInfo.processInfo.thermalState
+        return ["state": state == .nominal ? "nominal" : "elevated"]
     }
-    override func later(_ request: [String: Any], reply: ExactReply) {
-        reply.send(call(request))
-    }
+    override func later(_ request: [String: Any], reply: ExactReply) { reply.send(call(request)) }
 }
 let exactModule: ExactModule.Type = Thermal.self
 ```
+
+```kotlin
+package exact.app
+
+import android.os.PowerManager
+import dev.exact.canvas.ExactModule
+import org.json.JSONObject
+
+class Module : ExactModule() {
+    override fun call(request: JSONObject): JSONObject {
+        if (context.agent) return JSONObject().put("state", "nominal")
+        val power = context.application.getSystemService(PowerManager::class.java)
+        val state = when (power?.currentThermalStatus) {
+            null -> "unknown"
+            PowerManager.THERMAL_STATUS_NONE -> "nominal"
+            else -> "elevated"
+        }
+        return JSONObject().put("state", state)
+    }
+}
+```
+
+`context.after(1000.0) { … }` follows the session clock, including under the driver.
+`context.changed("thermal")` refreshes sources that called `native.watch("thermal")`.
 
 ```contract
 shape Thermal
@@ -70,8 +76,10 @@ export const answer: Answer = (source, args, store, storage, native) =>
   sources[source](args, store, storage, native);
 ```
 
-`call` runs on main within 100 ms; mark it `throws` to refuse. `later(request, reply)`
-answers with one `reply.send` or `fail`, from any thread, and is the one the web implements, in
-`modules/web/index.js`, so the source above awaits it.
+`call` runs within 100 ms, on main on Apple and on the calling
+thread on Android. Throw to refuse. `later` starts on main. Answer once with
+`reply.send` or `reply.fail` from any thread. Kotlin’s default sends `call(request)`.
 
-Drive with `clock +1`, then `clock data`. Rebuild Swift with `bun exact.mjs ios`; `print` reaches agent `logs`.
+Rebuild with `bun exact.mjs ios` or `android`.
+
+For `API_BASE_URL`, set `launch: true` in manifest `env` and read `import.meta.env.API_BASE_URL`. Use `SIMCTL_CHILD_API_BASE_URL` on the simulator. Android and web read the build value.

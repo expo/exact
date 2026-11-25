@@ -750,13 +750,14 @@ the browser's supported schemes and installation behavior. Linux's CLI URL
 argument retains the ordinary location conversion because it does not
 register OS protocol handlers.
 
-A scheme registered with `host.ios.urlSchemes` or `host.macos.urlSchemes`
+A scheme in `host.ios.urlSchemes`, `host.macos.urlSchemes` or `host.android.urlSchemes`
 alone delivers its link as a location, cold as the launch location and warm
 as one navigation, with no `/open` route. A non-empty authority is the first
 segment and an empty one is none: `notes://post/42?x=1`,
 `notes:///post/42?x=1` and `notes:/post/42?x=1` are all `/post/42?x=1`, the
 fragment kept (LLP 1038 §3). Expo's `Linking.createURL("/post/42")` writes
-the three-slash form.
+the three-slash form. Android matches the declared spelling and its lowercase form,
+and refuses a scheme declared in both `urlSchemes` and `protocol_handlers`.
 
 For packaged-only Apple registration, add `"distribution_only": true` to an
 entry, for example `{"protocol":"notes","url":"/open?u=%s","distribution_only":true}`.
@@ -770,7 +771,7 @@ the web manifest or explicit `host.<platform>.urlSchemes`.
 `http` and `https` are the web's own schemes. An app declares both or
 neither: each once, with the same `url` and the same `distribution_only`.
 `readManifest` refuses any other form, so every build does, and
-`host.ios.urlSchemes` and `host.macos.urlSchemes` refuse both. The pair makes
+all three hosts refuse both in `urlSchemes`. The pair makes
 the app a web browser:
 
 | host | what the pair does |
@@ -1407,10 +1408,12 @@ from `color_scheme_dark.icons`, and its tinted icon is a square `monochrome`
 PNG, whose alpha iOS draws white on black. The web links each scheme's favicons
 (the smallest square raster of at least 32 px, then an SVG when there is one)
 and an Apple touch icon (the smallest opaque square PNG of at least 180 px, else
-the largest). Android takes a square `maskable` of at least 432 px as its
-adaptive icon, a `monochrome` one as its themed layer, a square `any` of 192 px
-when there is no `maskable`, and a 16:9 `any` of at least 640×360 px as the TV
-banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
+the largest). Android centres a square `maskable` PNG of at least 432 px at 82.5 dp on
+a 108 dp layer. For fully opaque artwork, a low-resolution copy extends the local edge
+colours into the margin. If any pixel has transparency, the background uses the light
+launch colour, or the top-left pixel’s RGB when none is named. A square `monochrome` supplies the themed layer,
+a square `any` of at least 192 px the legacy fallback, and a 16:9 `any` of at least
+640×360 px the TV banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
 at least 1280×768 px (an 8:3 and a 29:9 one give the Top Shelf images); the
 watch app a square one of 1024 px, or `host.ios.icon` when its `icon.json` lists
 watchOS; Windows a square `any` of at least 256 px, linked into the executable.
@@ -1508,7 +1511,10 @@ in its middle, as every app's does. `host.android.launchImage` replaces it:
 platform shows within a centred square 192 dp across and, on stock Android, cuts
 to the circle in that square (a `width` above 192 is refused); before Android 12,
 whose launch window has no icon, the picture is centred on the window. `false`
-shows no icon. Changing a colour or a picture requires a new native build.
+shows no icon in either appearance. Both hosts accept a dark PNG inside `launchImage`:
+`{ "src": "mark-light.png", "width": 128, "color_scheme_dark": { "src": "mark-dark.png" } }`.
+Each picture uses the parent's width and its own aspect ratio. Without a dark PNG the
+same picture appears in both schemes. Changing a colour or picture requires a new native build.
 
 ### Store category, Game Mode and memory
 
@@ -2089,9 +2095,9 @@ the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
 From the app's directory, `bun exact.mjs android --release --no-install --json`
 builds an APK without querying adb. `bun exact.mjs android --bundle --json`
 builds a production App Bundle (`.aab`) without installing. Both report the
-artifact's absolute path. An outside app's outputs are
-`target/android/app/outputs/apk/release/app-release.apk` and
-`target/android/app/outputs/bundle/release/app-release.aab`.
+artifact's absolute path. An outside app's outputs are `target/android/app/outputs/apk/release/app-release.apk` and `target/android/app/outputs/bundle/release/app-release.aab`.
+
+For Android package visibility, put `"queries": [{"action": "android.intent.action.TTS_SERVICE"}]` in `host.android`. Entries take `{package}`, `{action}` or `{action, scheme}` under the same allow-list as a bound package's `manifest.queries`. The APK merges matching entries once. A package with a Kotlin POI car service declares `manifest.carAppService` in its Android implementation. [Android module implementations](../host/android/README.md#module-implementations-llp-1133001-d5)
 
 `EXACT_BUILD_NUMBER` sets Android's `versionCode` (1 by default, an integer
 from 1 through 2100000000); `EXACT_VERSION` sets `versionName` (0.1.0 by
@@ -3177,7 +3183,11 @@ does. A mutation fails on its first overrun. `failure(x).code` is `error`
 and `failure(x).reason` is `overrun` for either failure. The app can show a
 retry button for a failed mutation. A development build also reports the
 overrun in the host console (the app’s logcat tag on Android). The Apple
-development window shows it until the next input or plan replacement.
+development window shows it until the next input or plan replacement. A launch
+with `EXACT_DEV_PILL=0` draws no such pill, nor the dev loop's status pill: for a
+screenshot of a development build (a simulator screenshot service such as Exact Build's,
+whose emulated clock can overrun budgets a device keeps). The budgets, the refusal and the
+console line are unchanged.
 The runner never retries a stream message
 that overruns.
 The host asks a yielded answer again at once, in its place among the source's
@@ -4075,6 +4085,14 @@ grant beside this one: see [Push](#push).
   is `prompt` asks first; while `denied` it is refused. A post from a wake or
   a tool while `prompt` is refused `person-required`: ask from a person's
   press first (`requestNotificationPermission()`).
+- `notificationshow` on the root hears a local post presented while the page is visible.
+  Its handler takes the same arguments as a click, the tag and an optional
+  `NotificationEvent` carrying `tag`, `title`, `body` and `data`. The handler runs
+  with the device’s origin. iOS, macOS and the web report presentation. Android reports the handoff
+  to the notification manager for an enabled channel while the activity is visible.
+  The system can still suppress the notification.
+  The agent emits it when its clock reaches `showTrigger`, or immediately for a post due now.
+  Push arrivals and posts delivered while hidden raise no event.
 - A plain click with `navigate=` opens that route location: one `navigate`
   event to the navigation root while the app runs, or the launch location when
   it starts the app. `navigate=` is reduced by the router's `location_of`
@@ -5190,7 +5208,7 @@ asks, from a press. [Recipe](recipes/displays.md).
 
 ### Still desktop capture (`@exact/screen-capture`)
 
-`captureScreens({directory, type?, quality?})` writes a still of every
+`captureScreens({directory, type?, quality?, screen?, rect?, window?, cursor?})` defaults to a still of every
 display, in display-list order, without a picker or window activation
 (LLP 1178). It answers `{captures: [{path, width, height, type, screen}]}`:
 physical pixel sizes and the corresponding `ScreenDetailed`, with
@@ -5208,19 +5226,24 @@ wake cannot request or capture. Files publish in call order after all
 encodes finish; cancellation before publication leaves previous files.
 A failure before publication preserves every previous file; a failure
 between renames reports `EncodingError` and may leave some files new.
-Limits are 8,192² pixels per display and 2²⁷ per call, checked before
+Limits are 8,192² pixels per picture and 2²⁷ per call, checked before
 allocation (`QuotaExceededError`). Unsupported encodings fall back to PNG;
 JPEG is supported on both desktop hosts.
 
 On macOS, status is `prompt` until this install has asked, `denied` after an
 unsuccessful request, and `granted` when the OS permits capture. It is read
 again when the app becomes active. A denial is changed in System Settings.
+On macOS, select a display with `screen` from `getScreenDetails()`. A `rect` within that
+display uses display-local CSS pixels. Select a window with the handle from
+`getWindowAtPoint({x, y})` or `getFrontmostWindow()`. Both lookups use the
+capture grant and app origin. The window still adds its desktop `frame`.
+The Screen Capture API's `cursor` accepts `always` or `never` (default).
 See the [capture recipe](recipes/screen-capture.md) for setup and fixtures.
 
 | host | still capture |
 | --- | --- |
-| macOS 14+ | `SCScreenshotManager`, sRGB at backing pixels, without the pointer; Screen Recording permission, checked at each capture |
-| Windows | per-monitor `BitBlt` with `SRCCOPY \| CAPTUREBLT`, physical pixels, no pointer or permission dialog; GDI's SDR colors, tagged sRGB |
+| macOS 14+ | `SCScreenshotManager`, sRGB at backing pixels, Screen Recording checked at each capture |
+| Windows | per-monitor GDI for the default call. Window lookup and explicit capture selectors or cursor settings return `NotSupportedError` |
 | web, Linux | deterministic fixture images under the agent; real capture answers `NotSupportedError` |
 | mobile, TV, watch, terminal | unavailable |
 
@@ -5855,7 +5878,7 @@ are pixels of the upright image. Lines keep the recognizer's reading order.
 | Host | Answer |
 | --- | --- |
 | iOS, iPadOS, macOS, tvOS | Vision; omitted languages use the request's defaults. Named languages match Vision's supported languages. `apple.confidence` is the top candidate's confidence. |
-| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Built and JVM-tested; recognition on a device is not yet verified. |
+| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Lines come in ML Kit's block order: in a photo that also holds text outside the page (a window's tab strip above a paragraph), that text can come first. Verified on a phone (Android 14) with the fixture pictures and camera photos. |
 | Web, Windows, Linux, terminal, and targets without an implementation | Declared default: `unavailable`, `reason: "not-supported"`, `languages: []`; `detectText` fails `NotSupportedError`. |
 
 Availability is fixed for an Apple or Android build; neither uses `downloadable`
@@ -5870,6 +5893,25 @@ ML Kit's [language table](https://developers.google.com/ml-kit/vision/text-recog
 distinguishes supported, experimental and mapped languages; all its Latin entries
 are admitted. Its [line result](https://developers.google.com/android/reference/com/google/mlkit/vision/text/Text.Line)
 defines the corner order and the unknown-language tag.
+
+### Detect faces in a still image (`@exact/face-detection`)
+
+`detectFaces(image=, maxDetectedFaces=, fastMode=)` reads a path covered by `fs.read`, such as a camera still or a picked file. It returns the EXIF-upright `width` and `height` and a `faces` list, largest box first. A picture with no face succeeds with an empty list. A face’s `boundingBox` has `x`, `y`, `width` and `height` in upright, full-resolution pixels measured from the top left. A box can extend beyond the image. Intersect it with the image before cropping. Each landmark has point `locations` and a `type` when known (`eye`, `mouth`, or `nose`). Vision returns an eye contour. ML Kit returns one point per detected eye. Models can infer landmarks on a partly hidden face. [Shape Detection API §2.2](https://wicg.github.io/shape-detection-api/#face-detection-api)
+
+Optional `pose` holds three angles in degrees. From the photographed person’s frame, positive `yaw` turns the nose to their left, positive `pitch` lifts their chin, and positive `roll` tips their right ear toward their right shoulder. A host omits `pose` when any angle is unavailable. An app checking for exactly one face should omit `maxDetectedFaces` so it can see a second face.
+
+| Host | Detection |
+| --- | --- |
+| iOS, iPadOS, macOS, tvOS | Vision supplies face rectangles, pose and landmarks. |
+| Android | Bundled ML Kit 16.1.7 runs offline and added 13,791,238 bytes to the signed arm64 test APK. The `android` member holds `leftEyeOpenProbability` and `rightEyeOpenProbability` when available, each from 0 to 1. The sides are the person’s. ML Kit’s default minimum face size is a tenth of the input width. |
+| Web | The browser’s own `FaceDetector` where available. The web API supplies boxes and landmarks. Landmark types are optional, and the API supplies no head angles. |
+| Hosts without a detector | `NotSupportedError`, including under a drive. |
+
+Landmark positions were checked on macOS and Android. On the iOS 26.5 simulator, Vision moved eye points between reads of identical pixels and eventually placed them outside the face box. Use an iPhone to test landmark positions. The iPhone check is still pending. The tvOS implementation has been compiled only.
+
+The image and detection results stay on the device. Google documents the operational metrics its SDK collects. [ML Kit data disclosure](https://developers.google.com/ml-kit/android-data-disclosure)
+
+The native implementations decode at up to 2048 pixels on the longer side. The browser decodes the full bitmap, then draws it into an upright canvas at that limit. With `fastMode`, Vision uses a 1024-pixel thumbnail, ML Kit uses its fast performance mode, and the browser receives the hint. The Apple `requestHatch` can configure both Vision requests before they run. The landmarks request’s search region also applies to the rectangles request unless the app overrides it there. Android’s `optionsHatch` configures the ML Kit options builder before a client is created. ML Kit omits head angles when fast mode, all contours, no landmarks and no classification are selected together. Drives use the default native options. An explicit `maxDetectedFaces` must be an integer from 0 through 65535 (`TypeError`). A missing file fails with `NotFoundError`, unreadable image data with `InvalidStateError`, and detector failure with `OperationError`. A drive uses the same on-device detector as the app. [Measured boxes, angles, eye probabilities and APK size](../packages/face-detection/test/checklist.md)
 
 ### Read barcodes (`@exact/barcode-detection`)
 
@@ -6218,10 +6260,11 @@ column dragenter=entered dragleave=left drop=took
 | iOS | yes: files, text and links from another app or this one, each file a copy, no folders; a field keeps text, links, text files and the text of a drag that also carries files, as UIKit's text views do, unless the field declares `drop` | file URLs, else the pasteboard's image as `image.png` |
 | tvOS | none | empty: tvOS has no pasteboard |
 | Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
-| Linux, Android, terminal | none | empty (text only) |
+| Android | yes: files, text and links from another app or this one, each file a copy of a `content:` item, no folders and no `file:` paths. Another app's files are copied under the read permission Android grants for the drop; without one, that drop brings its text and link alone. While a drop has no `url`, a text item whose whole last line is an `http://` or `https://` link gives that link as the `url`, and its lines before it, such as the title Chrome sends, as the `text`; a field keeps text, links and text files, as Android's text views do, unless it declares `drop`, and gives a file to the `drop` above it | empty (text only) |
+| Linux, terminal | none | empty (text only) |
 
 The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,
-folders, text and a link), `tap <target> dragenter …` and `tap <target>
+folders except on iOS and Android, text and a link), `tap <target> dragenter …` and `tap <target>
 dragleave`, `type <target> paste --file <path…>` and `type <target> paste
 --image <png>`. A test drops with `tap "zone" drop file "a.pdf" text "…" url
 "…"`, with at least one of those parts.
@@ -6331,13 +6374,14 @@ A Mac build signed ad hoc leaves out the share extension
 
 ### Clipboard images
 
-A press can start a data-code clipboard read on macOS, iOS and the web. With
+A press can start a data-code clipboard read on macOS, iOS, Android and the web. With
 the `clipboard.read` grant, `await readText()` returns plain text (up to
-1 MiB of UTF-8), or an empty string when there is none. On Apple platforms it takes
-the first item with plain text. iOS controls permission to paste from another app. `await read()`
+1 MiB of UTF-8), or an empty string when there is none. On Apple platforms and Android it takes
+the first item with plain text. Android rejects with
+`NotAllowedError` if the window lacks input focus. iOS controls permission to paste from another app. `await read()`
 returns clipboard items. Inspect `item.types` and call
-`await item.getType("text/plain")` for text or `await item.getType("image/png")`
-for a temporary `app:/tmp/` PNG path. The host sanitizes each image within
+`await item.getType("text/plain")` for text. On Apple platforms, Android and the web,
+`await item.getType("image/png")` returns a temporary `app:/tmp/` PNG path. The host sanitizes each image within
 the 64 MiB and 64-million-pixel bounds. File access uses the app's ordinary
 file grants.
 
@@ -6670,12 +6714,14 @@ Linux native apps can run TypeScript through `exact-js` and Hermes;
 
 Signed delivery carries one module pair, and which pair depends on the host. The
 Apple loader accepts TypeScript or a Rust module enabled by the binary's Rust policy.
-A Linux binary built with its update entry installs a Rust pair only. A Linux app
-whose module is TypeScript, and every Windows app, sets that platform's
-`deploy.store` to `"0"`: with any other level the binary exits at start. The
-installed binary must supply the required runtime and admit the module's app
-identity and grants. An app with both TypeScript and Rust modules sets every
-`deploy.store` entry to `"0"`: delivery of both together is not implemented. See LLP 1027 for the design record.
+A generated Linux entry links the delivery adapter at the default store level
+`"A"`. It can install a TypeScript pair or a Rust pair when the binary admits it.
+Set `deploy.store.linux` to `"0"` for a binary-only build or to run the Linux
+host headless on Windows. The Windows host requires `deploy.store.windows` to
+be `"0"`. The installed binary must supply the required runtime and admit the
+module's app identity and grants. An app with both TypeScript and Rust modules
+sets every `deploy.store` entry to `"0"` because delivery of both together is
+not implemented. See LLP 1027 for the design record.
 
 ## Package configuration
 
@@ -6686,19 +6732,35 @@ A package's interface declares the values it takes from the app in its
 `"metadata": "<name>"` to also fill a vendor SDK's `<meta-data>`, if the name is
 on `CONFIG_METADATA` in `scripts/android-manifest.mjs`.
 
-The app gives them in `app.json` as `"packages": {"<interface>": {"<target>":
-{"<key>": <value>}}}`. An `env` key's value is `{"env": "<VARIABLE>"}`, which
-the build reads from its environment. The package's code reads the values as
-`context.config` in Kotlin and Swift, and as `config` on the web. A build
-refuses a value of another type (`bake-config-type`), an undeclared key
-(`bake-config-unknown`) and a required key with no value (the declared
-`missing` code). It refuses a `"required": "release"` key only in a release
-build.
+The app supplies a base value in `packages.<interface>.<target>.<key>` in
+`app.json`. A development-trust build overlays individual keys from
+`development.packages.<interface>.<target>`. Both sections take the keys and
+types the interface declares. A key supplied only under `development` is
+absent in production. The build selects the value before reading an `env`
+reference (`{"env": "<VARIABLE>"}`). Each selected value ships in the app.
+A production JSON import of `app.json` sees an empty `development.packages`
+map when the app declared that section.
 
-`env` keeps a value out of the repository, not out of the app: everything in
-`config` ships in the APK, the IPA or the page. A changed native value needs
-a new binary. See
-[A package's configuration](contract-for-agents.md#a-packages-configuration).
+The package reads the result through `context.config` in Swift, Kotlin and
+JavaScript. A build refuses a value of another type (`bake-config-type`),
+an undeclared key (`bake-config-unknown`) and a missing required value
+(the declared `missing` code). A release checks `"required": "release"`
+after selection. Production must satisfy it from the base. A changed native
+value needs a new binary.
+
+**Package context.** The read-only Boolean `context.development` is true
+when the app was built with development trust and false in production.
+Linux and Windows Rust packages read it as `context.development()`.
+It has the same value when the app runs under the agent or launches normally.
+The package's Swift sources also have the `EXACT_DEVELOPMENT` compilation
+condition in a development build. SwiftPM products build in release
+configuration and the APK is non-debuggable in both trusts. A package can
+use the fact to select a vendor SDK's test mode.
+See [A package's configuration](contract-for-agents.md#a-packages-configuration).
+
+Both web targets load a placed package view from its bound web implementation
+after first paint. A game can also supply the tag in its own web module.
+Package sources and sends in a wasm game still use the runner’s substitutes.
 
 ## Access hatches
 
@@ -7521,6 +7583,14 @@ neither
 runs when it lifts 64 points or more that way. Both directions are the
 screen's, in a right-to-left layout too, and a node may have both
 ([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
+
+`swipe=action` with `swipe-direction` (`left`, `right`, `up` or `down`) is the
+platform's discrete swipe: nothing follows the finger, and the action runs once
+when UIKit's swipe recognizer recognizes a swipe that way on the node or a view
+inside it, a text field included. UIKit arbitrates it with the other gestures
+under the finger, as it does any swipe: a field whose text overflows pans
+instead. Only iOS has it; macOS,
+tvOS, the web, Linux, Windows and Android fire none (LLP 1057.001 §8).
 
 ## Timer options
 

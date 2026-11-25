@@ -74,6 +74,47 @@ final class MenuSectionTests: XCTestCase {
         XCTAssertFalse(pop.menuShaped, "a section holds rows only")
     }
 
+    func testSymbolAndTwoTextsMakeAMenuItemInsideOrOutsideASection() throws {
+        let p = presenter()
+        defer { p.menus.reset() }
+        let pop = try XCTUnwrap(p.views[2])
+        var column = ButtonFace(); column.placement = "top"; column.fits = false
+        p.buttonFace = { $0 == 5 ? column : ButtonFace() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 30, "kind": "image", "props": ["imageSource": "symbol:sf/flame.fill", "symbolName": "flame.fill"]],
+            ["op": "create", "id": 31, "kind": "text", "props": ["text": "Deals fire damage"]],
+            ["op": "style", "id": 5, "style": ["display": "flex", "flex_direction": "column"]],
+            ["op": "children", "id": 5, "ids": [30, 105, 31]],
+            ["op": "children", "id": 2, "ids": [4]],
+        ]))
+        for grouped in [true, false] {
+            if !grouped {
+                p.apply(wireBatch([["op": "children", "id": 4, "ids": [6]],
+                                   ["op": "children", "id": 2, "ids": [5]]]))
+            }
+            XCTAssertTrue(pop.menuShaped)
+            #if os(iOS)
+            var items = p.menus.items(of: pop)
+            if grouped {
+                let section = try XCTUnwrap(items.first as? UIMenu)
+                XCTAssertTrue(section.options.contains(.displayInline))
+                XCTAssertEqual(section.title, "Your presets")
+                items = section.children
+            }
+            let item = try XCTUnwrap(items.first as? UIAction)
+            #else
+            let items = p.menus.menu(of: pop).items
+            if grouped { XCTAssertEqual(items.first?.title, "Your presets") }
+            let item = try XCTUnwrap(items.first { !$0.isSectionHeader })
+            #endif
+            if #available(macOS 14.4, *) {
+                XCTAssertEqual(item.title, "Fireball")
+                XCTAssertEqual(item.subtitle, "Deals fire damage")
+            }
+            XCTAssertNotNil(item.image)
+        }
+    }
+
     #if os(iOS)
     /// Each section an inline menu, its title the group's name, `|` between them.
     func testASectionIsATitledInlineMenu() throws {

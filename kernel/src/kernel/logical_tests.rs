@@ -146,6 +146,7 @@ fn a_capture_follows_an_inherited_direction() {
 fn start_and_end_read_back_and_round_trip_on_the_wire() {
     for name in [
         "--exact-keyboard-inset-start",
+        "--exact-bar-inset-end",
         "--exact-native-2-safe-area-inset-end",
     ] {
         let text = format!("var({name}, 2px)");
@@ -164,9 +165,43 @@ fn start_and_end_read_back_and_round_trip_on_the_wire() {
     // the local inset, by edge, until activation
     for name in [
         "--exact-keyboard-inset-middle",
+        "--exact-bar-inset-left",
         "--exact-safe-area-inset-start",
     ] {
         let text = format!("var({name}, 2px)");
         assert_eq!(crate::style::Dimension::parse_calc(&text), None, "{name}");
+    }
+}
+
+#[test]
+fn route_bar_widths_follow_the_readers_direction_and_clear_with_the_bar() {
+    let start = "var(--exact-bar-inset-start, 123px)";
+    let end = "var(--exact-bar-inset-end, 123px)";
+    let mut ops = create(3..=5);
+    for id in 3..=5 {
+        ops.push(style(
+            id,
+            vec![],
+            &[
+                (StyleId::Width, start),
+                (StyleId::Height, end),
+                (StyleId::Direction, if id == 4 { "rtl" } else { "ltr" }),
+            ],
+        ));
+    }
+    ops.extend([children(1, &[2, 5]), children(2, &[3, 4])]);
+    let mut k = owner(390.0, 844.0, ops);
+    let size = |k: &Kernel, id| {
+        let (_, _, width, height) = frame(k, id);
+        [width, height]
+    };
+    for sides in [[0.0, 84.0], [300.0, 0.0], [0.0, 0.0]] {
+        lay_out(&mut k);
+        assert!(k.set_route_bar_insets(2, sides).unwrap());
+        assert!(!k.set_route_bar_insets(2, sides).unwrap());
+        lay_out(&mut k);
+        assert_eq!(size(&k, 3), sides);
+        assert_eq!(size(&k, 4), [sides[1], sides[0]]);
+        assert_eq!(size(&k, 5), [0.0; 2]);
     }
 }

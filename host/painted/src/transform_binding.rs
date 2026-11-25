@@ -204,6 +204,17 @@ impl<D: DataSource> Host<D> {
         values: [Value; 2],
         now_ms: f64,
     ) -> Result<bool, String> {
+        self.transform_drag_update_at(held, binding, values, now_ms, now_ms)
+    }
+
+    pub(crate) fn transform_drag_update_at(
+        &mut self,
+        held: TransformHold,
+        binding: TransformDragBinding,
+        values: [Value; 2],
+        now_ms: f64,
+        at_ms: f64,
+    ) -> Result<bool, String> {
         if !self.transform_hold_live(held, binding) {
             return Ok(false);
         }
@@ -212,7 +223,7 @@ impl<D: DataSource> Host<D> {
         }
         let accepted = self
             .engine
-            .update_transform_hold(held, now_ms / 1000., values)
+            .update_transform_hold_at(held, now_ms / 1000., at_ms / 1000., values)
             .map_err(|e| format!("transform update: {e:?}"))?;
         if accepted {
             self.now_ms = now_ms;

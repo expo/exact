@@ -155,7 +155,6 @@ impl<D: DataSource> Presenter<D> {
             pointer_kind: _,
             slop: _,
             window: _,
-            segments: _,
             choice: _,
             #[cfg(any(windows, test))]
                 deferred_painter: _,
@@ -196,7 +195,7 @@ impl<D: DataSource> Presenter<D> {
         fields.clear();
         *field_history = Default::default();
         *field_drag = None;
-        *drag_in = Default::default();
+        drag_in.reset();
         *mouse_selection = Default::default();
         #[cfg(any(target_os = "android", test))]
         {
@@ -235,6 +234,7 @@ impl<D: DataSource> Presenter<D> {
         self.give_clock();
         self.modules_replaced();
         self.auth_replaced();
+        self.opens_replaced();
         self.frame_partitions_asked();
         self.brush.replaced();
         self.brush.canvases.drawings = self.host.canvas_snapshots().clone();

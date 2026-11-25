@@ -36,6 +36,7 @@ export function preferGroups(facts) {
       const m = /^([\w-]+\.\w+(?:#@?[\w.-]+(?:\/[\w.-]+)*)?)=(.+)$/s.exec(String(value));
       if (!m) throw new MalformedOperation(`prefer extension ${value}: expected <extension>.<source>[#<import path>]=<JSON>|clear`);
       try { (extension.extension ??= {})[m[1]] = m[2] === 'clear' ? 'clear' : JSON.parse(m[2]); } catch (e) { throw new MalformedOperation(`prefer extension ${m[1]}: ${e.message}`); }
+      if (m[2] !== 'clear' && extension.extension[m[1]] === 'clear') extension.literal = true;
       continue;
     }
     if (name === 'midi.state' && MIDI_FACTS['midi.state'].includes(value)) { midi.state = value; continue; }
@@ -64,6 +65,60 @@ export function preferGroups(facts) {
   }
   if (fold.gap != null && fold.cols == null) throw new MalformedOperation('prefer: gap needs segments <cols>x<rows>');
   return { media, page, fold, mode, midi, extension };
+}
+
+/** Apply the preference once. If the package opened a document during its callback,
+ * that document receives the driver's launch table before the next step. */
+export async function preferExtension(session, request) {
+  const web = session.carrier;
+  if (!web.installSubstitutes) return session.op(request);
+  const before = await web.evaluate(() => {
+    // The navigate event fires during location.reload(), before the old document can reply.
+    if (!Object.hasOwn(globalThis, '__exactPackageNavigation')) {
+      globalThis.__exactPackageNavigation = null;
+      globalThis.navigation?.addEventListener('navigate', event => {
+        globalThis.__exactPackageNavigation = event.destination.sameDocument ? null : event;
+      });
+    }
+    return performance.timeOrigin;
+  });
+  let interrupted;
+  try { await session.op(request); }
+  catch (error) {
+    if (error.reply) throw error;
+    interrupted = error;
+  }
+  session.preferenceDocument = await preferenceDocument(web, before, interrupted);
+}
+
+/** A package can navigate after its preference reply, while the driver settles the old document. */
+export async function packageClock(session, spec) {
+  try { return await session.clock(spec); }
+  catch (error) {
+    if (!session.preferenceDocument || !['settle', 'data'].includes(spec) || error.reply) throw error;
+    session.preferenceDocument = await preferenceDocument(session.carrier, session.preferenceDocument, error);
+    return session.clock(spec);
+  }
+}
+
+async function preferenceDocument(web, before, interrupted) {
+  const deadline = Date.now() + 10000;
+  do {
+    const page = await web.evaluate(() => {
+      const event = globalThis.__exactPackageNavigation;
+      return [performance.timeOrigin, !!globalThis.exact?.agentSettled, !!event && !event.defaultPrevented && !event.signal.aborted];
+    }).catch(() => null);
+    if (page) {
+      const [origin, ready, leaving] = page;
+      if (origin === before && !leaving) {
+        if (interrupted) throw interrupted;
+        return origin;
+      }
+      if (origin !== before && ready && !leaving) return origin;
+    }
+    await new Promise(done => setTimeout(done, 20));
+  } while (Date.now() < deadline);
+  throw interrupted ?? new Error('the document opened by the package did not boot');
 }
 
 /** The request a native host answers: `media` rides along when nothing else does (an empty request is refused there by name). */

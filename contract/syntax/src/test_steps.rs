@@ -199,6 +199,15 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// A package substitute, keyed as in a drive. An absent value clears it.
+    PreferExtension {
+        /// The qualified source or agent word.
+        key: String,
+        /// The JSON the package receives.
+        value: Option<String>,
+        /// Where.
+        span: Span,
+    },
     /// `before data` skips the initial `clock data` wait. A native app runs
     /// on real time before the driver connects; the web uses the agent's.
     BeforeData {
@@ -386,6 +395,13 @@ pub enum Step {
     Background {
         /// Elapsed wall time with the app away.
         ms: u32,
+        /// Where.
+        span: Span,
+    },
+    /// Move the iOS simulator's hinge and wait for its angle.
+    Fold {
+        /// Hinge angle from closed (0) to fully open (180).
+        degrees: f64,
         /// Where.
         span: Span,
     },

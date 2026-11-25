@@ -218,7 +218,7 @@ impl<D: DataSource> Presenter<D> {
                 | "load" | "exitPictureInPicture") => {
                     eprintln!("exact: {name} unsupported on the headless/DRM host");
                     if name == "openURL" {
-                        self.answer_open(&c.args, false);
+                        self.answer_open(c.args.get(1).and_then(exact_plan::Value::as_str), false);
                     }
                 }
                 // The image hears the refusal too, once the commands have run (LLP 1042 §9).

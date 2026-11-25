@@ -3,7 +3,7 @@
 // UIKit's bars and real touches (`--chrome platform`, `--touch platform`; the web
 // leg has the agent's), on the Duo simulator fully open, partially folded and
 // closed (the hinge at 180°, 130° and 0°), the hinge set from inside the simulator
-// by `scripts/duo/hinge_helper.c` (compiled per run with the selected Xcode's
+// by `scripts/duo/hinge_helper.m` (compiled per run with the selected Xcode's
 // simulator SDK). At every pose:
 // the cover-root and inset invariants `smoke ios` checks; the Fold screen's
 // two panes exactly on the division's segments (one pane flat or closed);
@@ -25,6 +25,7 @@
 // §9): the suite starts it upright, and the rotate, resize and web legs turn it.
 // `--only insets,keyboard-bar,lab,arrangement,reading,navigation,navigation-gestures,host-navigation,host,rotate,resize,web` runs the named legs; the keyboard checks
 // run only when a probe shows a software keyboard on this simulator.
+import { hasSimulatorHinge, hingeHelper } from './duo/hinge.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -119,7 +120,7 @@ async function suite({ open: openSession, check: record }, reset) {
   const pick = process.env.EXACT_SIM;
   const version = (d) => Number(/iOS-(\d+)-(\d+)/.exec(d.runtime)?.slice(1).join('.') ?? 0);
   const dev = pick ? simulators().find((d) => d.udid === pick || d.name === pick) : null;
-  if (!dev || dev.type !== 'iPhone-Duo' || version(dev) < 27.1) {
+  if (!dev || !hasSimulatorHinge(dev) || version(dev) < 27.1) {
     console.log('duo: unsupported — needs an iPhone Duo simulator on iOS ≥ 27.1 under Xcode 27.1 (EXACT_SIM, DEVELOPER_DIR)');
     return 'unsupported';
   }
@@ -129,23 +130,16 @@ async function suite({ open: openSession, check: record }, reset) {
   let recorded = null; // whether the open pose reports the recorded inner panel
   const panels = {}; // what each panel reported first, when the record does not apply
 
-  // The hinge helper, compiled for this run with the selected Xcode's simulator SDK and ad-hoc signed.
-  const helper = resolve(out, 'hinge_helper');
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
-  const cc = spawnSync('xcrun', ['-sdk', 'iphonesimulator', 'clang', '-arch', arch, '-mios-simulator-version-min=17.0', '-O2', '-framework', 'IOKit', '-framework', 'CoreFoundation', '-o', helper, resolve(ROOT, 'scripts/duo/hinge_helper.c')], { encoding: 'utf8' });
-  if (!check(cc.status === 0, `the hinge helper did not compile: ${cc.stderr || cc.stdout}`)) return;
-  const sign = spawnSync('codesign', ['-f', '-s', '-', helper], { encoding: 'utf8' });
-  if (!check(sign.status === 0, `the hinge helper was not signed: ${sign.stderr}`)) return;
-  /** Set the hinge. Xcode 27.1's devicectl reads no hinge back (it has no `device motion`), so a pose is judged by what the session reports. */
-  const hinge = (deg) => {
-    const r = spawnSync('xcrun', ['simctl', 'spawn', udid, helper, 'set', String(deg)], { encoding: 'utf8' });
-    check(r.status === 0, `hinge ${deg}: ${r.stderr || r.stdout}`);
+  let helper;
+  try { helper = hingeHelper(udid, out); } catch (e) { check(false, e.message); return; }
+  const move = (command, value) => {
+    try { helper(command, value); return true; } catch (e) { return check(false, e.message); }
   };
+  const hinge = deg => move('set', deg);
   /** Turn the device (`TURNS`' helper name) and wait, over 50 reads, for CoreDevice to report it turned. A failure in session `s` before the turn is photographed first. */
   const orient = async (turn, s) => {
     if (s) await shot(s);
-    const r = spawnSync('xcrun', ['simctl', 'spawn', udid, helper, 'orient', turn], { encoding: 'utf8' });
-    if (!check(r.status === 0, `orient ${turn}: ${r.stderr || r.stdout}`)) return;
+    if (!move('orient', turn)) return;
     const want = TURNS.find(([name]) => name === turn)[1];
     let now;
     for (let i = 0; i < 50 && now !== want; i++) {
@@ -333,7 +327,7 @@ async function suite({ open: openSession, check: record }, reset) {
    * its route starts at the viewport's top and ends at the keyboard's top while one shows, else at the viewport's bottom;
    * under the agent's chrome it ends at the viewport's bottom. iOS's layout lists only views in the window, so its sheet
    * is listed only while it shows. Under UIKit's bars the authored
-   * tablist has no box. Beside UIKit's tab bar along the bottom a tab's route ends below the bar's top by the home
+   * tablist's box is UIKit's tab bar's. Beside UIKit's tab bar along the bottom a tab's route ends below the bar's top by the home
    * indicator's inset (34 points on the whole panel), which the panes' padding takes; beside its rail, at the viewport's
    * bottom. Under the agent's own chrome (the web leg) the tablist is laid out below the routes, as the web does,
    * ending at the viewport's bottom, and they end at its top. */
@@ -349,9 +343,9 @@ async function suite({ open: openSession, check: record }, reset) {
       return end;
     }
     if (uikit) {
-      check(!laid, `${tag}: under UIKit's bars the authored tablist has no box: ${JSON.stringify(bar)}`);
       const f = await tabBarFrame(s);
       if (!check(f, `${tag}: UIKit's tab bar is visible`)) return l.viewport.h;
+      check(['x', 'y', 'w', 'h'].every((k) => near(bar?.[k], f[k])), `${tag}: the authored tablist's box is UIKit's tab bar's ${JSON.stringify(f)}: ${JSON.stringify(bar)}`);
       if (f.h > f.w) return l.viewport.h; // a rail at the side
       check(near(f.x, 0) && near(f.w, l.viewport.w) && near(f.y + f.h, l.viewport.h), `${tag}: UIKit's tab bar runs along the viewport's bottom: ${JSON.stringify(f)} in ${JSON.stringify(l.viewport)}`);
       return f.y + l.env['safe-area-inset-bottom'];
@@ -415,8 +409,8 @@ async function suite({ open: openSession, check: record }, reset) {
   /** At a fold, layout `l` has two segments, and no control of the screen shown lies on the band between them, the
    * hinge: a button, a field, a sheet's drag handle (`heightDragFor`). Scrolling content may cross it (Apple's
    * adaptive-layout talk, developer.apple.com/videos/play/tech-talks/111463), so a control inside a scroller is exempt.
-   * The authored tablist's tabs count: under UIKit's bars they have no box (UIKit's tab bar is a rail at the inner
-   * panel's right edge upright, a bar at its bottom turned), and under the agent's own chrome they keep to the trailing
+   * The authored tablist's tabs count: under UIKit's bars their boxes are its items' (UIKit's tab bar is a rail at the
+   * inner panel's right edge upright, a bar at its bottom turned), and under the agent's own chrome they keep to the trailing
    * segment on a book fold. */
   const offBand = async (s, l, tag) => {
     const segs = l.env['viewport-segments'];
@@ -505,7 +499,7 @@ async function suite({ open: openSession, check: record }, reset) {
   const sdk = JSON.parse(readFileSync(resolve(labBundle, 'receipt.json'), 'utf8')).sdk ?? '';
   const sdkVersion = Number(/iPhoneSimulator(\d+\.\d+)\.sdk/.exec(sdk)?.[1] ?? 0);
   if (!check(sdkVersion >= 27.1, `duo: the duo-lab bundle was built with ${sdk || 'an unknown SDK'}; the fold needs the iOS 27.1 SDK — DEVELOPER_DIR=<Xcode 27.1> bun host/apple/build.mjs --ios duo-lab`)) return;
-  reset.hinge = () => { spawnSync('xcrun', ['simctl', 'spawn', udid, helper, 'orient', 'portrait']); hinge(180); }; // leave the simulator upright and open, whatever happens
+  reset.hinge = () => { move('orient', 'portrait'); hinge(180); }; // leave the simulator upright and open, whatever happens
   await orient('portrait'); // the record is the device upright
   // Whether this simulator shows a software keyboard at all. The simulator's state
   // is what counts, and it moves under a run: a Device Hub window sets the device's

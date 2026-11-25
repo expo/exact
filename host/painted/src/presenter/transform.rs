@@ -1,5 +1,4 @@
-//! Primary pan + authored zoom controls; no pinch or wheel-zoom inference:
-//! Linux declares pinch absent (LLP 1057.001 §4; evdev tracks no multitouch).
+//! A transform binding’s paired translate and scale hold (LLP 1057.001 §4).
 use super::contact::{Candidate, HeldKind, Hold};
 use super::*;
 use exact_kernel::{NodeKey, TransformDragBinding};
@@ -56,6 +55,7 @@ impl<D: DataSource> Presenter<D> {
             primary,
             velocity: VelocityTracker::new(),
             kind: HeldKind::Transform {
+                time_offset: now_ms - at_ms,
                 binding,
                 pair,
                 revision,
@@ -70,12 +70,14 @@ impl<D: DataSource> Presenter<D> {
         &mut self,
         held: &mut Hold,
         delta: Value,
+        pinched: Option<[Value; 2]>,
         now_ms: f64,
         at_ms: f64,
     ) -> Result<bool, String> {
         let HeldKind::Transform {
             binding,
             pair,
+            time_offset,
             revision,
         } = held.kind
         else {
@@ -84,16 +86,34 @@ impl<D: DataSource> Presenter<D> {
         if self.transform_revision(binding) != Some(revision) {
             return Ok(false);
         }
-        let value = Value {
-            x: pair.translate().value.x + delta.x,
-            y: pair.translate().value.y + delta.y,
-            ..Value::ZERO
-        };
-        let accepted =
-            self.host
-                .transform_drag_update(pair, binding, [value, pair.scale().value], now_ms)?;
+        let [translate, scale] = pinched.unwrap_or_else(|| {
+            [
+                Value::new(
+                    pair.translate().value.x + delta.x,
+                    pair.translate().value.y + delta.y,
+                ),
+                pair.scale().value,
+            ]
+        });
+        let sample = Value::four(translate.x, translate.y, scale.x, 0.);
+        if let Some((at, was)) = held.sampled.filter(|_| held.lifting && pinched.is_some()) {
+            if !exact_motion::gesture::lift_samples(sample != was, (at_ms - at) / 1000.) {
+                return Ok(true);
+            }
+        }
+        let accepted = self.host.transform_drag_update_at(
+            pair,
+            binding,
+            [translate, scale],
+            now_ms,
+            at_ms + time_offset,
+        )?;
         if accepted {
-            held.sample(at_ms, delta, value);
+            if pinched.is_some() {
+                held.sampled = Some((at_ms, sample));
+            } else {
+                held.sample(at_ms, delta, translate);
+            }
             self.dirty = true;
         }
         Ok(accepted)
@@ -101,11 +121,13 @@ impl<D: DataSource> Presenter<D> {
     pub(super) fn finish_transform_drag(
         &mut self,
         held: &Hold,
+        pinched: bool,
         now_ms: f64,
     ) -> Result<bool, String> {
         let HeldKind::Transform {
             binding,
             pair,
+            time_offset,
             revision,
         } = held.kind
         else {
@@ -130,7 +152,17 @@ impl<D: DataSource> Presenter<D> {
                 .value(pair.scale().token.node(), exact_motion::Property::Scale)
                 .expect("live scale"),
         ];
-        let velocities = [held.release_velocity(), Value::ZERO];
+        let velocities = if pinched {
+            let at = held.sampled.unwrap().0 + time_offset;
+            [pair.translate(), pair.scale()].map(|s| {
+                self.host
+                    .engine()
+                    .hold_velocity(s.token, at / 1000.)
+                    .unwrap_or(Value::ZERO)
+            })
+        } else {
+            [held.release_velocity(), Value::ZERO]
+        };
         let dispatched = self
             .host
             .dispatch_transform_held(pair, binding, values, velocities, now_ms);

@@ -76,7 +76,7 @@ impl DataSource for Granted {
 }
 
 /// A shell that makes windows and keeps nothing they draw.
-struct Blank;
+pub(super) struct Blank;
 impl SurfacePainter for Blank {
     fn record(&mut self, _: (f32, f32), _: f32, _: &mut dyn FnMut(&mut dyn Backend)) -> Vec<u32> {
         Vec::new()

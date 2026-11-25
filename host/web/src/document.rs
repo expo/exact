@@ -815,6 +815,7 @@ impl<S: Source> Walk<'_, '_, S> {
         let mut markup: Option<String> = None;
         for (name, value) in &props {
             match name.as_str() {
+                "aria-keyshortcuts" if exact_plan::shortcut::portable(value) => {}
                 // Browser-owned state the glue keeps in JavaScript.
                 "scrollFollowEnd" | "scrollTop" | "scrollLeft" | "autofocus" => {}
                 // A sized, transparent source supplies the natural box before

@@ -175,6 +175,7 @@ impl<D: DataSource> Runner<D> {
             e.fields.get(key) != value.as_ref() || e.fields.get("kind") != Some(&json!(kind))
         });
         entries.push(Listed {
+            registered_by: None,
             reference,
             source: self
                 .plan

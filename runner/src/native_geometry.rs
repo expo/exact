@@ -397,6 +397,7 @@ fn name(family: Family) -> &'static str {
         Family::ReadableContentCorners => "readableContentCorners",
         Family::ReadableContentGuide => "readableContentGuide",
         Family::SystemMinimum => "systemMinimumLayoutMargins",
+        Family::Bar => "bar",
     }
 }
 

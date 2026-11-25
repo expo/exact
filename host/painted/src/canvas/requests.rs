@@ -68,6 +68,11 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.take_requests()
     }
 
+    /// A Kotlin module callback, registered between host turns.
+    pub fn module_after(&mut self, timer: i32, due: f64) {
+        self.p.module_after(timer, due);
+    }
+
     /// What the reader's hatches ask (`hatches::reader::act`), run at once,
     /// between turns: its answer, -1 when refused. A view hosted or let go
     /// paints again.
@@ -152,6 +157,11 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The reader's answer to request `id`, or its cancellation (`None`).
     pub fn answer(&mut self, id: u32, answer: Option<&str>) {
         self.p.answer_request(id, answer);
+    }
+
+    /// The reader refused a module call.
+    pub fn refuse_module(&mut self, id: u32, error: &str, message: Option<&str>) {
+        self.p.refuse_module(id, error, message);
     }
 
     /// How a presence check the reader made ended (LLP 1133.010 D13).

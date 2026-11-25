@@ -46,6 +46,24 @@ fn device_startup_phases() {
     }
 }
 
+/// @ref LLP 1172.023.006 M2.
+#[test]
+fn only_a_gpu_span_issues_timing_queries() {
+    let mut d = D3d11::new().unwrap();
+    let target = d.create_target(8, 8).unwrap();
+    let pass = |d: &mut D3d11| d.render(&Frame::default(), target, Some([0.; 4])).unwrap();
+    pass(&mut d);
+    assert_eq!(d.timing.issued, 0);
+    d.begin_gpu_span().unwrap();
+    pass(&mut d);
+    pass(&mut d);
+    d.end_gpu_span().unwrap();
+    // The disjoint query, and a timestamp before and after each pass.
+    assert_eq!(d.timing.issued, 5);
+    pass(&mut d);
+    assert_eq!(d.timing.issued, 5);
+}
+
 #[test]
 fn failed_and_disconnected_device_workers_are_reported() {
     let (send, receive) = std::sync::mpsc::channel();

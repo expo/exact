@@ -37,11 +37,10 @@ test "the counts and the error are the regions' text"
 
 - `aria-live="polite"` or `"assertive"` makes a `text` a live region without the role, and
   wins over the role's; `aria-live="off"` silences a `status`.
-- Put the role on the `text`, and leave `aria-label` off it: Android and Windows read a
-  live region by its accessible name, which a box has only from an `aria-label` (Windows
-  says nothing when a child of a `row role="status"` changes), and an `aria-label` on the
-  `text` is read in place of its text.
+- Put the role on the `text` that changes. An `aria-label` on that text supplies the
+  words its accessible name reports. Windows and Wayland also apply a live container's
+  priority to its accessible children. A child with an explicit `aria-live` sets the
+  priority for its subtree, including `off` for silence.
 - iOS, iPadOS, tvOS and macOS post the platform's announcement, the web leaves it to the
-  browser, Android and Windows mark a live region for TalkBack and Narrator, and the Linux
-  host and watchOS say nothing yet: [Announcing a
-  change](../contract-for-agents.md#announcing-a-change) has each host.
+  browser, and Android and Windows mark a live region for TalkBack and Narrator. On a
+  Wayland desktop, Orca reads the announced text. See the [details for each host](../contract-for-agents.md#announcing-a-change).

@@ -1,4 +1,4 @@
-#if EXACT_AGENT && os(iOS)
+#if os(iOS)
 import UIKit
 
 extension UITraitCollection {

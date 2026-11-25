@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // LLP 1166.000 D2 in a real browser: the cases the kernel's `role_step` and `role_tab_stop` answer
 // (kernel/tables/role-key-cases.json, which kernel/tests/it/role_keys.rs runs) put to the web's own
 // implementation, the input piece both web targets load (input-glue.js). Each case's tree is plain DOM under the
@@ -63,9 +63,9 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 async function inChrome(test) {
   const server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    const file = ['navigation.js', 'input-glue.js', 'prompt-glue.js', 'alert-message.js'].find(name => req.url === '/' + name);
-    if (!file) { res.writeHead(404); res.end(); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, file)));
+    const module = hostFixtureModule(req.url.slice(1));
+    if (module === null) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(module);
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const suite = await cdpBrowser({ args: ['--window-size=600,400'] }), { cdp } = suite;

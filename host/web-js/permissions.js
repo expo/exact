@@ -40,8 +40,10 @@ export function permissions(rows, states) {
       const parts = p.field.split("."), last = parts.pop();
       let at = out;
       for (const part of parts) at = at?.[part];
-      const web = p.field.split(".").reduce((at, part) => at?.[part], row.sub.web);
-      if (at && typeof at === "object") at[last] = web ?? stateOf(p.name);
+      const read = value => p.field.split(".").reduce((at, part) => at?.[part], value);
+      const target = row.sub.targets?.web;
+      const fixed = target?.available === false ? read(target) ?? read(row.sub.default) : undefined;
+      if (at && typeof at === "object") at[last] = read(row.sub.web) ?? fixed ?? stateOf(p.name);
     }
     return out;
   };

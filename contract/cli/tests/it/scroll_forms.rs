@@ -377,3 +377,53 @@ fn an_edge_effect_bars_node_reply_carries_its_registration() {
     );
     assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("barEdgeEffect"));
 }
+
+#[test]
+fn the_list_forms_lower_to_their_rows() {
+    // D15's list rows: each inset reference its word, the margins and background insets per edge
+    // as `padding` expands them; a list that says none keeps the initial value, UIKit's choice
+    let source = "component A\n  view\n    column testId=\"list\" -exact-list-insets-reference=\"none\" -exact-list-section-insets-reference=\"layout-margins\" -exact-list-supplementary-insets-reference=\"readable-content\" -exact-list-cell-margins=\"4 6\" -exact-list-background-insets=\"1 2 3 4\"\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let [list, plain] = ["list", "plain"].map(|t| style(&mut r, t));
+    let l = &list.rare;
+    let words = format!(
+        "{:?} {:?} {:?}",
+        l.list_insets_reference,
+        l.list_section_insets_reference,
+        l.list_supplementary_insets_reference
+    );
+    assert_eq!(words, "None LayoutMargins ReadableContent");
+    let margins = [
+        l.list_cell_margins_top.clone(),
+        l.list_cell_margins_right.clone(),
+        l.list_cell_margins_bottom.clone(),
+        l.list_cell_margins_left.clone(),
+    ];
+    assert_eq!(margins, points([4.0, 6.0, 4.0, 6.0]));
+    let background = [
+        l.list_background_insets_top.clone(),
+        l.list_background_insets_right.clone(),
+        l.list_background_insets_bottom.clone(),
+        l.list_background_insets_left.clone(),
+    ];
+    assert_eq!(background, points([1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(
+        format!("{:?}", plain.rare.list_insets_reference),
+        "Automatic"
+    );
+}
+
+#[test]
+fn the_keyboard_dismiss_padding_lowers_to_its_row() {
+    // D7's padding is a length on a scroller, 0 where unsaid; a negative length is kept as said,
+    // and the host uses 0 for it
+    let source = "component A\n  view\n    column\n      column testId=\"said\" overflow-y=\"scroll\" -exact-keyboard-dismiss-padding=56\n      column testId=\"negative\" overflow-y=\"scroll\" -exact-keyboard-dismiss-padding=-4\n      column testId=\"plain\" overflow-y=\"scroll\"\n";
+    let mut r = boot(source);
+    let [said, negative, plain] = ["said", "negative", "plain"].map(|t| style(&mut r, t));
+    assert_eq!(said.rare.keyboard_dismiss_padding, Dimension::Points(56.0));
+    assert_eq!(
+        negative.rare.keyboard_dismiss_padding,
+        Dimension::Points(-4.0)
+    );
+    assert_eq!(plain.rare.keyboard_dismiss_padding, Dimension::Points(0.0));
+}

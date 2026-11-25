@@ -94,6 +94,7 @@ function settleMovers(later) {
 // `apply` and its `children` case name the portal functions above only on a batch with movers: the page's tests run
 // them alone.
 function apply(batch) {
+  if (batch.packageViewOwners) host.packageViewOwners = batch.packageViewOwners;
   // Hidden movers this batch makes: to the holder once it has made them.
   const hiddenLater = [];
   let holding = false;
@@ -1253,6 +1254,7 @@ export function applyBatch(batch) {
       globalThis.exact.gpu?.syncPerformance?.();
       globalThis.exact.gpu?.drainRecords();
       globalThis.exact.gpu?.layout?.();
+      if (HAS_PACKAGE_VIEWS) host.packageViews?.report();
       globalThis.exact.committed?.();
       // A commit may settle the request a replacement waits for (boot.js).
       globalThis.exact.replacementChanged?.();

@@ -241,6 +241,7 @@ function moduleType(t, inList=false) {
     return moduleType(json[1],inList);
   }
   if (t==='unit') return 'void';
+  if (t==='DOMRect') return '{ x: number; y: number; width: number; height: number }';
   // Bytes are data code's (LLP 1133.006 D8 item 1); an option that may be either takes both (LLP 1133.035 D2).
   if (t==='string|bytes') return inList ? '(string | Uint8Array)' : 'string | Uint8Array';
   if (t.endsWith('[]')) return moduleType(t.slice(0,-2),true)+'[]';
@@ -290,7 +291,9 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
   for (const [shape,fields] of Object.entries(shapes)) {
     // On a target none of the interface's implementations names, `supports` answers false (LLP 1133.006 D7).
     if (keyed(shape)) {
-      const here = !target || implementations.some(i => i.targets?.includes(target));
+      const writers = entries.filter(e => e.send && Object.values(e.options ?? {}).some(t => unwrapped(t) === shape));
+      const writable = !writers.length || writers.some(e => !e.substitute?.unsupported?.includes(target));
+      const here = !target || (writable && implementations.some(i => i.targets?.includes(target)));
       const supported = here ? Object.keys(fields.record).filter(k => !fields.record[k]?.targets || fields.record[k].targets.includes(target)) : [];
       lines.push(...keyedClass(shape,fields.record,outputs.has(shape),supported));
       continue;
@@ -389,11 +392,19 @@ function binding(name, declaration, implementations, dom=()=>[], members={}, tar
   lines.push(
     `function call(body: { extension: string; owner?: string; source?: string; send?: string; args: unknown }${wired ? ', bytes = false' : ''}): Promise<any> {`,
     ...(wired ? ['  body = { ...body, args: toWire(body.args) };'] : []),
+    '  const name = `${body.extension}.${body.source ?? body.send}`;',
     '  const via = (globalThis as any).__exact_module;',
     `  const answer: Promise<any> = via ? via(body) : fetch("exact-native:", { method: "POST", body: JSON.stringify(body), exactIndependentHttp: { maxResponseBytes: ${extension === 'clipboard' ? '(body.send === "read" || body.send === "readText") ? 8388608 : 1048576' : '1048576'} } } as any)`,
-    '    .then((r: any) => r.text().then((t: string) => { if (r.status === 200) return JSON.parse(t); throw failed(t || "the module did not answer", "UnknownError"); }));',
-    wired ? '  return answer.then((v: any) => { const a = answered(v, `${body.extension}.${body.source ?? body.send}`); return bytes ? fromWire(a) : a; });'
-      : '  return answer.then((v: any) => answered(v, `${body.extension}.${body.source ?? body.send}`));',
+    '    .then((r: any) => r.text().then((t: string) => {',
+    '      if (r.status === 200) return JSON.parse(t);',
+    '      if (r.status === 500 && r.headers?.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/json") {',
+    '        let refusal; try { refusal = JSON.parse(t); } catch {}',
+    '        answered(refusal, name);',
+    '      }',
+    '      throw failed(t || "the module did not answer", "UnknownError");',
+    '    }));',
+    wired ? '  return answer.then((v: any) => { const a = answered(v, name); return bytes ? fromWire(a) : a; });'
+      : '  return answer.then((v: any) => answered(v, name));',
     '}',
     'function callNow(body: { extension: string; owner?: string; sync: string; args: unknown }): any {',
     '  const now = (globalThis as any).__exact_module_sync;',

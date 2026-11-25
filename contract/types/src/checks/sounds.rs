@@ -344,7 +344,7 @@ fn undeclared(path: &str, declared: &BTreeSet<String>) -> String {
         );
     }
     let mut near: Vec<&String> = declared.iter().collect();
-    near.sort_by_key(|d| distance(path, d));
+    near.sort_by_key(|d| crate::literals::edit_distance(path, d));
     let near = near
         .iter()
         .take(3)
@@ -352,21 +352,4 @@ fn undeclared(path: &str, declared: &BTreeSet<String>) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("`{path}` is not a declared sound (declared, nearest first: {near}); declare it at the top level: `sound \"{path}\"`")
-}
-
-fn distance(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.chars().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let next = (diagonal + usize::from(ca != *cb))
-                .min(row[j] + 1)
-                .min(row[j + 1] + 1);
-            diagonal = row[j + 1];
-            row[j + 1] = next;
-        }
-    }
-    row[b.len()]
 }

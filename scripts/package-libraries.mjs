@@ -20,9 +20,12 @@
 import { spawnSync } from '../host/apple/toolchain.mjs';
 import { dylibInstallNames } from '../host/apple/link.mjs';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { pathWithin, within } from './paths.mjs';
+import { fileDependencies } from './file-dependencies.mjs';
+import { implementationFor, moduleInterfaces } from '../js/bake/src/typescript.mjs';
 import { fileURLToPath } from 'node:url';
 
 export const LIBRARY_CACHE = resolve(homedir(), '.cache/exact/package-libraries');
@@ -346,4 +349,141 @@ export function embedLibrary(lib, embed, ios) {
   placeLibrary(lib, join(embed, 'Frameworks'));
   const runPath = ios ? '@executable_path/Frameworks' : '@executable_path/../Frameworks';
   return { frameworks: [{ path: `Frameworks/${lib.link}.framework`, package: lib.package, sha256: lib.sha256, linkerFlags: ['-F', 'Frameworks', '-framework', lib.link, '-Xlinker', '-rpath', '-Xlinker', runPath], embed: true }] };
+}
+
+// Bun links each file of an external file: dependency to its source. Only the
+// workspace declaration for this install can grant that second directory.
+function swiftPackageRoots(appDir, installed) {
+  const root = realpathSync(installed), manifest = realpathSync(resolve(root, 'package.json'));
+  if (!within(root, manifest)) {
+    const matches = source => existsSync(resolve(source, 'package.json')) && realpathSync(resolve(source, 'package.json')) === manifest;
+    for (let dir = realpathSync(appDir); ; dir = dirname(dir)) {
+      const dep = existsSync(resolve(dir, 'package.json')) && fileDependencies(dir).find(p => realpathSync(p.installed) === root);
+      if (dep && matches(dep.source)) return [root, realpathSync(dep.source)];
+      const modules = resolve(dir, 'node_modules'), lock = resolve(dir, 'bun.lock');
+      if (within(modules, root) && existsSync(lock)) {
+        const name = relative(modules, root).split(sep).join('/');
+        const pin = Bun.JSONC.parse(readFileSync(lock, 'utf8')).packages?.[name]?.[0];
+        const prefix = name + '@file:';
+        if (pin?.startsWith(prefix)) {
+          const source = resolve(dir, pin.slice(prefix.length));
+          if (matches(source)) return [root, realpathSync(source)];
+        }
+      }
+      if (dirname(dir) === dir) break;
+    }
+  }
+  return [root];
+}
+
+// A workspace package can contain the example app that builds it. Keep the
+// app's generated directories out of its sources, including after relocation.
+export function swiftPackageOutputs(app, installed) {
+  const outputs = [resolve(app.dir, '.exact'), app.target ?? resolve(app.dir, 'target')];
+  return [...new Set(swiftPackageRoots(app.dir, installed).flatMap(root => outputs.map(path => pathWithin(root, path)))
+    .filter(name => name !== '..' && !name.startsWith('../') && !isAbsolute(name)))].sort();
+}
+
+// A Swift manifest is a program and can consult siblings of its Swift package.
+// Copy its npm package's own files, preserving framework links. Record any
+// unreachable links so a Swift package that needs one can name it in its refusal.
+// With no app directory, verify the already materialized tree, including every extra file.
+export function swiftPackageFiles(appDir, installed, output, omitted = [], generated = []) {
+  const roots = appDir ? swiftPackageRoots(appDir, installed) : [realpathSync(installed)];
+  const hash = createHash('sha256');
+  function visit(name) {
+    if (generated.includes(name)) return;
+    const installedFile = resolve(roots[0], name), backing = roots[1] && resolve(roots[1], name);
+    const file = backing && !lstatSync(installedFile, { throwIfNoEntry: false }) ? backing : installedFile;
+    let real;
+    try { real = realpathSync(file); }
+    catch (error) {
+      if (!appDir || !['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code) || !lstatSync(file).isSymbolicLink()) throw error;
+    }
+    const owner = real && roots.find(root => within(root, real));
+    if (!owner) {
+      if (!appDir) throw new Error(`${file} escapes the cached Swift package`);
+      omitted.push(name);
+      return;
+    }
+    const dest = output && resolve(output, name), target = relative(owner, real).split(sep).join('/');
+    // An external Bun install links to the authored link itself. Keep the first hop of
+    // a relative link: a signed framework seals Versions/Current, even when it points to A.
+    const authored = backing && existsSync(backing) && realpathSync(backing) === real ? backing : file;
+    if (lstatSync(authored).isSymbolicLink()) {
+      const raw = readlinkSync(authored), hop = resolve(dirname(authored), raw);
+      const local = roots.find(root => within(root, authored));
+      const moved = join(relative(local, dirname(authored)), raw);
+      const portable = !isAbsolute(raw) && moved !== '..' && !moved.startsWith('..' + sep) && within(local, hop);
+      const link = portable ? raw : relative(dirname(name), target) || '.';
+      hash.update(JSON.stringify([name, 'link', link]));
+      if (dest) symlinkSync(link, dest);
+      return;
+    }
+    const info = statSync(real);
+    if (info.isFile()) {
+      if (dest) copyFileSync(real, dest, constants.COPYFILE_FICLONE);
+      hash.update(JSON.stringify([name, 'file', info.mode & 0o111])).update(createHash('sha256').update(readFileSync(dest || real)).digest());
+    } else if (info.isDirectory()) {
+      hash.update(JSON.stringify([name, 'directory']));
+      if (dest) mkdirSync(dest, { recursive: true });
+      const entries = new Set(readdirSync(real));
+      // Bun leaves authored symlinks out of an external directory install. A versioned
+      // framework needs those links alongside the installed files they designate.
+      if (backing && existsSync(backing) && within(roots[1], realpathSync(backing))) for (const child of readdirSync(backing, { withFileTypes: true })) {
+        if (child.isSymbolicLink()) entries.add(child.name);
+      }
+      for (const entry of [...entries].sort()) {
+        if (appDir && entry === '.git' && existsSync(resolve(real, entry, 'HEAD')) && existsSync(resolve(real, entry, 'objects'))) continue;
+        if (appDir && entry === '.build') {
+          const marker = resolve(real, entry, 'CACHEDIR.TAG');
+          if (existsSync(marker) && roots.some(root => within(root, realpathSync(marker))) && statSync(marker).isFile() && readFileSync(marker, 'utf8').startsWith('Signature: 8a477f597d28d172789f06886806bc55')) continue;
+        }
+        visit(name ? `${name}/${entry}` : entry);
+      }
+    } else throw new Error(`${file} must be a regular Swift package input`);
+  }
+  visit('');
+  return hash.update(JSON.stringify(omitted)).digest('hex');
+}
+
+function swiftImplementationDirectory(app, root, directory) {
+  const physical = realpathSync(directory);
+  const owner = swiftPackageRoots(app, root).find(path => within(path, physical));
+  if (!owner) throw new Error(`${directory} escapes the package directory ${root}`);
+  return relative(owner, physical);
+}
+
+export function swiftPackageInventories(app, bound, target, snapshots) {
+  return bound.filter(p => Array.isArray(p.swiftPackages) && p.swiftPackages.some(item => item?.path)).map(impl => {
+    const snapshot = snapshots?.get(impl.swiftPackageRoot), generated = snapshot?.generated ?? swiftPackageOutputs(app, impl.swiftPackageRoot);
+    const sha256 = snapshot?.digest ?? swiftPackageFiles(app.dir, impl.swiftPackageRoot, undefined, [], generated);
+    const identity = { interface: impl.swiftPackageInterface, target, directory: swiftImplementationDirectory(app.dir, impl.swiftPackageRoot, dirname(impl.swiftPackagesSource)), sha256, ...(generated.length ? { generated } : {}) };
+    return { kind: 'swift-package', path: app.dir, name: `${identity.interface}/${identity.directory} Swift package`, identity };
+  });
+}
+
+// Receipts written before the first path declaration have no row to recheck.
+export function addedSwiftPackageInputs(appDir, target, extensions, inventories = []) {
+  const missing = new Set(Object.values(extensions ?? {}));
+  for (const row of inventories) if (row.kind === 'swift-package') missing.delete(row.identity.interface);
+  if (!missing.size) return [];
+  const added = [];
+  for (const iface of moduleInterfaces(appDir)) {
+    if (!missing.has(iface.name)) continue;
+    const impl = implementationFor(appDir, iface, target);
+    if (impl?.json.platform === 'apple' && impl.json.sources?.swift?.length && impl.json.class && impl.json.swiftPackages?.some(p => p?.path)) {
+      added.push(`${iface.name}/${relative(impl.root, impl.dir)} Swift package`);
+    }
+  }
+  return added;
+}
+
+// Rebind when comparing receipts because a nearer install can shadow a hoisted implementation.
+export function swiftPackageInputChanged(appDir, input) {
+  try {
+    const iface = moduleInterfaces(appDir).find(i => i.name === input.interface);
+    const impl = iface && implementationFor(appDir, iface, input.target);
+    return !impl || swiftImplementationDirectory(appDir, impl.root, impl.dir) !== input.directory || swiftPackageFiles(appDir, impl.root, undefined, [], input.generated) !== input.sha256;
+  } catch { return true; }
 }

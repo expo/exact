@@ -93,8 +93,17 @@ fn segmented_groups(source: &str) {
         "as wide as its segments"
     );
     assert_ne!(km.2, nmi.2, "each its own width");
-    // The track round the segments; the chip under the checked one.
-    assert_eq!(pixel(&mut p, "units", 1.0, 18.0), track);
+    // The pixel centre is half a standard deviation outside the chip's straight
+    // edge, where a Gaussian covers 30.85% of the pixel with its 16% black ink.
+    let expected = track.map(|c| (f32::from(c) * (1.0 - 0.3085 * 0.16)).round() as u8);
+    for group in ["units", "stacked"] {
+        let shadow = pixel(&mut p, group, 2.0, 18.0);
+        assert!(
+            shadow.iter().zip(expected).all(|(s, e)| s.abs_diff(e) <= 2),
+            "{group} chip shadow: {shadow:?}, expected {expected:?}"
+        );
+    }
+    assert_eq!(pixel(&mut p, "units", units.2 - 2.0, 18.0), track);
     assert_eq!(pixel(&mut p, "u-km", 3.0, 15.0), chip);
     assert_eq!(pixel(&mut p, "u-mi", 3.0, 15.0), track);
     // Its label the label's colour, an unchecked one the secondary label's:
@@ -123,7 +132,7 @@ fn segmented_groups(source: &str) {
     // An authored layout stays the author's, on the track.
     let (k1, k2) = (rect(&mut p, "k-1"), rect(&mut p, "k-2"));
     assert!(k2.1 >= k1.1 + k1.3, "one under the other: {k1:?} {k2:?}");
-    assert_eq!(pixel(&mut p, "stacked", 1.0, 18.0), track);
+    assert_eq!(pixel(&mut p, "k-2", 3.0, 15.0), track);
     assert_eq!(pixel(&mut p, "k-1", 3.0, 15.0), chip);
     // A vertical group is no segmented control.
     assert_eq!(size(&mut p, "v-1").1, 36.0);

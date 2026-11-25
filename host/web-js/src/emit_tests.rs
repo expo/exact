@@ -1280,11 +1280,11 @@ fn a_table_and_a_description_list_are_their_elements() {
     assert!(!out.css.contains("display:grid"), "{}", out.css);
 }
 
-/// @ref LLP 1047.002 D1 — a commit reads bound exits and layout transitions
-/// through presence-bindings.js, which only a plan that binds one links, and
-/// which is handed over before the first commit builds the view.
+/// @ref LLP 1047.002 D1 — install presence probes before mounting a plan
+/// with an exit or a bound layout transition.
 #[test]
-fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
+fn presence_probes_link_for_exits_and_bound_layout_transitions() {
+    exact_web::link(exact_web_capabilities::ALL);
     let emitted = |view: &str| {
         let source = format!("keyframes leave\n  to opacity=0\n\ncomponent App\n  state calm = false\n  view\n    column\n      {view}\n");
         crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
@@ -1292,6 +1292,7 @@ fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
             .js
     };
     for view in [
+        "text \"Card\" -exact-exit-animation=\"leave 200ms linear both\"",
         "text \"Card\" -exact-exit-animation=(calm ? \"none\" : \"leave 200ms linear both\")",
         "text \"Card\" -exact-layout-transition=(calm ? \"none\" : \"200ms linear\")",
     ] {
@@ -1301,7 +1302,6 @@ fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
     }
     for view in [
         "text \"Card\"",
-        "text \"Card\" -exact-exit-animation=\"leave 200ms linear both\"",
         "text \"Card\" -exact-layout-transition=\"200ms linear\"",
     ] {
         let js = emitted(view);

@@ -73,6 +73,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::presence::attach(env);
             $crate::canvas::frame_partitions::attach(env);
             $crate::canvas::secrets::attach(env);
+            $crate::presenter::attach_android_module(env);
             environment(env, dir, live);
             let store = string(env, store);
             match boot((width as u32, height as u32), scale, &store) {
@@ -87,6 +88,15 @@ macro_rules! canvas_jni_start {
                     JNI_FALSE
                 }
             }
+        }
+
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_endSession(
+            _env: *mut JNIEnv,
+            _class: jclass,
+        ) {
+            HOST.with(|slot| drop(slot.borrow_mut().take()));
+            RUNNING.store(false, std::sync::atomic::Ordering::Release);
         }
 
         /// What a booting thread hands the thread that runs the host: the
@@ -131,6 +141,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::presence::attach(env);
             $crate::canvas::frame_partitions::attach(env);
             $crate::canvas::secrets::attach(env);
+            $crate::presenter::attach_android_module(env);
             // The environment is set here, before any other thread reads it.
             environment(env, dir, live);
             let store = string(env, store);

@@ -416,7 +416,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         applied = []
         applyOptions(to: web)
         // Preload scripts are a partitioned frame's: an unpartitioned one may be a wrapper's child.
-        if partition != nil { automation?.attached(controller) }
+        if partition != nil { automation?.attached(web) }
         ownScripts = controller.userScripts.count
         return web
     }
@@ -609,18 +609,20 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         session = values["session"] as? String ?? ""
         handlesNewWindow = values["newwindow"] as? Bool ?? false
         hatched = values["hatched"] as? Bool ?? false
-        element = values["element"] as? String ?? ""
+        let newElement = values["element"] as? String ?? ""
         owner = values["owner"] as? String ?? ""
         Automations.arms.add(self)
         let name = values["partition"] as? String
         options = values
         pdf?.view.zoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1)
         guard name != partition || (built == nil && pdf == nil) else {
+            element = newElement
             if let built { applyOptions(to: built) }
             return
         }
         let replacing = built != nil || pdf != nil
         if replacing { teardown() }
+        element = newElement
         partition = name
         if replacing {
             // A local PDF's frame losing its partition shows the PDF's view, and makes no web view for `serve` to drop.
@@ -1458,17 +1460,26 @@ public func exactWebAnswer(_ handle: UnsafeMutableRawPointer?, _ bytes: UnsafePo
 
 public typealias ClearFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32) -> Void
 
+public typealias AutomationMessage = @convention(block) (NSDictionary) -> Void
+
 /// A call of `@exact/browser-automation` (@ref LLP 1020.002 D9), its options
 /// with `op`, `id` and `owner` (the session's module folder): `done` receives
 /// the answer's JSON, `{error, message}` when it failed.
 @_cdecl("exact_web_automation")
 public func exactWebAutomation(_ bytes: UnsafePointer<UInt8>?, _ length: UInt32, _ context: UnsafeMutableRawPointer?, _ done: ClearFn?) {
-    let request = json(bytes, length)
+    // Byte 2 selects the message-capable ABI. Its context retains [completion, message block].
+    // A plain JSON request keeps its opaque context, even when its JSON is malformed.
+    let extended = length > 0 && bytes?.pointee == 2
+    let request = extended ? json(bytes?.advanced(by: 1), length - 1) : json(bytes, length)
+    let message: AutomationMessage? = extended ? context.map {
+        let callbacks = Unmanaged<NSArray>.fromOpaque($0).takeUnretainedValue()
+        return unsafeBitCast(callbacks.object(at: 1) as AnyObject, to: AutomationMessage.self)
+    } : nil
     let finish: ([String: Any]) -> Void = { answer in
         let data = (try? JSONSerialization.data(withJSONObject: answer)) ?? Data("{}".utf8)
         data.withUnsafeBytes { done?(context, $0.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count)) }
     }
-    let run = { Automations.run(request, finish: finish) }
+    let run = { Automations.run(request, message: message, finish: finish) }
     if Thread.isMainThread { run() } else { DispatchQueue.main.async(execute: run) }
 }
 

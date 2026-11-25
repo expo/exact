@@ -682,6 +682,8 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
       input value=text input=edit testId="field" height=24
       if armed
         button "Paste" aria-keyshortcuts="Meta+V Control+V" press=pressed("button-paste") testId="paste" height=24
+      text formatShortcut("Mod+Shift+O") testId="cap"
+      button "Choose" aria-keyshortcuts="Mod+Shift+O" press=pressed("choose") height=24
       button "F13" aria-keyshortcuts="F13" press=pressed("f13") testId="f13" height=24
       button "F24" aria-keyshortcuts="Shift+F24" press=pressed("f24") testId="f24" height=24
       button "S" aria-keyshortcuts="s" press=pressed("s") testId="s" height=24
@@ -715,11 +717,17 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
         let text = k.node(id).unwrap().props.str(exact_kernel::PropId::Text);
         text.unwrap_or("").to_string()
     };
+    let cap = p.host().kernel().node(named(&p, "cap")).unwrap();
+    assert_eq!(
+        cap.props.str(exact_kernel::PropId::Text),
+        Some("Ctrl+Shift+O")
+    );
     let (pad, field, root) = (named(&p, "pad"), named(&p, "field"), named(&p, "log"));
     let key = |p: &mut Presenter<()>, id: u32, chord: &str| {
         handle(p, &format!(r#"{{"op":"type","id":{id},"key":"{chord}"}}"#))
     };
     for (chord, want) in [
+        ("Control+Shift+O", "key:Control;key:Shift;choose;"),
         ("F13", "f13;"),
         ("Shift+F24", "key:Shift;f24;"),
         ("F24", "key:F24;"),

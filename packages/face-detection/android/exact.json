@@ -1,0 +1,30 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/face-detection@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {
+    "AndroidDetectedFace": {
+      "leftEyeOpenProbability": "option<number>",
+      "rightEyeOpenProbability": "option<number>"
+    }
+  },
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [
+    "optionsHatch"
+  ],
+  "artifacts": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "com.google.mlkit:face-detection:16.1.7"
+  ],
+  "class": "exact.facedetection.FaceDetectionModule"
+}

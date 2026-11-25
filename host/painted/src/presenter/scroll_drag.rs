@@ -33,10 +33,15 @@ impl<D: DataSource> Presenter<D> {
             .as_f64()
             .filter(|ms| ms.is_finite() && (0.0..=2000.0).contains(ms))
             .ok_or("scroll drag: duration must be 0–2000 ms")?;
+        let press = r
+            .get("press")
+            .map_or(Some(0.), |v| v.as_f64())
+            .filter(|v| v.is_finite() && *v >= 0.)
+            .ok_or("invalid press duration")?;
         let hold = r
             .get("hold")
             .map_or(Some(0.), |v| v.as_f64())
-            .filter(|hold| hold.is_finite() && *hold >= 0. && ms + hold <= 10000.)
+            .filter(|hold| hold.is_finite() && *hold >= 0. && press + ms + hold <= 10000.)
             .ok_or("scroll drag: move and hold must fit in 10000 ms")?;
         if self.contact_position().is_some() {
             return Err("scroll drag: another contact is down".into());
@@ -106,11 +111,28 @@ impl<D: DataSource> Presenter<D> {
                 return Err("scroll drag: target is hidden, inert or covered".into());
             }
         }
+        let distance = dx.abs().max(dy.abs()) as f64;
         let (dx, dy) = match (named, horizontal) {
             (None, true) => (dx, 0.),
             (None, false) => (0., dy),
             _ => (dx, dy),
         };
+        let reorder_grip = (r["probe"] == true || press > 0.)
+            && under.field.is_none()
+            && self.arrange_hold_at(start.0, start.1).is_some();
+        if reorder_grip && r["probe"] == true {
+            if let Some(deadline) = r["longPressMs"].as_f64() {
+                let travel = (deadline - press).max(0.);
+                if deadline <= press
+                    || (ms > 0. && travel <= ms && distance * travel / ms <= self.slop)
+                {
+                    return Ok(
+                        serde_json::json!({"scrollDrag": "presenter", "liftAt": deadline})
+                            .to_string(),
+                    );
+                }
+            }
+        }
         if r["probe"] == true
             && (primary_claimed
                 || owner.is_none()
@@ -142,11 +164,26 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         let seek = self.live_time().is_none();
-        if !seek && hold > 0. {
+        if !seek && (hold > 0. || press > 0.) {
             return Err("scroll drag: a timed hold needs the agent clock or native input".into());
         }
         if r["probe"] == true {
-            return Ok(serde_json::json!({"scrollDrag": "reader"}).to_string());
+            return Ok(
+                serde_json::json!({"scrollDrag": "reader", "reorderGrip": reorder_grip})
+                    .to_string(),
+            );
+        }
+        if press > 0. {
+            if !reorder_grip {
+                return Err("scroll drag: the press no longer starts on a reorder grip".into());
+            }
+            if let Some(error) = crate::agent::hold_framed(self, self.host.now() + press).1 {
+                return Err(error);
+            }
+            // Recheck the hit and the scroll chain after timers have run.
+            let mut move_only = r.clone();
+            move_only.as_object_mut().unwrap().remove("press");
+            return self.agent_scroll_drag(&move_only);
         }
         let travels = scroller.axes.0 || scroller.axes.1;
         let began = self.host.now();

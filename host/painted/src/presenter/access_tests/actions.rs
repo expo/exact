@@ -116,3 +116,32 @@ fn a_grouped_switch_keeps_its_own_actions() {
     assert!(p.access_custom_action(dark.id, dark.actions[0].0, 0.));
     assert_eq!(p.host.runner().slot("dark"), Some(&Value::Bool(true)));
 }
+
+#[test]
+fn a_muted_child_does_not_announce_its_live_ancestor() {
+    let mut p = boot(
+        r#"component App
+  state message = ""
+  action edit
+    message = "Muted change"
+  view
+    column
+      button "Edit" press=edit testId="edit"
+      column aria-label="Changes" aria-live="assertive"
+        column aria-live="off"
+          text message
+"#,
+        (320., 240.),
+        0,
+    );
+    let first = statement(&mut p);
+    let group = named(&first.nodes, "Changes").id;
+    tap(&mut p, "edit");
+    let next = statement(&mut p);
+    assert_eq!(named(&next.nodes, "Changes").id, group);
+    assert_ne!(named(&next.nodes, "Muted change").flags & flag::LIVE_OFF, 0);
+    assert!(next
+        .changes
+        .iter()
+        .all(|(_, what, ..)| what & change::LIVE == 0));
+}

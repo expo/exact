@@ -224,10 +224,7 @@ pub(super) fn publish(
         // change with its frame unchanged: it publishes them all again when
         // that changed or what places it moved, not when it is only on the
         // way to a dirty cell.
-        let displacement = tree
-            .tables
-            .flat(slot)
-            .then(|| super::table::displacement(arena, tree, slot, arena.taffy(slot)));
+        let displacement = tree.part_displacement(arena, slot, arena.taffy(slot));
         let displaced = displacement
             .is_some_and(|d| tree.displacements.insert(slot, d) != Some(d) || parent_moved);
         let descend_all = full
@@ -301,9 +298,8 @@ pub(super) fn publish(
                     continue; // its own layout's, in its own space
                 }
                 let full = full || arena.flags(child).has(NodeFlags::ATTACHED);
-                let (cx, cy) = if let Some(grid) = tree.tables.grid_for(slot, child) {
-                    let l = tree.layout(grid);
-                    (fx + l.location.x, fy + l.location.y)
+                let (cx, cy) = if let Some((dx, dy)) = tree.grid_offset(slot, child) {
+                    (fx + dx, fy + dy)
                 } else {
                     (fx, fy)
                 };

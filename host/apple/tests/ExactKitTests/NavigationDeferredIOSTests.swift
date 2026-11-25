@@ -216,6 +216,34 @@ final class NavigationDeferredIOSTests: XCTestCase {
         }
     }
 
+    func testLinksDeliveredWhileBackgroundedDoNotStartStackAnimations() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "navigation needs window containment") }
+        let (session, navigation, nav) = try fixture("background-navigation", in: scene, holdCovers: false)
+        let animations = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(true)
+        defer {
+            UIView.setAnimationsEnabled(animations)
+            NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+            AppBackground.invalidate()
+        }
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        XCTAssertTrue(PageFacts.hidden)
+        var animatedWrites: [Bool] = []
+        try withNavigationStackWrites(shouldRefuse: { _, _ in false }, observe: { writer, _, animated in
+            if writer === nav { animatedWrites.append(animated) }
+        }) {
+            XCTAssertTrue(session.navigate("/detail"))
+            waitFor("the first link reaches UIKit") { !animatedWrites.isEmpty }
+            XCTAssertFalse(animatedWrites.contains(true), "a mounted background window must not start a push animation")
+            XCTAssertTrue(session.navigate("/plain"))
+            waitFor("the later link is shown without another activation") {
+                navigation.activeRoute?.node.props["testId"] == "route-plain" && !navigation.pendingSync
+            }
+            XCTAssertFalse(animatedWrites.contains(true))
+            XCTAssertNil(nav.transitionCoordinator)
+        }
+    }
+
     private func mountedSession(_ label: String, in scene: UIWindowScene) -> (ExactSession, ExactView) {
         let session = ExactApp.shared.makeSession(label: label)
         let view = ExactView(session: session)
@@ -230,7 +258,7 @@ final class NavigationDeferredIOSTests: XCTestCase {
         return (session, view)
     }
 
-    private func fixture(_ label: String, in scene: UIWindowScene) throws -> (ExactSession, NavigationHost, UINavigationController) {
+    private func fixture(_ label: String, in scene: UIWindowScene, holdCovers: Bool = true) throws -> (ExactSession, NavigationHost, UINavigationController) {
         let (session, view) = mountedSession(label, in: scene)
         let plan = try fixturePlan("NAVIGATION_BARS")
         XCTAssertNil(session.boot(plan: plan, size: view.bounds.size).error)
@@ -242,7 +270,7 @@ final class NavigationDeferredIOSTests: XCTestCase {
             return nav.topViewController?.viewIfLoaded?.window === view.window && nav.transitionCoordinator == nil && !navigation.inTransition
         }
         let nav = try XCTUnwrap(navigation.primaryNavigation)
-        session.presenter.onCovers = nil
+        if holdCovers { session.presenter.onCovers = nil }
         return (session, navigation, nav)
     }
 
@@ -270,25 +298,30 @@ final class NavigationLayoutProbe: UIView {
 /// Intercepts stack setters for a test and restores UIKit's implementation
 /// when the test finishes. A true result from `shouldRefuse` skips the setter.
 func withNavigationStackWrites(shouldRefuse: @escaping (UINavigationController, [UIViewController]) -> Bool,
+                               observe: ((UINavigationController, [UIViewController], Bool) -> Void)? = nil,
                                _ test: () throws -> Void) throws {
     let writer = try XCTUnwrap(class_getInstanceMethod(UINavigationController.self, #selector(UINavigationController.setViewControllers(_:animated:))))
     let shim = try XCTUnwrap(class_getInstanceMethod(UINavigationController.self, #selector(UINavigationController.interceptStackWrite(_:animated:))))
     precondition(StackWriteInterception.shouldRefuse == nil)
     StackWriteInterception.shouldRefuse = shouldRefuse
+    StackWriteInterception.observe = observe
     method_exchangeImplementations(writer, shim)
     defer {
         method_exchangeImplementations(writer, shim)
         StackWriteInterception.shouldRefuse = nil
+        StackWriteInterception.observe = nil
     }
     try test()
 }
 
 private enum StackWriteInterception {
+    static var observe: ((UINavigationController, [UIViewController], Bool) -> Void)?
     static var shouldRefuse: ((UINavigationController, [UIViewController]) -> Bool)?
 }
 
 extension UINavigationController {
     @objc dynamic fileprivate func interceptStackWrite(_ routes: [UIViewController], animated: Bool) {
+        StackWriteInterception.observe?(self, routes, animated)
         if StackWriteInterception.shouldRefuse?(self, routes) == true { return }
         interceptStackWrite(routes, animated: animated)
     }

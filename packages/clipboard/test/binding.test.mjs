@@ -10,7 +10,7 @@ import { moduleBinding } from '../../../js/bake/src/__exact_binding.mjs';
 
 const pkg = resolve(import.meta.dir, '..');
 const declaration = JSON.parse(readFileSync(join(pkg, 'exact.json'), 'utf8'));
-const implementations = ['apple', 'web', 'windows'].map((p) => JSON.parse(readFileSync(join(pkg, p, 'exact.json'), 'utf8')));
+const implementations = ['android', 'apple', 'web', 'windows'].map((p) => JSON.parse(readFileSync(join(pkg, p, 'exact.json'), 'utf8')));
 // Each target's binding, written before any is imported (Bun lists a directory once).
 const dir = mkdtempSync(join(tmpdir(), 'exact-clipboard-binding-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -32,7 +32,7 @@ test('supports answers the declared types where an implementation is, and none e
     expect((await load(target)).ClipboardItem.supports('text/html')).toBe(['macos', 'ios', 'web'].includes(target));
   }
   expect((await load('tvos')).ClipboardItem.supports('text/plain')).toBe(false);
-  expect((await load('android')).ClipboardItem.supports('image/png')).toBe(false);
+  for (const type of ['text/plain', 'image/png']) expect((await load('android')).ClipboardItem.supports(type)).toBe(false);
 });
 
 test('text over 1 MiB refuses before it is sent, as a key and as writeText', async () => {

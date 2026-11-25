@@ -154,3 +154,34 @@ fn a_covered_scrollers_extent_keeps_the_cover() {
     let node = kernel.node(1).unwrap();
     assert_eq!(exact_painted::paint::content_size(&node, &kernel).1, 580.0);
 }
+
+#[test]
+fn route_bottom_toolbar_uses_ordinary_row_layout() {
+    let frames = |placement, size| {
+        let source = format!("component App\n  view\n    main navigationKey=\"home\"\n      column navigationKey=\"home\" width=300 height=400\n        scroll {size} testId=\"body\"\n          box height=800\n        row role=\"toolbar\" {placement} height=48 testId=\"tools\"\n          spacer\n          button \"Add\"\n");
+        let plan = contract::compile(&source).unwrap();
+        let (host, error) = exact_painted::Host::boot(
+            &plan.encode(),
+            (),
+            Box::new(exact_kernel::MonospaceMeasurer::default()),
+            300.,
+            400.,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        ["body", "tools"].map(|name| {
+            host.kernel()
+                .node_by_key(host.kernel().find_by_test_id(name)[0])
+                .unwrap()
+                .frame
+        })
+    };
+    for (size, height) in [("flex=1 min-height=0", 352.), ("height=90", 90.)] {
+        let placed = frames("toolbarPlacement=\"bottom\"", size);
+        assert_eq!(placed, frames("", size));
+        assert_eq!(
+            (placed[0].height, placed[1].y, placed[1].height),
+            (height, height, 48.)
+        );
+    }
+}

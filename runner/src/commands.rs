@@ -23,6 +23,19 @@ pub struct Command {
     pub source: Option<ViewId>,
 }
 
+impl Command {
+    /// Requests that can show the session's page, open another app window,
+    /// or start the app again. Show and restore of the session's window
+    /// are both bare `focus()`. An element's focus stays inside the page.
+    pub(crate) fn shows_window(&self) -> bool {
+        match self.name.as_str() {
+            "focus" | "reload" => self.args.is_empty(),
+            "panel" | "relaunch" | "openDevTools" => true,
+            _ => false,
+        }
+    }
+}
+
 /// `{"command":"share"|"saveFile",…}`: the named command's ruling, as its
 /// module's `request` writes it.
 pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {

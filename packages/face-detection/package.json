@@ -1,0 +1,12 @@
+{
+  "name": "@exact/face-detection",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The faces in a still image, by the Shape Detection API's FaceDetector names (LLP 1133.027).",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json",
+    "./android": "./android/exact.json",
+    "./web": "./web/exact.json"
+  }
+}

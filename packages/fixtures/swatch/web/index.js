@@ -23,10 +23,10 @@ export const roster = { 'swatch-box': { view: SwatchBox } };
 /** What it reads of its configuration: the label, and the key by its length and last four characters only. */
 const read = ({ label, apiKey }) => `label=${label ?? 'none'} apiKey=${apiKey ? `${apiKey.length} chars ending ${apiKey.slice(-4)}` : 'none'}`;
 
-export function implementation({ changed, config = {} }) {
+export function implementation({ changed, config = {}, development }) {
   const heard = [];
   return {
-    swatchReports: () => ({ text: heard.join('; '), count: heard.length, config: read(config) }),
+    swatchReports: () => ({ text: heard.join('; '), count: heard.length, config: `${read(config)} development=${development}` }),
     made: (view) => say(heard, `made ${view}`, changed),
     displayed: (view, shown, origin) => say(heard, `displayed ${view} ${shown} ${origin}`, changed),
     bound: (view, prop, origin) => say(heard, `bound ${view} ${prop} ${origin}`, changed),

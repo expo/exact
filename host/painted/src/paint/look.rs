@@ -128,9 +128,7 @@ pub(crate) fn line(dark: bool) -> [u8; 4] {
     )
 }
 
-/// The ink that reads on `fill`: white, until the fill is light enough that
-/// black reads better (CIE lightness above 49, the sheet's own threshold).
-pub(crate) fn ink_on(fill: [u8; 4]) -> [u8; 4] {
+pub(crate) fn luminance(color: [u8; 4]) -> f32 {
     let linear = |c: u8| {
         let c = c as f32 / 255.0;
         if c <= 0.04045 {
@@ -139,7 +137,13 @@ pub(crate) fn ink_on(fill: [u8; 4]) -> [u8; 4] {
             ((c + 0.055) / 1.055).powf(2.4)
         }
     };
-    let y = 0.2126 * linear(fill[0]) + 0.7152 * linear(fill[1]) + 0.0722 * linear(fill[2]);
+    0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
+}
+
+/// The ink that reads on `fill`: white, until the fill is light enough that
+/// black reads better (CIE lightness above 49, the sheet's own threshold).
+pub(crate) fn ink_on(fill: [u8; 4]) -> [u8; 4] {
+    let y = luminance(fill);
     let lightness = if y > 0.008856 {
         116.0 * y.cbrt() - 16.0
     } else {

@@ -13,7 +13,8 @@
   "sources": {
     "swift": [
       "ScreenCapture.swift",
-      "CaptureFiles.swift"
+      "CaptureFiles.swift",
+      "CaptureSources.swift"
     ]
   },
   "artifacts": [],

@@ -121,6 +121,16 @@ fn set_prop(host: &mut Host<NoData>, view: u32, prop: PropId, value: PropValue) 
 }
 
 #[test]
+fn losing_the_last_handle_preserves_an_unheld_height_transition() {
+    let source = SOURCE.replace("second = false", "second = false\n    extent = 240");
+    let (mut host, _) = boot_source(&source);
+    press(&mut host, "firstOff", 1.0);
+    let batch = press(&mut host, "secondOff", 2.0);
+    assert!(batch.contains("\"property\":\"height\""), "{batch}");
+    assert!(!batch.contains("\"op\":\"retire-motion\""), "{batch}");
+}
+
+#[test]
 fn boot_registers_one_target_multiple_handles_after_coherent_tree_and_only_changes() {
     let (mut host, batch) = boot();
     let a = host.height_drag_binding(id(&host, "handle")).unwrap();
@@ -158,7 +168,7 @@ fn boot_registers_one_target_multiple_handles_after_coherent_tree_and_only_chang
         host.springs()
             .engine()
             .value(motion_node(a.target), Property::Height),
-        None
+        Some(MotionValue::scalar(640.0))
     );
 }
 
@@ -371,7 +381,10 @@ fn last_auto_handle_clears_registration_programmatic_owner_survives() {
     let sheet = motion_node(key(&host, "sheet"));
     press(&mut host, "firstOff", 1.0);
     press(&mut host, "secondOff", 2.0);
-    assert_eq!(host.springs().engine().value(sheet, Property::Height), None);
+    assert_eq!(
+        host.springs().engine().value(sheet, Property::Height),
+        Some(MotionValue::scalar(640.0))
+    );
     let (mut host, _) = boot_source(&single);
     let own = id(&host, "programmatic");
     host.set_height_owner(Some(own)).unwrap();
@@ -402,7 +415,10 @@ fn same_height_registration_keeps_automatic_lifetime_and_live_hold() {
     );
     press(&mut host, "firstOff", 110.0);
     press(&mut host, "secondOff", 120.0);
-    assert_eq!(host.springs().engine().value(node, Property::Height), None);
+    assert_eq!(
+        host.springs().engine().value(node, Property::Height),
+        Some(MotionValue::scalar(640.0))
+    );
 }
 
 #[test]
@@ -420,7 +436,10 @@ fn explicit_height_clear_retires_bindings_until_a_later_receipt() {
         batch.contains(&binding_op(&host, "handle2", None)),
         "{batch}"
     );
-    assert_eq!(host.springs().engine().value(node, Property::Height), None);
+    assert_eq!(
+        host.springs().engine().value(node, Property::Height),
+        Some(MotionValue::scalar(640.0))
+    );
     assert!(!host.springs().engine().has_hold(held.token));
     assert_eq!(host.springs().engine().now(), 0.1);
     assert!(host

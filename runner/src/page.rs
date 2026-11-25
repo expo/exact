@@ -66,7 +66,51 @@ pub enum Platform {
     Headless,
 }
 
+/// The keyboard notation used by a reader. A server has no keyboard.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Keyboard {
+    /// Rendering before the reader is known.
+    #[default]
+    Unknown,
+    /// Apple modifier and key glyphs.
+    Apple,
+    /// Windows key names.
+    Windows,
+    /// Linux desktop key names.
+    Linux,
+    /// Android hardware keyboard key names.
+    Android,
+}
+
+impl Keyboard {
+    /// The browser supplies this code at launch. A server has no keyboard.
+    pub fn from_code(code: u32) -> Self {
+        match code {
+            1 => Self::Apple,
+            2 => Self::Windows,
+            3 => Self::Linux,
+            4 => Self::Android,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 impl Platform {
+    pub(crate) fn keyboard(self) -> Keyboard {
+        match self {
+            Self::Ios | Self::Macos | Self::Tvos | Self::Watchos => Keyboard::Apple,
+            Self::Android => Keyboard::Android,
+            Self::Windows => Keyboard::Windows,
+            Self::Linux => Keyboard::Linux,
+            Self::Terminal if cfg!(target_vendor = "apple") => Keyboard::Apple,
+            Self::Terminal if cfg!(windows) => Keyboard::Windows,
+            Self::Terminal => Keyboard::Linux,
+            Self::Web => crate::time::launch_keyboard(),
+            Self::Headless => Keyboard::Unknown,
+        }
+    }
+
     /// The Contract value of `exactPage().platform`.
     pub fn name(self) -> &'static str {
         match self {

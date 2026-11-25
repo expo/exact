@@ -148,7 +148,7 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     func deliver(id: String, date: Date, info: [AnyHashable: Any]) {
         // A notification an older build scheduled carries its session fields
         // and `navigate` at the top level of `userInfo`.
-        guard let entry = info["exact"] as? [AnyHashable: Any] ?? (info["navigate"] != nil ? info : nil),
+        guard let entry = localEntry(info),
               entry["session"] is String, entry["owner"] is String else { return }
         let location = (entry["navigate"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         guard firstDelivery(id, date), let session = postingSession(entry) else { return }
@@ -192,8 +192,50 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        let silent = notification.request.content.sound == nil
-        completionHandler(silent ? [.banner, .list] : [.banner, .list, .sound])
+        let request = notification.request
+        let options: UNNotificationPresentationOptions = request.content.sound == nil ? [.banner, .list] : [.banner, .list, .sound]
+        present(request, options: options, complete: completionHandler)
+    }
+
+    private func localEntry(_ info: [AnyHashable: Any]) -> [AnyHashable: Any]? {
+        info["exact"] as? [AnyHashable: Any] ?? (info["navigate"] != nil ? info : nil)
+    }
+
+    func present(_ request: UNNotificationRequest, options: UNNotificationPresentationOptions,
+                 complete: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Only the system sets the trigger. A push can copy every field of a local post's userInfo.
+        guard !(request.trigger is UNPushNotificationTrigger),
+              !options.intersection([.banner, .list, .alert]).isEmpty,
+              let entry = localEntry(request.content.userInfo),
+              entry["session"] is String, entry["owner"] is String else { return complete(options) }
+        let present = {
+            let visible = !PageFacts.hidden
+            complete(options)
+            if visible { self.shown(request, entry: entry) }
+        }
+        if Thread.isMainThread { present() } else { DispatchQueue.main.async(execute: present) }
+    }
+
+    private func shown(_ request: UNNotificationRequest, entry: [AnyHashable: Any]) {
+        let content = request.content
+        guard let session = postingSession(entry) else { return }
+        let fields: [String: Any]
+        if let name = entry["extension"] as? String {
+            guard name == "notifications", entry["event"] as? String == "notificationclick",
+                  let text = entry["args"] as? String,
+                  let args = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [Any],
+                  args.count == 2, let original = args[1] as? [String: Any], let tag = args[0] as? String else { return }
+            fields = ["tag": tag, "title": original["title"] ?? content.title,
+                      "body": original["body"] ?? NSNull(), "data": original["data"] ?? NSNull()]
+        } else {
+            // The original navigation-only post kept its title and body in the request.
+            guard content.userInfo["exact"] == nil, entry["navigate"] is String else { return }
+            fields = ["tag": entry["tag"] as? String ?? "", "title": content.title,
+                      "body": content.body.isEmpty ? NSNull() as Any : content.body, "data": entry["data"] ?? NSNull()]
+        }
+        guard let json = try? JSONSerialization.data(withJSONObject: [fields["tag"]!, fields]) else { return }
+        session.raiseModuleEvent(extension: "notifications", event: "notificationshow",
+                                 args: String(decoding: json, as: UTF8.self), activation: false)
     }
 }
 
@@ -204,6 +246,12 @@ extension ExactApp {
     public func installNotificationClicks(boot: ((ExactSession) -> Void)? = nil, activate: ((ExactSession) -> Void)? = nil) {
         NotificationPresenter.shared.install(on: self, activate: activate, boot: boot)
         PushRegistration.listen()
+    }
+
+    /// An embedder that owns the delegate forwards its final options and the system's completion handler together.
+    public func presentNotification(_ notification: UNNotification, options: UNNotificationPresentationOptions,
+                                    completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        NotificationPresenter.shared.present(notification.request, options: options, complete: completionHandler)
     }
 
     /// A scene's launch response may also reach the delegate; one request is

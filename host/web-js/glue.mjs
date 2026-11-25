@@ -131,12 +131,13 @@ export async function bundleModuleGlue(root, file, { production, minify = true }
 
 /** Bundle one host entry; the wasm glue keeps navigation as its other shipped module. `unused`: the navigation
  * behaviours the page leaves out (navigation.flag; LLP 1047.002 D2.1). */
-export async function bundleHostModule(root, name, { grants = false, production = false, unused = [] } = {}) {
+export async function bundleHostModule(root, name, { grants = false, production = false, unused = [], packageViews = false } = {}) {
   const web = resolve(root, 'host/web');
   const external = name === 'glue.js' ? 'navigation.js' : grants ? 'grant-admission.js' : null;
   const { rolldown } = await import('rolldown'), { gateAgent } = production ? await import('./agent-gate.mjs') : {};
   const bundle = await rolldown({
     input: resolve(web, name),
+    transform: { define: { HAS_PACKAGE_VIEWS: String(Boolean(packageViews)), PACKAGE_VIEW_OWNERS: JSON.stringify(packageViews || {}) } },
     treeshake: false,
     optimization: { inlineConst: false },
     plugins: [{
@@ -162,12 +163,12 @@ export async function bundleHostModule(root, name, { grants = false, production 
 }
 
 /** Build the host files consumed by the wasm build, servers and bare-plan fixtures. */
-export async function buildHostGlue(root, { production = false, out = resolve(root, 'target/web-host') } = {}) {
+export async function buildHostGlue(root, { production = false, packageViews = false, out = resolve(root, 'target/web-host') } = {}) {
   mkdirSync(out, { recursive: true });
   const stage = mkdtempSync(resolve(out, '.build-'));
   try {
     for (const name of HOST_ENTRIES) {
-      writeFileSync(resolve(stage, name), await bundleHostModule(root, name, { production }));
+      writeFileSync(resolve(stage, name), await bundleHostModule(root, name, { production, packageViews }));
     }
     const admission = await import(resolve(root, 'host/web/grant-admission.js'));
     writeFileSync(resolve(stage, 'grant-admission.js'), `export { ${Object.keys(admission).join(', ')} } from './navigation.js';\n`);

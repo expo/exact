@@ -175,3 +175,33 @@ fn a_row_that_navigates_keeps_the_hosts_split() {
         Some("280")
     );
 }
+
+#[test]
+fn a_tab_split_is_literal_and_an_untabbed_stack_can_still_bind_it() {
+    let tab = include_str!("../../../../scripts/fixtures/split-tabs.contract");
+    for value in [
+        "",
+        r#"navigationSplit="none""#,
+        r#"navigationSplit="split""#,
+    ] {
+        contract::compile(&tab.replace(r#"navigationSplit="split""#, value)).unwrap();
+    }
+    for value in [
+        r#"(e.name == "library" ? "split" : "none")"#,
+        "280",
+        r#""280""#,
+    ] {
+        let error = contract::compile(&tab.replace(
+            r#"navigationSplit="split""#,
+            &format!("navigationSplit={value}"),
+        ))
+        .unwrap_err();
+        assert_eq!(error.id, "lower-tab-split", "{error}");
+        assert!(
+            error.message.contains("by construction")
+                && error.message.contains("two tabs or two routes")
+        );
+    }
+    let bound = r#"navigationSplit=(e.name == "home" ? "300" : "none")"#;
+    assert_eq!(split_of(&stack(bound, "")).as_deref(), Some("300"));
+}

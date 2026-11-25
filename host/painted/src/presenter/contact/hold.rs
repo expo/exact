@@ -32,3 +32,56 @@ impl Hold {
             .map_or(Value::ZERO, |(at, _)| self.velocity.estimate(at / 1000.))
     }
 }
+
+impl<D: super::DataSource> super::Presenter<D> {
+    pub(in crate::presenter) fn pending_arrange(
+        &self,
+    ) -> Option<(exact_runner::ReorderBinding, (f32, f32))> {
+        let c = self.contact.as_ref()?;
+        if self.contact_has_gesture() || c.retained.is_some() || c.canvas.is_some() {
+            return None;
+        }
+        c.candidate
+            .into_iter()
+            .chain(c.rest.iter().copied())
+            .find_map(|candidate| {
+                let super::Candidate::Arrange(binding) = candidate else {
+                    return None;
+                };
+                (self.input_live(binding.handle)
+                    && self.host.runner().reorder_binding(binding.handle) == Some(binding))
+                .then_some((binding, c.origin))
+            })
+    }
+
+    pub(in crate::presenter) fn lift_arrange(
+        &mut self,
+        binding: exact_runner::ReorderBinding,
+        now: f64,
+    ) -> bool {
+        let Some(mut contact) = self.contact.take() else {
+            return false;
+        };
+        match self.begin_arrange(binding, now) {
+            Ok(Some(held)) => {
+                contact.hold = Some(held);
+                contact.origin = contact.position;
+                contact.candidate = Some(super::Candidate::Arrange(binding));
+                contact.rest.clear();
+                if let Some(key) = contact.feedback.take() {
+                    self.press_feedback(key, super::Edge::Cancel, now);
+                }
+                self.clear_pending_sheet_drag();
+                self.contact = Some(contact);
+                true
+            }
+            result => {
+                if let Err(error) = result {
+                    self.host.log(error);
+                }
+                self.contact = Some(contact);
+                false
+            }
+        }
+    }
+}

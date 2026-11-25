@@ -93,6 +93,7 @@ fn step_json(step: &Step, s: &mut String) {
             match form {
                 TapForm::Press => s.push_str("\"press\""),
                 TapForm::Hover => s.push_str("\"hover\""),
+                TapForm::DoubleTap => s.push_str("\"dblclick\",\"touch\":true"),
                 TapForm::Dblclick => s.push_str("\"dblclick\""),
                 TapForm::Contextmenu => s.push_str("\"contextmenu\""),
                 TapForm::History(delta) => s.push_str(&format!("\"history\",\"history\":{delta}")),
@@ -102,6 +103,12 @@ fn step_json(step: &Step, s: &mut String) {
                 }
                 TapForm::Pinch { scale, at } => {
                     s.push_str(&format!("\"pinch\",\"scale\":{scale}"));
+                    if let Some((x, y)) = at {
+                        s.push_str(&format!(",\"at\":[{x},{y}]"));
+                    }
+                }
+                TapForm::Swipe { direction, at } => {
+                    s.push_str(&format!("\"swipe\",\"direction\":\"{direction}\""));
                     if let Some((x, y)) = at {
                         s.push_str(&format!(",\"at\":[{x},{y}]"));
                     }
@@ -226,6 +233,16 @@ fn step_json(step: &Step, s: &mut String) {
         Step::Locale { tag, .. } => {
             s.push_str("{\"op\":\"locale\",\"value\":");
             q(tag, s);
+        }
+        Step::PreferExtension { key, value, .. } => {
+            s.push_str("{\"op\":\"prefer-extension\",\"key\":");
+            q(key, s);
+            if let Some(json) = value {
+                s.push_str(",\"value\":");
+                s.push_str(json);
+            } else {
+                s.push_str(",\"clear\":true");
+            }
         }
         Step::Prefer { name, value, .. } => {
             s.push_str("{\"op\":\"prefer\",\"name\":");
@@ -393,6 +410,9 @@ fn step_json(step: &Step, s: &mut String) {
             q(edit, s);
             s.push_str(",\"text\":");
             q(text, s);
+        }
+        Step::Fold { degrees, .. } => {
+            s.push_str(&format!("{{\"op\":\"fold\",\"degrees\":{degrees}"));
         }
         Step::Background { ms, .. } => {
             s.push_str(&format!("{{\"op\":\"background\",\"ms\":{ms}"));

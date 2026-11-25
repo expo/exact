@@ -1,4 +1,4 @@
-// A package's views on the JS target (LLP 1133.001 D1; LLP 1133.008 D8
+// A package's views on the web (LLP 1133.001 D1; LLP 1133.008 D8
 // items 1 and 2), as the runner's `modules/views.rs` does natively. A tag the
 // plan's `views` table names is made by its extension's web implementation,
 // whose chunk exports `roster`, each tag's view class:
@@ -10,42 +10,51 @@
 //     destroy()
 //   }
 //
-// native-glue.js makes it through `globalThis.exact.packageViews`. After each
+// native-glue.js makes it through the session’s factory table. After each
 // commit, each view's implementation is told when the view's displayed state
 // changes (`displayed(view, shown, origin)`, by wakelock-glue.js's rule, for a
 // view declared `"displayed": true`) and when a prop its declaration marks as
 // binding a device changes (`bound(view, prop, origin)`). The web has no tool
 // or wake door, so every origin is `app`.
-import { After, say, viewId } from "./rt.js";
 import { displayed } from "./wakelock-glue.js";
 
-/** `views`: tag → [extension, displayed, binding props, agent vocabulary]; `chunk(extension)`, its web implementation's module;
+/** `views`: tag → [extension, displayed, binding props, agent vocabulary, package]; `chunk(extension)`, its web implementation's module;
  * `instance(extension)`, the session's instance of it. */
-export function packageViews(views, chunk, instance) {
-  const tags = Object.keys(views);
-  if (!tags.length) return;
-  (globalThis.exact ??= {}).packageViews = {
-    serves: tag => Object.hasOwn(views, tag),
+export function packageViews(views, chunk, instance, { say, viewId, target, serves = tag => Object.hasOwn(views, tag) }) {
+  const tags = Object.keys(views), constructed = new WeakSet();
+  const table = {
+    serves,
     async make(tag, { element, props, events, view }) {
-      const [extension] = views[tag];
-      const [m, implementation] = await Promise.all([chunk(extension), instance(extension)]);
+      const [extension, , , , owner] = views[tag];
+      const provider = owner ? `the ${extension} extension of ${owner}` : `the ${extension} extension`;
+      const [m, implementation] = await Promise.all([chunk(extension), instance(extension)]).catch(error => {
+        throw new Error(`${provider} could not load <${tag}> on the web ${target} target: ${error.message}`, { cause: error });
+      });
       const View = m?.roster?.[tag]?.view;
-      if (typeof View !== "function") throw new Error(`${extension}'s web implementation serves no ${tag}`);
-      return new View({ implementation, element, props, events, view: String(view) });
+      if (typeof View !== "function") {
+        throw new Error(`${provider} has no view factory for <${tag}> on the web ${target} target`);
+      }
+      if (element?.exactNative?.destroyed || !serves(tag)) return;
+      const handle = new View({ implementation, element, props, events, view: String(view) });
+      constructed.add(element);
+      table.report();
+      return handle;
     },
   };
   const told = new Map(); // element → { shown, bound: prop → its value's JSON }
   const tell = (extension, tag, id, what, ...args) => {
     say(`view ${tag} ${id}: ${what === "displayed" ? `displayed ${args[0]}` : `bound ${args[0]}`} (app origin)`);
-    instance(extension)?.then(impl => impl?.[what]?.(id, ...args, "app"));
+    instance(extension)?.then(impl => impl?.[what]?.(id, ...args, "app")).catch(error => say(`view ${tag} ${id}: ${error.message}`));
   };
-  After.push(() => {
+  table.report = (retiring = false) => {
     const root = typeof document === "object" ? document.getElementById("exact-root") : null;
-    if (!root) return;
+    if (!root && !retiring) return;
     const now = new Set();
-    for (const tag of tags) {
+    for (const tag of retiring ? [] : tags) {
+      if (!serves(tag)) continue;
       const [extension, hears, binds] = views[tag];
       for (const el of root.querySelectorAll(tag)) {
+        if (!constructed.has(el)) continue;
         now.add(el);
         const id = String(viewId(el)), was = told.get(el) ?? { shown: false, bound: new Map() };
         told.set(el, was);
@@ -67,5 +76,6 @@ export function packageViews(views, chunk, instance) {
       told.delete(el);
       if (was.shown) tell(views[el.localName][0], el.localName, String(viewId(el)), "displayed", false);
     }
-  });
+  };
+  return table;
 }

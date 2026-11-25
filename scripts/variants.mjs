@@ -10,6 +10,9 @@ import { settingNames } from '../js/bake/src/__exact_env.mjs';
 
 export { takeVariant } from './help.mjs';
 
+/** The app declaration this install was resolved from, used to generate the shared workspace. */
+export const baseManifest = Symbol('base app manifest');
+
 /** Makes a requested variant (EXACT_VARIANT) this app's selection, unless another app already claimed it, and returns
  * the manifest `read` reads then: the verb that resolves the app (`resolveApp`) calls it, and every process below
  * inherits EXACT_VARIANT_APP. A selection names one app, so a variant exported in a shell neither renames nor refuses
@@ -73,7 +76,7 @@ export function resolveVariant(manifest, name) {
   const base = manifest.app.id, id = base + variant.idSuffix, host = { ...manifest.host };
   if (host.android?.id) host.android = { ...host.android, id: host.android.id + variant.idSuffix };
   if (host.ios?.appClip?.id) host.ios = { ...host.ios, appClip: { ...host.ios.appClip, id: id + host.ios.appClip.id.slice(base.length) } };
-  const resolved = { ...manifest, app: { ...manifest.app, id, name: variant.name }, host, variant: { name, base } };
+  const resolved = { ...manifest, app: { ...manifest.app, id, name: variant.name }, host, variant: { name, base }, [baseManifest]: manifest };
   if (variant.icons) {
     resolved.icons = variant.icons;
     if (resolved.color_scheme_dark?.icons) { const { icons: _, ...dark } = resolved.color_scheme_dark; resolved.color_scheme_dark = dark; }

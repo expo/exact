@@ -168,10 +168,14 @@ impl PaintedBox {
     /// top left, through the transform it was painted under (a zoom around
     /// it included).
     pub(crate) fn local(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let mut p = Point::from_xy(x, y);
+        self.local_transform()?.map_point(&mut p);
+        Some((p.x, p.y))
+    }
+
+    pub(crate) fn local_transform(&self) -> Option<Transform> {
         let (ts, rect) = self.affine?;
-        let mut p = [Point::from_xy(x, y)];
-        ts.invert()?.map_points(&mut p);
-        Some((p[0].x - rect.0, p[0].y - rect.1))
+        Some(ts.invert()?.post_translate(-rect.0, -rect.1))
     }
 }
 

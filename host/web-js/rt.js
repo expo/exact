@@ -1,5 +1,5 @@
-export { px, lt, presenceUse } from './presence-bindings.js';
-// Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan
+export { fixedExit, px, lt, presenceUse } from './presence-bindings.js';
+// Exits and bound layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan
 // binds one (LLP 1047.002 D1)
 export let Probes = null;
 export function usePresenceBindings(b) {
@@ -10,6 +10,7 @@ export const presentRows = (row, ...a) => (Probes ? Probes.rows(row, ...a) : row
 import { resourceInspection, retainedAnswer } from './resource-inspection.js';
 export { canvasColor } from './said.js';
 import { rt as Link } from './rt-link.js';
+export { resolveShortcuts, formatShortcut as x_formatShortcut } from "./navigation.js";
 export { liveTime } from './live-time.js';
 import { liveById, installFits, installSymbolEffects } from './navigation.js';
 // synced animations (LLP 1055.002, emit.rs `clocks`)
@@ -469,8 +470,9 @@ export function deferForReplacement(f) {
 }
 /** One commit: `f` runs; its writes, sends and refreshes land; settlement
  * runs; a refusal anywhere up to here puts everything back and leaves the
- * tree untouched; then the tree updates, completion callbacks run, requests go out, commands run. */
-export function commit(f, what = 'commit', finished) {
+ * tree untouched; then the tree updates, completion callbacks run, requests go out, commands run. With `presenceSnap`,
+ * it plays no layout transition and ends those under way (presence-glue.js). */
+export function commit(f, what = 'commit', finished, presenceSnap = false) {
   if (Writes) {
     if (finished) Finishes.push(finished);
     return f();
@@ -605,7 +607,11 @@ export function commit(f, what = 'commit', finished) {
     for (const f of Before) f();
     // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063); when the flush
     // will run no effect it writes nothing, and presence measures nothing (`still`)
-    Pres?.before({ ops: Probes?.gains() ?? [], still: !due() }, Views);
+    if (Pres) {
+      const ops = Probes?.gains() ?? [], still = !due();
+      const regions = !still && Queue.some(n => !n.gone && (n.$r || n.$listRows));
+      Pres.before({ ops, still, presenceSnap }, Views, regions ? Probes?.departures?.() : undefined);
+    }
     try {
       flush();
       Tabs.open?.();

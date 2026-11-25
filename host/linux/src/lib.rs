@@ -107,7 +107,6 @@ fn run_composed_with<D: DataSource + Default>(
     region: Option<ContentRegionRegistration>,
     composed: Composed,
 ) -> i32 {
-    row_reuse_from_env(false);
     if print_baked_receipt(compat) {
         return 0;
     }
@@ -135,6 +134,7 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
         eprintln!("exact: {why}");
         return 1;
     }
+    row_reuse_from_env(false);
     exact_painted::app::show_neutral_look();
     #[cfg(target_os = "linux")]
     if !config.headless() && use_wayland(config) {

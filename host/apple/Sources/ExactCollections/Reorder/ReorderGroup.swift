@@ -130,6 +130,7 @@ package final class ReorderGroupHold: NativeListReorder {
     private var landing = false
     private let pointerDriven: Bool
     private var nativeFinished: (() -> Void)?
+    private var queuedSuccessor: UInt32?
 
     /// Pin the grip, snapshot its row (before the runner hides it), and lift.
     package init?(_ handle: NodeView, point: CGPoint, ghost drawn: Bool, nativeList: UInt32? = nil, finished: (() -> Void)? = nil) {
@@ -261,10 +262,23 @@ package final class ReorderGroupHold: NativeListReorder {
         observe(ReorderGroupState.last(in: batch))
         if active { end() }
     }
-    package func drop(before: UInt32?) {
-        guard active, nativeFinished != nil, live, let presenter, let runtime = presenter.session?.runtime else { return }
+    /// The drop can apply another snapshot. Let UIKit finish its transaction first.
+    package func queueDrop(before: UInt32?) {
+        guard active, nativeFinished != nil, queuedSuccessor == nil else { return }
+        queuedSuccessor = before ?? 0 // the wire id for the end of the section
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let before = queuedSuccessor else { return }
+            drop(before: before)
+        }
+    }
+
+    private func drop(before: UInt32) {
+        guard let presenter, let runtime = presenter.session?.runtime else { end(); return }
+        guard live, !runtime.held else { abandon(); return }
+        queuedSuccessor = nil
+        guard active else { return }
         let batch = runtime.on {
-            var successor = (before ?? 0).littleEndian
+            var successor = before.littleEndian
             _ = withUnsafeBytes(of: &successor) { runtime.write(Data($0)) }
             return runtime.read(exact_reorder_group_end(runtime.rt, state.token, 2, now))
         }
@@ -320,9 +334,13 @@ package final class ReorderGroupHold: NativeListReorder {
     }
 
     /// The session restarted: no Rust calls.
-    func abandon() { end() }
+    func abandon() {
+        if queuedSuccessor != nil { presenter?.session?.discardQueuedReorder() }
+        end()
+    }
 
     private func end() {
+        queuedSuccessor = nil
         stopEdge()
         ghost?.remove(); ghost = nil
         if state.phase != "finished" && state.phase != "refused" {

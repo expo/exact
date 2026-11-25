@@ -266,7 +266,8 @@ final class SwipeActionsIOSTests: XCTestCase {
                 // Rubber-banded 60 points past the action edge.
                 scroll.contentOffset.x = left ? -60 : 150
                 var target = scroll.contentOffset
-                p.swipeHost.painted.willEnd(owner, scroll, target: &target)
+                owner.heightRecognizer = SheetAtScrollStart()
+                owner.scrollViewWillEndDragging(scroll, withVelocity: .zero, targetContentOffset: &target)
                 XCTAssertEqual(pressed, [4], "leading=\(leading), rtl=\(rtl)")
                 XCTAssertEqual(target.x, left ? 90 : 0, "the row closes after its full swipe")
             }

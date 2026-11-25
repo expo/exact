@@ -29,9 +29,11 @@ pub(in crate::runner) struct Events {
 }
 
 struct Raised {
+    presentation: bool,
     row: usize,
     args: Vec<Json>,
     origin: CallOrigin,
+    cause: Cause,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -47,11 +49,22 @@ impl<D: DataSource> Runner<D> {
         args: &str,
         origin: CallOrigin,
     ) -> Result<(), String> {
+        let args: Vec<Json> = serde_json::from_str(args)
+            .map_err(|_| format!("{extension}.{name}: the arguments are a JSON array"))?;
+        let registrar = self.native_shortcut_cause(extension, name, &args);
+        self.queue_module_event(extension, name, args, origin, false, registrar)
+    }
+
+    pub(super) fn queue_module_event(
+        &mut self,
+        extension: &str,
+        name: &str,
+        args: Vec<Json>,
+        origin: CallOrigin,
+        presentation: bool,
+        registered_by: Option<Cause>,
+    ) -> Result<(), String> {
         let key = format!("{extension}.{name}");
-        let args: Vec<Json> = match serde_json::from_str(args) {
-            Ok(Json::Array(args)) => args,
-            _ => return Err(format!("{key}: the arguments are a JSON array")),
-        };
         let Some(row) = (self.plan.module_events.iter()).position(|e| {
             self.plan.str(e.extension) == extension && self.plan.str(e.declared) == name
         }) else {
@@ -72,8 +85,18 @@ impl<D: DataSource> Runner<D> {
         };
         // Each event's own bound: past it, its own oldest is dropped.
         let hold = declared.hold.max(1) as usize;
+        let raised = Cause::raised(origin);
+        let cause = registered_by
+            .filter(|c| c.hidden_show_reason().is_some())
+            .map_or(raised, |c| self.join_causes(raised, c));
         let queued = &mut self.extensions.events.queued;
-        queued.push_back(Raised { row, args, origin });
+        queued.push_back(Raised {
+            row,
+            args,
+            origin,
+            presentation,
+            cause,
+        });
         let mut dropped = Vec::new();
         while queued.iter().filter(|r| r.row == row).count() > hold {
             let Some(at) = queued.iter().position(|r| r.row == row) else {
@@ -117,42 +140,62 @@ impl<D: DataSource> Runner<D> {
     ) -> (Vec<CommitReceipt>, Option<RunnerError>) {
         self.journal_effect_lines();
         let mut receipts = Vec::new();
-        while let Some(raised) = self.extensions.events.queued.pop_front() {
-            let row = self.plan.module_events[raised.row].clone();
-            let key = format!(
-                "{}.{}",
-                self.plan.str(row.extension),
-                self.plan.str(row.declared)
-            );
-            let action = self.plan.action(row.action).clone();
-            let mut args = Vec::new();
-            let mut refused = None;
-            for (i, p) in action.params.iter().enumerate() {
-                let ty = self.plan.param(p).ty;
-                let json = raised.args.get(i).cloned().unwrap_or(Json::Null);
-                match self.event_arg(ty, &json) {
-                    Ok(v) => args.push(v),
-                    Err(why) => refused = Some(why),
-                }
-            }
-            if let Some(why) = refused {
-                self.log(format!("{key}: refused: {why}"));
-                continue;
-            }
-            let action_name = self.plan.str(action.name).to_owned();
-            self.log(format!("{key}: heard by {action_name}"));
-            // Only an activation the host raised is queued as the app's.
-            if raised.origin == CallOrigin::App {
-                self.note_activation();
-            }
-            let cause = Cause::raised(raised.origin);
-            let result = self.as_cause(cause, |r| r.run_action(row.action, args, &[]));
-            match result {
-                Ok(receipt) => receipts.push(receipt),
-                Err(e) => return (receipts, Some(e)),
+        // A handler's new event already has its place in the FIFO and its own wake.
+        for _ in 0..self.extensions.events.queued.len() {
+            match self.hear_module_event() {
+                Ok(Some(receipt)) => receipts.push(receipt),
+                Ok(None) => (),
+                Err(error) => return (receipts, Some(error)),
             }
         }
         (receipts, None)
+    }
+
+    pub(super) fn has_module_event(&self) -> bool {
+        !self.extensions.events.queued.is_empty()
+    }
+
+    pub(super) fn has_queued_presentation(&self) -> bool {
+        self.extensions
+            .events
+            .queued
+            .iter()
+            .any(|event| event.presentation)
+    }
+
+    pub(super) fn hear_module_event(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
+        let Some(raised) = self.extensions.events.queued.pop_front() else {
+            return Ok(None);
+        };
+        let row = self.plan.module_events[raised.row].clone();
+        let key = format!(
+            "{}.{}",
+            self.plan.str(row.extension),
+            self.plan.str(row.declared)
+        );
+        let action = self.plan.action(row.action).clone();
+        let mut args = Vec::new();
+        let mut refused = None;
+        for (i, p) in action.params.iter().enumerate() {
+            let ty = self.plan.param(p).ty;
+            let json = raised.args.get(i).cloned().unwrap_or(Json::Null);
+            match self.event_arg(ty, &json) {
+                Ok(v) => args.push(v),
+                Err(why) => refused = Some(why),
+            }
+        }
+        if let Some(why) = refused {
+            self.log(format!("{key}: refused: {why}"));
+            return Ok(None);
+        }
+        let action_name = self.plan.str(action.name).to_owned();
+        self.log(format!("{key}: heard by {action_name}"));
+        // Only an activation the host raised is queued as the app's.
+        if raised.origin == CallOrigin::App {
+            self.note_activation();
+        }
+        self.as_cause(raised.cause, |r| r.run_action(row.action, args, &[]))
+            .map(Some)
     }
 
     /// Journal a request a commit not the app's made while `prompt`, which

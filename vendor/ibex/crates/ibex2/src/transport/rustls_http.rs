@@ -277,7 +277,7 @@ impl ureq::unversioned::resolver::Resolver for Resolver {
         #[cfg(test)]
         RESOLVER_CALLS.fetch_add(1, Ordering::SeqCst);
         let signal = self.0.lock().unwrap().signal.clone().expect("active lease");
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         let deadline = timeout
             .not_zero()
             .map(|duration| Instant::now() + *duration);
@@ -292,7 +292,7 @@ impl ureq::unversioned::resolver::Resolver for Resolver {
         match found {
             Ok(result) => result,
             Err(super::lookup::Unanswered::Aborted) => {
-                Err(interrupted(signal.check().err().unwrap_or_else(|| {
+                Err(cancelled(signal.check().err().unwrap_or_else(|| {
                     HostError::Failed("AbortError: The operation was aborted".into())
                 })))
             }
@@ -311,8 +311,14 @@ impl std::fmt::Debug for CancellableConnector {
         f.write_str("CancellableConnector")
     }
 }
-fn interrupted(error: HostError) -> ureq::Error {
-    std::io::Error::new(std::io::ErrorKind::Interrupted, error.to_string()).into()
+pub(super) fn cancelled_io(error: HostError) -> std::io::Error {
+    // Interrupted means retry the same I/O. The abort signal is permanent
+    // for this request, including inside rustls complete_io and write_all.
+    std::io::Error::new(std::io::ErrorKind::ConnectionAborted, error.to_string())
+}
+
+fn cancelled(error: HostError) -> ureq::Error {
+    cancelled_io(error).into()
 }
 impl<In: WireTransport> Connector<In> for CancellableConnector {
     type Out = Either<In, CancellableSocket>;
@@ -331,7 +337,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
             current.resendable = false;
             current.signal.clone().expect("active lease")
         };
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         let budget = details
             .timeout
             .not_zero()
@@ -341,7 +347,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
         let mut last = std::io::Error::new(std::io::ErrorKind::NotConnected, "no resolved address");
         let count = details.addrs.len();
         for (index, address) in details.addrs.iter().enumerate() {
-            signal.check().map_err(interrupted)?;
+            signal.check().map_err(cancelled)?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -351,7 +357,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
             let attempt = remaining / (count - index) as u32;
             match connect_socket(*address, attempt, &signal) {
                 Ok(stream) => {
-                    signal.check().map_err(interrupted)?;
+                    signal.check().map_err(cancelled)?;
                     stream.set_nodelay(details.config.no_delay())?;
                     let socket = stream.try_clone()?;
                     let buffers = LazyBuffers::new(
@@ -374,7 +380,7 @@ impl<In: WireTransport> Connector<In> for CancellableConnector {
                 }
             }
         }
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         Err(last.into())
     }
 }
@@ -509,9 +515,7 @@ pub(crate) fn connect_socket(
         }
         let deadline = Instant::now() + timeout;
         loop {
-            signal
-                .check()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Interrupted, e.to_string()))?;
+            signal.check().map_err(cancelled_io)?;
             if let Some(error) = socket.take_error()? {
                 return Err(error);
             }
@@ -578,7 +582,7 @@ impl CancellableSocket {
         let Some(signal) = signal else {
             return Ok(());
         };
-        signal.check().map_err(interrupted)?;
+        signal.check().map_err(cancelled)?;
         if self.generation != Some(generation) {
             let socket = self.socket.try_clone()?;
             let context = Arc::downgrade(&self.context);
@@ -608,7 +612,18 @@ impl WireTransport for CancellableSocket {
             .map_err(ureq::Error::from)
     }
     fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
-        self.prepare()?;
+        #[cfg(test)]
+        let gated = abort_tests::before_socket_read();
+        let ready = self.prepare();
+        #[cfg(test)]
+        if gated {
+            // Report a retryable cancellation before returning it to rustls.
+            assert!(
+                matches!(&ready, Err(ureq::Error::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionAborted),
+                "{ready:?}"
+            );
+        }
+        ready?;
         self.stream
             .set_read_timeout(timeout.not_zero().map(|d| *d))?;
         let n = self.stream.read(self.buffers.input_append_buf())?;
@@ -969,7 +984,7 @@ mod tests {
     use std::process::Command;
     use std::sync::{mpsc, MutexGuard};
 
-    fn tls_test_lock() -> MutexGuard<'static, ()> {
+    pub(super) fn tls_test_lock() -> MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
         LOCK.lock().unwrap()
     }
@@ -1002,12 +1017,15 @@ mod tests {
         let result = opened
             .recv_timeout(Duration::from_secs(5))
             .expect("returned at the abort");
-        let error = result.unwrap_err().to_string();
+        let error = result.unwrap_err();
         assert!(
             aborted.elapsed() < Duration::from_millis(500),
             "returned at the abort"
         );
-        assert!(error.contains("abort"), "{error}");
+        assert_eq!(
+            error,
+            HostError::Failed("AbortError: The operation was aborted".into())
+        );
         assert_eq!(gate.0.waiting(), 1, "the lookup itself still runs");
         drop(gate);
     }
@@ -1037,7 +1055,7 @@ mod tests {
         }
     }
 
-    fn request_head(socket: &mut TcpStream) -> String {
+    pub(super) fn request_head(socket: &mut TcpStream) -> String {
         next_head(socket).expect("a request's head")
     }
 
@@ -1088,7 +1106,7 @@ mod tests {
     }
 
     /// The listener's next connection, or none within `limit`.
-    fn accept_within(listener: &TcpListener, limit: Duration) -> Option<TcpStream> {
+    pub(super) fn accept_within(listener: &TcpListener, limit: Duration) -> Option<TcpStream> {
         let end = Instant::now() + limit;
         loop {
             match listener.accept() {
@@ -1736,6 +1754,9 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+#[path = "rustls_abort_tests.rs"]
+mod abort_tests;
 #[cfg(test)]
 #[path = "rustls_timeout_tests.rs"]
 mod timeout_tests;

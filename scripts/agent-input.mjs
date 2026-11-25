@@ -21,6 +21,7 @@ import {
   clockSlices,
   padOp,
   postInto,
+  swipeDrag,
 } from './agent-keys.mjs';
 import { appShareTarget, driverShare, webShareLocation } from './share-target.mjs';
 
@@ -85,6 +86,17 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
     // {contextmenu:true,at:[x,y]} is secondary. Points are target-relative; plain
     // canvas taps and held down/move/up contacts remain fingers (LLP 1015.000).
     async tap(target, opts = {}) {
+      // @ref LLP 1057.001 §8.3 — a swipe is a real flick, a fast straight drag the platform's recognizer reads (the drag
+      // refuses one it would make the scroll view's own). Only a real touch reaches UIKit's recognizer, so another carrier
+      // refuses it, having sent nothing, as it does one aimed at a held request.
+      if (opts.swipe !== undefined) {
+        tapArguments(opts);
+        if (opts.at?.some(v => v < 0)) throw new Error('swipe: at is an offset into the target\'s box from its top-left corner, never negative');
+        if (holdOf(target)) throw new Error(`swipe: ${target} is a held request, which takes a choice, not a swipe; a swipe is on a view`);
+        // `--touch drag`, a test file's, makes a drag a real touch too, and a swipe is one
+        if (!['ios', 'host-ios'].includes(host) || !['platform', 'drag'].includes(touch)) throw new Error(`swipe: a swipe is the platform's recognizer's, which only a real touch on a view reaches; drive iOS with --touch platform, or the effect through the control the app gives it`);
+        return s.tap(target, { drag: { ...swipeDrag(opts), flick: true } });
+      }
       if (holdOf(target)) {
         if (s.held) throw new Error(`a drag's finger is down (${s.held}): only reads and the clock until it lifts`);
         return s.answer('tap', target, opts.choice);

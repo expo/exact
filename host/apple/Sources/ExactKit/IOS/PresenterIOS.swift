@@ -100,6 +100,9 @@ package final class Presenter {
         AriaCarriers.note(view, of: self)
         reorders.updateGesture(view)
         view.updateRefresh()
+        #if os(iOS)
+        view.updateDiscreteSwipe()
+        #endif
         view.relook()
     }
     package func carrying(_ key: String) -> [NodeView] { chrome.ids(key).sorted().compactMap { views[$0] } }
@@ -223,6 +226,10 @@ package final class Presenter {
     package var keyboardPolicy: String { interactiveWidget ?? "resizes-content" }
     /// The keyboard guide's top in window coordinates for this session's current layout.
     package var keyboardTop: CGFloat?
+    /// A reveal of the focused editor an interactive keyboard drag held (`keyboardDragEnded`).
+    var revealOwed = false
+    /// The first root, as of the last batch.
+    private(set) weak var documentRoot: NodeView?
     /// The safe-area insets the kernel was given (LLP 1008 §9): the
     /// screen's under `viewport-fit=cover`, zero when the viewport is the
     /// safe area itself. Reported to the agent as `env`.
@@ -292,6 +299,9 @@ package final class Presenter {
         collections.rescued = { [unowned self] in paintVisibleText() }
         textRasters.slotFreed = { [unowned self] in scrollPump.textSlotFreed() }
         viewport.keyboardDismissMode = .interactive
+        #if os(iOS)
+        KeyboardDrag.watch(viewport) { [weak self] in self?.documentRoot }
+        #endif
         viewport.contentInsetAdjustmentBehavior = .never
         viewport.backgroundColor = .platformBackground(in: root)
     }
@@ -318,11 +328,6 @@ package final class Presenter {
     }
     #endif
 
-    var interactiveKeyboardDrag: Bool {
-        let drags = { (sv: UIScrollView) in sv.keyboardDismissMode == .interactive && (sv.isTracking || sv.isDragging) }
-        return drags(viewport) || scrollers.contains { views[$0]?.scrollView.map(drags) ?? false }
-            || navigation.primaryRouteSurfaces.contains { $0.contentViewport.map(drags) ?? false }
-    }
 
     /// Reconcile through UIKit layout in the keyboard's animation, after batches finish.
     /// Deferred work captures timing only and reads current ownership and geometry.
@@ -985,7 +990,7 @@ package final class Presenter {
         }
         var beganGeometry = false, touchedIDs: [UInt32] = [], reshapedIDs: [UInt32] = [], restyledIDs: [UInt32] = []
         // Read once: an animation UIKit has open around the batch is open around each of its ops
-        let animating = UIView.inheritedAnimationDuration > 0
+        let animating = Presenter.animationMayBeOpen
         if outermost { placedAnew.removeAll(keepingCapacity: true) } // a flat leaf promoted between batches
         let anewFrom = placedAnew.count
         if batch.controls { controls.facesChanged() }
@@ -1213,7 +1218,8 @@ package final class Presenter {
             pageGeometryOwed = false
             fitDocument(); reachPageEdges(); paintCanvas()
         }
-        let first = root.subviews.first as? NodeView
+        documentRoot = root.subviews.first as? NodeView
+        let first = documentRoot
         let widget = first?.props["interactiveWidget"]
         if widget != interactiveWidget {
             interactiveWidget = widget
@@ -1356,15 +1362,16 @@ package final class Presenter {
         for (rank, child) in contained.enumerated() {
             let i = rank + offset
             if i < current.count && current[i] === child { continue }
-            // One already here is past `i` (those before it are in place):
-            // moved as UIKit moves it, without asking for every subview again
-            // (a pooled row comes back from past the rows, each a move).
+            // A pooled row already here comes forward from past the rows in place.
             let wasHere = child.superview === container
             let was = wasHere && i < current.count ? current[i...].firstIndex { $0 === child } : nil
-            container.insertSubview(child, at: i)
             if wasHere {
+                container.insertSubview(child, at: i)
                 if let was { current.remove(at: was); current.insert(child, at: i) } else { current = container.subviews }
-            } else { current.insert(child, at: i); regrid(child) }
+            } else {
+                child.movingRoute(into: container) { container.insertSubview(child, at: i) }
+                current.insert(child, at: i); regrid(child)
+            }
         }
         flats.mounted(parent.id)
         if parent === navigation.container { navigation.placeOwner() }

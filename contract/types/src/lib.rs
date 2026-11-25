@@ -319,6 +319,8 @@ pub struct Shapes {
     /// The native modules' sends that answer nothing, by program-unique
     /// name: a statement naming one sends it (LLP 1133.004 D5).
     pub effects: std::collections::BTreeSet<String>,
+    /// A candidate in an expanded component must be judged before substitution.
+    pub(crate) expanded_comparison: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Where `x.length` reads a record's field (`lists::LengthReads`).
     pub(crate) lengths: Arc<std::sync::Mutex<lists::LengthReads>>,
 }
@@ -761,27 +763,7 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
         // `[]` is a `list<?>` as `none` is an `option<?>`: the other arm of a
         // `match` or `?:`, a declared `list<T>`, or a write into the state
         // it initializes fills the `?` through `unify`.
-        Expr::List(items, _) => {
-            let mut item = Ty::Unknown;
-            for (i, x) in items.iter().enumerate() {
-                let t = infer(x, scope, shapes)?;
-                held::value(&t, x, "a list")?;
-                item = match item.unify(&t) {
-                    Some(u) => u,
-                    None => {
-                        return err(
-                            "type-list-item",
-                            format!(
-                                "a list's items have one type: item {} is `{t}`, the items before it `{item}`",
-                                i + 1
-                            ),
-                            x.span(),
-                        )
-                    }
-                };
-            }
-            Ty::List(Box::new(item))
-        }
+        Expr::List(items, _) => lists::literal(items, |_, value| infer(value, scope, shapes))?,
         Expr::Some(inner, _) => {
             let t = infer(inner, scope, shapes)?;
             held::value(&t, inner, "`some(…)`")?;
@@ -984,8 +966,11 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
             }
         }
         Expr::Binary(op, a, b, span) => {
-            let ta = infer(a, scope, shapes)?;
-            let tb = infer(b, scope, shapes)?;
+            let (ta, tb) = if matches!(op, BinOp::Eq | BinOp::Ne) {
+                (enums::operand(a, b, scope, shapes)?, enums::operand(b, a, scope, shapes)?)
+            } else {
+                (infer(a, scope, shapes)?, infer(b, scope, shapes)?)
+            };
             // An operand still `?` (a derive not yet settled in the fixpoint)
             // defers the whole expression; the fixpoint retries it.
             if ta == Ty::Unknown || tb == Ty::Unknown {
@@ -1368,6 +1353,9 @@ fn check_with_sites(
     // child's own declarations, lifted in — what lowering will lower.
     // A use that cannot be expanded is refused and left out; the rest of the
     // root is still checked, what it lacked reading as `?`.
+    if called.components.len() > 1 {
+        types.shapes.expanded_comparison = Some(Arc::default());
+    }
     let mut before_expansion = sink.errors.len();
     let (mut expanded, independent) = loop {
         let (expanded, refused) =
@@ -1400,6 +1388,7 @@ fn check_with_sites(
         }
         before_expansion = sink.errors.len();
     };
+    enums::check_authored_root(&called, &expanded, &mut types, &mut sink);
     persist::check(file, &types, &expanded, &mut sink);
     // What lowering lowers: each caller's names renamed apart from what its
     // callees read, after the checks spoke in the author's (LLP 1089 D7).
@@ -1444,7 +1433,7 @@ fn check_children(file: &File, types: &mut Types, sink: &mut Sink) {
         }
     }
     for c in file.components.iter().skip(1) {
-        let ct = component::check_component(c, types, None, &[], &[], sink);
+        let ct = component::check_component(c, types, None, &[], &[], &[], sink);
         types.components.push(ct);
     }
 }
@@ -1471,6 +1460,7 @@ fn check_root(
         Some(&expanded.owners),
         &expanded.resource_owners,
         &expanded.task_owners,
+        &[],
         sink,
     );
     // @ref LLP 1048.000 D2 — each route's `pages=` source, in the root's seam.

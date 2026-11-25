@@ -260,10 +260,12 @@ export function pr(e) {
  * `motion-glue.js`), fetched after the first painted frame by a plan that
  * uses motion; `f(m)` runs at once when it is here, else once it is. */
 let Motion = null,
-  Mo = null;
+  Mo = null,
+  pendingMotion = [];
 function motion(f) {
   if (Mo) return f(Mo);
   if (typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
+  pendingMotion?.push(f);
   if (!Motion) {
     inflight.n++;
     Motion = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
@@ -274,15 +276,15 @@ function motion(f) {
       .then(m => {
         Mo = m;
         After.push(() => Mo.flush());
+        for (const observe of pendingMotion.splice(0)) observe(m);
+        m.flush();
       })
-      .catch(err => say(`motion: ${err.message}`))
+      .catch(err => { pendingMotion = null; say(`motion: ${err.message}`); })
       .finally(() => inflight.n--);
   }
-  Motion.then(() => Mo && f(Mo));
 }
 /** A node the motion engine follows (the kernel's motion seam): `f` gives
- * its `translate`, `scale`, `rotate`, `opacity`, `transition` and release velocity as the
- * plan binds them, told the engine at every commit that changes them. */
+ * its targets, transition and release velocity. A height drag also identifies its possible owner. */
 export function mo(e, f) {
   const id = viewId(e);
   onEnd(() => motion(m => m.gone(id)));
@@ -300,16 +302,6 @@ export function onSwipe(e, f) {
 export function onSwipeLeft(e, f) {
   e.$swipeleft = f;
   motion(m => m.swipe(e));
-}
-/** A height drag's owner (the node a handle's `heightDragFor` names): its
- * numeric height and `transition`, told the motion engine as they change. */
-export function mh(e, f) {
-  const id = viewId(e);
-  onEnd(() => motion(m => m.gone(id)));
-  effect(() => {
-    const v = f();
-    motion(m => m.height(id, v));
-  });
 }
 /** `heightrelease`: motion-glue's height drag on the handle's named ancestor. */
 export function onHeight(e, f) {

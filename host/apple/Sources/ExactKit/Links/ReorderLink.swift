@@ -10,7 +10,7 @@ import UIKit
 #endif
 
 package protocol NativeListReorder: AnyObject {
-    func drop(before: UInt32?)
+    func queueDrop(before: UInt32?)
     func cancel()
 }
 

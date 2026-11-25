@@ -31,11 +31,14 @@ extension NavigationHost {
         return .some(nil)
         #else
         guard !ExactEnv.authoredChrome, let root, let session = presenter.session else { return .some(nil) }
-        let retained = split?.listNode ?? 0
-        if let heard = heardSplit, heard.read.view == root.node.id, heard.read.retained == retained { return .some(heard.rule) }
+        // The tab or window can have a custom primary. An explicit split
+        // still uses the runner's row associations when it finds a list.
+        let requested = tabWantsSplit(root) ? StackSplit(list: nil, width: nil, rows: [:]) : nil
+        let retained = split?.list.stackRoutes.first === root ? split?.listNode ?? 0 : 0
+        if let heard = heardSplit, heard.read.view == root.node.id, heard.read.retained == retained { return .some(heard.rule ?? requested) }
         guard let read = session.runtime.on(busy: nil, { session.runtime.readSplit(root.node.id, retained: retained, sequence: session.runtime.sequence.newest) }) else { return nil }
         heardSplit = HeardSplit(read)
-        return .some(heardSplit?.rule)
+        return .some(heardSplit?.rule ?? requested)
         #endif
     }
 
@@ -55,7 +58,7 @@ extension NavigationHost {
     /// (`makeNavigation`, so the `navigation` hatch receives each), as the
     /// primary owner, holding the first routes before its view enters the
     /// window, where UIKit collapses or expands it.
-    func installSplit(_ p: Projection, first: [RouteController], rule: StackSplit, in parent: UIViewController) {
+    func makeSplit(first: [RouteController], rule: StackSplit) -> SplitIOS {
         let list = makeNavigation(first: first.first?.node)
         let detail = makeNavigation(first: nil)
         let split = SplitIOS(list: list, detail: detail) { [weak self] routes, nav, animated in
@@ -64,19 +67,32 @@ extension NavigationHost {
         split.listNode = rule.list
         split.rule = rule
         split.changed = { [weak self, weak split] in
-            guard let self, let split, self.split === split else { return }
-            splitChanged()
+            guard let self, let split else { return }
+            if self.split === split { splitChanged() } else { runHeldSync() }
         }
         split.willPush = { [weak self] route, beneath in self?.prepareRoutePush(route, beneath: beneath) }
-        split.baseChanged = { [weak self] base in self?.prepareColumnTransition(base) }
-        self.split = split
-        primaryNavigation = list
+        split.baseChanged = { [weak self, weak split] base in
+            guard let self, let split else { return }
+            self.prepareColumnTransition(base, in: split)
+        }
+        return split
+    }
+
+    func startSplit(_ split: SplitIOS, first: [RouteController]) {
+        let list = split.list, detail = split.detail
         prepareRoutes(Array(first.prefix(1)), in: list)
         prepareRoutes(Array(first.dropFirst()), in: detail)
         // The detail's column keeps its bar, the empty detail's too (LLP 1127 D7)
         detail.setNavigationBarHidden(!barShows(detail), animated: false)
         split.show(first, animated: false)
         for nav in [list, detail] { watchPops(nav) }
+    }
+
+    func installSplit(_ p: Projection, first: [RouteController], rule: StackSplit, in parent: UIViewController) {
+        let split = makeSplit(first: first, rule: rule)
+        self.split = split
+        primaryNavigation = split.list
+        startSplit(split, first: first)
         parent.addChild(split.controller)
         let mount = ownerMount(p.root)
         split.controller.view.frame = ownerFrame(split.controller, in: mount)
@@ -107,7 +123,7 @@ extension NavigationHost {
         if let arrived = split.detailRoutes.last, arrived !== top { presenter.pressShows(arrived.node) }
         // A sidebar's selected row follows the detail's base, a `replace` of its item included (LLP 1127 D3, D7)
         split.pressedRows = split.pressedRows.filter { id, _ in stack.contains { $0.node.id == id } }
-        let row = detailRow(in: split.rule)
+        let row = detailRow(split, in: split.rule, base: stack.dropFirst().first)
         if !split.controller.isCollapsed, let list = split.listNode, row != split.sidebarRow {
             split.sidebarRow = row
             presenter.groupedLists?.sync(changed: [list])
@@ -116,6 +132,37 @@ extension NavigationHost {
         if !split.presses.isEmpty, split.presses.allSatisfy(\.landed) { endPress(split, poll: false) }
         ApplyProfile.time("nav.layout") { split.controller.view.layoutIfNeeded() }
         return false
+    }
+
+    /// An inactive tab keeps its columns and its row. Read its rule without replacing the active tab's subscription.
+    func syncInactiveSplit(_ columns: SplitIOS, _ routes: [RouteController], sequence: UInt64) {
+        let changed = !columns.shown.elementsEqual(routes, by: ===)
+        guard changed || !columns.presses.isEmpty else { return }
+        if let root = routes.first, let runtime = presenter.session?.runtime {
+            if let rule = runtime.stackSplitAnswer(root.node.id, retaining: columns.listNode) {
+                columns.rule = rule
+                columns.listNode = rule?.list
+            } else {
+                askSplitNextTurn()
+            }
+        } else if routes.isEmpty {
+            columns.rule = nil
+            columns.listNode = nil
+        }
+        creditPresses(columns, batch: sequence, stack: routes)
+        if changed && (columns.inTransition || routesInFlight(routes)) {
+            tabsHeld = true
+            for owner in [columns.controller, columns.list, columns.detail] {
+                if let transition = owner.transitionCoordinator { runHeld(after: transition) }
+            }
+            return
+        }
+        prepareRoutes(Array(routes.prefix(1)), in: columns.list)
+        prepareRoutes(Array(routes.dropFirst()), in: columns.detail)
+        guard columns.show(routes, animated: false) else { tabsHeld = true; return }
+        columns.pressedRows = columns.pressedRows.filter { id, _ in routes.contains { $0.node.id == id } }
+        columns.sidebarRow = detailRow(columns, in: columns.rule, base: routes.dropFirst().first)
+        if let list = columns.listNode { presenter.groupedLists?.sync(changed: [list]) }
     }
 
     /// A route pushed within N1 zooms from its `navigationSource` in the
@@ -132,9 +179,9 @@ extension NavigationHost {
     /// (ZoomPushIOS), as the base pushed onto a stack would have, and none
     /// for a base that names none or for no base. A route pushed within N1
     /// has its own.
-    private func prepareColumnTransition(_ base: RouteController?) {
+    private func prepareColumnTransition(_ base: RouteController?, in split: SplitIOS) {
         #if os(iOS)
-        guard #available(iOS 18.0, *), let split else { return }
+        guard #available(iOS 18.0, *) else { return }
         split.detail.preferredTransition = nil
         guard let base, let root = split.list.stackRoutes.first as? RouteController else { return }
         prepareZoomPush(base, beneath: root, on: split.detail)
@@ -178,7 +225,8 @@ extension NavigationHost {
     /// stack's, or N0's while N1 is what leaves (LLP 1127 D5.4).
     func popCoordinator(of route: RouteController) -> UIViewControllerTransitionCoordinator? {
         guard let stack = route.lastStack else { return nil }
-        if let split, stack === split.detail, !split.nested { return split.list.transitionCoordinator ?? stack.transitionCoordinator }
+        let columns = split?.detail === stack ? split : tabSplits.values.first { $0.detail === stack }
+        if let columns, !columns.nested { return columns.list.transitionCoordinator ?? stack.transitionCoordinator }
         return stack.transitionCoordinator
     }
 
@@ -216,16 +264,24 @@ extension NavigationHost {
     /// Whether `view` is in the split's list column while the split is
     /// expanded: UIKit's sidebar, which keeps its look while UIKit hides it.
     func showsAsSidebar(_ view: UIView) -> Bool {
-        guard let split, !split.controller.isCollapsed, let list = split.list.stackRoutes.first?.viewIfLoaded else { return false }
-        return view.isDescendant(of: list)
+        sidebar(containing: view) != nil
+    }
+
+    private func sidebar(containing view: UIView) -> SplitIOS? {
+        func contains(_ columns: SplitIOS) -> Bool {
+            !columns.controller.isCollapsed && columns.list.stackRoutes.first?.viewIfLoaded.map(view.isDescendant(of:)) == true
+        }
+        if let split, contains(split) { return split }
+        return tabSplits.values.first(where: contains)
     }
 
     /// The row of the split's list whose detail shows, which a sidebar keeps
     /// selected; nil, keeping the row a person pressed, while a row's press
     /// has batches still to apply (`listPress`).
     func sidebarSelection(_ view: UIView) -> UInt32?? {
-        guard showsAsSidebar(view) else { return .some(nil) }
-        return split?.presses.isEmpty == false ? nil : detailRow
+        guard let columns = sidebar(containing: view) else { return .some(nil) }
+        guard columns.presses.isEmpty else { return nil }
+        return columns === split ? detailRow : .some(columns.sidebarRow)
     }
 
     /// `detailRow(in:)` by the runner's rule; nil while the runner cannot
@@ -233,7 +289,7 @@ extension NavigationHost {
     var detailRow: UInt32?? {
         guard let split, let root = split.list.stackRoutes.first as? RouteController else { return .some(nil) }
         guard let rule = splitRule(root) else { return nil }
-        return .some(detailRow(in: rule))
+        return .some(detailRow(split, in: rule, base: base(selectedStack).dropFirst().first))
     }
 
     /// The row whose detail shows, for the stack's base, its first route
@@ -245,8 +301,8 @@ extension NavigationHost {
     /// app marks current (`StackSplit.current`), as the Mac's split and the
     /// web's take it. Read from the router: the row the columns are being
     /// written for. None without a detail.
-    func detailRow(in rule: StackSplit?) -> UInt32? {
-        guard let split, let base = base(selectedStack).dropFirst().first else { return nil }
+    func detailRow(_ split: SplitIOS, in rule: StackSplit?, base: RouteController?) -> UInt32? {
+        guard let base else { return nil }
         if let row = rule?.rows[base.node.id] { return row }
         if let pressed = split.pressedRows[base.node.id], pressed.at == rule?.locations[base.node.id] { return pressed.row }
         return rule?.current
@@ -292,7 +348,7 @@ extension NavigationHost {
     /// press has had a batch credited and, with `poll`, each frame until
     /// then, for batches the session drops as changing nothing.
     private func endPress(_ split: SplitIOS, poll: Bool = true) {
-        guard self.split === split, !split.presses.isEmpty else { return }
+        guard !split.presses.isEmpty else { return }
         if presenter.session?.batchesWaiting == true {
             if poll { DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self, weak split] in if let split { self?.endPress(split) } } }
             return

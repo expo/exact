@@ -19,6 +19,7 @@
 // once (a reload reuses the definitions), and the module renders into the
 // element it is given. Events are copied, checked against the instance's
 // nonce, and dispatched after the batch that caused them, never inside it.
+const PACKAGE_LIFETIME = true;
 const ABI = 1;
 // The runner's dispatch codes for EventKind ordinals 0–8 (hover: over 2, off 3).
 const DISPATCH = [0, 1, 2, 4, 5, 6, 7, 8, 9];
@@ -89,21 +90,23 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
   }
   // Props replace the whole aggregate; a refusal keeps the last accepted.
   function observe(el, st, live, set) {
-    st.observer = new MutationObserver(() => {
+    const update = () => {
       const next = el.getAttribute('data-nativeviewprops') ?? '{}';
       if (next === st.props || !live()) return;
       try { set(next); st.props = next; if (st.state === 'error') { st.state = 'ready'; delete st.error; } }
       catch (error) { fail(st, 'error', `props refused: ${error?.message ?? error}`); }
-    });
+    };
+    st.observer = new MutationObserver(update);
     st.observer.observe(el, { attributes: true, attributeFilter: ['data-nativeviewprops'] });
+    if (PACKAGE_LIFETIME && st.package) update(); // Props may have changed while the factory loaded.
   }
   function attachNow(el) {
     const st = el.exactNative;
     if (!st || st.destroyed) return;
-    if (failure) return fail(st, failure.state ?? 'unavailable', failure.message);
+    if (failure) return st.missingFactory ? fail(st, 'error', st.missingFactory) : fail(st, failure.state ?? 'unavailable', failure.message);
     // The name is a table key, checked again on plan bytes (D2, D5).
     if (!/^[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$/.test(st.name)) return fail(st, 'error', `refused module name ${JSON.stringify(st.name)}`);
-    if (!Object.hasOwn(table.roster, st.name)) return fail(st, 'error', `the module artifact has no factory for ${st.name}`);
+    if (!Object.hasOwn(table.roster, st.name)) return fail(st, 'error', st.missingFactory ?? `the module artifact has no factory for ${st.name}`);
     const mine = ++nonce;
     st.nonce = mine;
     const { live, event } = events(el, st, mine);
@@ -124,6 +127,7 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
     const mine = ++nonce;
     st.nonce = mine;
     const { live, event } = events(el, st, mine);
+    if (PACKAGE_LIFETIME) st.package = true;
     const handlers = Object.fromEntries(NAMES.map((name, kind) => [name, (payload) => event(kind, payload)]));
     // An event the package declares beyond the nine (LLP 1133.021 §9 item 2)
     // rides the message kind; the plan's handler decodes its arguments.
@@ -134,10 +138,11 @@ globalThis.exact.nativeHost = ({ dispatch, log, packages = null }) => {
       st.handle = handle; st.package = true; st.props = props; st.state = 'ready'; delete st.error;
       say(`${st.name} #${st.id}: ready (a package's view)`);
       observe(el, st, live, (next) => handle.setProps?.(JSON.parse(next)));
-    }, (error) => { st.nonce = 0; fail(st, 'error', `create refused: ${error?.message ?? error}`); });
+    }, (error) => { if (PACKAGE_LIFETIME && !live()) return; st.nonce = 0; fail(st, 'error', `create refused: ${error?.message ?? error}`); });
   }
   return {
     attach(el) {
+      if (PACKAGE_LIFETIME && el.exactNative.destroyed) return;
       say(`${el.exactNative.name} #${el.exactNative.id}: loading`);
       if (packages?.serves(el.exactNative.name)) return attachPackage(el);
       if (!loaded || failure) { failure = null; loaded = load(); }

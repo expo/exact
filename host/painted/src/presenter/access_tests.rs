@@ -3,7 +3,7 @@
 //! person reads, what a node's identity outlives, what an open surface
 //! leaves of the page, a hosted field's place, what a statement says
 //! changed, what an action does, and that a host whose shell never asks
-//! (desktop Linux) builds nothing.
+//! builds nothing.
 use super::*;
 
 #[path = "access_tests/actions.rs"]

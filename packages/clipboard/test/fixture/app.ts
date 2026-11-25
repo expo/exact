@@ -17,6 +17,7 @@ const bytes = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 const said = (e: unknown) => { const x = e as { name?: string; message?: string }; return `${x.name}: ${x.message}`; };
 
 const sources: Sources = {
+  pasteText: async () => ({ text: await readText() }),
   readOnMount: async () => {
     try { await readText(); return { text: 'read on mount' }; } catch (e) { return { text: said(e) }; }
   },

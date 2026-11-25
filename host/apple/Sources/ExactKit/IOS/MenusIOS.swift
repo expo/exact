@@ -820,7 +820,7 @@ package final class MenuHost {
         if entry.relay == nil { entry.relay = MountRelay(presenter, mount: entry.layer) }
         #endif
         entry.layer.mount(in: presenter)
-        if pop.superview !== entry.layer { entry.layer.addSubview(pop) }
+        if pop.superview !== entry.layer { pop.movingRoute(into: entry.layer) { entry.layer.addSubview(pop) } }
         #if os(iOS)
         if checking, entry.substitutesMenu { entry.checkHidden = true }
         #endif
@@ -875,7 +875,7 @@ package final class MenuHost {
         presenter?.popoverEvents.changed(pop, open: false)
         pop.isHidden = true
         if presenter?.views[pop.id] === pop, let parent = entry.parent {
-            parent.insertSubview(pop, at: min(entry.index, parent.subviews.count))
+            pop.movingRoute(into: parent) { parent.insertSubview(pop, at: min(entry.index, parent.subviews.count)) }
             presenter?.regrid(pop) // a frame op while it was up was placed from the top layer
             // Its centre as it was, its origin on a whole pixel at its size now.
             let s = presenter?.gridScale ?? 1, size = pop.bounds.size

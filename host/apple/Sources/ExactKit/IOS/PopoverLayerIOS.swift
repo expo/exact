@@ -61,6 +61,8 @@ package final class PopoverLayer: UIView {
             }
         }
         if superview !== host {
+            let finish = presenter.session?.natives.prepareScreenMove(self, into: host)
+            defer { finish?() }
             if let above = host.subviews.compactMap({ $0 as? PopoverLayer }).first(where: { $0.order > order }) {
                 host.insertSubview(self, belowSubview: above)
             } else { host.addSubview(self) }

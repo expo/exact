@@ -54,7 +54,7 @@ test.each([false, true])('a view validates and delivers its agent vocabulary (su
       const prefer = extension => exact.extensions.prefer({ extension });
       const before = prefer({ 'words.heard': 'hello' });
       if (before.error) throw new Error(before.error);
-      await exact.packageViews.make('words-panel', {});
+      await exact.packageViews.make('words-panel', {element:document.createElement('div')});
       const initial = seen.at(-1);
       const errors = [
         prefer({ 'words.heard': 7 }), prefer({ 'words.levels': [1, 'two'] }),
@@ -89,6 +89,76 @@ test.each([false, true])('a view validates and delivers its agent vocabulary (su
   } finally { await browser?.close(); server.stop(true); }
 });
 
+test('a missing view factory names its package, extension and web target', async () => {
+  const server = moduleServer();
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    await expect(page.evaluate(async () => {
+      const { modules } = await import('/host/web-js/modules.js');
+      const loader = async () => ({ implementation: () => ({}), roster: {} });
+      modules({}, { words: loader }, { 'words-panel': ['words', false, [], {}, '@fixture/words'] });
+      await exact.packageViews.make('words-panel', {});
+    })).rejects.toThrow('the words extension of @fixture/words has no view factory for <words-panel> on the web JS target');
+  } finally { await browser?.close(); server.stop(true); }
+});
+
+test('a drive acknowledges the table while package callbacks and later calls keep their order', async () => {
+  const server = moduleServer(), browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      const sub = {implementation:true, agent:{outcome:'string'}};
+      const entered = Promise.withResolvers(), initial = Promise.withResolvers(), later = Promise.withResolvers();
+      let outcome;
+      modules({
+        apple:['store.apple',false,{...sub,owner:'@fixture/store/apple',implementationTargets:['ios']},'s'],
+        buy:['store.purchase',true,sub,'s'],
+        status:['store.status',false,{...sub, admission:'none', permission:{name:'p',field:'state',status:'status'},
+          default:{available:false,state:'unknown'}},{available:'b',state:'s'}],
+        optional:['other.optional',false,{default:'original'},['?', 's']],
+        browse:['network.browse',false,{network:'browse',unsupported:['web']},{services:['[','s']}],
+      }, {store:async () => ({implementation:() => ({
+        async preferred(values) {
+          if (!values.outcome) { entered.resolve(); await initial.promise; }
+          if (values.outcome === 'cancel') await later.promise;
+          outcome = values.outcome ?? 'idle';
+        },
+        purchase() { return outcome; },
+        status() { return {available:true,state:'unknown'}; }
+      })})});
+      const e = exact.extensions, buy = () => e.call({extension:'store',send:'purchase'});
+      const set = (key, value) => e.prefer({extension:{[key]:value}}, 'drive');
+      const startup = buy();
+      await entered.promise;
+      const acknowledged = set('store.outcome', 'success');
+      initial.resolve();
+      await acknowledged;
+      await startup;
+      const first = await buy();
+      const changes = set('store.outcome', 'cancel');
+      const immediate = !(changes instanceof Promise);
+      const second = buy();
+      later.resolve();
+      await changes;
+      set('other.optional', null);
+      const absent = await e.call({extension:'other',source:'optional'});
+      set('other.optional', 'clear');
+      const cleared = await e.call({extension:'other',source:'optional'});
+      const network = e.prefer({extension:{'network.browse':[]}}, 'launch');
+      const status = await e.call({extension:'store',source:'status'});
+      return {first, second:await second, immediate, absent, cleared, network, status};
+    });
+    expect(result).toEqual({first:'success', second:'cancel', immediate:true, absent:null, cleared:'original', network:{}, status:{available:true,state:'unknown'}});
+  } finally { await browser.close(); server.stop(true); }
+});
+
 test.each(['cleared', 'conflicting'])('%s preferences cancel the camera clip during module initialization', async change => {
   const server = moduleServer(), browser = await suiteBrowser('chromium', { needs: ['hevc'] });
   try {
@@ -117,7 +187,7 @@ test.each(['cleared', 'conflicting'])('%s preferences cancel the camera clip dur
       window.fetch = async (...args) => { started(); await held; return fetch(...args); };
       prefer({ 'camera.clip': { path: 'packages/camera/fixture/frames.mp4' } });
       let made = false;
-      const loading = exact.packageViews.make('exact-camera', {}).then(view => { made = true; return view; });
+      const loading = exact.packageViews.make('exact-camera', {element:document.createElement('div')}).then(view => { made = true; return view; });
       await fetching;
       prefer(change === 'cleared' ? { 'camera.clip': 'clear' }
         : { 'camera.picture': { path: 'packages/camera/fixture/card.jpg' } });
@@ -758,4 +828,35 @@ test('an input-gated read requires the calling source’s grant in a mixed app',
     });
     expect(refused).toEqual({ error: 'NotAllowedError' });
   } finally { await browser.close(); server.stop(true); }
+});
+
+test('the agent clock delivers a show posted by a click at the same instant', async () => {
+  const server = moduleServer();
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      const heard = [];
+      const list = { state: 'notifications', key: 'tag', launch: 'notification', tap: { event: 'click' }, show: { event: 'show' } };
+      modules({ post: ['lab.post', true, { list, effect: true }] }, {}, {}, {
+        'lab.click': [() => () => { heard.push('click'); rt.Hosts.post('app', { tag: 'lab' }); }, 'activation', 16, [], 'clicked'],
+        'lab.show': [() => () => heard.push(rt.clock.now), 'emit', 16, [], 'shown'],
+      });
+      exact.extensions.launch({ launch: 'notification', entry: { tag: 'initial' } });
+      await Promise.resolve();
+      // Cross a browser task boundary with the agent clock frozen.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const before = heard.slice();
+      exact.extensions.launch({ launch: 'notification', entry: { tag: 'second' } });
+      await Promise.resolve();
+      rt.advance(0);
+      return { before, after: heard };
+    });
+    expect(result).toEqual({ before: ['click'], after: ['click', 0, 'click', 0] });
+  } finally { await browser?.close(); server.stop(true); }
 });

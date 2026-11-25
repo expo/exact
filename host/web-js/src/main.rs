@@ -23,6 +23,8 @@ mod emit;
 #[cfg(test)]
 mod emit_tests;
 mod events;
+#[cfg(test)]
+mod events_tests;
 mod faces;
 mod facts;
 mod hoist;

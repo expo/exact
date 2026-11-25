@@ -300,6 +300,22 @@ final class MenuBarMacTests: XCTestCase {
         XCTAssertEqual(presses, [1, 6])
     }
 
+    func testPrimaryModifierFilesAndPressesTheCommandChord() throws {
+        let presenter = Presenter(), window = window(presenter)
+        defer { window.close() }
+        button(1, "Open", "Mod+Shift+O", in: presenter)
+        var presses: [UInt32] = []
+        presenter.onPress = { presses.append($0) }
+        let bar = DevMenu.makeMenu(shortcuts: presenter.shortcuts, documents: false, develop: false)
+        let file = try XCTUnwrap(bar.items.first { $0.submenu?.title == "File" }?.submenu)
+        let open = try XCTUnwrap(item(file, 1))
+        XCTAssertEqual(open.keyEquivalent.lowercased(), "o")
+        XCTAssertEqual(open.keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertFalse(presenter.routeKey(key("O", [.control, .shift], code: 31, window: window), focused: true))
+        XCTAssertTrue(presenter.routeKey(key("O", [.command, .shift], code: 31, window: window), focused: true))
+        XCTAssertEqual(presses, [1])
+    }
+
     /// `-exact-menu-keys` (LLP 1021 §5.3.3): Close Window keeps its place
     /// without ⌘W, and a command's ⌘W takes nothing from it; a declared ⇧⌘W
     /// that a command claims comes back when the command goes; without the
@@ -331,7 +347,7 @@ final class MenuBarMacTests: XCTestCase {
         presenter.shortcuts.sync()
         XCTAssertEqual(close.keyEquivalent, "w")
         XCTAssertEqual(close.keyEquivalentModifierMask, [.command, .shift])
-        button(2, "Close All Tabs", "Meta+Shift+W", in: presenter)
+        button(2, "Close All Tabs", "Mod+Shift+W", in: presenter)
         presenter.shortcuts.sync()
         XCTAssertEqual(close.keyEquivalent, "", "the command holds ⇧⌘W")
         XCTAssertEqual(try XCTUnwrap(item(file, 2)).keyEquivalentModifierMask, [.command, .shift])

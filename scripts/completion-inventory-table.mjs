@@ -59,6 +59,8 @@ export const classifications = [
     ["painted:host/painted/src/paint_motion.rs", "Host::boot_paint Host::colors_changed Host::set_scheme Host::set_view_scheme Host::sync_paint"],
     ["painted:host/painted/src/presence.rs", "Host::observe_layout"],
     ["painted:host/painted/src/presenter.rs", "Presenter::resize Presenter::resize_scaled Presenter::set_frame_period Presenter::set_pointer"],
+    ["painted:host/painted/src/presenter/accesskit.rs", "WindowTree::set_title WindowTree::title WindowTree::update"],
+    ["painted:host/painted/src/presenter/accesskit/node.rs", "map_node"],
     ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_clock Presenter::bar_event Presenter::bar_plans Presenter::bars Presenter::bars_json Presenter::sync_bars"],
     ["painted:host/painted/src/presenter/build_channel.rs", "Presenter::apply_pin"],
     ["painted:host/painted/src/presenter/clipboard.rs", "Presenter::set_clipboard"],
@@ -78,8 +80,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter/scrollbar.rs", "Presenter::set_scrollbars"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::present"],
     ["painted:host/painted/src/presenter/top/status.rs", "Presenter::sync_status_images"],
-    ["painted:host/painted/src/presenter/window.rs", "Presenter::chrome Presenter::set_window"],
-    ["painted:host/painted/src/scale.rs", "Host::apply_live Host::set_display_scale Host::set_modes Host::set_root_font_size Host::set_view"],
+    ["painted:host/painted/src/presenter/window.rs", "Presenter::chrome Presenter::set_window Presenter::window_background"],
+    ["painted:host/painted/src/scale.rs", "Host::apply_live Host::set_display_scale Host::set_modes Host::set_root_font_size Host::set_view Host::set_window_view"],
     ["painted:host/painted/src/surfaces.rs", "Presenter::sync_surfaces_with_canvas_tick"],
     ["painted:host/painted/src/forma.rs", "Host::forma_json"],
     ["painted:host/painted/src/presenter/frames.rs", "Presenter::candidate_page Presenter::frame_partitions_asked Presenter::serve_frame_partitions"],
@@ -103,6 +105,7 @@ export const classifications = [
     ["runner:runner/src/runner/theme.rs", "Runner::set_token Runner::set_tokens"],
     ["runner:runner/src/runner/time.rs", "Runner::chosen_locale Runner::direction Runner::place Runner::resolved_locale Runner::set_place Runner::set_place_formatted Runner::set_time Runner::wall_time"],
     ["runner:runner/src/runner/viewport.rs", "Runner::refresh_geometry Runner::set_fold Runner::set_keyboard_height Runner::set_preferences Runner::set_view Runner::set_viewport Runner::viewport"],
+    ["runner:runner/src/page.rs", "Keyboard::from_code"],
     ["runner:runner/src/viewport.rs", "ScreenOrientation::from_code ScreenOrientation::rotated"],
     ["web:host/web/src/abi.rs", "exact_motion exact_report_colors exact_resize exact_set_display_scale exact_set_page exact_set_place exact_set_root_font_size exact_set_screen_reader exact_set_time exact_set_update exact_set_orientation exact_set_viewport_geometry"],
     ["web:host/web/src/abi/mode.rs", "exact_set_mode"],
@@ -114,7 +117,11 @@ export const classifications = [
     ["apple:host/apple/src/abi/exports.rs", "exact_dispatch"],
     ["painted:host/painted/src/canvas/access.rs", "CanvasHost::access CanvasHost::access_act CanvasHost::access_custom_action CanvasHost::access_off"],
     ["painted:host/painted/src/canvas/field.rs", "CanvasHost::field_action CanvasHost::field_composing CanvasHost::field_edited CanvasHost::field_focused CanvasHost::field_input CanvasHost::field_scrolled CanvasHost::field_selected"],
+    ["painted:host/painted/src/canvas/drop.rs", "CanvasHost::drag_dropped CanvasHost::drag_left CanvasHost::drag_over CanvasHost::drop_landed CanvasHost::drop_released CanvasHost::field_drop"],
     ["painted:host/painted/src/canvas/input.rs", "CanvasHost::finger CanvasHost::reader_selection CanvasHost::scroll CanvasHost::touch CanvasHost::touching"],
+    ["painted:host/painted/src/canvas/jni_drop.rs",
+      "Java_dev_exact_canvas_Native_dragDropped Java_dev_exact_canvas_Native_dragLeft Java_dev_exact_canvas_Native_dragOver " +
+      "Java_dev_exact_canvas_Native_dropLanded Java_dev_exact_canvas_Native_dropReleased Java_dev_exact_canvas_Native_fieldDrop"],
     ["painted:host/painted/src/canvas/jni.rs",
       "Java_dev_exact_canvas_Native_readerSelection " +
       "Java_dev_exact_canvas_Native_accessAct Java_dev_exact_canvas_Native_fieldAction Java_dev_exact_canvas_Native_fieldComposing " +
@@ -129,11 +136,13 @@ export const classifications = [
     ["painted:host/painted/src/height_binding.rs", "Host::dispatch_height_held"],
     ["painted:host/painted/src/holds.rs", "Host::dispatch_held Host::dispatch_retained"],
     ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
+    ["painted:host/painted/src/presenter/accesskit.rs", "WindowTree::action"],
+    ["painted:host/painted/src/presenter/accesskit/node.rs", "scroll_target"],
     ["painted:host/painted/src/presenter/access.rs", "Presenter::access_act Presenter::access_menu_flag Presenter::access_pressable"],
     ["painted:host/painted/src/presenter/access/actions.rs", "Presenter::access_custom_action"],
     ["painted:host/painted/src/presenter/access/scroll.rs", "Presenter::access_scroll_to"],
     ["painted:host/painted/src/presenter/addressed_tap.rs", "Presenter::presses_itself Presenter::tap Presenter::tap_at"],
-    ["painted:host/painted/src/presenter/back.rs", "Presenter::system_back"],
+    ["painted:host/painted/src/presenter/back.rs", "Presenter::route_back Presenter::system_back"],
     ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_choose Presenter::bar_listener"],
     ["painted:host/painted/src/presenter/clipboard.rs", "Presenter::clipboard_action"],
     ["painted:host/painted/src/presenter/collection.rs", "Presenter::collection_scroll_turn Presenter::dispatch_authored_scroll"],
@@ -142,6 +151,7 @@ export const classifications = [
       "Presenter::pointer_abandoned Presenter::pointer_lost Presenter::pointer_move Presenter::pointer_up " +
       "Presenter::pointerdown_prevents_focus Presenter::press_lifted"],
     ["painted:host/painted/src/presenter/contact/mouse.rs", "Presenter::pointer_down_with_clicks"],
+    ["painted:host/painted/src/presenter/contact/pinch.rs", "Presenter::allows_touch_zoom Presenter::begin_transform_pinch Presenter::drive_transform_pinch Presenter::pinch_binding Presenter::tracking_transform_pinch Presenter::transform_finger"],
     ["painted:host/painted/src/presenter/control.rs", "Presenter::commit_control_value Presenter::key_click Presenter::toggle_control Presenter::toggle_control_with_press"],
     ["painted:host/painted/src/presenter/desktop_access.rs",
       "FieldTextLayout::runs FieldTextLayout::same_shape Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_scroll_text_line Presenter::access_select Presenter::access_selection Presenter::access_editor Presenter::accessible_field_view Presenter::enabled_access_view Presenter::access_text_layout " +
@@ -159,14 +169,16 @@ export const classifications = [
     ["painted:host/painted/src/presenter/field.rs", "Presenter::apply_field_edit Presenter::before_input Presenter::drain_field_select_tasks Presenter::field_select Presenter::set_range_text"],
     ["painted:host/painted/src/presenter/hatch.rs", "Presenter::hatch_act"],
     ["painted:host/painted/src/presenter/hosted.rs",
-      "Presenter::field_look Presenter::reader_field_action Presenter::reader_field_composing Presenter::reader_field_edited Presenter::reader_field_focused " +
+      "Presenter::field_inert Presenter::field_look Presenter::reader_field_action Presenter::reader_field_composing Presenter::reader_field_edited Presenter::reader_field_focused " +
       "Presenter::reader_field_input Presenter::reader_field_scrolled Presenter::reader_field_selected"],
     ["painted:host/painted/src/presenter/ime.rs", "Presenter::ime_begin Presenter::ime_commit Presenter::ime_end Presenter::ime_preedit Presenter::ime_target Presenter::ime_unconverted"],
     ["painted:host/painted/src/presenter/links.rs", "Presenter::follow Presenter::open_location"],
     ["painted:host/painted/src/presenter/picker.rs", "Presenter::open_document"],
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/file_drop.rs",
-      "Presenter::drag_crossings Presenter::drag_event Presenter::drag_left Presenter::drag_over Presenter::dropped"],
+      "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_dropped Presenter::drag_event Presenter::drag_flush " +
+      "Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_owner " +
+      "Presenter::drop_released Presenter::dropped Presenter::field_drop"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
     ["painted:host/painted/src/presenter/replacement.rs", "Presenter::buttons_released Presenter::pointer_released Presenter::reader_touch Presenter::set_touching"],
@@ -180,7 +192,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/stage/touch.rs", "Presenter::dismiss_sheet Presenter::nested_sheet_bounds Presenter::reader_sheet_drag"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::choose Presenter::dispatch_toggles"],
     ["painted:host/painted/src/presenter/top/input.rs", "Presenter::surface_event"],
-    ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::long_press Presenter::open_context_menu"],
+    ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::long_press Presenter::open_context_menu Presenter::arrange_hold_at"],
     ["painted:host/painted/src/presenter/transform_geometry.rs", "Presenter::deliver_resizes"],
     ["painted:host/painted/src/presenter/typing.rs", "Presenter::clipboard Presenter::clipboard_event Presenter::commit_text Presenter::key Presenter::key_default Presenter::type_key Presenter::type_text"],
     ["painted:host/painted/src/presenter/unload.rs", "Presenter::before_unload"],
@@ -200,7 +212,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_zoom Java_dev_exact_canvas_Native_zoomTap Java_dev_exact_canvas_Native_zoomWheel"],
     ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::zoom CanvasHost::zoom_tap CanvasHost::zoom_wheel"],
     ["painted:host/painted/src/presenter/zoom.rs",
-      "Presenter::double_tap_container Presenter::double_tap_zoom Presenter::scroll_container_to Presenter::tap_waits Presenter::wheel_zoom " +
+      "Presenter::double_tap_container Presenter::double_tap_listener Presenter::double_tap_zoom Presenter::press_and_double_tap Presenter::scroll_container_to Presenter::tap_waits Presenter::wheel_zoom " +
       "Presenter::zoom_double_tap Presenter::zoom_pinch_began Presenter::zoom_pinch_ended Presenter::zoom_pinched Presenter::zoom_tap_down " +
       "Presenter::zoomable_from Presenter::zoomable_under"],
   ]),
@@ -329,6 +341,7 @@ export const classifications = [
       "Presenter::arrange_candidate Presenter::arrange_edge Presenter::arrange_live Presenter::arrange_pin Presenter::arrange_settled Presenter::begin_arrange " +
       "Presenter::cancel_reorder Presenter::end_arrange Presenter::needs_animation_frame Presenter::sample_arrange"],
     ["painted:host/painted/src/presenter/arrange_geometry.rs", "Presenter::arrange_mapping"],
+    ["painted:host/painted/src/presenter/contact/hold.rs", "Presenter::lift_arrange Presenter::pending_arrange"],
     ["painted:host/painted/src/presenter/group.rs",
       "Presenter::end_group Presenter::finish_group Presenter::group_brush Presenter::group_edge Presenter::group_grip Presenter::group_live Presenter::group_pin " +
       "Presenter::group_sample Presenter::group_start Presenter::group_target Presenter::observe_group"],
@@ -401,7 +414,8 @@ export const classifications = [
       "Java_dev_exact_canvas_Native_scratchStorage Java_dev_exact_canvas_Native_sensorInput Java_dev_exact_canvas_Native_surfaceHas " +
       "Java_dev_exact_canvas_Native_underAgent"],
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameRates Java_dev_exact_canvas_Native_frameWindow"],
-    ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_backProgress"],
+    ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::hosted_back"],
+    ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_backProgress Java_dev_exact_canvas_Native_hostedBack"],
     ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_flingEnded Java_dev_exact_canvas_Native_refresh Java_dev_exact_canvas_Native_snapsAround"],
     ["painted:host/painted/src/canvas/journal.rs", "CanvasHost::echo_journal"],
     ["painted:host/painted/src/canvas/refine.rs", "CanvasHost::scale"],
@@ -516,6 +530,11 @@ export const classifications = [
     ["web:host/web/src/abi/clock.rs", "exact_sensor_events exact_sensor_inputs"],
     ["web:host/web/src/abi/midi.rs", "exact_midi"],
   ]),
+  group("Android data module timers", ["subscription"], "Canvas session and its Kotlin module", "UI-owned",
+    "ModuleSession holds callbacks across Activity recreation and runner replacement. The session clock takes due timers; ending the session clears the callbacks.", [
+    ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_moduleAfter"],
+    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::module_after"],
+  ]),
   group("module announcements", ["subscription"], "bound source/module and its active readers in this session", "UI-owned",
     "runner/src/runner/time.rs changed/apply_announced settle source watches; modules/events.rs raises events into the live module bindings. No durable outcome record is provided.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_app_changed exact_module_event"],
@@ -579,9 +598,9 @@ export const classifications = [
     ["painted:host/painted/src/presenter/links.rs", "Presenter::launch_at Presenter::launch_location"],
     ["runner:runner/src/runner/router.rs",
       "Runner::host_back Runner::host_back_to Runner::host_forward Runner::host_go Runner::host_launch Runner::location_ahead Runner::location_behind Runner::location_beneath " +
-      "Runner::resource_args Runner::resource_is_placeholder Runner::route_matches Runner::route_one_location Runner::take_router_change Runner::visit_location"],
+      "Runner::resource_args Runner::resource_is_placeholder Runner::route_accepts Runner::route_matches Runner::route_one_location Runner::take_router_change Runner::visit_location"],
     ["runner:runner/src/runner/split.rs", "Runner::press_writes_router Runner::route_inspector Runner::show_split_placeholder Runner::split_row_owner Runner::stack_split"],
-    ["runner:runner/src/runner/tabs.rs", "Runner::build_every_tab Runner::build_tabs Runner::panels_need_navigation Runner::unopened_tabs"],
+    ["runner:runner/src/runner/tabs.rs", "Runner::build_every_tab Runner::build_tabs Runner::panels_need_navigation Runner::possible_split_panels Runner::unopened_tabs"],
     ["web:host/web/src/abi.rs", "exact_build_locations exact_host_back exact_host_go exact_location_of exact_route_match exact_set_launch"],
   ]),
   group("picker results", ["one-shot"], "picker request and requesting file-input view", "UI-owned",
@@ -629,7 +648,7 @@ export const classifications = [
     ["apple:host/apple/src/textflow.rs", "exact_text_balanced_breaks exact_text_line_breaks exact_textflow_flow exact_textflow_free exact_textflow_prepare"],
     ["painted:host/painted/src/lower.rs", "Host::play_transitions"],
     ["painted:host/painted/src/desktop.rs", "Screen::json"],
-    ["painted:host/painted/src/screen_capture.rs", "fixtures sizes"],
+    ["painted:host/painted/src/screen_capture.rs", "sizes"],
     ["painted:host/painted/src/paint_motion.rs", "Host::paint_color Host::paint_over Host::present_paint"],
     ["painted:host/painted/src/presenter/painter.rs", "Presenter::poll_apple_painter Presenter::repeat_apple_frame"],
     ["painted:host/painted/src/press.rs", "Host::look_motion Host::retarget_press Host::retire_presses"],
@@ -657,11 +676,12 @@ export const classifications = [
   group("replies", ["one-shot", "subscription", "durable operation"], "pending ticket and source turn; UI target by default", "UI-owned",
     "runner/src/runner/reply.rs:27-88 checks pending, background, tool and module-work tickets; reply.rs:309 preserves effectful reply writes. Ordinary resource/then ownership is inferred from PendingReq.target in commit.rs:960. host/painted/src/presenter/pump.rs pump/pump_with_clock drain executor replies and picker/abort work through host_replies.rs fulfill_ready.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_fulfill_surface"],
-    ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_answer"],
-    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::answer"],
+    ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_answer Java_dev_exact_canvas_Native_refuseModule"],
+    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::answer CanvasHost::refuse_module"],
     ["painted:host/painted/src/host_replies.rs", "Host::fulfill_all Host::fulfill_ready"],
     ["painted:host/painted/src/presenter/requests.rs", "Presenter::answer_request"],
     ["render:host/render/src/requests.rs", "settle settle_aborts settle_with_clock"],
+    ["runner:runner/src/request.rs", "Outcome::module_refusal"],
     ["runner:runner/src/runner/commit.rs", "Runner::append_request#next_ticket:1"],
     ["runner:runner/src/runner/reply.rs", "Runner::fulfill Runner::fulfill_measured"],
     ["web:host/web/src/abi.rs", "exact_fulfill"],
@@ -672,11 +692,12 @@ export const classifications = [
     ["apple:host/apple/src/abi/exports.rs", "exact_request_active"],
     ["painted:host/painted/src/canvas.rs", "CanvasHost::poll"],
     ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_poll Java_dev_exact_canvas_Native_requests"],
+    ["painted:host/painted/src/canvas/jni_start.rs", "Java_dev_exact_canvas_Native_endSession"],
     ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::requests"],
     ["painted:host/painted/src/host.rs", "Host::dispatch_work Host::has_ordered_request_refusals Host::has_request_refusals Host::native_work Host::refuse_request Host::release_work Host::take_request_refusal Host::take_requests"],
     ["painted:host/painted/src/presenter/commands.rs", "Presenter::run_commands"],
     ["painted:host/painted/src/presenter/requests.rs",
-      "Presenter::end_auth Presenter::end_packages Presenter::handle_modules Presenter::modules_replaced Presenter::orientation_applied Presenter::orientation_lock " +
+      "Presenter::end_auth Presenter::end_packages Presenter::install_shell_handlers Presenter::modules_replaced Presenter::orientation_applied Presenter::orientation_lock " +
       "Presenter::pick Presenter::serve_packages Presenter::serve_requests Presenter::take_requests Presenter::tell_shell Presenter::wakelock_moved"],
     ["painted:host/painted/src/teardown.rs", "finish"],
     ["render:host/render/src/executor.rs",
@@ -891,6 +912,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/frame_partitions.rs", "attach kept"],
     ["painted:host/painted/src/canvas/legacy.rs", "attach decode glyph"],
     ["painted:host/painted/src/canvas/presence.rs", "attach"],
+    ["painted:host/painted/src/presenter/requests/android.rs", "attach"],
     ["painted:host/painted/src/canvas/secrets.rs", "attach"],
     ["painted:host/painted/src/canvas/time.rs", "attach format"],
     ["painted:host/painted/src/com.rs", "ensure_mta ensure_sta"],
@@ -974,11 +996,11 @@ export const classifications = [
     ["painted:host/painted/src/presenter/display_frame.rs", "SubmittedFrame::pixels"],
     ["painted:host/painted/src/presenter/edit_menu.rs", "EditMenu::enabled"],
     ["painted:host/painted/src/presenter/painter.rs", "PainterBoot::direct_d3d11 PainterBoot::windows PainterChoice::from_baked PainterChoice::from_env set_custom_painter"],
-    ["painted:host/painted/src/presenter/palette.rs", "material Palette::from_words Palette::report Palette::tell"],
+    ["painted:host/painted/src/presenter/palette.rs", "material Palette::from_reader_words Palette::from_words Palette::report Palette::tell ReaderPalette::from_words"],
     ["painted:host/painted/src/presenter/requests.rs", "Haptic::named"],
     ["painted:host/painted/src/presenter/snap.rs", "area flicked resnap rest"],
     ["painted:host/painted/src/presenter/top/look.rs", "Layout::desktop Layout::of Layout::paint Layout::target_at Layout::texts origin place"],
-    ["painted:host/painted/src/presenter/top/shape.rs", "alert is_confirmation menu Plan::rows"],
+    ["painted:host/painted/src/presenter/top/shape.rs", "alert is_confirmation menu Plan::rows Presenter::menu_row"],
     ["painted:host/painted/src/raster/geometry.rs", "rounded_rect"],
     ["painted:host/painted/src/surfaces/android.rs", "buffer_frame window_ready"],
     ["painted:host/painted/src/surfaces/retry.rs", "Rest::due Rest::rendered Retry::begin Retry::eligible Retry::recorded"],
@@ -987,7 +1009,7 @@ export const classifications = [
     "host/painted/src/package.rs Context exposes a session package instance; canvas/jni_extensions.rs binds the current reader extensions. Session reload replaces the context native slot.", [
     ["painted:host/painted/src/canvas/jni_extensions.rs", "agent bind_later invoked now sensor_input surface_has under_agent"],
     ["painted:host/painted/src/package.rs",
-      "Context::agent Context::cache Context::changed Context::data Context::desktop Context::displays Context::emit Context::extension Context::foreground Context::label Context::log " +
+      "Context::agent Context::cache Context::changed Context::data Context::desktop Context::development Context::displays Context::emit Context::extension Context::foreground Context::label Context::log " +
       "Context::notifier Context::now Context::origin Context::pads Context::request Context::session Context::temporary Entry::of"],
   ]),
   group("region and text", ["one-shot"], "text request/source, font recipe, paint context and current paragraph/cache residency", "UI-owned",
@@ -1170,9 +1192,10 @@ export const classifications = [
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/admission.rs and in_flight.rs tie admission, aborts and retirement to pending tickets. Retained effectful work is separately represented by module_work.rs.", [
     ["painted:host/painted/src/presenter.rs", "Presenter::after_commit Presenter::run_dispatch"],
     ["painted:host/painted/src/presenter/commands.rs", "Presenter::package_turn Presenter::run_queued_commands"],
+    ["painted:host/painted/src/presenter/requests/open_url.rs", "Presenter::hand_url Presenter::open_url"],
     ["painted:host/painted/src/presenter/requests.rs",
-      "Presenter::bind_modules Presenter::copy_text Presenter::drop_picks Presenter::editing Presenter::haptic Presenter::leave_for Presenter::not_carried " +
-      "Presenter::open_url_now Presenter::orientation_moved Presenter::orientation_unavailable Presenter::package_lines Presenter::pickable Presenter::picks_renewed " +
+      "Presenter::bind_modules Presenter::copy_text Presenter::drop_picks Presenter::editing Presenter::haptic Presenter::not_carried " +
+      "Presenter::orientation_moved Presenter::orientation_unavailable Presenter::package_lines Presenter::pickable Presenter::picks_renewed " +
       "Presenter::press_haptic Presenter::request_files Presenter::say_target Presenter::wakelock_unavailable"],
   ], "durable for a retained effectful/background ticket; holds() also accepts those tickets (reply.rs:27-33)."),
   group("session lifecycle", ["one-shot"], "session creation, boot, replacement or teardown; no independent completion", "UI-owned",
@@ -1205,7 +1228,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/arrange.rs", "Presenter::prepare_arrange_down Presenter::tick_arrange"],
     ["painted:host/painted/src/presenter/arrive.rs", "Presenter::arrive Presenter::autofocus Presenter::lands Presenter::note_press_from Presenter::presses Presenter::release_focus Presenter::route_title"],
     ["painted:host/painted/src/presenter/back.rs", "Presenter::back_key_down"],
-    ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_button Presenter::content_scroller Presenter::read_bars"],
+    ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_button Presenter::bar_colors Presenter::content_scroller Presenter::read_bars"],
     ["painted:host/painted/src/presenter/contact.rs",
       "Presenter::canvas_input_live Presenter::contact_down Presenter::depth Presenter::feedback_contains Presenter::focus_on_down Presenter::input_live " +
       "Presenter::pointer_lift Presenter::pointer_moved Presenter::retire_acknowledged_pointer Presenter::retire_pointer"],
@@ -1305,7 +1328,7 @@ export const classifications = [
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/router.rs validates visits against the live router; replacement/retirement changes that owner.", [
     ["painted:host/painted/src/presenter/history.rs", "Presenter::history_action"],
     ["painted:host/painted/src/presenter/stage.rs",
-      "Presenter::desktop_stage Presenter::place_sheets Presenter::stage_page_route Presenter::stage_paint Presenter::stage_sheets Presenter::stage_shows " +
+      "Presenter::back_sheets Presenter::desktop_stage Presenter::place_sheets Presenter::stage_page_route Presenter::stage_paint Presenter::stage_sheets Presenter::stage_shows " +
       "Presenter::sync_stage Presenter::top_sheet"],
   ]),
   group("picture results", ["one-shot"], "pending image/picture source, decode generation and current presentation consumers", "UI-owned",
@@ -1330,7 +1353,8 @@ export const classifications = [
   ]),
   group("replies", ["one-shot", "subscription", "durable operation"], "pending ticket and source turn; UI target by default", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/reply.rs:27-88 checks pending, background, tool and module-work tickets; reply.rs:309 preserves effectful reply writes. Ordinary resource/then ownership is inferred from PendingReq.target in commit.rs:960.", [
-    ["painted:host/painted/src/presenter/requests.rs", "Presenter::answer_date Presenter::answer_open"],
+    ["painted:host/painted/src/presenter/requests.rs", "Presenter::answer_date"],
+    ["painted:host/painted/src/presenter/requests/open_url.rs", "Presenter::answer_open"],
   ], "durable when the ticket names background/tool work or retained effectful module work; see reply.rs:70-88 and module_work.rs. Not all tool handlers survive session teardown."),
   group("session lifecycle", ["one-shot"], "session creation, boot, replacement or teardown; no independent completion", "UI-owned",
     "The named public runner-crate source is the session lifecycle API or its value/admission helper. Runner boot constructs session state (runner/src/runner.rs); host ABI buffers and configuration belong to that runtime handle.", [

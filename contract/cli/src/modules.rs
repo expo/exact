@@ -486,6 +486,15 @@ fn bounded(
             })
         }
         Expr::Str(name, at) => {
+            if option == "keys" && matches!(sub["shortcut"].as_str(), Some("register" | "check")) {
+                if let Err(why) = exact_runner::desktop::single_side_shortcut(name) {
+                    return Some(error(
+                        "contract-module-shortcut",
+                        format!("invalid global shortcut {name:?}: {why}"),
+                        *at,
+                    ));
+                }
+            }
             let surface =
                 (sub["surfaceOptions"].as_array().into_iter().flatten()).any(|o| o == option);
             (surface && !surfaces.contains(name)).then(|| {

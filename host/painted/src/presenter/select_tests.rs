@@ -120,6 +120,26 @@ fn tab_and_back_close_an_open_menu() {
     assert_eq!(slot(&p, "log"), "");
 }
 
+#[test]
+fn a_select_updates_the_hosted_dispatcher_without_a_route_change() {
+    let (mut p, id) = focused(PICK, (300., 400.));
+    thread_local! { static REQUESTS: std::cell::RefCell<Vec<Vec<i32>>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    p.hosted_back(Some(|layers| {
+        REQUESTS.with_borrow_mut(|r| r.push(layers.to_vec()))
+    }));
+    key(&mut p, " ");
+    assert_eq!(p.dispatched_back(1, 1, p.host.now()), -1);
+    assert_eq!(p.menu, Some(id));
+    assert_eq!(p.dispatched_back(4, id, p.host.now()), 1);
+    assert_eq!(p.dispatched_back(4, id, p.host.now()), -1);
+    REQUESTS.with_borrow_mut(|r| {
+        assert_eq!(
+            std::mem::take(r),
+            [vec![0; 3], vec![0, 4, id as i32, 4, id as i32], vec![0; 3]]
+        )
+    });
+}
+
 /// Sixty options, after `above` points of the page.
 fn long(above: u32) -> String {
     let mut source = String::from(

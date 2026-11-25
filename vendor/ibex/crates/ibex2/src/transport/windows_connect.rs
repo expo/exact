@@ -32,9 +32,7 @@ pub(crate) fn connect_socket(
 }
 
 fn check_abort(signal: &AbortSignal) -> io::Result<()> {
-    signal
-        .check()
-        .map_err(|error| io::Error::new(io::ErrorKind::Interrupted, error.to_string()))
+    signal.check().map_err(super::rustls_http::cancelled_io)
 }
 
 fn complete(
@@ -175,7 +173,7 @@ mod tests {
                 panic!("aborted attempt polled")
             })
             .unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+            assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
         }
     }
 
@@ -195,7 +193,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+            assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
             assert_eq!(polls, 1);
         }
     }
@@ -276,7 +274,7 @@ mod tests {
             &controller.signal(),
         )
         .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
         assert_eq!(
             listener.accept().unwrap_err().kind(),
             io::ErrorKind::WouldBlock

@@ -65,11 +65,11 @@ mod surface;
 use surface::fact_shape;
 mod symbols;
 pub use contract_analyze::SuggestionCheck;
-pub use properties::resolve_test_states_path;
 pub use properties::{
     check_properties, check_properties_path, check_suggestions_path, properties, property_program,
-    resolve_properties_path, tests,
+    resolve_properties_path, tests, tests_with_defaults,
 };
+pub use properties::{check_test_substitutes, resolve_test_states_path};
 mod tests_json;
 pub use tests_json::{authored_json, tests_json};
 pub mod forma_levels;

@@ -251,7 +251,7 @@ final class SwipeHold {
         if updated && !cancel && fingerVelocity?.isFinite != false && armed(displacement),
            live, inputEligible, let view {
             let id = view.id, now = session.now()
-            session.applyInput(mapping.value(displacement) > 0 ? session.runtime.swiperight(id, now: now) : session.runtime.swipeleft(id, now: now), at: id)
+            session.applyInput(session.runtime.swipe(id, mapping.value(displacement) > 0 ? .right : .left, now: now), at: id)
         }
         ended = true
         session.retireInputHold(self)

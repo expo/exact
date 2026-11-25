@@ -100,7 +100,7 @@ impl PlanBytes<'_> {
 /// One runner, one painter.
 pub struct Host<D: DataSource> {
     runner: Runner<D>,
-    pub(crate) web_mount: Option<serde_json::Value>,
+    pub(crate) incoming_links: crate::app::IncomingLinks,
     secret_session: system::SecretSession,
     doc_watch: Option<crate::doc_watch::DocWatch>,
     font_sync: Option<(crate::text::Shared, usize)>,
@@ -327,7 +327,7 @@ impl<D: DataSource> Host<D> {
         }
         let mut host = Host {
             runner,
-            web_mount: None,
+            incoming_links: Default::default(),
             secret_session,
             doc_watch: None,
             font_sync: font_sync.map(|text| (text, 0)),
@@ -444,7 +444,7 @@ impl<D: DataSource> Host<D> {
     /// is answered again in that one commit, which the painter picks up
     /// like any other — the kernel is the display list here.
     pub fn set_delivery_from_compat(&mut self, json: &str) -> Option<String> {
-        self.web_mount = crate::app::web_mount(json);
+        self.incoming_links = crate::app::IncomingLinks::from_compat(json);
         match self.runner.set_delivery_from_compat(json) {
             Ok(None) => None,
             Ok(Some(receipt)) => {
@@ -1177,7 +1177,7 @@ impl<D: DataSource> Host<D> {
     }
 
     /// The device's posture and the viewport segments (LLP 1078 D4), set
-    /// only by the agent here: the kernel's grid and `exactViewport`'s
+    /// by the agent here: the kernel's grid and `exactViewport`'s
     /// three fields together — a relayout when a style reads the segments,
     /// one commit when a resource reads the fields.
     pub fn set_segments(
@@ -1187,33 +1187,13 @@ impl<D: DataSource> Host<D> {
         rows: u32,
         rects: Vec<exact_kernel::Rect>,
     ) -> Option<String> {
-        let (Ok(c), Ok(r)) = (u8::try_from(cols), u8::try_from(rows)) else {
-            return Some(format!("segments: {cols}x{rows} is past the kernel's grid"));
-        };
-        let restyled = match self.runner.kernel_mut().set_segments(c, r, rects) {
-            Ok(changed) => changed,
-            Err(e) => return Some(format!("segments: {e:?}")),
-        };
         let fold = exact_runner::Fold {
             posture,
             cols,
             rows,
         };
-        match self.runner.set_fold(fold) {
-            Ok(Some(receipt)) => {
-                self.presence.unauthored |= restyled;
-                self.commit(
-                    &[Timed {
-                        at_ms: self.now_ms,
-                        receipt,
-                    }],
-                    None,
-                )
-            }
-            Ok(None) if restyled => self.layout_unauthored().err(),
-            Ok(None) => None,
-            Err(e) => Some(format!("segments: {e:?}")),
-        }
+        self.set_window_view(None, None, None, Some((fold, rects)))
+            .err()
     }
 
     /// The display preferences (LLP 1061 D5): re-answer `exactViewport()` in one commit.

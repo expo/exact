@@ -32,7 +32,7 @@ test "a repeat is refused and keeps its text; the list survives a relaunch"
 | `request POST "/items" {…} as grace expect 409` | Writes as another person through [the app's server](rest-backend.md#where-the-server-lives), empty per test; a status not 2xx fails, or with `expect 409` any other. |
 | `size 390x844`, `at "/item/7#moves"`, `epoch`, `time-zone`, `locale`, `seed`, `before data` | Start a test or file. |
 
-[Grammar](../contract-grammar.md#authored-tests).
+[Grammar and limits](../contract-grammar.md#authored-tests).
 
 `expect state` takes `==`, `!=`, `>=`, `<=` or `in 0 1`, against literals or
 `state <path>` (`in` needs a list). Use `clock data` before reading an input's reply

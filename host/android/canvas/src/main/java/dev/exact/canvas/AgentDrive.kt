@@ -52,7 +52,12 @@ class AgentDrive(name: String) : Drive {
         say(Exact.agent("{\"op\":\"ready\"}"))
         while (true) {
             val line = lines.readLine() ?: return
-            if (line.isNotBlank()) say(if (AX.containsMatchIn(line)) ax(line) else Exact.agent(line))
+            if (line.isBlank()) continue
+            if (AX.containsMatchIn(line)) say(ax(line))
+            else if (line.contains("\"scrollDrag\"") && line.contains("\"probe\"")) {
+                val probe = try { org.json.JSONObject(line) } catch (_: org.json.JSONException) { null }
+                say(Exact.agent(probe?.put("longPressMs", android.view.ViewConfiguration.getLongPressTimeout())?.toString() ?: line))
+            } else say(Exact.agent(line))
         }
     }
 

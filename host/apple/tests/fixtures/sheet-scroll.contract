@@ -1,0 +1,29 @@
+component ReadingSheet
+  state px = 320
+  state releases = 0
+  state speed = 0
+  state released = 0
+  action snap(height: number, velocity: number)
+    released = height
+    speed = velocity
+    if velocity >= 250
+      px = height < 320 ? 320 : 480
+    else if velocity <= -250
+      px = height > 320 ? 320 : 160
+    else
+      px = height < 240 ? 160 : height < 400 ? 320 : 480
+    releases = releases + 1
+  view
+    column height="100%" position="relative"
+      scroll testId="outside" height=100
+        column height=700
+          text "Outside the sheet"
+      column id="sheet" testId="sheet" position="absolute" bottom=0 left=0 right=0 height=px min-height=160 max-height=480 box-sizing="border-box" transition="height -exact-spring(300,30,1)"
+        text "Reading" height=44
+        list testId="port" heightDragFor="sheet" heightrelease=snap flex=1 min-height=0
+          for name in range(24) key=name
+            if name == 0
+              scroll testId="rail" height=50 overflow-x="scroll" overflow-y="hidden"
+                text "First row" width=900 height=50
+            else
+              text `Row ${name}` height=50

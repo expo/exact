@@ -121,6 +121,8 @@ const NODE: i32 = 4;
 const BARLESS: i32 = 8;
 /// Bits 6 and 7: what a drag of it does to the keyboard, its authored
 /// `keyboardDismissMode`; unsaid, Android's: nothing (LLP 1115.001 D12).
+/// Android shows no accessory bar over its keyboard, so UIKit's accessory
+/// modes are the plain ones (LLP 1123 D7).
 const DISMISS_ON_DRAG: i32 = 64;
 const DISMISS_INTERACTIVE: i32 = 128;
 /// Bits 4 and 5: it hears `refresh`, and its `refreshing` is true: the
@@ -331,9 +333,27 @@ impl<D: DataSource> Presenter<D> {
         let mut claims = self.touch_kept(key);
         for candidate in self.candidates(key) {
             let (x, y) = match candidate {
-                Candidate::Arrange(_) | Candidate::Height { .. } => (false, true),
+                // An ordinary grip takes a finger on the platform's long press.
+                // Before then only touch-action keeps the list from scrolling.
+                Candidate::Arrange(_) => (false, false),
+                Candidate::Height { .. } => (false, true),
                 Candidate::Swipe(_) => (true, false),
-                Candidate::Transform(_) | Candidate::Group(_) => (true, true),
+                Candidate::Transform(b) => {
+                    kernel.node_by_key(b.handle).map_or((false, false), |n| {
+                        let action = n.style.touch_action;
+                        if matches!(
+                            action,
+                            exact_kernel::TouchAction::Auto
+                                | exact_kernel::TouchAction::Manipulation
+                        ) {
+                            (true, true)
+                        } else {
+                            let (x, y) = gives(action);
+                            (!x, !y)
+                        }
+                    })
+                }
+                Candidate::Group(_) => (true, true),
                 // A `pan` hears what its `touch-action` does not give to
                 // scrolling, as a browser cancels a pointer it pans with.
                 Candidate::Pan(key) => kernel.node_by_key(key).map_or((false, false), |n| {
@@ -653,12 +673,26 @@ impl<D: DataSource> Presenter<D> {
             under.chain.len() as i32,
             under.field.unwrap_or(0) as i32,
         ];
-        let tapped =
-            (self.hit(x / scale, y / scale)).and_then(|hit| self.double_tap_container(hit));
+        if self
+            .contact
+            .as_ref()
+            .and_then(|c| c.hold.as_ref())
+            .is_some_and(|h| matches!(h.kind, super::contact::HeldKind::Arrange(_)))
+        {
+            out[0] |= 64;
+        }
+        let hit = self.hit(x / scale, y / scale);
+        let tapped = hit.and_then(|hit| self.double_tap_container(hit));
         for s in &under.chain {
+            let allows_pinch = hit.is_some_and(|hit| self.allows_touch_zoom(hit, Some(s.id)));
             let rev = self.reader_revision(s);
             let tap = if tapped == Some(s.id) { DOUBLE_TAP } else { 0 };
-            out.extend([s.id as i32, self.reader_flags(s) | tap, rev as i32]);
+            let flags = self.reader_flags(s);
+            out.extend([
+                s.id as i32,
+                (if allows_pinch { flags } else { flags & !ZOOM }) | tap,
+                rev as i32,
+            ]);
             let px = [s.offset.0, s.offset.1, s.max.0, s.max.1];
             out.extend(px.iter().chain(&s.port).map(|v| bits(v * scale)));
         }
@@ -728,8 +762,8 @@ impl<D: DataSource> Presenter<D> {
             .filter(|_| s.id != PAGE)
             .and_then(|n| n.props.str(exact_kernel::PropId::KeyboardDismissMode))
         {
-            Some("on-drag") => DISMISS_ON_DRAG,
-            Some("interactive") => DISMISS_INTERACTIVE,
+            Some("on-drag" | "on-drag-with-accessory") => DISMISS_ON_DRAG,
+            Some("interactive" | "interactive-with-accessory") => DISMISS_INTERACTIVE,
             _ => 0,
         };
         let refresh = if s.id == PAGE
@@ -822,6 +856,10 @@ impl<D: DataSource> Presenter<D> {
             origin(content.1),
             (self.context_menu_at(x / scale, y / scale).map(|v| v.0))
                 .or_else(|| self.lift_source_at(x / scale, y / scale))
+                .or_else(|| {
+                    self.arrange_hold_at(x / scale, y / scale)
+                        .and_then(|b| self.host.kernel().node_by_key(b.handle).map(|n| n.id))
+                })
                 .map_or(0, |id| id as i32),
         ]
     }

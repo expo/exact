@@ -63,22 +63,51 @@ impl<D: DataSource> Presenter<D> {
                 .kernel()
                 .node(id)
                 .is_some_and(|node| node.node_type == NodeType::NativeView && node.key == key);
-        // A control disabled or hidden since its view was shown (by itself or
-        // an ancestor) takes no action, as a popup it opened before may still send one.
-        let action = matches!(kind, "press" | "change" | "input");
-        let eligible = || {
-            self.host.retained_action_eligible(key)
-                && crate::paint::paints(self.host.kernel(), id, None)
+        if !valid {
+            return false;
+        }
+        let Some(kind) = EventKind::from_name(kind) else {
+            return false;
         };
-        if !valid || (action && !eligible()) {
+        // A control can be hidden or disabled after the reader bound its callback.
+        if matches!(
+            kind,
+            EventKind::Press | EventKind::Change | EventKind::Input | EventKind::Focus
+        ) && (!self.host.retained_action_eligible(key)
+            || !crate::paint::paints(self.host.kernel(), id, None))
+        {
+            return false;
+        }
+        if matches!(kind, EventKind::Focus | EventKind::Blur) {
+            let next = match kind {
+                EventKind::Focus if self.focus_refusal(id).is_none() => Some(id),
+                EventKind::Blur => {
+                    let waiting = self.host.flights.focus == Some(key);
+                    if waiting {
+                        self.host.flights.focus = None;
+                    }
+                    if self.focus != Some(id) {
+                        return waiting;
+                    }
+                    None
+                }
+                _ => return false,
+            };
+            if let Some(error) = self.set_focus(next, now_ms) {
+                eprintln!("exact: native module: {error}");
+            }
+            self.queue_collections();
+            return true;
+        }
+        if !self.host.runner().handlers_of(id).contains(&kind) {
             return false;
         }
         let event = match kind {
-            "press" => Event::Press,
-            "change" => Event::Change(payload.into()),
-            "input" => Event::Input(payload.into()),
-            "load" => Event::Load,
-            "message" => Event::Message(payload),
+            EventKind::Press => Event::Press,
+            EventKind::Change => Event::Change(payload.into()),
+            EventKind::Input => Event::Input(payload.into()),
+            EventKind::Load => Event::Load,
+            EventKind::Message => Event::Message(payload),
             _ => return false,
         };
         if let Some(error) = self.host.dispatch_at(id, event, now_ms) {

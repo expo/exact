@@ -224,12 +224,13 @@ impl<D: DataSource> Presenter<D> {
         menu_targets: &mut BTreeMap<exact_kernel::NodeKey, bool>,
     ) -> i32 {
         let mut flags = 0;
-        if self
-            .host
-            .kernel()
-            .node(row.node)
-            .is_some_and(|n| n.props.str(PropId::AccessibilityRole) == Some("menuitemcheckbox"))
-        {
+        if self.host.kernel().node(row.node).is_some_and(|n| {
+            let role = n.props.str(PropId::AccessibilityRole);
+            role == Some("menuitemcheckbox")
+                || !self.desktop_overlays()
+                    && (role == Some("menuitemradio")
+                        || n.props.bool(PropId::AccessibilityChecked).is_some())
+        }) {
             flags |= flag::CHECKABLE;
         }
         if let Some(key) = row.opens {
@@ -272,7 +273,7 @@ fn build_surface(
             ancestor,
             role::BUTTON,
             flag::CLICK | flag::EXPANDABLE | flag::EXPANDED,
-            row.title.clone(),
+            row.menu_name(),
             [0.; 4],
             info(row.node),
         );
@@ -412,7 +413,11 @@ fn build_surface(
             parent,
             role,
             flags,
-            row.title.clone(),
+            if alert {
+                row.title.clone()
+            } else {
+                row.menu_name()
+            },
             rect,
             info(row.node),
         );

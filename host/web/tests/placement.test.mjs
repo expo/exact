@@ -82,12 +82,18 @@ async function paintedOpacity(page, expected, x = 30) {
 
 for (const engine of ['chromium', 'firefox', 'webkit']) {
   engineTest[engine](`${engine}: placement opacity multiplies classes, control states and shadows, and leaves them authored`, () => browserPlacement(engine, async page => {
-    await page.evaluate(() => {
-      child('div','authored').style.boxShadow='-25px 0 0 0 red';child('button').setAttribute('data-pressed','');child('button').disabled = true;
+    await page.evaluate(async () => {
+      const {createInputHandlers} = await import('/input-glue.js');
+      createInputHandlers({root: host, views: new Map(), retiredViews: new Set(), ready: () => true, inertAncestor: () => false, dispatch() {}});
+      child('div','authored').style.boxShadow='-25px 0 0 0 red';
+      child('button').id = 'pressed';child('button').disabled = true;
       // A Contract `button`, whose every property the shell reverts to the browser's (index.html `[data-native]`).
       const native=child('button','authored');native.setAttribute('data-native','');native.setAttribute('data-button-style','bordered');
       layout();
     });
+    await page.locator('#pressed').hover();
+    await page.mouse.down();
+    await page.locator('#pressed').evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished)));
     await paintedOpacity(page,[.15,.1625,.125,.15]);
     await paintedOpacity(page,[.15],5);
     await page.evaluate(() => {factor=1;layout();});
@@ -95,6 +101,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
     await page.evaluate(() => {factor=.25;layout();delete gpu.gpu_placement_opacity;layout();});
     await paintedOpacity(page,[.6,.65,.5,.6]);
     assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#exact-root > :not(canvas)')].map(el=>el.style.opacity)),['','','','']);
+    await page.mouse.up();
   }));
 
   engineTest[engine](`${engine}: JS opacity bindings remain authored while placed and after unplacing`, () => browserPlacement(engine, async page => {

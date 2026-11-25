@@ -54,29 +54,55 @@ pub fn launch_location(args: impl IntoIterator<Item = String>, compat: &str) -> 
     launch_argument(args).map_or_else(|| "/".into(), |href| incoming_location(&href, compat))
 }
 
-/// A URL from outside the app as its location (LLP 1038 D8): at the
-/// template's `%s` of the `protocol_handlers` entry for its scheme, else its
-/// ordinary location. Only the Android reader registers handlers and names
-/// them here (`EXACT_PROTOCOL_HANDLERS`, from the APK's
-/// `dev.exact.protocol_handlers`), as an Apple bundle's
-/// `ExactProtocolHandlers`; a command-line URL on Linux or Windows has none.
+/// A URL from outside the app as its location (LLP 1038 D8), or the root
+/// when it is outside this app's web mount, link origins and registered schemes.
 pub fn incoming_location(href: &str, compat: &str) -> String {
-    incoming_location_at(href, web_mount(compat).as_ref())
+    incoming_location_at(href, &IncomingLinks::from_compat(compat)).unwrap_or_else(|| "/".into())
 }
 
-pub(crate) fn incoming_location_at(href: &str, mount: Option<&serde_json::Value>) -> String {
+/// The Android reader exports its registered templates as `EXACT_PROTOCOL_HANDLERS`
+/// before the first URL is read, at launch or while the app runs.
+pub(crate) fn incoming_location_at(href: &str, links: &IncomingLinks) -> Option<String> {
     static HANDLERS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
     let handlers = HANDLERS.get_or_init(|| {
         protocol_handlers(std::env::var("EXACT_PROTOCOL_HANDLERS").ok().as_deref())
     });
-    location_through(href, handlers, mount)
+    location_through(href, handlers, links)
 }
 
-pub(crate) fn web_mount(compat: &str) -> Option<serde_json::Value> {
-    serde_json::from_str::<serde_json::Value>(compat)
-        .ok()?
-        .pointer("/inputs/webMount")
-        .cloned()
+#[derive(Clone, Default)]
+pub(crate) struct IncomingLinks {
+    mount: Option<serde_json::Value>,
+    schemes: Vec<String>,
+    origins: Vec<String>,
+}
+
+impl IncomingLinks {
+    pub(crate) fn from_compat(compat: &str) -> Self {
+        let inputs = serde_json::from_str::<serde_json::Value>(compat)
+            .ok()
+            .and_then(|value| value.get("inputs").cloned())
+            .unwrap_or_default();
+        Self {
+            mount: inputs.get("webMount").cloned(),
+            origins: inputs
+                .pointer("/links/origins")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            schemes: inputs
+                .pointer("/capabilities/urlSchemes")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+        }
+    }
 }
 
 /// The `[{"protocol", "url"}]` entries the reader registered; none when
@@ -100,13 +126,38 @@ fn protocol_handlers(json: Option<&str>) -> Vec<(String, String)> {
 fn location_through(
     href: &str,
     handlers: &[(String, String)],
-    mount: Option<&serde_json::Value>,
-) -> String {
-    let local = mount.and_then(|mount| {
+    links: &IncomingLinks,
+) -> Option<String> {
+    if let Some(location) = handlers.iter().find_map(|(protocol, template)| {
+        exact_route::protocol_location_of(href, protocol, template)
+    }) {
+        return Some(location);
+    }
+    let url = url::Url::parse(href).ok();
+    if url.as_ref().is_some_and(|url| {
+        links
+            .schemes
+            .iter()
+            .any(|scheme| url.scheme().eq_ignore_ascii_case(scheme))
+    }) {
+        return Some(exact_route::location_of(href));
+    }
+    if links.mount.is_none() || url.is_none() {
+        return Some(exact_route::location_of(href));
+    }
+    links.mount.as_ref().and_then(|mount| {
         let mut url = url::Url::parse(href).ok()?;
         let origin = url::Url::parse(mount.get("origin")?.as_str()?).ok()?;
-        if !matches!(url.scheme(), "http" | "https") || url.origin() != origin.origin() {
+        if !matches!(url.scheme(), "http" | "https") {
             return None;
+        }
+        if url.origin() != origin.origin() {
+            return links
+                .origins
+                .iter()
+                .filter_map(|origin| url::Url::parse(origin).ok())
+                .any(|origin| url.origin() == origin.origin())
+                .then(|| exact_route::location_of(href));
         }
         let base = mount.get("base")?.as_str()?;
         let path = if url.path() == base.trim_end_matches('/') {
@@ -115,14 +166,8 @@ fn location_through(
             format!("/{}", url.path().strip_prefix(base)?)
         };
         url.set_path(&path);
-        Some(url.to_string())
-    });
-    handlers
-        .iter()
-        .find_map(|(protocol, template)| {
-            exact_route::protocol_location_of(href, protocol, template)
-        })
-        .unwrap_or_else(|| exact_route::location_of(local.as_deref().unwrap_or(href)))
+        Some(exact_route::location_of(url.as_str()))
+    })
 }
 
 /// The first non-flag argument, as it was given, or `None`. The `hidden`
@@ -1311,18 +1356,53 @@ mod tests {
             ("web+notes://n/1", "/n/web%2Bnotes%3A%2F%2Fn%2F1"),
             // An App Link and an unregistered scheme keep their ordinary location.
             ("https://links.example/ficha/7", "/ficha/7"),
+            ("notes:///links?from=cold#part", "/links?from=cold#part"),
+            ("notes://links?from=warm", "/links?from=warm"),
             ("other://post/42", "/post/42"),
             ("/urgencies", "/urgencies"),
         ] {
-            assert_eq!(location_through(href, &handlers, None), expected, "{href}");
+            assert_eq!(
+                location_through(href, &handlers, &IncomingLinks::default()).as_deref(),
+                Some(expected),
+                "{href}"
+            );
+        }
+        let links = IncomingLinks::from_compat(
+            r#"{"inputs":{"webMount":{"origin":"https://site.invalid","base":"/app/"},"capabilities":{"urlSchemes":["notes"]},"links":{"origins":["https://site.invalid","https://share.example"]}}}"#,
+        );
+        for (href, expected) in [
+            (
+                "sscontrol://unknown/7",
+                Some("/open?u=sscontrol%3A%2F%2Funknown%2F7"),
+            ),
+            ("notes:///unknown/7?q=1#part", Some("/unknown/7?q=1#part")),
+            (
+                "https://site.invalid/app/unknown?q=1#part",
+                Some("/unknown?q=1#part"),
+            ),
+            ("https://site.invalid/app", Some("/")),
+            ("https://share.example/post/42", Some("/post/42")),
+            ("http://share.example/post/42", None),
+            ("https://share.example:444/post/42", None),
+            ("/unknown?q=1#part", Some("/unknown?q=1#part")),
+            ("https://other.invalid/app/unknown", None),
+            ("https://site.invalid/application/unknown", None),
+            ("https://site.invalid:444/app/unknown", None),
+            ("other://unknown", None),
+        ] {
+            assert_eq!(
+                location_through(href, &handlers, &links).as_deref(),
+                expected,
+                "{href}"
+            );
         }
         for json in [None, Some(""), Some("{}"), Some(r#"[{"protocol":"x"}]"#)] {
             assert!(protocol_handlers(json).is_empty(), "{json:?}");
         }
         // No reader named any: every host's ordinary conversion.
         assert_eq!(
-            location_through("sscontrol://ficha/7", &[], None),
-            "/ficha/7"
+            location_through("sscontrol://ficha/7", &[], &IncomingLinks::default()).as_deref(),
+            Some("/ficha/7")
         );
     }
 

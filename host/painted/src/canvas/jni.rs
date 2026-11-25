@@ -20,6 +20,8 @@ pub use byte_arrays::{bytes, utf8};
 
 #[path = "jni_frames.rs"]
 mod frames;
+#[path = "jni_drop.rs"]
+mod jni_drop;
 #[path = "jni_extensions.rs"]
 pub mod jni_extensions;
 #[path = "jni_keys.rs"]
@@ -232,23 +234,23 @@ macro_rules! canvas_jni {
                 let mut told = $crate::canvas::Told {
                     size: (width.max(0) as u32, height.max(0) as u32),
                     scale,
-                    insets: [0; 16],
+                    geometry: [0; 20],
                 };
-                let n = ((**env).GetArrayLength.expect("jni"))(env, insets).clamp(0, 16);
+                let n = ((**env).GetArrayLength.expect("jni"))(env, insets).clamp(0, 20);
                 ((**env).GetIntArrayRegion.expect("jni"))(
                     env,
                     insets,
                     0,
                     n,
-                    told.insets.as_mut_ptr(),
+                    told.geometry.as_mut_ptr(),
                 );
                 $crate::canvas::window(told);
                 with(|h| h.set_window(told));
             }
 
             /// The device's colours (LLP 1115.001 D4): Material 3's colour
-            /// roles as the reader resolved them, twelve light and then the
-            /// same twelve dark, ARGB, in `presenter::Material`'s order.
+            /// roles, light then dark in `presenter::Material`'s order, followed
+            /// by the contrast level and available device accent swatches.
             /// Before `start`, from any thread, so the host boots resolving
             /// every role by them, and on the host's thread again whenever
             /// one changes. Any other count of colours is ignored.
@@ -261,7 +263,7 @@ macro_rules! canvas_jni {
                 let n = ((**env).GetArrayLength.expect("jni"))(env, roles).max(0);
                 let mut words = vec![0i32; n as usize];
                 ((**env).GetIntArrayRegion.expect("jni"))(env, roles, 0, n, words.as_mut_ptr());
-                let Some(palette) = $crate::presenter::Palette::from_words(&words) else {
+                let Some(palette) = $crate::presenter::ReaderPalette::from_words(&words) else {
                     return;
                 };
                 $crate::canvas::colors(palette);
@@ -296,6 +298,20 @@ macro_rules! canvas_jni {
             ) {
                 let answer = (!answer.is_null()).then(|| string(env, answer));
                 with(|h| h.answer(id as u32, answer.as_deref()));
+            }
+
+            /// The reader refused module request `id`.
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_refuseModule(
+                env: *mut JNIEnv,
+                _class: jclass,
+                id: jint,
+                error: jstring,
+                message: jstring,
+            ) {
+                let error = string(env, error);
+                let message = (!message.is_null()).then(|| string(env, message));
+                with(|h| h.refuse_module(id as u32, &error, message.as_deref()));
             }
 
             /// What the reader draws around the page, when that is not what
@@ -686,7 +702,7 @@ macro_rules! canvas_jni {
                 with(|h| h.media(id as u32, key, session as u64, &event, &payload, &state));
             }
 
-            $crate::canvas_jni_scroll!();
+            $crate::canvas_jni_scroll!(); $crate::canvas_jni_drop!();
 
             /// The producer's scale and its scroller statement
             /// (`CanvasHost::scrollers`), or null when unchanged.
@@ -741,8 +757,11 @@ macro_rules! canvas_jni {
                 id: jint,
                 x: jfloat,
                 y: jfloat,
+                tool: jint,
+                at: jlong,
+                primary_x: jfloat, primary_y: jfloat,
             ) {
-                with(|h| h.finger(action, id, x, y));
+                with(|h| h.finger(action, id, x, y, tool, at, (primary_x,primary_y)));
             }
 
             /// What happened in the window the reader made for surface

@@ -503,6 +503,37 @@ fn an_edit_is_the_fields_text_and_the_app_answers_it_by_its_number() {
     assert_eq!(log(&p), heard, "the command's `select`, and no `input`");
 }
 
+#[test]
+fn a_presenter_edit_tells_the_hosted_field_where_to_put_the_caret() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(FORM);
+    p.serve_requests();
+    p.reader_fields(1.0);
+    let name = id(&p, "name");
+    for (value, end) in [("Fern", 4), ("🍃ab", 4), ("", 0)] {
+        let packet = |p: &mut Presenter<()>| told(p).into_iter().find(|f| f.id == name).unwrap();
+        let rev = packet(&mut p).look[15];
+        p.type_text(name, value).unwrap();
+        let field = packet(&mut p);
+        assert_eq!(field.value, value);
+        assert_eq!(field.look[15], rev + 2);
+        assert_eq!(&field.look[16..], &[end, end]);
+    }
+}
+
+#[test]
+fn an_input_handler_can_replace_the_value_before_the_reader_takes_the_caret() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(&FORM.replace("name = value", "name = `!${value}`"));
+    p.serve_requests();
+    p.reader_fields(1.);
+    let name = id(&p, "name");
+    p.type_text(name, "Fern").unwrap();
+    let field = told(&mut p).into_iter().find(|f| f.id == name).unwrap();
+    assert_eq!(field.value, "!Fern");
+    assert_eq!(&field.look[16..], &[5, 5]);
+}
+
 /// LLP 1115.000 §5, ruling 6: the app hears `input` at every change, the
 /// composing text included, and a value it writes meanwhile is held, the
 /// last one, until the composition ends.

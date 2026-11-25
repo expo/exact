@@ -14,6 +14,25 @@ const ROOT = resolve(import.meta.dir, '../..');
 // The runner's normalized set for `net.fetch https://api.castle.test` (as tests/it/request.rs's batch carries it).
 const GRANTS = {version:1,entries:[[1,'net.fetch https://api.castle.test',['fetch','https','api.castle.test',443],null]],error:null,seal:'825ec7a8503217b3'};
 
+test('only event dispatch looks up the script.message receiver', () => {
+  let reads = 0;
+  const realm = vm.createContext({ URL, TextEncoder, TextDecoder, AbortController, AbortSignal: isolatedAbortSignal(), crypto,
+    __exact_host: () => '', console: { error() {} }, exact: { tools: {
+      ping: () => 'pong',
+      get 'script.message'() { reads++; return () => 42; },
+    } } });
+  vm.runInContext(readFileSync(resolve(ROOT, 'js/src/binary.js'), 'utf8'), realm);
+  vm.runInContext(modulePrelude(ROOT), realm);
+  function dispatch(source) {
+    const { call } = JSON.parse(realm.__exact_call(source, '["{}"]', 'tool'));
+    return JSON.parse(realm.__exact_settle(String(call)));
+  }
+  expect(dispatch('event:script.message')).toMatchObject({ tag: 0, value: '42' });
+  expect(dispatch('tool:script.message')).toMatchObject({ tag: 2, kind: 'UnknownSource' });
+  expect(dispatch('tool:ping')).toMatchObject({ tag: 0, value: '"pong"' });
+  expect(reads).toBe(1);
+});
+
 test('the image waiter cannot expose a raw database behind the storage queue', async () => {
   const realm = vm.createContext({ URL, TextEncoder, TextDecoder, AbortController, AbortSignal: isolatedAbortSignal(), crypto,
     __exact_host: () => '', console: { error() {} } });

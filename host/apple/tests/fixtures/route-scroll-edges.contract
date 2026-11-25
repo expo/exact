@@ -1,0 +1,40 @@
+// LLP 1123 D4, D9: the hero pads its text below the navigation bar. The
+// same scroller reaches under the tab bar, which has its own clearance.
+routes nav
+  tab home "/"
+
+component BarHero
+  state topOff = true
+  state bottomOff = false
+  state clearBar = false
+  state short = false
+  action toggleTop
+    topOff = not topOff
+  action toggleBottom
+    bottomOff = not bottomOff
+  action toggleBar
+    clearBar = not clearBar
+  action toggleHeight
+    short = not short
+  view
+    column navigationKey=`${top(nav).id}` position="absolute" inset=0
+      column id="panel-home" role="tabpanel"
+        for e in stack(nav) key=e.id
+          column navigationKey=`${e.id}` position="absolute" inset=0 testId="route"
+            -exact-safe-area=(topOff ? (bottomOff ? "top bottom" : "top") : (bottomOff ? "bottom" : none))
+            navigationBar=(clearBar ? "transparent" : "auto")
+            header
+              text "Window" role="heading" aria-level=1
+            scroll flex=1 min-height=0 testId="list"
+              max-height=(short ? "calc(100vh - var(--exact-safe-area-inset-bottom))" : "none")
+              column padding-top="var(--exact-safe-area-inset-top)" background-color="-exact-system-orange" testId="hero"
+                text "Start" testId="hero-text"
+                button "Top" testId="top" press=toggleTop
+                button "Bottom" testId="bottom" press=toggleBottom
+                button "Bar" testId="bar" press=toggleBar
+                button "Height" testId="height" press=toggleHeight
+                column height=2400
+                text "End" testId="end"
+      row role="tablist"
+        button role="tab" aria-controls="panel-home" aria-selected=true
+          text "Home"

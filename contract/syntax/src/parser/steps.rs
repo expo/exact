@@ -3,7 +3,7 @@
 use super::*;
 
 /// The hosts a test's `on` names, as the driver names them.
-const TEST_HOSTS: [&str; 7] = ["web", "macos", "ios", "tvos", "linux", "windows", "android"];
+pub const TEST_HOSTS: [&str; 7] = ["web", "macos", "ios", "tvos", "linux", "windows", "android"];
 
 impl Parser {
     /// `font "Name" = "path.ttf"`, or a block of `weight [weight] [italic] =
@@ -125,6 +125,7 @@ impl Parser {
                         | Step::AnswerFetch { .. }
                         | Step::AnswerSource { .. }
                         | Step::Prefer { .. }
+                        | Step::PreferExtension { .. }
                 )
         });
         if let Some(late) = late {
@@ -169,6 +170,7 @@ impl Parser {
         for step in &steps {
             let refused = match step {
                 Step::Perf { .. } | Step::ExpectPerf { .. } => Some("a `perf` block measures steps; its `expect perf` lines follow it, and blocks do not nest".to_string()),
+                Step::Fold { .. } => Some("`fold` waits for the simulator hinge on the wall clock, so it cannot run in a `perf` block".to_string()),
                 Step::Background { .. } => Some("`background` waits on iOS and the wall clock, so it cannot run in a `perf` block".to_string()),
                 // `clock +N real`, `clock held` and `clock until` let real
                 // time pass while the agent's clock stands.
@@ -498,6 +500,7 @@ impl Parser {
     fn json_value(&mut self) -> R<String> {
         let token = self.next();
         Ok(match token.kind {
+            TokenKind::Json(raw) => raw,
             TokenKind::Punct(open @ ("{" | "[")) => {
                 let close = if open == "{" { "}" } else { "]" };
                 let mut out = String::from(open);
@@ -554,16 +557,41 @@ impl Parser {
             "prefer" if self.at_ident("midi") => return self.prefer_midi(span),
             "prefer" => {
                 // A module's permission is dotted (`permission.notifications`).
-                let (mut name, _) = self.ident()?;
+                let (mut name, name_span) = self.ident()?;
                 while self.eat_punct(".") {
                     name.push('.');
                     name.push_str(&self.ident()?.0);
+                }
+                if prefer_key(&name) == "extension" && name != "extension" {
+                    return Err(SyntaxError { id: "syntax-expected-step", message: "write `prefer extension <extension>.<name>=<JSON>|clear`".into(), span: name_span });
+                }
+                if name == "extension" {
+                    let (key, _) = self.ident()?;
+                    if !key.contains('.') {
+                        return self.err("syntax-expected-step", "expected <extension>.<name>=<JSON>|clear");
+                    }
+                    self.expect_punct("=")?;
+                    let value = if self.at_ident("clear") {
+                        self.next();
+                        None
+                    } else {
+                        Some(self.json_value()?)
+                    };
+                    self.newline()?;
+                    return Ok(Step::PreferExtension { key, value, span });
+                }
+                if prefer_key(&name) == "mode" && matches!(self.peek2(), TokenKind::Punct("=")) {
+                    return Err(SyntaxError {
+                        id: "syntax-drive-only-preference",
+                        message: "`prefer mode` pins a mode in an agent drive. Use `prefer mode <axis>=<value>` there".into(),
+                        span: name_span,
+                    });
                 }
                 let value = match self.next() {
                     Token { kind: TokenKind::Ident(value) | TokenKind::Str(value), .. } => value,
                     token => return Err(SyntaxError {
                         id: "syntax-expected-step",
-                        message: "`prefer` takes a media feature, a page fact (including `root-font-size`) or a module permission and its value. Quote numbers and values with punctuation, as `prefer root-font-size \"24\"` or `prefer permission.notifications granted`. Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now".into(),
+                        message: "`prefer` takes a media feature, a page fact (including `root-font-size`) or a module permission and its value. Quote numbers and values with punctuation, as `prefer root-font-size \"24\"` or `prefer permission.notifications granted`. Use `prefer extension <extension>.<name>=<JSON>|clear` for a package substitute. Folds (`posture`, `segments`, `gap`) and mode pins require an agent drive".into(),
                         span: token.span,
                     }),
                 };
@@ -580,10 +608,11 @@ impl Parser {
                     return self.drag_step(target, span);
                 }
                 let form = match self.peek_kind().clone() {
-                    TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "wheel" => {
+                    TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "swipe" || w == "wheel" => {
                         self.next();
                         match w.as_str() {
                             "hover" => TapForm::Hover,
+                            "dblclick" if self.at_ident("touch") => { self.next(); TapForm::DoubleTap }
                             "dblclick" => TapForm::Dblclick,
                             "contextmenu" => TapForm::Contextmenu,
                             "pinch" => {
@@ -605,6 +634,31 @@ impl Parser {
                                     None
                                 };
                                 TapForm::Pinch { scale, at }
+                            }
+                            // `tap "id" swipe <direction> [at x y]`: the platform's discrete swipe (LLP 1057.001 §8.3).
+                            "swipe" => {
+                                let direction = match self.peek_kind().clone() {
+                                    TokenKind::Ident(d) if ["left", "right", "up", "down"].contains(&d.as_str()) => {
+                                        self.next();
+                                        d
+                                    }
+                                    _ => {
+                                        return self.err(
+                                            "syntax-expected-step",
+                                            "`swipe` takes a direction: left, right, up or down",
+                                        )
+                                    }
+                                };
+                                let at = if self.at_ident("at") {
+                                    self.next();
+                                    Some((
+                                        self.step_number("the swipe's x in the node's box")?,
+                                        self.step_number("the swipe's y in the node's box")?,
+                                    ))
+                                } else {
+                                    None
+                                };
+                                TapForm::Swipe { direction, at }
                             }
                             // `tap "id" wheel <dx> <dy>`: the agent's wheel, so a Mac's scroll can be tested.
                             "wheel" => {
@@ -769,6 +823,13 @@ impl Parser {
                     );
                 }
                 Step::Authorize { cancel, span }
+            }
+            "fold" => {
+                let degrees = self.step_number("a fold angle from 0 through 180 degrees")?;
+                if !(0.0..=180.0).contains(&degrees) {
+                    return self.err("syntax-expected-step", "fold takes a hinge angle from 0 through 180 degrees");
+                }
+                Step::Fold { degrees, span }
             }
             "background" => {
                 let ms = self.step_number("the time away in milliseconds")?;
@@ -1291,6 +1352,7 @@ pub(super) const LAUNCH: [&str; 13] = [
 pub(super) fn launch_word(step: &Step) -> &'static str {
     match step {
         Step::Prefer { .. } => "prefer",
+        Step::PreferExtension { .. } => "prefer extension",
         Step::Size { .. } => "size",
         Step::At { .. } => "at",
         Step::Epoch { .. } => "epoch",
@@ -1337,6 +1399,9 @@ pub fn same_launch(a: &Step, b: &Step) -> bool {
     }
     if let (Step::Prefer { name: x, .. }, Step::Prefer { name: y, .. }) = (a, b) {
         return prefer_key(x) == prefer_key(y);
+    }
+    if let (Step::PreferExtension { key: x, .. }, Step::PreferExtension { key: y, .. }) = (a, b) {
+        return x == y;
     }
     let word = launch_word(a);
     !word.is_empty() && word == launch_word(b)
@@ -1387,6 +1452,7 @@ fn prefer_key(name: &str) -> &str {
         "segments",
         "gap",
         "mode",
+        "extension",
         "midi.state",
         "midi.inputs",
         "midi.outputs",

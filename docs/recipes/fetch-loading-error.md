@@ -28,7 +28,7 @@ component App
             text p testId=`post-${i}`
 ```
 
-Use nonempty IDs since `empty().owner` is `""`. A failed refresh keeps the owner's rows. An empty reply clears them.
+`empty().owner` is `""`. Use nonempty IDs. A [failed refresh](progressive-tabs.md) keeps the owner’s rows. Empty replies clear them.
 
 ```ts
 import type { Answer, Result } from './app.contract.d.ts';

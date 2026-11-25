@@ -45,7 +45,7 @@ class ScrollTouchTest {
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun under(x: Float, y: Float, done: (IntArray) -> Unit) { answers.addLast(done) }
         @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long, at: Long, history: MotionEvent?): Boolean { touches.add(action); return false }
-        @Implementation fun finger(action: Int, id: Int, x: Float, y: Float, waitMs: Long) = false
+        @Implementation fun finger(action: Int, id: Int, x: Float, y: Float, tool: Int, at: Long, primaryX: Float, primaryY: Float, waitMs: Long) = false
         /** What exact2 was told of the touch itself: down, then lifted. */
         val touching = ArrayList<Boolean>()
         @Implementation fun touching(on: Boolean) { touching.add(on) }

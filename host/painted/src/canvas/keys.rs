@@ -70,23 +70,44 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
+    /// Subscribe the activity to Back targets. The first call delivers the layers already open.
+    pub fn hosted_back(&mut self, notify: Option<fn(&[i32])>) {
+        self.p.hosted_back(notify)
+    }
+
     /// System Back, in the presenter's order (LLP 1115.001 D6). Whether the
     /// app took it; when it did not, it has nowhere to go back to and the
     /// activity goes.
-    pub fn back(&mut self) -> bool {
+    pub fn back(&mut self, kind: i32, id: u32) -> i32 {
         self.end_scroll();
         let now = self.now();
-        let taken = self.p.system_back(now);
-        self.force |= taken;
+        let taken = if kind == 0 {
+            i32::from(self.p.system_back(now))
+        } else {
+            self.p.dispatched_back(kind, id, now)
+        };
+        self.force |= taken == 1;
         taken
     }
 
     /// Predictive Back as it goes (Android 14's `OnBackAnimationCallback`):
     /// the presenter previews the pop or the sheet's close; Back itself
     /// commits it ([`CanvasHost::back`]).
-    pub fn back_progress(&mut self, phase: i32, progress: f32, edge: i32) -> bool {
+    pub fn back_progress(
+        &mut self,
+        kind: i32,
+        id: u32,
+        phase: i32,
+        progress: f32,
+        edge: i32,
+    ) -> bool {
         let now = self.now();
-        let previews = self.p.back_progress(phase, progress, edge, now);
+        let previews = if kind == 0 {
+            self.p.back_progress(phase, progress, edge, now)
+        } else {
+            self.p
+                .dispatched_progress(kind, id, phase, progress, edge, now)
+        };
         self.force = true;
         previews
     }

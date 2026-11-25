@@ -8,8 +8,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { pollUntil } from './agent-launch.mjs';
-import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, androidPermissionPrompt, gradleApp, readerReply, reverseRoot } from './agent-android.mjs';
+import { launchEnvironment, launchFacts, pollUntil } from './agent-launch.mjs';
+import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, androidPermissionPrompt, gradleApp, reverseRoot } from './agent-android.mjs';
 
 const focusCommand = "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'";
 const screenFixtures = resolve(import.meta.dir, 'fixtures/android-screen');
@@ -261,13 +261,15 @@ test('the Android reader uses a variant\'s package for lookup, launch and drive 
     writeFileSync(record, JSON.stringify({ package: 'com.example.android_app' }));
     expect(() => androidDeploy(fixture.app, fixture.bin, fixture.env)).toThrow(`installs as com.example.android_app, not ${id}: build it again (bun exact.mjs android --variant dev)`);
     writeFileSync(record, JSON.stringify({ package: id }));
-    const deployed = androidDeploy(fixture.app, fixture.bin, fixture.env);
+    const substitutes = launchEnvironment(launchFacts({substitutes: {"store.active": true}}), 'android').EXACT_AGENT_SUBSTITUTES;
+    const deployed = androidDeploy(fixture.app, fixture.bin, { ...fixture.env, EXACT_AGENT_SUBSTITUTES: substitutes });
     expect(deployed.dir).toBe(`/data/local/tmp/exact/${id}`);
     child = deployed.spawn();
     const closed = once(child, 'close');
     child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
     expect(await closed).toEqual([0, null]);
     const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.some(args => args[0] === 'shell' && args[1].includes("x_agent_substitutes") && args[1].includes(substitutes))).toBe(true);
     expect(commands.some(args => args[0] === 'shell' && args[1].includes(`pm path '${id}'`))).toBe(true);
     expect(commands.some(args => args[0] === 'shell' && args[1].includes(`${id}/dev.exact.app.MainActivity`))).toBe(true);
     expect(commands.some(args => args.join(' ').includes(fixture.app.id))).toBe(false);
@@ -339,25 +341,6 @@ for (const [api, controller] of [[29, 'com.android.permissioncontroller'], [30, 
   } finally {
     if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
     fixture.dispose();
-  }
-});
-
-test('the Android carrier waits for the hold duration acknowledged by the host', async () => {
-  const request = { op: 'tap', phase: 'hold', ms: 250 };
-  const accepted = '{"phase":"hold","waitMs":250}';
-  const waiting = Promise.withResolvers(), elapsed = Promise.withResolvers();
-  let delivered = false;
-  const reply = readerReply(request, () => accepted, ms => {
-    waiting.resolve(ms);
-    return elapsed.promise;
-  }).then(line => { delivered = true; return line; });
-  expect(await Promise.race([waiting.promise, reply])).toBe(250);
-  await new Promise(resolve => setImmediate(resolve));
-  expect(delivered).toBe(false);
-  elapsed.resolve();
-  expect(await reply).toBe(accepted);
-  for (const line of ['{"phase":"hold","clock":250}', '{"error":"no contact is down"}']) {
-    expect(await readerReply(request, () => line, () => { throw new Error('unexpected wait'); })).toBe(line);
   }
 });
 
@@ -1297,6 +1280,7 @@ test('a locked Gradle failure keeps its output and names lock repair only for de
       ['Resolved a module which is not part of the dependency lock state', 1, true],
       ['Did not resolve a module which is part of the dependency lock state', 1, true],
       ['Strict dependency locking is enabled and no lock state exists', 1, true],
+      ['Dependency lock state: Gradle lock lowers shell dependency. Run the named --write-locks command', 1, false],
       ['Compilation failed: unresolved reference', 1, false],
       ['Timeout waiting to lock the build cache', 1, false],
       ['Dependency verification failed in an expected fixture', 0, false],

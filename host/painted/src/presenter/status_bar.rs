@@ -19,6 +19,9 @@ pub(super) struct Choice {
 struct Generation {
     host: u64,
     epoch: u64,
+    roles: u64,
+    bar_root: Option<ViewId>,
+    sheet_open: bool,
     dark: bool,
     viewport: exact_runner::Viewport,
     split: Option<(ViewId, bool)>,
@@ -43,7 +46,11 @@ impl<D: DataSource> Presenter<D> {
         // synchronizes route visibility from that same tree before chrome is read.
         // Schemes, viewport preferences and split visibility can change without
         // a kernel commit. Scroll offsets cannot change the winning declaration.
+        let _roles = self.host.runner().bind_roles();
         let generation = Generation {
+            roles: exact_kernel::style::roles::generation(),
+            bar_root: self.host.bars().root,
+            sheet_open: self.sheet_open(),
             host: self.hosts,
             epoch: self.host.kernel().epoch(),
             dark: self.dark(),
@@ -74,11 +81,12 @@ impl<D: DataSource> Presenter<D> {
             .resolutions
             .set(self.window.status_bar.resolutions.get() + 1);
         let kernel = self.host.kernel();
+        let [status, navigation] = self.bar_icon_appearance();
         let mut choice = Choice {
             style: "default",
             source: None,
-            light_icons: self.dark(),
-            navigation_light_icons: self.dark(),
+            light_icons: status.unwrap_or_else(|| self.dark()),
+            navigation_light_icons: navigation.unwrap_or_else(|| self.dark()),
             hidden: false,
             hidden_source: None,
         };

@@ -233,8 +233,11 @@ impl<D: DataSource> Presenter<D> {
     /// it, at its scheme's registered `protocol_handlers` template when there
     /// is one (`app::incoming_location`). The refusal, else `None`.
     pub fn open_location(&mut self, href: &str, now_ms: f64) -> Option<String> {
-        let location = crate::app::incoming_location_at(href, self.host.web_mount.as_ref());
-        if !self.host.runner().route_matches(&location) {
+        let Some(location) = crate::app::incoming_location_at(href, &self.host.incoming_links)
+        else {
+            return Some(format!("open {href}: URL is outside this app"));
+        };
+        if !self.host.runner().route_accepts(&location) {
             return Some(format!("open {location}: no route matches it"));
         }
         let root = self.navigation_root().filter(|root| {
@@ -257,7 +260,10 @@ impl<D: DataSource> Presenter<D> {
     /// nothing showing it (LLP 1133.017 D7: Android's boot for a wake), read
     /// as `EXACT_LAUNCH_URL` is at a boot. The refusal, else `None`.
     pub fn launch_location(&mut self, href: &str, now_ms: f64) -> Option<String> {
-        let location = crate::app::incoming_location_at(href, self.host.web_mount.as_ref());
+        let Some(location) = crate::app::incoming_location_at(href, &self.host.incoming_links)
+        else {
+            return Some(format!("launch {href}: URL is outside this app"));
+        };
         self.launch_at(&location, now_ms)
     }
 
@@ -411,8 +417,11 @@ component App
 
     #[test]
     fn a_url_from_outside_goes_to_the_root_when_it_routes_it() {
+        // The compiler supplies a fallback even when the source omits one.
+        let mut plan = exact_plan::Plan::decode(&crate::test_plan(SRC)).unwrap();
+        plan.routes.retain(|route| !route.notfound);
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan(SRC),
+            &plan.encode(),
             (),
             (400., 300.),
             1.,
@@ -452,6 +461,31 @@ component App
         );
     }
 
+    #[test]
+    fn a_url_from_outside_uses_the_notfound_route() {
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(SRC),
+            (),
+            (400., 300.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        assert!(!p.host.runner().route_matches("/nope-missing"));
+        assert_eq!(
+            p.open_location("shelf:///nope-missing?from=link#detail", 10.),
+            None
+        );
+        let change = p.host.router_op().unwrap();
+        assert_eq!(change.location(), "/nope-missing?from=link#detail");
+        assert_eq!(change.visits.len(), 2);
+        assert_eq!(p.host.kernel().find_by_test_id("route-notfound").len(), 1);
+        assert_eq!(p.open_location("/note/7", 20.), None);
+        assert_eq!(p.host.kernel().find_by_test_id("route-note").len(), 1);
+    }
+
     impl Presenter<()> {
         fn paragraph_runs_with_href(&mut self, reader: &str) -> Vec<String> {
             self.frame();
@@ -466,6 +500,97 @@ component App
                 .filter(|h| !h.is_empty())
                 .collect()
         }
+    }
+
+    #[test]
+    fn android_open_url_waits_for_the_intent_and_keeps_declarations_out_of_links() {
+        let source = r#"component App
+  state status = ""
+  action hear(value: string)
+    status = status + value
+  view
+    input id="result" change=hear
+"#;
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (300., 500.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        p.compat = r#"{"inputs":{"capabilities":{"openUrlSchemes":["demo","unhandled","file","intent"]}}}"#.into();
+        p.serve_requests();
+        let status = |p: &Presenter<()>| {
+            p.host
+                .runner()
+                .slot("status")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let open = |p: &mut Presenter<()>, url: &str| {
+            p.open_url(&[
+                exact_plan::Value::from(url),
+                exact_plan::Value::from("result"),
+            ]);
+        };
+        assert!(
+            !p.leave("demo:///links"),
+            "an inline link keeps its own policy"
+        );
+        p.take_requests();
+        open(&mut p, "DeMo:///links?from=test");
+        let words = p
+            .take_requests()
+            .expect("the declared scheme reaches Android");
+        assert_eq!(words[0], 1);
+        let accepted = words[1] as u32;
+        open(&mut p, "unhandled://item");
+        let missing = p.take_requests().unwrap()[1] as u32;
+        assert_ne!(accepted, missing);
+        p.requests_reset();
+        assert_eq!(status(&p), "");
+        assert!(p.answer_request(missing, Some("failed")));
+        assert!(p.answer_request(accepted, Some("opened")));
+        assert!(!p.answer_request(accepted, Some("opened")));
+        assert_eq!(status(&p), "failedopened");
+        p.take_requests();
+        for url in [
+            "unlisted:thing",
+            "file:///path",
+            "intent:thing",
+            "demo:\0bad",
+        ] {
+            open(&mut p, url);
+            assert!(p.take_requests().is_none());
+        }
+        assert_eq!(status(&p), "failedopenedfailedfailedfailedfailed");
+        open(&mut p, "https://example.com");
+        let old = p.take_requests().unwrap()[1] as u32;
+        p.open_url(&[exact_plan::Value::from("https://example.com/queued")]);
+        p.opens_replaced();
+        assert!(!p.answer_request(old, Some("opened")));
+        let queued = p
+            .take_requests()
+            .expect("an issued link still opens after reload");
+        assert_eq!(queued[0], 1);
+        open(&mut p, " app-settings: ");
+        assert!(p.take_requests().is_none());
+
+        p.agent = true;
+        let before = status(&p);
+        open(&mut p, "demo:///links");
+        assert_eq!(status(&p), before + "opened");
+        assert!(p.take_requests().is_none());
+        assert!(p
+            .host
+            .runner()
+            .journal()
+            .any(|s| s.contains("openURL demo: journaled under the agent")));
     }
 
     #[test]

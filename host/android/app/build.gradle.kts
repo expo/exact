@@ -3,14 +3,30 @@
 // from the manifest (app.json `host.android.id`, default `app.id`; `app.name`), as a selected variant has them (LLP 1030.008).
 // `bun scripts/agent-android.mjs build <name> --apk` builds the app's library (apps/<name>/android), puts it and the
 // app's assets under this module's build directory, and runs `:app:assembleRelease`.
+import com.android.build.api.artifact.ScopedArtifact
+import com.android.build.api.variant.ScopedArtifacts
+import java.net.URLClassLoader
+import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.ZipFile
+import org.objectweb.asm.ClassReader
+import org.gradle.api.artifacts.component.ModuleComponentSelector
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import org.gradle.api.internal.artifacts.ivyservice.ivyresolve.strategy.DefaultVersionComparator
+import org.gradle.api.internal.artifacts.ivyservice.ivyresolve.strategy.VersionParser
 import groovy.json.JsonSlurper
+import com.android.build.api.instrumentation.*
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.Opcodes
+import org.objectweb.asm.tree.*
 
 plugins { id("com.android.application") }
 
+val carService = providers.gradleProperty("carAppService").orNull?.takeIf { it.isNotEmpty() }
 val developmentApk = providers.gradleProperty("developmentApk").orNull == "1"
 
-// -Pcompose=1: the app's plan has a date or time control, and its picker is Compose Material 3's (LLP 1115.001.000
-// D1-D2; `agent-android.mjs` reads the plan's uses). Without it the framework's dialogs show, and Compose is not linked.
+// The plan's pickers or an app's Kotlin use Compose (LLP 1115.001.000 D2).
 val compose = providers.gradleProperty("compose").orNull == "1"
 if (compose) apply(plugin = "org.jetbrains.kotlin.plugin.compose")
 // -Pvideo=1: the plan has a `video` or an `audio`, or the build is a development one, and Media3's player (`:video`) is
@@ -126,6 +142,7 @@ android {
     // app's activity, scripts/share-target.mjs, LLP 1133.024 D5), merged into the shell's manifest from the release source set's: an app that grants no device asks
     // for none, and one that uses no such package runs nothing beyond the shell's activity.
     val fragment = providers.gradleProperty("manifestFragment").orNull?.let { file(it).readText() }?.takeIf { it.isNotBlank() }
+    if (carService != null) sourceSets["main"].kotlin.directories.add("src/car/java")
     // The kernel's symbol vocabulary and Material shapes (LLP 1116.007 D3.1, LLP 1115.001 D14), including every role
     // for computed dynamic/pinned items: a shortcut's and a control's icon. The lookup also keeps static and runtime
     // resolution the same; the shortcuts below write a drawable for each role.
@@ -423,6 +440,28 @@ if (maven.isNotEmpty()) {
         lockMode.set(LockMode.STRICT)
         lockFile.set(file(providers.gradleProperty("mavenLock").get()))
     }
+    val incompleteProbes = ConcurrentHashMap<String, Throwable>()
+    tasks.register("checkMavenLock") {
+        doLast {
+            val release = listOf(configurations.getByName("releaseRuntimeClasspath"), configurations.getByName("releaseCompileClasspath"))
+            for (configuration in (release + configurations.filter { it.isCanBeResolved }).distinct()) {
+                configuration.incoming.resolutionResult.allDependencies.filterIsInstance<UnresolvedDependencyResult>()
+                    .firstOrNull()?.let { throw it.failure }
+                incompleteProbes[configuration.name]?.let { throw it }
+            }
+        }
+    }
+    val appMaven = configurations.dependencyScope("appMaven").get()
+    configurations.implementation.get().extendsFrom(appMaven)
+    dependencies {
+        maven.forEach { coordinate ->
+            val library = create(coordinate) as ExternalModuleDependency
+            if (carService != null && coordinate.startsWith("androidx.car.app:app:")) {
+                library.version { strictly(coordinate.substringAfterLast(':')) }
+            }
+            add(appMaven.name, library)
+        }
+    }
     if (gradle.startParameter.isWriteDependencyLocks) {
         // Lock constraints can expose transitive edges absent from an unconstrained graph. Resolve with the
         // selected versions constrained before recording the lock, as the next strict build will resolve it.
@@ -433,10 +472,52 @@ if (maven.isNotEmpty()) {
                 shouldResolveConsistentlyWith(unlocked)
             }
         }
+    } else {
+        val parser = VersionParser()
+        val order = DefaultVersionComparator().asVersionComparator()
+        configurations.configureEach {
+            incoming.afterResolve {
+                // A recursive copy inherits the resolution listeners of its source.
+                if (this !== this@configureEach.incoming) return@afterResolve
+                // Gradle exposes a lock entry as a strict constraint on the root, even when a conflicting
+                // direct dependency cannot resolve. Its selected components would omit that module.
+                val locked = resolutionResult.rootComponent.get().dependencies.filter { it.isConstraint }
+                    .mapNotNull { it.requested as? ModuleComponentSelector }
+                    .filter { it.versionConstraint.strictVersion.isNotEmpty() }
+                    .associate { it.moduleIdentifier to it.versionConstraint.strictVersion }
+                if (locked.isEmpty()) return@afterResolve
+                val unlocked = copyRecursive()
+                unlocked.resolutionStrategy.deactivateDependencyLocking()
+                // Only inspect metadata here. The build verifies every input to its locked classpath.
+                unlocked.resolutionStrategy.disableDependencyVerification()
+                val graph = unlocked.incoming.resolutionResult
+                val root = graph.rootComponent.get()
+                val shell = hierarchy.filter { it != appMaven }.flatMap { it.dependencies.withType<ExternalModuleDependency>() }
+                    .map { it.module }.toSet()
+                val edges = graph.allDependencies
+                edges.filterIsInstance<UnresolvedDependencyResult>().firstOrNull()?.let { incompleteProbes[name] = it.failure }
+                val drift = edges.mapNotNull { edge ->
+                    val request = edge.requested as? ModuleComponentSelector ?: return@mapNotNull null
+                    val fromShell = if (edge.from == root) request.moduleIdentifier in shell else edge.from.id is ProjectComponentIdentifier
+                    if (edge.isConstraint || !fromShell) return@mapNotNull null
+                    val held = locked[request.moduleIdentifier] ?: return@mapNotNull null
+                    val selected = (edge as? ResolvedDependencyResult)?.selected?.moduleVersion?.version ?: return@mapNotNull null
+                    if (order.compare(parser.transform(selected), parser.transform(held)) <= 0) return@mapNotNull null
+                    val declaration = request.version.ifEmpty { "by platform" }
+                    val selection = if (selected != request.version) ", selected $selected" else ""
+                    "${request.moduleIdentifier} (declared $declaration$selection, locked $held)"
+                }.distinct().sorted()
+                if (drift.isNotEmpty()) {
+                    val command = providers.gradleProperty("androidLockCommand").orNull ?: if (appDir.resolve("exact.mjs").isFile)
+                        "in $appDir: bun exact.mjs android --write-locks"
+                    else "in ${rootDir.resolve("../..").canonicalPath}: bun scripts/agent-android.mjs build $app --apk --write-locks with EXACT_APP_DIR set to $appDir"
+                    throw GradleException("Gradle lock lowers shell dependency on $name: ${drift.joinToString()}. Run $command")
+                }
+            }
+        }
     }
 }
 dependencies {
-    maven.forEach { implementation(it) }
     implementation(project(":canvas"))
     if (video) implementation(project(":video"))
     if (backgroundPlayback) {
@@ -450,5 +531,251 @@ dependencies {
         implementation(platform(libs.compose.bom))
         implementation(libs.compose.material3)
         implementation("androidx.core:core:1.16.0")
+    }
+}
+
+abstract class CarDescriptor : DefaultTask() {
+    @get:OutputDirectory abstract val resources: DirectoryProperty
+    @TaskAction fun writeDescriptor() {
+        val xml = resources.get().file("xml/automotive_app_desc.xml").asFile
+        xml.parentFile.mkdirs()
+        xml.writeText("<automotiveApp><uses name=\"template\" /></automotiveApp>")
+    }
+}
+
+// AndroidX makes onBind final. Wrap the Binder returned by its pinned implementation.
+abstract class CarHostBinder : AsmClassVisitorFactory<InstrumentationParameters.None> {
+    override fun isInstrumentable(classData: ClassData) = classData.className == "androidx.car.app.CarAppService"
+    override fun createClassVisitor(classContext: ClassContext, nextClassVisitor: ClassVisitor): ClassVisitor =
+        object : ClassNode(Opcodes.ASM9) {
+            override fun visitEnd() {
+                val bind = methods.single { it.name == "onBind" && it.desc == "(Landroid/content/Intent;)Landroid/os/IBinder;" }
+                val returns = bind.instructions.toArray().filter { it.opcode == Opcodes.ARETURN }
+                require(returns.isNotEmpty()) { "CarAppService.onBind has no binder to validate" }
+                for (ret in returns) bind.instructions.insertBefore(ret, InsnList().apply {
+                    add(VarInsnNode(Opcodes.ALOAD, 0))
+                    add(MethodInsnNode(Opcodes.INVOKESTATIC, "dev/exact/car/PoiCarAppServiceKt", "validatedBinder",
+                        "(Landroid/os/IBinder;Landroidx/car/app/CarAppService;)Landroid/os/IBinder;", false))
+                })
+                accept(nextClassVisitor)
+            }
+        }
+}
+
+// A Maven dependency contributes its own manifest after Exact checks the package declaration.
+abstract class CheckCarManifest : DefaultTask() {
+    @get:Optional @get:InputFile @get:PathSensitive(PathSensitivity.NONE) abstract val approvedFragment: RegularFileProperty
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE) abstract val merged: RegularFileProperty
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) abstract val jars: ListProperty<RegularFile>
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) abstract val classes: ListProperty<Directory>
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) abstract val kotlinSources: ConfigurableFileCollection
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) abstract val ownerSources: ConfigurableFileCollection
+    @get:Optional @get:Classpath abstract val compilerJar: RegularFileProperty
+    @get:Input abstract val ownerDir: Property<String>
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) abstract val libraryResources: ConfigurableFileCollection
+    @get:Input abstract val service: Property<String>
+    @get:Input abstract val maps: Property<Boolean>
+
+    // The JVM records the source basename. On a collision, use the pinned Gradle distribution's
+    // Kotlin parser to identify the top-level declaration without interpreting its implementation.
+    private fun declaringSources(files: List<File>, name: String): List<File> {
+        if (files.size < 2) return files
+        val libraries = compilerJar.get().asFile.parentFile.listFiles()!!.filter { it.extension == "jar" }.map { it.toURI().toURL() }
+        return URLClassLoader(libraries.toTypedArray(), ClassLoader.getPlatformClassLoader()).use { loader ->
+            fun type(name: String) = loader.loadClass("org.jetbrains.kotlin.$name")
+            val disposable = type("com.intellij.openapi.Disposable")
+            val disposer = type("com.intellij.openapi.util.Disposer")
+            val lifetime = disposer.getMethod("newDisposable").invoke(null)
+            try {
+                val config = type("config.CompilerConfiguration")
+                val mode = type("cli.jvm.compiler.EnvironmentConfigFiles")
+                val environment = type("cli.jvm.compiler.KotlinCoreEnvironment")
+                val env = environment.getMethod("createForProduction", disposable, config, mode).invoke(null, lifetime,
+                    config.getConstructor().newInstance(), mode.getField("JVM_CONFIG_FILES").get(null))
+                val factory = type("psi.KtPsiFactory")
+                val parser = factory.getConstructor(type("com.intellij.openapi.project.Project"), Boolean::class.javaPrimitiveType)
+                    .newInstance(environment.getMethod("getProject").invoke(env), false)
+                val parse = factory.getMethod("createFile", String::class.java, String::class.java)
+                val declarations = type("psi.KtFile").getMethod("getDeclarations")
+                val klass = type("psi.KtClassOrObject")
+                val fqName = klass.getMethod("getFqName")
+                files.filter { source ->
+                    val file = parse.invoke(parser, source.name, source.readText())
+                    (declarations.invoke(file) as List<*>).any { klass.isInstance(it) && fqName.invoke(it)?.toString() == name }
+                }
+            } finally { disposer.getMethod("dispose", disposable).invoke(null, lifetime) }
+        }
+    }
+
+    // Project scope excludes Maven classes. The exact binary name and Kotlin SourceFile identify
+    // which implementation supplied the class Android will instantiate.
+    private fun checkClass(service: String) {
+        val path = service.replace('.', '/') + ".class"
+        val bytes = classes.get().map { it.asFile.resolve(path) }.filter { it.isFile }.map { it.readBytes() } +
+            jars.get().mapNotNull { jar -> ZipFile(jar.asFile).use { zip -> zip.getEntry(path)?.let { zip.getInputStream(it).readBytes() } } }
+        require(bytes.size == 1) { "carAppService $service must name a compiled class from the declaring package's Kotlin" }
+        val cls = ClassNode()
+        ClassReader(bytes.single()).accept(cls, 0)
+        val owner = File(ownerDir.get()).canonicalFile
+        val inputs = ownerSources.files.mapTo(mutableSetOf()) { it.canonicalFile }
+        val candidates = kotlinSources.files.filter { it.name == cls.sourceFile }.map { it.canonicalFile }.distinct()
+        val sources = declaringSources(candidates, service)
+        require(cls.sourceFile?.endsWith(".kt") == true && sources.isNotEmpty() &&
+            sources.all { source -> source in inputs && generateSequence(source.parentFile) { it.parentFile }.firstOrNull { it.resolve("package.json").isFile } == owner }) {
+            "carAppService $service must come from a Kotlin source in its declaring package (found ${cls.sourceFile})"
+        }
+        with(cls) {
+            val base = "dev/exact/car/PoiCarAppService"
+            require(superName == base && interfaces.isEmpty() && access and Opcodes.ACC_PUBLIC != 0 && access and Opcodes.ACC_ABSTRACT == 0) {
+                "$service must extend dev.exact.car.PoiCarAppService directly for its final createHostValidator"
+            }
+            require(methods.any { it.name == "<init>" && it.desc == "()V" && it.access and Opcodes.ACC_PUBLIC != 0 }) {
+                "$service needs a public no-argument constructor"
+            }
+            for (method in methods) {
+                if (method.name == "<init>" && method.desc == "()V") {
+                    val code = method.instructions.toArray().filter { it.opcode >= 0 }
+                    require(code.size == 3 && (code[0] as? VarInsnNode)?.let { it.opcode == Opcodes.ALOAD && it.`var` == 0 } == true &&
+                        (code[1] as? MethodInsnNode)?.let { it.opcode == Opcodes.INVOKESPECIAL && it.owner == base && it.name == "<init>" && it.desc == "()V" } == true &&
+                        code[2].opcode == Opcodes.RETURN && method.tryCatchBlocks.isEmpty()) {
+                        "$service must have an empty constructor because Android constructs it before host validation"
+                    }
+                } else {
+                    require(method.name == "onCreateSession" ||
+                        method.access and Opcodes.ACC_PRIVATE != 0 && !method.name.startsWith("<")) {
+                        "$service cannot define ${method.name} before host validation; put its car code in onCreateSession"
+                    }
+                }
+            }
+            require(methods.any { it.name == "onCreateSession" && it.desc in setOf("()Landroidx/car/app/Session;", "(Landroidx/car/app/SessionInfo;)Landroidx/car/app/Session;") }) {
+                "$service must override onCreateSession"
+            }
+        }
+    }
+
+    @TaskAction fun checkManifest() {
+        val file = merged.get().asFile
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        factory.isNamespaceAware = true
+        val doc = factory.newDocumentBuilder().parse(file)
+        val ns = "http://schemas.android.com/apk/res/android"
+        fun org.w3c.dom.NodeList.elements() = (0 until length).map { item(it) as org.w3c.dom.Element }
+        fun org.w3c.dom.Element.name() = getAttributeNS(ns, "name")
+        val expected = service.get()
+        val actual = doc.getElementsByTagName("service").elements().filter { component ->
+            component.getElementsByTagName("action").elements().any { it.name() == "androidx.car.app.CarAppService" }
+        }.map { it.name() }
+        require(actual == listOf(expected).filter { it.isNotEmpty() }) {
+            "Merged CarAppService declarations $actual must match the package's carAppService ${expected.ifEmpty { "(none)" }}"
+        }
+        val mapEntries = listOf("uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m").flatMap { tag ->
+            doc.getElementsByTagName(tag).elements().filter { it.name() == "androidx.car.app.MAP_TEMPLATES" }
+        }
+        require(if (maps.get()) mapEntries.singleOrNull()?.let { it.tagName == "uses-permission" && it.attributes.length == 1 } == true else mapEntries.isEmpty()) {
+            "Merged MAP_TEMPLATES must match the carAppService package's permissions, without SDK or flag restrictions"
+        }
+        val app = doc.getElementsByTagName("application").elements().single()
+        if (expected.isEmpty()) {
+            val reserved = setOf("com.google.android.gms.car.application", "androidx.car.app.minCarApiLevel")
+            val stray = app.getElementsByTagName("meta-data").elements().firstOrNull { it.parentNode == app && it.name() in reserved }
+            require(stray == null) { "Merged application metadata ${stray?.name()} requires a carAppService" }
+        } else {
+            // Compare the installed entries with the shape the package allow-list actually emitted.
+            val tools = "http://schemas.android.com/tools"
+            val fragment = "<manifest xmlns:android=\"$ns\" xmlns:tools=\"$tools\">" + approvedFragment.get().asFile.readText() + "</manifest>"
+            val approved = factory.newDocumentBuilder().parse(fragment.byteInputStream())
+            fun org.w3c.dom.Element.children() = (0 until childNodes.length).mapNotNull { childNodes.item(it) as? org.w3c.dom.Element }
+            fun shape(node: org.w3c.dom.Element): List<Any> {
+                val attributes = (0 until node.attributes.length).map { node.attributes.item(it) }.filter { it.namespaceURI == ns }
+                return listOf(node.tagName, attributes.associate { it.localName to it.nodeValue }, node.children().map(::shape))
+            }
+            for (entry in approved.getElementsByTagName("*").elements()) {
+                when (entry.getAttributeNS(tools, "node")) {
+                    "replace" -> {
+                        val installed = app.children().singleOrNull { it.tagName == entry.tagName && it.name() == entry.name() }
+                        require(installed != null && shape(installed) == shape(entry)) { "Merged ${entry.name()} differs from the approved carAppService entry" }
+                    }
+                    "remove" -> if (entry.name().startsWith("androidx.car.app.")) {
+                        val authority = entry.getAttributeNS(ns, "authorities")
+                        require(doc.getElementsByTagName(entry.tagName).elements().none {
+                            it.name() == entry.name() || authority.isNotEmpty() && it.getAttributeNS(ns, "authorities") == authority
+                        }) { "Merged carAppService retained ${entry.name()}" }
+                    }
+                }
+            }
+            checkClass(expected)
+            require(app.getAttributeNS(ns, "permission").isEmpty()) { "carAppService $expected cannot inherit an application permission" }
+            // The app supplies the descriptor. A library must not introduce a version for another configuration.
+            for (res in libraryResources.files) {
+                val xml = res.parentFile.name
+                val reserved = if (xml.startsWith("values")) {
+                    res.readText().contains("automotive_app_desc") && factory.newDocumentBuilder().parse(res)
+                        .documentElement.childNodes.let { nodes -> (0 until nodes.length).mapNotNull { nodes.item(it) as? org.w3c.dom.Element } }
+                        .any { it.getAttribute("name") == "automotive_app_desc" && (it.tagName == "xml" || it.getAttribute("type") == "xml") }
+                } else res.name == "automotive_app_desc.xml"
+                require(!reserved) { "carAppService reserves @xml/automotive_app_desc for the build; also declared by $res" }
+            }
+            // Android creates the Application and its process's providers before calling Service.onBind.
+            // The shell's Files provider and the reader's ProfileInstaller initializer run framework code.
+            val applicationClass = app.name()
+            require(applicationClass in setOf("", "android.app.Application")) { "carAppService cannot start $applicationClass before host validation" }
+            val appId = doc.documentElement.getAttribute("package")
+            fun process(name: String, default: String) = if (name.startsWith(':')) appId + name else name.ifEmpty { default }
+            val serviceProcess = process(app.getAttributeNS(ns, "process"), appId)
+            for (provider in app.children().filter { it.tagName == "provider" && process(it.getAttributeNS(ns, "process"), serviceProcess) == serviceProcess }) {
+                when (provider.name()) {
+                    "dev.exact.canvas.Files" -> Unit
+                    "androidx.startup.InitializationProvider" -> for (entry in provider.children().filter { it.tagName == "meta-data" }) {
+                        require(entry.name() == "androidx.profileinstaller.ProfileInstallerInitializer") {
+                            "carAppService cannot run startup initializer ${entry.name()} before host validation"
+                        }
+                    }
+                    else -> error("carAppService cannot start provider ${provider.name()} before host validation")
+                }
+            }
+            val componentFactory = app.getAttributeNS(ns, "appComponentFactory")
+            require(componentFactory in setOf("", "android.app.AppComponentFactory", "androidx.core.app.CoreComponentFactory")) {
+                "The carAppService requires the platform component factory or AndroidX CoreComponentFactory, found $componentFactory"
+            }
+        }
+    }
+}
+
+val mapPermission = "androidx.car.app.MAP_TEMPLATES" in providers.gradleProperty("permissions").orNull.orEmpty().split(',')
+if (carService != null || mapPermission || maven.isNotEmpty() || providers.gradleProperty("manifestFragment").isPresent) {
+    androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+        val check = tasks.register<CheckCarManifest>(variant.computeTaskName("check", "CarManifest")) {
+            service.set(carService.orEmpty())
+            maps.set(carService != null && providers.gradleProperty("carMapTemplates").orNull == "1")
+            merged.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
+        }
+        if (carService != null) {
+            val descriptor = tasks.register<CarDescriptor>(variant.computeTaskName("generate", "CarDescriptor"))
+            variant.sources.res!!.addGeneratedSourceDirectory(descriptor, CarDescriptor::resources)
+            variant.instrumentation.transformClassesWith(CarHostBinder::class.java, InstrumentationScope.ALL) {}
+            variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS)
+            variant.artifacts.forScope(ScopedArtifacts.Scope.PROJECT).use(check).toGet(ScopedArtifact.CLASSES, CheckCarManifest::jars, CheckCarManifest::classes)
+            val resources = variant.runtimeConfiguration.incoming.artifactView {
+                attributes.attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, "android-res")
+            }.files
+            check.configure {
+                approvedFragment.set(layout.file(providers.gradleProperty("manifestFragment").map { File(it) }))
+                compilerJar.fileValue(gradle.gradleHomeDir!!.resolve("lib").listFiles()!!.single { it.name.startsWith("kotlin-compiler-embeddable-") && it.extension == "jar" })
+                ownerSources.from(providers.gradleProperty("carSourceDirs").map { dirs ->
+                    dirs.split(',').map { fileTree(it).matching { include("**/*.kt"); exclude("**/node_modules/**") } }
+                })
+                ownerDir.set(providers.gradleProperty("carDeclaration").map { declaration ->
+                    val installed = generateSequence(File(declaration).parentFile) { it.parentFile }.map { it.resolve("package.json") }.first { it.isFile }
+                    installed.canonicalFile.parent
+                })
+                kotlinSources.from(variant.sources.kotlin!!.all.map { dirs -> dirs.map { fileTree(it).matching { include("**/*.kt") } } })
+                libraryResources.from(resources.asFileTree.matching { include("**/xml*/automotive_app_desc.xml", "**/values*/*.xml") })
+            }
+        } else check.configure { ownerDir.set("") }
+        // Both APK and bundle packaging consume the checked inputs.
+        val packaging = setOf("package${variant.name.replaceFirstChar { it.uppercase() }}", variant.computeTaskName("package", "Bundle"))
+        tasks.matching { it.name in packaging }
+            .configureEach { dependsOn(check) }
     }
 }

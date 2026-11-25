@@ -7,21 +7,30 @@ import UIKit
 extension NodeView {
     package func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         guard scrollView === self.scrollView else { return }
+        var listVelocity = velocity
         // `scrolldragend` (Charlie, 2026-11-10): UIKit's velocity, points per
         // millisecond and positive as the offset grows, as the web's
         // scrollLeft/scrollTop, and the rest decided below, in those coordinates.
         defer {
-            if handlers.contains("scrolldragend"), velocity.x.isFinite, velocity.y.isFinite {
+            if handlers.contains("scrolldragend"), listVelocity.x.isFinite, listVelocity.y.isFinite {
                 let rest = targetContentOffset.pointee
-                presenter?.scrollDrag(id, (velocity, CGPoint(x: rest.x + scrollLeftInset(scrollView), y: rest.y + scrollTopInset(scrollView))))
+                presenter?.scrollDrag(id, (listVelocity, CGPoint(x: rest.x + scrollLeftInset(scrollView), y: rest.y + scrollTopInset(scrollView))))
             }
         }
+        var start = dragStart(scrollView)
         #if os(iOS)
+        if let list = (heightRecognizer as? SheetScrollGesture)?.listDrag(in: scrollView) {
+            start.y = list.start
+            if list.atStart {
+                targetContentOffset.pointee.y = -scrollView.adjustedContentInset.top
+                listVelocity.y = 0
+            }
+        }
         // A painted swipe row's full swipe decides where it rests (PaintedSwipesIOS.swift).
         defer { if swipeOwner { presenter?.swipeActions.paintedWillEnd(self, scrollView, target: targetContentOffset) } }
         #endif
         targetContentOffset.pointee = snappedOffset(targetContentOffset.pointee, in: scrollView, release: scrollView.contentOffset,
-                                                    drag: (dragStart(scrollView), velocity))
+                                                    drag: (start, listVelocity))
     }
 
     /// Where the drag that is ending began: its pan's translation, which

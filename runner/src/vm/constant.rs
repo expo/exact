@@ -80,7 +80,8 @@ pub(super) fn read(plan: &Plan, ins: &Instruction) -> Option<String> {
             if !f.localized()
                 && !matches!(
                     f,
-                    Stdlib::PerformanceNow
+                    Stdlib::FormatShortcut
+                        | Stdlib::PerformanceNow
                         | Stdlib::T
                         | Stdlib::Frame
                         | Stdlib::RangeFrame

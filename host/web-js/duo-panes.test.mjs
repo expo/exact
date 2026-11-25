@@ -147,6 +147,26 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
         }
       }
     }
+    // Folded like a laptop with 80 points of the lower segment left, the note sheet rests above the fold, its bottom at
+    // the fold's top, with a field a tap reaches; with the room it needs, it keeps to the lower segment
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 951, height: 669, deviceScaleFactor: 1, mobile: false });
+    await page.getByTestId('tab-combos').click();
+    await page.getByTestId('open-note').click();
+    const sheetRests = bottom => page.waitForFunction(bottom => {
+      const sheet = document.querySelector('[data-testid="note-sheet"]');
+      return !sheet.getAnimations().length && Math.round(sheet.getBoundingClientRect().bottom) === bottom;
+    }, bottom, { timeout: 5000 });
+    for (const [offset, bottom] of [[480, 480], [300, 600]]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 800, height: 600, deviceScaleFactor: 1, mobile: false,
+        displayFeature: { orientation: 'horizontal', offset, maskLength: 40 } });
+      await sheetRests(bottom);
+      await page.getByTestId('note-title-input').click({ timeout: 5000 });
+      expect(await page.evaluate(() => document.activeElement?.dataset.testid)).toBe('note-title-input');
+      await page.getByTestId('note-title-input').blur();
+    }
+    await page.getByTestId('note-back').click();
+    await page.getByTestId('open-note').waitFor();
     expect(errors).toEqual([]);
     // The runtime journals a style the browser refuses without throwing
     expect(await page.evaluate(() => exact.journal.filter(line => /invalid .* value .*; unset/.test(line) || line.includes(' is not a value it takes')))).toEqual([]);

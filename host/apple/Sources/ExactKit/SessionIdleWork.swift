@@ -28,7 +28,11 @@ extension ExactSession {
     /// unsettled for reads and the frame until then. A drain asked inside one (a slice landed by work it runs) leaves the
     /// queue to it, which runs the rest after that work. `destroy` cancels what is left.
     func runWaitingWork() {
-        guard !draining, !insideApply, !landing, !holdingReports, !idleScheduled, !afterFill.isEmpty else { return }
+        guard !draining, !insideApply, !landing, !holdingReports else { return }
+        if !idleScheduled, !afterFill.isEmpty { drainWaitingWork() }
+        callOut()
+    }
+    private func drainWaitingWork() {
         draining = true; defer { draining = false }
         var ran = 0
         while !fillInFlight, !fillLanding, !afterFill.isEmpty {
@@ -37,5 +41,18 @@ extension ExactSession {
             let item = afterFill.removeFirst()
             if state == .destroyed || (item.views != nil && item.views != viewsEpoch) { item.cancelled?() } else { inCoversChain(item.cause, item.work) }
         }
+    }
+
+    /// Run `work` outside what is being applied and what waits for it, in the order asked: at once, or as the last of those
+    /// ends. A hatch's `changed` runs so: UIKit may lay views out there in an animation it opens, and the reports that layout
+    /// makes are then told and answered inside it.
+    package func afterApplying(_ work: @escaping () -> Void) {
+        guard insideApply || landing || draining || callingOut else { return work() }
+        outside.append(work)
+    }
+    private func callOut() {
+        guard !callingOut else { return }
+        callingOut = true; defer { callingOut = false }
+        while !insideApply, !landing, !draining, !outside.isEmpty { outside.removeFirst()() }
     }
 }

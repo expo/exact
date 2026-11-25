@@ -8,6 +8,8 @@ use winit::{
     window::{CursorIcon, Window},
 };
 
+pub(super) const SCROLL_LINE: f32 = 48.;
+
 #[derive(Default)]
 pub(super) struct Input {
     pointer: Option<(f32, f32)>,
@@ -131,7 +133,9 @@ impl Input {
                 }
                 if let Some((x, y)) = self.pointer {
                     let (dx, dy) = match delta {
-                        MouseScrollDelta::LineDelta(dx, dy) => (-dx * 48., -dy * 48.),
+                        MouseScrollDelta::LineDelta(dx, dy) => {
+                            (-dx * SCROLL_LINE, -dy * SCROLL_LINE)
+                        }
                         MouseScrollDelta::PixelDelta(position) => {
                             let position = position.to_logical::<f32>(window.scale_factor());
                             (-position.x, -position.y)

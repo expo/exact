@@ -521,7 +521,7 @@ impl DataSource for Module {
     ) -> Result<Answer, DataError> {
         // A handler a module calls back (LLP 1133.016 D9): `tools[name]`,
         // its arguments and its value JSON text (the prelude's `tool`).
-        if source.starts_with(TOOL) && !self.sigs.contains_key(source) {
+        if is_package_handler(source) && !self.sigs.contains_key(source) {
             let (params, result) = (vec![Shape::String], Shape::String);
             self.sigs.insert(
                 source.to_owned(),

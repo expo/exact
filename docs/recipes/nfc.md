@@ -1,7 +1,6 @@
 # Recipe: reading and writing NFC tags
 
-`@exact/nfc` is Web NFC's NDEF reading and writing (LLP 1133.035). Shelf's
-Tag This Book (`apps/shelf`) is the whole app to copy from.
+`@exact/nfc` reads and writes NDEF tags (LLP 1133.035). See Tag This Book in `apps/shelf`.
 
 1. **Declare** the grant and its purpose. A signed iOS build also needs the
    App ID's NFC Tag Reading capability.
@@ -19,11 +18,9 @@ Tag This Book (`apps/shelf`) is the whole app to copy from.
    tag read is a `reading` on the root's outermost node, whatever started the
    scan.
 
-4. **Draw the wait only where the platform draws none.** iOS shows its own
-   sheet (`readerUI` `system`) with the app's `apple.alertMessage`. Android
-   and the web show nothing, so the app shows a sheet with the same words and
-   Cancel, and only once `state` is `granted`, so it never sits under the
-   browser's permission prompt.
+4. **Show the scan sheet.** iOS displays `apple.alertMessage` in its sheet
+   (`readerUI` is `system`). On Android and web, show that message and Cancel
+   once `state` is `granted`.
 
 5. **Records with bytes are data code's.** Contract gets each record's
    `recordType` and decoded `text`. `ndefRecords({ reading })` in `app.ts`
@@ -71,7 +68,9 @@ is `app`. A failed write's `code` is D3's error (`NetworkError`,
 
 **Lock with care.** `makeReadOnly()` cannot be undone: confirm first.
 
-**Driving it.** No simulator has a radio, so drives use the substitute:
-`prefer extension nfc.tags=[…]` declares the tags, `prefer extension
-nfc.field="<id>"` brings one into the field, and `tap @t cancel` or `tap @t
-timeout` ends a held scan.
+**Driving it.** A drive or a test file can supply the tags.
+Lead the web test with `prefer permission.nfc granted` and
+`prefer extension nfc.tags=[{"id":"book","records":[]}]`. Start the scan,
+then use `prefer extension nfc.field="book"` and `clock settle` before
+checking what the app read. In an interactive drive,
+`tap @t cancel` or `tap @t timeout` ends a held scan.

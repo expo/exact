@@ -1,5 +1,5 @@
 //! Finite strings: assignment admission differs from expression unification.
-use super::{checks, infer, Ref, Scope, Shapes, Ty};
+use super::{checks, err, infer, Ref, Scope, Shapes, Ty, TypeError};
 use contract_syntax::Expr;
 
 pub(super) fn contains(ty: &Ty) -> bool {
@@ -63,6 +63,102 @@ pub(super) fn accepts_expr(
         }
         _ => checks::can_unify(want, have),
     }
+}
+
+/// Infer a comparison operand before a list can widen its individual items.
+pub(super) fn operand(
+    e: &Expr,
+    opposite: &Expr,
+    scope: &Scope,
+    shapes: &Shapes,
+) -> Result<Ty, TypeError> {
+    let ty = match (e, opposite) {
+        (Expr::List(items, _), Expr::List(others, _)) => {
+            super::lists::literal(items, |i, item| match others.get(i) {
+                Some(other) => operand(item, other, scope, shapes),
+                None => infer(item, scope, shapes),
+            })?
+        }
+        (Expr::Some(value, _), Expr::Some(other, _)) => {
+            let item = operand(value, other, scope, shapes)?;
+            super::held::value(&item, value, "`some(…)`")?;
+            Ty::Option(Box::new(item))
+        }
+        _ => {
+            let ty = infer(e, scope, shapes)?;
+            compare_literal(&ty, opposite, shapes)?;
+            return Ok(ty);
+        }
+    };
+    shapes.bounded(&ty, e.span())?;
+    Ok(ty)
+}
+
+/// Equality with a dynamic string is valid even if its type is wider than the enum.
+pub(super) fn compare_literal(ty: &Ty, expr: &Expr, shapes: &Shapes) -> Result<(), TypeError> {
+    match (ty, expr) {
+        (Ty::Option(item), Expr::Some(value, _)) => compare_literal(item, value, shapes),
+        (Ty::List(item), Expr::List(values, _)) if item.contains_enum() => values
+            .iter()
+            .try_for_each(|value| compare_literal(item, value, shapes)),
+        (Ty::Enum(members), Expr::Str(value, span)) if !members.contains(value) => {
+            if let Some(candidate) = &shapes.expanded_comparison {
+                candidate.store(true, std::sync::atomic::Ordering::Relaxed);
+                return Ok(());
+            }
+            let nearest = members
+                .iter()
+                .min_by_key(|member| crate::literals::edit_distance(value, member))
+                .expect("an enum has at least one member");
+            err(
+                "type-enum-comparison",
+                format!("{value:?} is not a declared member of `{ty}`; did you mean {nearest:?}?"),
+                *span,
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A child's body was checked with its declared props. Substitution can turn
+/// a string read into a literal, or narrow it to an enum. If that produced a
+/// candidate, check the root as written, with the handler types its uses inferred.
+pub(super) fn check_authored_root(
+    file: &contract_syntax::File,
+    expanded: &contract_syntax::Expanded,
+    types: &mut super::Types,
+    sink: &mut super::Sink,
+) {
+    let Some(candidate) = types.shapes.expanded_comparison.take() else {
+        return;
+    };
+    if candidate.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut root = file.components[0].clone();
+        if file.routes.is_some() {
+            root.states.insert(0, expanded.root.states[0].clone());
+        }
+        let mut source = super::Sink::default();
+        super::component::check_component(
+            &root,
+            types,
+            expanded.owners.get(..root.states.len()),
+            &[],
+            &[],
+            &types.components[0].actions,
+            &mut source,
+        );
+        let scope = types.component_scope(&expanded.root, &types.components[0]);
+        super::uses::check_uses(&root.view, &scope, types, file, &mut source);
+        for b in &root.provides {
+            source.keep(infer(&b.expr, &scope, &types.shapes));
+        }
+        for error in source.errors {
+            if error.id == "type-enum-comparison" {
+                sink.push(error);
+            }
+        }
+    }
+    types.shapes.expanded_comparison = Some(candidate);
 }
 
 /// An assignment diagnostic keeps the rejected literal visible through wrappers.

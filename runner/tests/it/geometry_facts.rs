@@ -27,6 +27,7 @@ shape Insets
 shape Observed
   safeArea: option<Insets>
   layoutMargins: option<Insets>
+  bar: option<Insets>
 shape Margins
   layoutMargins: option<Rect>
 shape Hero
@@ -141,6 +142,30 @@ fn a_layout_reaches_the_fact_in_a_later_commit() {
     );
     lay_out(&mut r);
     assert!(r.refresh_geometry().unwrap().is_none());
+}
+
+#[test]
+fn a_route_bar_reaches_a_geometry_reader_at_the_next_layout() {
+    use exact_kernel::{BlockAxis, HostBlock};
+    let mut r = hero("120", "");
+    let slot = r.kernel().find_by_id("hero")[0].index;
+    let view = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(120.0),
+        height: BlockAxis::Is(40.0),
+    };
+    r.kernel_mut().set_host_block(view, Some(block)).unwrap();
+    for width in [0.0, 69.0, 0.0] {
+        assert!(!r
+            .kernel_mut()
+            .set_route_bar_insets(view, [0.0, width])
+            .unwrap());
+        lay_out(&mut r);
+        assert!(r.refresh_geometry().unwrap().is_some());
+        let sides = some(&some(&fields(&r, "g")[3])[2]);
+        assert_eq!(sides, [0.0, width as f64, 0.0, 0.0].map(Value::Number));
+    }
 }
 
 #[test]

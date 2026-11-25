@@ -149,6 +149,9 @@ pub struct Cause {
     /// The invocation is a call: LLP 1111 D4a's command rules hold for its
     /// work, after the call too.
     call: bool,
+    /// A notification action or a control invoked in the background, among
+    /// the contributors. A foreground control and remote Play also fold to action.
+    background_action: bool,
     /// The invocation whose work it is (D7's ownership), whose id its
     /// commits stamp on what they start; 0 for none. A device's re-ask is
     /// no invocation's.
@@ -186,7 +189,10 @@ impl Cause {
     /// Notification background action `id`, the person's act for that one
     /// action, run with no view (LLP 1133.004).
     pub(in crate::runner) const fn background_action(id: u64) -> Cause {
-        Cause::begin(CallOrigin::Action, id, false)
+        Cause {
+            background_action: true,
+            ..Cause::begin(CallOrigin::Action, id, false)
+        }
     }
 
     /// A wake's invocation `id` of `origin`: a wake's event, or a
@@ -207,6 +213,13 @@ impl Cause {
             CallOrigin::Tool
         };
         Cause::begin(origin, id, true)
+    }
+
+    pub(in crate::runner) fn control(id: u64, foreground: bool) -> Cause {
+        Cause {
+            background_action: !foreground,
+            ..Cause::call(true, id)
+        }
     }
 
     /// A remote Play or Pause (the lock screen, headphones, Control Center,
@@ -240,6 +253,9 @@ impl Cause {
     /// [`Runner::act_from`]'s: an invocation of `origin` with no id, for a
     /// door and a test that name only the origin.
     fn of_origin(origin: CallOrigin) -> Cause {
+        if origin == CallOrigin::Action {
+            return Cause::background_action(0);
+        }
         Cause::begin(origin, 0, origin == CallOrigin::Tool)
     }
 
@@ -255,6 +271,7 @@ impl Cause {
             id,
             causes: Causes(Causes::bit(origin)),
             call,
+            background_action: false,
             owner: id,
             data: false,
             input: false,
@@ -297,6 +314,17 @@ impl Cause {
         Cause {
             input: ticket.input_started(),
             ..self
+        }
+    }
+
+    /// D7a checks every contributor, even when a device is the folded origin.
+    pub(in crate::runner) fn hidden_show_reason(self) -> Option<&'static str> {
+        if self.causes.has(CallOrigin::Tool) {
+            Some("tool call")
+        } else if self.background_action {
+            Some("background action")
+        } else {
+            None
         }
     }
 
@@ -673,6 +701,7 @@ impl<D: DataSource> Runner<D> {
         Cause {
             causes: a.causes.union(b.causes),
             call: a.call || b.call,
+            background_action: a.background_action || b.background_action,
             data: a.data || b.data,
             input: a.input && b.input,
             owner: if a.owner == b.owner { a.owner } else { 0 },
@@ -690,6 +719,9 @@ impl<D: DataSource> Runner<D> {
         self.origins
             .tickets
             .insert(ticket, cause.owned_by(was.owner));
+        if let (Target::Resource(i), Some(_)) = (target, cause.hidden_show_reason()) {
+            self.origins.asked.insert(i, cause.unowned());
+        }
     }
 
     /// The cause of `data_ready`'s commit (LLP 1027 D4): the join of the

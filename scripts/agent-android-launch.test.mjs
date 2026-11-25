@@ -107,6 +107,28 @@ test('a launch picture without background_color sits on the platform\'s surface,
   assert.equal(colour(read(res, 'values-night')), undefined);
 }));
 
+test('the night starting window uses its PNG at the shared width and its own aspect', () => inDir((dir) => {
+  const res = resolve(dir, 'res'), dark = png(dir, 300, 450);
+  const light = 'day.png';
+  writeFileSync(resolve(dir, light), encodePng({ width: 80, height: 40, data: new Uint8Array(80 * 40 * 4).fill(255) }));
+  const image = { src: light, width: 128, color_scheme_dark: { src: 'logo.png' } };
+  const { files } = androidLaunch({ host: { android: { launchImage: image } } }, res, dir);
+  assert.deepEqual(files.map(({ file }) => file), [resolve(dir, light), dark]);
+  const pngNight = readPng(resolve(res, 'drawable-night-nodpi/exact_launch_picture.png'));
+  assert.deepEqual([pngNight.width, pngNight.height], [300, 450]);
+  for (const [scheme, height, splashHeight] of [['', 64, 36], ['-night', 192, 108]]) {
+    const layer = (name) => readFileSync(resolve(res, `drawable${scheme}/exact_launch_${name}.xml`), 'utf8');
+    assert.ok(layer('window').includes(`android:width="128dp" android:height="${height}dp"`));
+    assert.ok(layer('icon').includes(`android:width="72dp" android:height="${splashHeight}dp"`));
+  }
+  delete image.color_scheme_dark;
+  androidLaunch({ host: { android: { launchImage: image } } }, res, dir);
+  assert.equal(existsSync(resolve(res, 'drawable-night-nodpi/exact_launch_picture.png')), false);
+  assert.equal(existsSync(resolve(res, 'drawable-night/exact_launch_icon.xml')), false);
+  assert.match(readFileSync(resolve(res, 'drawable-night/exact_launch_window.xml'), 'utf8'), /width="128dp" android:height="64dp"[^>]*@drawable\/exact_launch_picture/);
+  assert.match(read(res, 'values-night-v31'), /windowSplashScreenAnimatedIcon">@drawable\/exact_launch_icon/);
+}));
+
 test('launchImage false hides the starting window\'s icon and draws nothing', () => inDir((dir) => {
   const res = resolve(dir, 'res');
   assert.deepEqual(androidLaunch({ host: { android: { launchImage: false } } }, res, dir), { theme: '@style/ExactAppLaunch', files: [] });

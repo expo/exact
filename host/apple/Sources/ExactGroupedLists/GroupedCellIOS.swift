@@ -4,6 +4,23 @@ import UIKit
 
 // Keep the detail button while UIKit refreshes the cell for accessibility.
 final class GroupedCell: UICollectionViewListCell {
+    /// The row's content margins and background insets (LLP 1123 D15), given to the content and
+    /// background configurations the cell holds after each of its configuration updates, Exact's
+    /// and UIKit's for its state; `nil` keeps UIKit's.
+    var listInsets: (margins: NSDirectionalEdgeInsets?, background: NSDirectionalEdgeInsets?) = (nil, nil) {
+        didSet { if listInsets != oldValue { setNeedsUpdateConfiguration() } }
+    }
+    override func updateConfiguration(using state: UICellConfigurationState) {
+        super.updateConfiguration(using: state)
+        if let margins = listInsets.margins, var c = contentConfiguration as? UIListContentConfiguration, c.directionalLayoutMargins != margins {
+            c.directionalLayoutMargins = margins
+            contentConfiguration = c
+        }
+        if let insets = listInsets.background, var b = backgroundConfiguration, b.backgroundInsets != insets {
+            b.backgroundInsets = insets
+            backgroundConfiguration = b
+        }
+    }
     private var activeBounds = CGRect.null
     var refreshActiveOnLayout = false
     override func layoutSubviews() {

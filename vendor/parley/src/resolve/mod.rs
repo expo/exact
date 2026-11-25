@@ -121,13 +121,19 @@ impl<T: Clone + PartialEq> Cache<T> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct ResolvedFamily {
+    pub(crate) id: FamilyId,
+    pub(crate) generic: Option<fontique::GenericFamily>,
+}
+
 /// Context for managing dynamic properties during layout.
 #[derive(Clone, Default)]
 pub(crate) struct ResolveContext {
-    families: Cache<FamilyId>,
+    families: Cache<ResolvedFamily>,
     variations: Cache<FontVariation>,
     features: Cache<FontFeature>,
-    tmp_families: Vec<FamilyId>,
+    tmp_families: Vec<ResolvedFamily>,
     tmp_variations: Vec<FontVariation>,
     tmp_features: Vec<FontFeature>,
 }
@@ -211,50 +217,38 @@ impl ResolveContext {
         &mut self,
         fcx: &mut FontContext,
         value: &FontFamily<'_>,
-    ) -> Resolved<FamilyId> {
+    ) -> Resolved<ResolvedFamily> {
         self.tmp_families.clear();
+        let mut push =
+            |family: &FontFamilyName<'_>| match family {
+                FontFamilyName::Named(name) => {
+                    if let Some(family) = fcx.collection.family_by_name(name) {
+                        self.tmp_families.push(ResolvedFamily {
+                            id: family.id(),
+                            generic: None,
+                        });
+                    }
+                }
+                FontFamilyName::Generic(generic) => {
+                    self.tmp_families
+                        .extend(fcx.collection.generic_families(*generic).map(|id| {
+                            ResolvedFamily {
+                                id,
+                                generic: Some(*generic),
+                            }
+                        }));
+                }
+            };
         match value {
             FontFamily::Source(source) => {
                 for family in FontFamilyName::parse_css_list(source).map_while(Result::ok) {
-                    match family {
-                        FontFamilyName::Named(name) => {
-                            if let Some(family) = fcx.collection.family_by_name(&name) {
-                                self.tmp_families.push(family.id());
-                            }
-                        }
-                        FontFamilyName::Generic(family) => {
-                            self.tmp_families
-                                .extend(fcx.collection.generic_families(family));
-                        }
-                    }
+                    push(&family);
                 }
             }
-            FontFamily::Single(family) => match family {
-                FontFamilyName::Named(name) => {
-                    if let Some(family) = fcx.collection.family_by_name(name) {
-                        self.tmp_families.push(family.id());
-                    }
-                }
-                FontFamilyName::Generic(family) => {
-                    self.tmp_families
-                        .extend(fcx.collection.generic_families(*family));
-                }
-            },
+            FontFamily::Single(family) => push(family),
             FontFamily::List(families) => {
                 let families: &[FontFamilyName<'_>] = families.borrow();
-                for family in families {
-                    match family {
-                        FontFamilyName::Named(name) => {
-                            if let Some(family) = fcx.collection.family_by_name(name) {
-                                self.tmp_families.push(family.id());
-                            }
-                        }
-                        FontFamilyName::Generic(family) => {
-                            self.tmp_families
-                                .extend(fcx.collection.generic_families(*family));
-                        }
-                    }
-                }
+                families.iter().for_each(push);
             }
         }
         let resolved = self.families.insert(&self.tmp_families);
@@ -313,7 +307,7 @@ impl ResolveContext {
     }
 
     /// Returns the list of font families for the specified handle.
-    pub(crate) fn stack(&self, stack: Resolved<FamilyId>) -> Option<&[FamilyId]> {
+    pub(crate) fn stack(&self, stack: Resolved<ResolvedFamily>) -> Option<&[ResolvedFamily]> {
         self.families.get(stack)
     }
 
@@ -342,7 +336,7 @@ impl ResolveContext {
 #[derive(Clone, PartialEq)]
 pub(crate) enum ResolvedProperty<B: Brush> {
     /// `font-family`.
-    FontFamily(Resolved<FamilyId>),
+    FontFamily(Resolved<ResolvedFamily>),
     /// Font size.
     FontSize(f32),
     /// Font width.
@@ -393,7 +387,7 @@ pub(crate) enum ResolvedProperty<B: Brush> {
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(crate) struct ResolvedStyle<B: Brush> {
     /// `font-family`.
-    pub(crate) font_family: Resolved<FamilyId>,
+    pub(crate) font_family: Resolved<ResolvedFamily>,
     /// Font size.
     pub(crate) font_size: f32,
     /// Font width.

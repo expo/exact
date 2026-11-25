@@ -80,7 +80,8 @@ impl<D: DataSource> Bridge<D> {
     /// it, 0 in its stack. Kind 24 sizes a table header’s column in points.
     /// NaN restores automatic sizing. Kind 27 says whether a given block is
     /// a navigation bar's item (LLP 1141.004 D3): its first f32 1 for one,
-    /// 0 for none.
+    /// 0 for none. Kind 28 reports the widths of navigation beside the route
+    /// on its physical left and right (LLP 1123 D9), two nonnegative floats.
     pub fn covers(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let out = if let Ok(records) = records(bytes) {
@@ -481,6 +482,13 @@ impl BlockChanges {
                 self.reports.registrations.push(registration);
             }
             27 => self.reports.bar_items.push((view, edge(8) == 1.0)),
+            28 => {
+                let sides = [edge(8), edge(12)];
+                if !sides.iter().all(|v| v.is_finite() && *v >= 0.0) {
+                    return Err("route bar: expected finite nonnegative widths");
+                }
+                self.reports.side_bars.push((view, sides));
+            }
             _ => return Ok(false),
         }
         Ok(true)
