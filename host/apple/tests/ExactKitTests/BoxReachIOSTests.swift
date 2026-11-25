@@ -62,6 +62,30 @@ final class BoxReachIOSTests: XCTestCase {
         XCTAssertEqual(box.bounds.origin, .zero)
     }
 
+    /// A text area that reaches keeps its text where layout put it (LLP 1123 D15): its text view fills
+    /// the reached frame, and its text container's inset grows by the reach, so the first line stays put.
+    func testATextAreaThatReachesKeepsItsTextWhereLayoutPutIt() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "reach is drawn in a window") }
+        let p = presenter(in: scene)
+        let window = try XCTUnwrap(self.window)
+        p.apply(wireBatch([
+            ["op": "create", "id": 6, "kind": "textarea", "props": ["value": "Notes"]],
+            ["op": "children", "id": 1, "ids": [2, 4, 6]],
+            ["op": "frame", "id": 6, "x": 0.0, "y": 200.0, "w": 300.0, "h": 100.0],
+        ]))
+        let node = try view(p, 6), area = try XCTUnwrap(node.textArea)
+        // Its content box 8 points in, as the kernel's `fieldContent` gives a native text control
+        node.applyKernelContentBox(CGRect(x: 8, y: 8, width: 284, height: 84), padding: [8, 8, 8, 8])
+        window.layoutIfNeeded()
+        let first = { area.convert(area.caretRect(for: area.beginningOfDocument), to: window) }
+        let resting = first()
+        p.setReach(6, UIEdgeInsets(top: 47, left: 12, bottom: 20, right: 0))
+        window.layoutIfNeeded()
+        XCTAssertEqual(area.convert(area.bounds, to: window), CGRect(x: -12, y: 153, width: 312, height: 167), "the text view fills the reached frame")
+        XCTAssertEqual(first().minY, resting.minY, accuracy: 0.5, "the first line where layout put it")
+        XCTAssertEqual(first().minX, resting.minX, accuracy: 0.5)
+    }
+
     /// A presenter of its own in a scene window: a root (1), 300 by 400, holding a box (2) 100 points
     /// tall and 100 down, its background `#336699` and its accessibility label "Panel", with a 50-by-30
     /// child (3) 10 points in, a view of its own; and a plain box (4), a flat leaf, the last 100 points.

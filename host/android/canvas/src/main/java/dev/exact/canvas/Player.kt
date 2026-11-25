@@ -125,13 +125,19 @@ internal class Player(private val fonts: Map<Int, Font>) {
     private var shiftY = 0f
     /** The stream's Canvas matrix, including clip and opacity restores. */
     private val current = Matrix()
-    private val savedMatrices = ArrayList<Matrix>()
-    private var matrixDepth = 0
-    private fun saveMatrix() {
-        if (matrixDepth == savedMatrices.size) savedMatrices.add(Matrix())
-        savedMatrices[matrixDepth++].set(current)
+    private class SavedMatrix {
+        val matrix = Matrix()
+        var clipAt = -1
     }
-    private fun restoreMatrix() { current.set(savedMatrices[--matrixDepth]) }
+    private val savedMatrices = ArrayList<SavedMatrix>()
+    private var matrixDepth = 0
+    private fun saveMatrix(clipAt: Int = -1) {
+        if (matrixDepth == savedMatrices.size) savedMatrices.add(SavedMatrix())
+        val saved = savedMatrices[matrixDepth++]
+        saved.matrix.set(current)
+        saved.clipAt = clipAt
+    }
+    private fun restoreMatrix() { current.set(savedMatrices[--matrixDepth].matrix) }
     private val backdropBounds = RectF()
 
     /** [anim] over [bounds]: drawn at the origin, under a translation, with bounds of its size alone. Android 10's
@@ -272,7 +278,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
 
     /** A filter open in a replay (op 53): the canvas it draws into, its node (null when it draws unfiltered), and
      * the shift before it. */
-    private class Filtered(val outer: Canvas, val node: android.graphics.RenderNode?, val shiftX: Float, val shiftY: Float) {
+    private class Filtered(val outer: Canvas, val node: android.graphics.RenderNode?, val shiftX: Float, val shiftY: Float, val clipBase: Int = 0) {
         var parentPlacements: ArrayList<PaintedOrigins.Placement>? = null
     }
     private val filters = ArrayList<Filtered>()
@@ -294,7 +300,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         node.setPosition(l, t, Math.ceil(backdropBounds.right.toDouble()).toInt(), Math.ceil(backdropBounds.bottom.toDouble()).toInt())
         node.setClipToBounds(true)
         node.setRenderEffect(effect)
-        filters.add(Filtered(c, node, shiftX, shiftY))
+        filters.add(Filtered(c, node, shiftX, shiftY, matrixDepth))
         shiftX += l; shiftY += t
         val inner = node.beginRecording()
         current.postTranslate(-l.toFloat(), -t.toFloat())
@@ -423,6 +429,70 @@ internal class Player(private val fonts: Map<Int, Font>) {
     }
 
     private fun f(b: IntBuffer, i: Int) = java.lang.Float.intBitsToFloat(b.get(i))
+
+    /** The painter emits the scroller's padding clip before its group. Intersect the rectangular
+     * envelopes in the recording's coordinates. RecordingCanvas.clipBounds also includes the recording's
+     * nominal size, which an unclipped parent lets its children paint beyond. */
+    private fun scrollPort(b: IntBuffer, base: Int): android.graphics.Rect? {
+        var port: RectF? = null
+        // A clip outside a filter bounds its output. Its input can contribute blur across that edge.
+        val first = maxOf(base, filters.lastOrNull { it.node != null }?.clipBase ?: 0)
+        for (depth in first until matrixDepth) {
+            val saved = savedMatrices[depth]
+            if (saved.clipAt < 0) continue
+            readRRect(b, saved.clipAt)
+            if (!saved.matrix.isAffine) {
+                // The corners bound the projection only while the entire clip is in front of the eye.
+                saved.matrix.getValues(values)
+                val x = values[Matrix.MPERSP_0].toDouble()
+                val y = values[Matrix.MPERSP_1].toDouble()
+                val minW = minOf(x * rect.left, x * rect.right) + minOf(y * rect.top, y * rect.bottom) + values[Matrix.MPERSP_2]
+                if (!(minW > 0.0)) continue
+            }
+            saved.matrix.mapRect(rect)
+            if (port == null) port = RectF(rect)
+            else if (!port.intersect(rect)) return android.graphics.Rect()
+        }
+        val bounds = port ?: return null
+        // A RenderNode's position and dimensions must fit in signed integers.
+        if (!(bounds.left >= Int.MIN_VALUE && bounds.top >= Int.MIN_VALUE && bounds.right < Int.MAX_VALUE && bounds.bottom < Int.MAX_VALUE)) return null
+        val box = android.graphics.Rect().also(bounds::roundOut)
+        return box.takeIf { it.width() >= 0 && it.height() >= 0 }
+    }
+
+    /** HWUI bounds a child's damage at a clipping RenderNode ancestor. Keep the group in page
+     * coordinates so offscreen rows can move into view. The canvas still clips its exact shape. */
+    private fun drawScrollPort(canvas: Canvas, content: android.graphics.RenderNode, box: android.graphics.Rect?) {
+        val save = canvas.save()
+        matrix.setTranslate(-shiftX, -shiftY)
+        if (box == null) {
+            canvas.setMatrix(matrix)
+            canvas.drawRenderNode(content)
+        } else if (!box.isEmpty) {
+            canvas.setMatrix(null)
+            val port = android.graphics.RenderNode("exact scrollport")
+            port.setPosition(box)
+            port.setClipToBounds(true)
+            val local = port.beginRecording()
+            local.translate(-box.left.toFloat(), -box.top.toFloat())
+            if (shiftX == 0f && shiftY == 0f) local.drawRenderNode(content)
+            else {
+                // Keep the replay origin separate from the port origin. At a large page offset,
+                // folding the two translations into a float can move a row by a pixel.
+                val shifted = android.graphics.RenderNode("exact shifted group")
+                shifted.setPosition(0, 0, width, height)
+                shifted.setClipToBounds(false)
+                val page = shifted.beginRecording()
+                page.setMatrix(matrix)
+                page.drawRenderNode(content)
+                shifted.endRecording()
+                local.drawRenderNode(shifted)
+            }
+            port.endRecording()
+            canvas.drawRenderNode(port)
+        }
+        canvas.restoreToCount(save)
+    }
 
     /** The last DASH: its intervals (path units) and phase; null when solid. */
     private var dash: FloatArray? = null
@@ -954,7 +1024,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     fill.shader = null; shader = null
                 }
                 4 -> {
-                    saveMatrix()
+                    saveMatrix(clipAt = i + 1)
                     c.save()
                     if (readRRect(b, i + 1)) c.clipRect(rect) else {
                         path.rewind(); path.addRoundRect(rect, radii, Path.Direction.CW); c.clipPath(path)
@@ -1190,7 +1260,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                             restoreMatrix()
                         }
                         placed(g, -shiftX, -shiftY)
-                        c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(holder?.invoke(grouped) ?: g); c.restore()
+                        drawScrollPort(c, holder?.invoke(grouped) ?: g, scrollPort(b, matrixBase))
                     }
                     node = null
                     i += 1

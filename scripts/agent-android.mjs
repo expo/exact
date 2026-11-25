@@ -24,6 +24,7 @@ import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { pushDrops, readerReply } from './agent-android-requests.mjs';
 import { within } from './paths.mjs';
+import { packageDirectories } from './cargo-dep-info.mjs';
 import { parseColour, schemeColours } from './scheme-colours.mjs';
 import { missingDependencies } from './package-libraries.mjs';
 import { HOST_DEV, PINNED_RUST, androidPackageId, bakeOutput, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, linuxBuild, mavenProblems, resolveApp } from './app.mjs';
@@ -1139,6 +1140,8 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, names, a
   try { for (const abi of abis.slice(1)) bake(abi); }
   catch (error) { console.error(error.message); return null; }
   const started = new Date().toISOString(), uses = planUses(out);
+  const kotlinRoots = [...READER_SOURCES, resolve(app.dir, 'modules/android')];
+  const kotlin = {paths:kotlinRoots, missing:kotlinRoots.filter(path => !existsSync(path)), watchedDirectories:packageDirectories(kotlinRoots), products:[]};
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
   // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
   if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
@@ -1175,9 +1178,9 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, names, a
     if (kept) { console.error(`exact android ${abi}: ${kept}`); return null; }
   }
   writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, package: androidPackageId(app.manifest), abis, libraries: abis.map(abi => built(ANDROID_ABIS[abi])), workspace: app.workspace ?? app.dir,
-    bakeStarted, bakes: bakes.flatMap(receipt => receipt.linkedInputs ?
-      [{ ...receipt.linkedInputs, products: receipt.products.filter(({path}) => receipt.linkedInputs.paths.includes(path)) }] : []),
-    sources: [...READER_SOURCES, resolve(app.dir, 'modules/android'), ...icons.files, ...launch.files] }) + '\n');
+    bakeStarted, bakes: [kotlin, ...bakes.flatMap(receipt => receipt.linkedInputs ?
+      [{ ...receipt.linkedInputs, products: receipt.products.filter(({path}) => receipt.linkedInputs.paths.includes(path)) }] : [])],
+    sources: [...icons.files, ...launch.files] }) + '\n');
   // What its bake inlined of each setting (LLP 1153 D4), bound to the APK, for a drive to compare with their sources.
   recordBuiltSettings(apk, app, out);
   for (const receipt of bakes) {

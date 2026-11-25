@@ -16,6 +16,7 @@ import { iosTouchInput, openTouches } from '../host/apple/touches.mjs';
 import { nativeKey, mouseContact } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
 import { platformWheel } from './agent-wheel.mjs';
+import { missingInputChanges } from './cargo-dep-info.mjs';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 // A descendant can retain the pipes after its carrier exits, even after the parent kills the carrier.
@@ -34,18 +35,19 @@ export function androidRebuild(a, reader) {
   return ownVerb(a, reader ? `android${abis}` : 'android --headless') ?? `bun scripts/agent-android.mjs build ${a.name}${reader ? ` --apk${abis}` : ''}`;
 }
 /** What changed since the APK was built, by the record its build left (agent-android.mjs `apkRecord`): each library's
- * Cargo inputs and separate bake inputs, the Kotlin by time, and the icons by digest. */
+ * Cargo inputs and separate bake inputs, the Kotlin source inventory, and the icons by digest. */
 export function apkChanges(a, apk) {
   const record = apkRecord(a, apk);
   if (!record?.libraries?.length) return [`${apk} (no complete ABI build record beside it: build it again)`];
   const since = Date.parse(record.started), digest = (file) => { try { return createHash('sha256').update(readFileSync(file)).digest('hex'); } catch { return null; } };
-  const baked = (record.bakes ?? []).flatMap(({ paths, missing, watchedDirectories, products }) => {
+  const baked = (record.bakes ?? []).flatMap(({ paths, missing, watchedDirectories, products, unstable }) => {
+    if (unstable) return [shown(unstable)];
     const bound = new Map(products.map(({path, sha256}) => [path, sha256]));
     return [
       ...watchedNewer(Date.parse(record.bakeStarted), paths.filter(path => !missing.includes(path) && !bound.has(path)),
         watchedDirectories, bound, [a.target]),
       ...[...bound].filter(([path, sha256]) => digest(path) !== sha256).map(([path]) => shown(path)),
-      ...missing.filter(existsSync).map(shown),
+      ...missingInputChanges(missing, watchedDirectories ?? []).map(shown),
     ];
   });
   return [...new Set([...baked, ...record.libraries.flatMap(library => depInfoNewer(since, library, library.replace(/\.so$/, '.d'), record.workspace))]),

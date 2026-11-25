@@ -655,10 +655,13 @@ extension NodeView {
         if isNativeTextControl {
             area.frame = bounds
             if let r = kernelContentBox {
-                // Layout's inset less what the drawn box lost to the pixel
-                // grid, so the text keeps layout's width (`PixelGridIOS.swift`).
-                area.textContainerInset = UIEdgeInsets(top: r.minY, left: r.minX, bottom: max(0, layoutBounds.height - r.maxY) + bounds.height - layoutBounds.height,
-                                                       right: max(0, layoutBounds.width - r.maxX) + bounds.width - layoutBounds.width)
+                // Layout's inset less what the drawn box lost to the pixel grid, so the text keeps
+                // layout's width (`PixelGridIOS.swift`), and past what reach draws the box beyond its
+                // laid-out frame, its bounds' origin, so reach never moves the text (LLP 1123 D15)
+                let o = bounds.origin
+                area.textContainerInset = UIEdgeInsets(top: r.minY - o.y, left: r.minX - o.x,
+                                                       bottom: max(0, layoutBounds.height - r.maxY) + bounds.height - layoutBounds.height + o.y,
+                                                       right: max(0, layoutBounds.width - r.maxX) + bounds.width - layoutBounds.width + o.x)
             }
         } else { area.frame = contentBox() }
         layoutResizeGrip()

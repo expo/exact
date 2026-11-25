@@ -351,7 +351,8 @@ class HostedTouchTest {
         player.replayAt(canvas, java.nio.IntBuffer.wrap(native), 0, native.size, 5f, 6f, layer)
         player.replay(canvas, java.nio.IntBuffer.wrap(intArrayOf(29, 11)), 0, 2, into = row)
         fun paint(x: Float, y: Float) {
-            val ops = intArrayOf(20, 9, 17, 22, x.toBits(), y.toBits(), 21)
+            val port = intArrayOf(4, 0, 0, 300f.toBits(), 550f.toBits()) + IntArray(8)
+            val ops = port + intArrayOf(20, 9, 17, 22, x.toBits(), y.toBits(), 21, 6)
             player.replay(canvas, java.nio.IntBuffer.wrap(ops), 0, ops.size)
         }
         paint(0f, 0f)

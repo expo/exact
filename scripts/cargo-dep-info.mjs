@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { EXE } from './paths.mjs';
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
 import { existsSync, lstatSync, mkdirSync, statSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { beside } from '../host/web/beside.mjs';
@@ -68,10 +68,64 @@ export function directoryInputNames(dir, skip = watchOutput()) {
   });
 }
 
-const inputIdentity = info => [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs];
+const inputIdentity = info => info && [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs];
+
+// A reader can distinguish executable inputs. Readability is tested by opening the file.
+const buildMode = mode => mode & 0o170111;
+const sha256 = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+function fileSnapshot(path, info, capture) {
+  const snapshot = {identity:inputIdentity(info)};
+  if (capture && info.isFile()) {
+    try { snapshot.sha256 = sha256(path); }
+    catch (error) { snapshot.readError = error.code; }
+  }
+  return snapshot;
+}
+
+/** Identity lets an unchanged file reuse its recorded hash. A replacement must match its mode, size and bytes. */
+export function sameWatchedFile(path, previous, identity = inputIdentity(statSync(path, {throwIfNoEntry:false}))) {
+  if (!previous?.identity || !identity || previous.unconfirmed) return false;
+  if (previous.identity.every((value, i) => value === identity[i])) return true;
+  if (buildMode(previous.identity[2]) !== buildMode(identity[2]) || previous.identity[3] !== identity[3] || !previous.sha256) return false;
+  try { return sha256(path) === previous.sha256; } catch { return false; }
+}
+
+export function sameWatchedDirectory(previous, now, skip) {
+  if (previous.error !== now.error || previous.link !== now.link || previous.via !== now.via) return false;
+  if (!now.entries) return JSON.stringify(previous.identity) === JSON.stringify(now.identity);
+  const included = ({name, directory}) => !skip(resolve(now.path, name), directory);
+  const before = previous.entries?.filter(included), after = now.entries.filter(included);
+  return before?.length === after.length && after.every((entry, i) => {
+    const was = before[i];
+    return entry.name === was.name && entry.directory === was.directory && entry.link === was.link && entry.via === was.via
+      && entry.error === was.error && (!entry.identity || sameWatchedFile(resolve(now.path, entry.name), was, entry.identity));
+  });
+}
+
+/** The links on an input path, including links in another link's target. Resolve `..` after following a link. */
+export function watchLinkTrace(path) {
+  let at = parse(path).root, parts = path.slice(at.length).split(sep), hops = [];
+  for (let i = 0; i < parts.length; i++) {
+    const name = parts[i];
+    if (!name || name === '.') continue;
+    if (name === '..') { at = dirname(at); continue; }
+    at = resolve(at, name);
+    let info; try { info = lstatSync(at); } catch { break; }
+    if (!info.isSymbolicLink()) continue;
+    const target = readlinkSync(at);
+    hops.push([at, target]);
+    if (hops.length === 40) break;
+    const root = parse(target).root;
+    at = root || dirname(at);
+    parts = target.slice(root.length).split(sep).concat(parts.slice(i + 1));
+    i = -1;
+  }
+  return hops.length ? JSON.stringify(hops) : undefined;
+}
 
 /** File identity detects replacement at an old mtime; directory identity would include ignored output edits. */
-export function directoryInputSnapshot(path, skip = () => false) {
+export function directoryInputSnapshot(path, skip = () => false, capture = true) {
+  const via = watchLinkTrace(path);
   let link;
   try { if (lstatSync(path).isSymbolicLink()) link = readlinkSync(path); } catch { /* unavailable */ }
   try {
@@ -79,22 +133,22 @@ export function directoryInputSnapshot(path, skip = () => false) {
       const child = resolve(path, name);
       let target;
       try { if (lstatSync(child).isSymbolicLink()) target = readlinkSync(child); } catch { /* unavailable */ }
-      const linked = target === undefined ? {} : {link:target};
+      const linked = target === undefined ? {} : {link:target, via:watchLinkTrace(child)};
       try {
         const info = statSync(child), directory = info.isDirectory();
-        return {name, ...linked, directory, ...(!directory ? {identity:inputIdentity(info)} : {})};
+        return {name, ...linked, directory, ...(!directory ? fileSnapshot(child, info, capture) : {})};
       } catch (error) { return {name, ...linked, directory:false, error:error.code}; }
     });
-    return {path, ...(link === undefined ? {} : {link}), entries};
+    return {path, ...(via ? {via} : {}), ...(link === undefined ? {} : {link}), entries};
   } catch (error) {
     if (!['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throw error;
-    let identity = null; try { identity = inputIdentity(statSync(path)); } catch { /* unavailable */ }
-    return {path, ...(link === undefined ? {} : {link}), entries:null, error:error.code, identity};
+    let file = {identity:null}; try { file = fileSnapshot(path, statSync(path), capture); } catch { /* unavailable */ }
+    return {path, ...(via ? {via} : {}), ...(link === undefined ? {} : {link}), entries:null, error:error.code, ...file};
   }
 }
 
 /** The receipt and drive walk the same filtered entries and record links before stopping cycles. */
-export function* watchedTree(paths, {outputs = [], skip = () => false, roots = outputRoots(outputs)} = {}) {
+export function* watchedTree(paths, {outputs = [], skip = () => false, roots = outputRoots(outputs), capture = false} = {}) {
   const ancestors = new Set();
   function* visit(path, excluded, top = false) {
     let info, link;
@@ -106,7 +160,7 @@ export function* watchedTree(paths, {outputs = [], skip = () => false, roots = o
     if (!info.isDirectory()) { yield {path, info, link}; return; }
     let real; try { real = realpathSync(path); } catch { real = path; }
     if (ancestors.has(real)) { yield {path, info, link, cycle:true}; return; }
-    const snapshot = directoryInputSnapshot(path, excluded);
+    const snapshot = directoryInputSnapshot(path, excluded, capture);
     yield {path, info, link, snapshot};
     ancestors.add(real);
     try { for (const entry of snapshot.entries ?? []) yield* visit(resolve(path, entry.name), excluded); }
@@ -119,15 +173,30 @@ export function* watchedTree(paths, {outputs = [], skip = () => false, roots = o
 }
 
 /** Inventories keep membership and link targets even when timestamps precede the build. */
-export function packageDirectories(paths, outputs = []) {
+export function packageDirectories(paths, outputs = [], since = Infinity) {
   const directories = new Map();
-  for (const {snapshot} of watchedTree(paths, {outputs})) if (snapshot) directories.set(snapshot.path, snapshot);
+  for (const {snapshot} of watchedTree(paths, {outputs, capture:true})) if (snapshot) directories.set(snapshot.path, snapshot);
   // A watched file's `ENOTDIR` snapshot: a directory put in its place at an old mtime still differs.
   for (const path of paths.map(path => resolve(path)).filter(path => !directories.has(path))) {
     const snapshot = directoryInputSnapshot(path);
-    if (snapshot.error === 'ENOTDIR') directories.set(path, snapshot);
+    if (snapshot.error === 'ENOTDIR' || snapshot.error && snapshot.link !== undefined) directories.set(path, snapshot);
+  }
+  // Cargo first discloses some watches after compiling. Bytes first observed during that build cannot vouch for its output.
+  if (since !== Infinity) for (const row of directories.values()) {
+    for (const file of row.entries ?? [row]) if (file.identity?.[5] >= since) file.unconfirmed = true;
   }
   return [...directories.values()];
+}
+
+/** A dangling watched link can change its target while both targets remain absent. */
+export function missingInputChanges(missing, directories) {
+  const recorded = new Map(directories.map(row => [row.path, row]));
+  return missing.filter(path => {
+    if (existsSync(path)) return true;
+    const previous = recorded.get(path);
+    if (previous?.link !== undefined) return previous.via !== watchLinkTrace(path);
+    return !!lstatSync(path, {throwIfNoEntry:false})?.isSymbolicLink();
+  });
 }
 
 /** Capture compiler inputs by bytes, directory membership and the targets written in links. */
@@ -208,30 +277,39 @@ function outputPath(path) {
 // Cargo follows directory links. Track their contents without reading outputs
 // through an alias or opening special files the baker may never use.
 // With no pre-bake snapshot, `since` rejects inputs whose change time cannot precede the bake.
-export function watchedDigest(paths, outputs, { inventory = false, since = Infinity } = {}) {
+export function watchedDigest(paths, outputs, { inventory = false, since = Infinity, snapshots } = {}) {
   const hash = createHash('sha256');
   const excluded = outputs.map(outputPath), ancestors = new Set();
   let stable = true;
   const changed = info => { if (info.ctimeMs >= since) stable = false; };
   const row = (...values) => hash.update(JSON.stringify(values) + '\n');
-  const visit = (path, top = false, atRoot = false, output = watchOutput(outputs, [path])) => {
+  const visit = (path, top = false, atRoot = false, output = watchOutput(outputs, [path]), entry = {}) => {
     let info, link;
     try {
       info = lstatSync(path);
+      if (top || info.isSymbolicLink()) {
+        const via = watchLinkTrace(path);
+        if (via) { entry.via = via; row(path, 'links', via); }
+      }
       if (info.isSymbolicLink()) {
         link = info;
-        row(path, 'link', readlinkSync(path));
+        entry.link = readlinkSync(path);
+        row(path, 'link', entry.link);
         info = statSync(path);
       }
       if (inventory && atRoot && basename(path).startsWith('.') && info.isDirectory()) return;
       const real = realpathSync(path);
       if (excluded.some(root => under(root, real))) { if (!inventory) row(path, 'output'); return; }
+      entry.directory = info.isDirectory();
       changed(info);
       if (link) changed(link);
       if (info.isDirectory()) {
         if (ancestors.has(real)) { row(path, 'cycle'); return; }
         const names = inventory ? readdirSync(path).sort() : directoryInputNames(path, output);
         if (!inventory) row(path, 'directory', names);
+        const via = snapshots ? watchLinkTrace(path) : undefined;
+        const snapshot = {path, ...(via ? {via} : {}), ...(link ? {link:entry.link} : {}), entries:[]};
+        snapshots?.set(path, snapshot);
         ancestors.add(real);
         try {
           for (const name of names) {
@@ -239,20 +317,43 @@ export function watchedDigest(paths, outputs, { inventory = false, since = Infin
             if (inventory && (['.git', 'node_modules', 'target', 'dist'].includes(name)
               || name.startsWith('.exact-js-bake-') || name.endsWith('.test.contract')
               || (top && (name === 'dist-windows' || beside(name) || name === 'app.contract.d.ts')))) continue;
-            visit(resolve(path, name), false, top, output);
+            const child = {name};
+            visit(resolve(path, name), false, top, output, child);
+            if (snapshots) snapshot.entries.push(child);
           }
         }
         finally { ancestors.delete(real); }
       } else if (inventory) {
         if (/\.(rs|ts|[cm]?js|json|contract|ttf|otf)$/.test(path)) row(path, 'source');
-      } else if (info.isFile()) row(path, 'file', createHash('sha256').update(readFileSync(path)).digest('hex'));
-      else row(path, info.isSocket() ? 'socket' : info.isFIFO() ? 'fifo'
+      } else if (info.isFile()) {
+        const digest = sha256(path);
+        row(path, 'file', buildMode(info.mode), digest);
+        if (snapshots) Object.assign(entry, {identity:inputIdentity(info), sha256:digest});
+      } else row(path, info.isSocket() ? 'socket' : info.isFIFO() ? 'fifo'
         : info.isBlockDevice() ? 'block-device' : info.isCharacterDevice() ? 'character-device' : 'other');
+      if (snapshots && !info.isDirectory()) {
+        entry.identity ??= inputIdentity(info);
+        if (top) {
+          const {directory, ...file} = entry;
+          snapshots.set(path, {path, entries:null, error:'ENOTDIR', ...file});
+        }
+      }
       if (since !== Infinity) {
         changed(lstatSync(path));
         if (link) changed(statSync(path));
       }
     } catch (error) {
+      if (snapshots) {
+        if (info?.isDirectory()) {
+          snapshots.set(path, {path, via:watchLinkTrace(path), ...(link ? {link:entry.link} : {}), entries:null, error:error.code, identity:inputIdentity(info)});
+        } else if (info?.isFile()) {
+          Object.assign(entry, {identity:inputIdentity(info), readError:error.code});
+          if (top) snapshots.set(path, {path, via:entry.via, ...(link ? {link:entry.link} : {}), entries:null, error:'ENOTDIR', identity:entry.identity, readError:error.code});
+        } else {
+          Object.assign(entry, {directory:false, error:error.code});
+          if (top && entry.link !== undefined) snapshots.set(path, {path, link:entry.link, via:entry.via, entries:null, error:error.code, identity:null});
+        }
+      }
       if (info) changed(info);
       if (link) changed(link);
       if (error.code === 'ELOOP') row(path, 'cycle');
