@@ -184,6 +184,8 @@ mod tests {
             created: keys.clone(),
             destroyed: reverse,
             touched: keys[4..].to_vec(),
+            // The edited field to reconcile is the live host's, which history gives back as none
+            reconcile_field: None,
             layout_invalidated: true,
             exits: vec![Exit {
                 key: key(11, 3),
