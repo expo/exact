@@ -487,7 +487,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   UIKit's push, pop, back swipe and full-screen presentation, a drag to dismiss included; no
   `-exact-layout-transition` is needed. A name held twice in a route, or in a sheet, stays
   put. The zoom's own element is `navigationSource=`'s `id` (`ZoomPushIOS.swift`, iOS 18 and
-  later), and the names beside it fly alongside the zoom. Film on the agent's clock skips
+  later); beside a zoom no name flies, and the destination's ride the zoomed card. Film on the agent's clock skips
   UIKit's transitions, which run on their own: film them under `--timing platform`, whose
   frames are sampled on the wall clock and not reproducible, or record the simulator
   (`xcrun simctl io booted recordVideo`) and read its frames.
