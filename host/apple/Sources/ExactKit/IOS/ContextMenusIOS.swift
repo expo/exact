@@ -1405,8 +1405,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
                 "phase": owner.committed ? "commit" : inTransition ? "transition" : "open"]
     }
 
-    /// Whether UIKit shows `node`'s own menu, the one on the node's view,
-    /// opened for this incarnation of it.
+    /// Whether UIKit shows a menu from `node`'s view (its own, or an inline
+    /// run's or a link's inside it), opened for this incarnation of it.
     func shows(_ node: NodeView) -> Bool {
         guard let owner = open, owner.shown, owner.source === node, owner.incarnation == node.incarnation else { return false }
         return owner.interaction?.view === node
@@ -1414,7 +1414,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 }
 
 extension MenuHost {
-    /// Whether UIKit shows `node`'s own context menu now (LLP 1094.000 D4).
+    /// Whether UIKit shows a context menu from `node`'s view now (LLP 1094.000 D4).
     package func showsContextMenu(of node: NodeView) -> Bool { context.shows(node) }
 }
 #endif

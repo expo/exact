@@ -668,6 +668,7 @@ final class DragOutIOSTests: XCTestCase {
             ["op": "frame", "id": 102, "x": 20.0, "y": 400.0, "w": 200.0, "h": 120.0],
         ]))
         let agent = Agent(session: session)
+        if let refusal = agent.askSiriRefusal { throw missing("UIKit", refusal) }
         XCTAssertEqual((agent.prefer(["page": ["ask-siri": "available"]])["page"] as? [String: Any])?["ask-siri"] as? String, "available")
         defer { _ = agent.prefer(["page": ["ask-siri": "unavailable"]]) }
         func labels() -> [String] {
@@ -681,10 +682,10 @@ final class DragOutIOSTests: XCTestCase {
         }
         /// What UIKit shows when `id`'s menu opens, read once the popover's row
         /// shows, by when UIKit has added whatever it adds; and how many items
-        /// the card's drag gives at a point off the card while the menu shows and
-        /// once it has closed. The test's request stands in for UIKit's, which
-        /// carries no touch on the card.
-        func open(_ id: UInt32) throws -> (rows: [String], shown: Int, lent: Int, closed: Int) {
+        /// the card's drag gives, at the card's centre, where the press was, and
+        /// at a point off the card, while the menu shows and once it has closed.
+        /// The test's requests stand in for UIKit's.
+        func open(_ id: UInt32) throws -> (rows: [String], shown: [Int], lent: Int, closed: [Int]) {
             let card = try XCTUnwrap(p.views[id])
             let interaction = try XCTUnwrap(card.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
             let present = NSSelectorFromString("_presentMenuAtLocation:")
@@ -692,25 +693,26 @@ final class DragOutIOSTests: XCTestCase {
             typealias Present = @convention(c) (AnyObject, Selector, CGPoint) -> Void
             unsafeBitCast(interaction.method(for: present), to: Present.self)(interaction, present, CGPoint(x: card.bounds.midX, y: card.bounds.midY))
             waitFor("\(id)'s menu to show its row", facts: { "\(labels())" }) { labels().contains("Pin") }
-            func items() throws -> Int {
+            let centre = card.convert(CGPoint(x: card.bounds.midX, y: card.bounds.midY), to: window)
+            func items(at point: CGPoint) throws -> Int {
                 guard let drag = drags(card).first else { return 0 }
-                return try sources(p).dragInteraction(drag, itemsForBeginning: PointDragSession(at: .zero, in: window)).count
+                return try sources(p).dragInteraction(drag, itemsForBeginning: PointDragSession(at: point, in: window)).count
             }
-            let rows = labels(), shown = try items()
+            let rows = labels(), shown = [try items(at: centre), try items(at: .zero)]
             // The view lent on to another node, as the pool's rebind does: the menu is not that node's.
             let incarnation = card.incarnation
             card.incarnation = NodePool.issue()
-            let lent = try items()
+            let lent = try items(at: .zero)
             card.incarnation = incarnation
             interaction.dismissMenu()
             waitFor("\(id)'s menu to close") { !p.menus.showsContextMenu(of: card) && !labels().contains("Pin") }
-            return (rows, shown, lent, try items())
+            return (rows, shown, lent, [try items(at: centre), try items(at: .zero)])
         }
         let draggable = try open(101), plain = try open(102)
         XCTAssertTrue(draggable.rows.contains("Ask Siri"), "the draggable card's menu")
-        XCTAssertEqual(draggable.shown, 1, "while its menu shows, its drag gives the card's text with no touch on the card")
+        XCTAssertEqual(draggable.shown, [1, 1], "while its menu shows, its drag gives the card's text, at the card under the menu and off it")
         XCTAssertEqual(draggable.lent, 0, "not once its view is another node's")
-        XCTAssertEqual(draggable.closed, 0, "and once the menu has closed, only to a touch on the card")
+        XCTAssertEqual(draggable.closed, [1, 0], "and once the menu has closed, only to a touch on the card")
         XCTAssertFalse(plain.rows.contains("Ask Siri"), "a plain card's menu")
     }
 }

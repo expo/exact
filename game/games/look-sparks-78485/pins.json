@@ -1,0 +1,9 @@
+{
+  "game": "look-sparks-78485",
+  "ticks": {},
+  "saves": {},
+  "hosts": [],
+  "generated": "bun game/prove.mjs look-sparks-78485",
+  "at": "unverified",
+  "help": "First baseline: bun game/prove.mjs look-sparks-78485; changed golden: add --repin. Empty pins fail ordinary proofs."
+}

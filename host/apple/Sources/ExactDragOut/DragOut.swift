@@ -170,9 +170,10 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         return DragItems.items(of: node, in: presenter?.session)
     }
 
-    /// The node whose own context menu UIKit shows (D4). A request for its
-    /// items then is the menu's, as Ask Siri's is (WWDC26 session 278), with no
-    /// touch on the node, so it is answered as a hand-built delegate answers any.
+    /// The node from whose view UIKit shows a context menu (D4). A request for
+    /// its items then is the menu's, Ask Siri's (WWDC26 session 278) or a drag of
+    /// the menu's preview, with no touch on the node, so it is answered as a
+    /// hand-built delegate answers any.
     private func asked(by interaction: UIDragInteraction) -> NodeView? {
         guard let presenter, let id = interactions.first(where: { $0.value === interaction })?.key, let node = presenter.views[id],
               interaction.view === node, Self.lifts(node), presenter.menus.showsContextMenu(of: node) else { return nil }
