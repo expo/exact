@@ -5,16 +5,25 @@
 //! that does not join its workers, a kill or a crash, never removes its
 //! staging file, so a launch's first use of a root removes every launch
 //! directory there whose lock no live process holds. Making a launch
-//! directory and sweeping both hold the staging directory's own `.lock`, so
-//! a sweep never sees a launch directory before its lock. The image spool
-//! (`spool_dir` in Exact's `host/painted/src/image/remote.rs`) works the
-//! same way.
+//! directory and sweeping both hold the staging directory's own
+//! `.namespace.lock`, so a sweep never sees a launch directory before its
+//! lock. The image spool (`spool_dir` in Exact's
+//! `host/painted/src/image/remote.rs`) works the same way.
+//!
+//! A path of that name the app made before is left as it is: it is ours only
+//! if it is a directory holding `.namespace.lock`, or an empty one. A root
+//! with no staging directory of ours, or one that cannot be made, stages
+//! beside the target as before.
 use super::*;
 use std::sync::Mutex;
 
 /// The directory in each app root that holds the launch directories. It is
 /// no app path: `parse` refuses it, and a root's listing leaves it out.
 pub(super) const STAGING: &str = ".exact-staging";
+/// The staging directory's lock, and the mark that it is ours.
+const NAMESPACE: &str = ".namespace.lock";
+/// A launch directory's lock.
+const LOCK: &str = ".lock";
 
 #[cfg(unix)]
 type Dir = File;
@@ -52,12 +61,19 @@ pub(super) fn unlisted(result: FsResult, root: bool) -> FsResult {
 impl AppDirectories {
     /// This launch's staging directory in the root `index` names, made at
     /// the launch's first use of that root.
-    pub(super) fn staging(&self, index: usize) -> Result<Dir, HostError> {
+    fn staging(&self, index: usize) -> Result<Dir, HostError> {
         #[cfg(unix)]
         let root = self.root(index)?;
         #[cfg(windows)]
         let root = &self.roots[index];
         launch(&root).map_err(error)
+    }
+
+    /// [`Self::staging`], or `parent`, the target's directory, when the root
+    /// has none of ours: a write never fails for want of one.
+    pub(super) fn staging_or(&self, index: usize, parent: &Dir) -> Result<Dir, HostError> {
+        self.staging(index)
+            .or_else(|_| parent.try_clone().map_err(error))
     }
 
     /// Make this launch's staging directory in each root now, removing those
@@ -82,8 +98,19 @@ fn launch(root: &Dir) -> io::Result<Dir> {
             _ => drop(launches.remove(at)),
         }
     }
-    let staging = make(root, STAGING)?;
-    let namespace = lock_file(&staging)?;
+    let staging = match child(root, STAGING) {
+        Ok(staging) if has_file(&staging, NAMESPACE) || entries(&staging)?.is_empty() => staging,
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the app's own folder is named .exact-staging",
+            ))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => make(root, STAGING)?,
+        // A file or a link of that name, the app's.
+        Err(e) => return Err(e),
+    };
+    let namespace = lock_file(&staging, NAMESPACE)?;
     // Another launch holds it only to sweep and make its directory: asked a
     // while, never waited on without end.
     let mut attempts = 0;
@@ -102,7 +129,7 @@ fn launch(root: &Dir) -> io::Result<Dir> {
     getrandom::getrandom(&mut bytes).map_err(|e| io::Error::other(e.to_string()))?;
     let name: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let dir = make(&staging, &name)?;
-    let lock = lock_file(&dir)?;
+    let lock = lock_file(&dir, LOCK)?;
     if !try_lock(&lock) {
         return Err(io::Error::other("a new launch directory's lock is held"));
     }
@@ -129,7 +156,7 @@ fn sweep(staging: &Dir) {
         let Ok(dir) = child(staging, &name) else {
             continue;
         };
-        let free = lock_file(&dir).is_ok_and(|lock| try_lock(&lock));
+        let free = lock_file(&dir, LOCK).is_ok_and(|lock| try_lock(&lock));
         drop(dir);
         if free {
             let _ = remove_tree(staging, &name);
@@ -153,8 +180,14 @@ fn make(dir: &File, name: &str) -> io::Result<File> {
     directory(dir, name)
 }
 #[cfg(unix)]
-fn lock_file(dir: &File) -> io::Result<File> {
-    open_at(dir, ".lock", libc::O_RDWR | libc::O_CREAT)
+fn lock_file(dir: &File, name: &str) -> io::Result<File> {
+    open_at(dir, name, libc::O_RDWR | libc::O_CREAT)
+}
+#[cfg(unix)]
+fn has_file(dir: &File, name: &str) -> bool {
+    open_at(dir, name, libc::O_RDONLY | libc::O_NONBLOCK)
+        .and_then(|file| file.metadata())
+        .is_ok_and(|meta| meta.is_file())
 }
 /// `flock`, which Android has and the standard library's lock does not cover there.
 #[cfg(unix)]
@@ -184,8 +217,12 @@ fn make(dir: &Directory, name: &str) -> io::Result<Directory> {
     dir.child(name, true)
 }
 #[cfg(windows)]
-fn lock_file(dir: &Directory) -> io::Result<File> {
-    dir.file(".lock", libc::O_RDWR | libc::O_CREAT)
+fn lock_file(dir: &Directory, name: &str) -> io::Result<File> {
+    dir.file(name, libc::O_RDWR | libc::O_CREAT)
+}
+#[cfg(windows)]
+fn has_file(dir: &Directory, name: &str) -> bool {
+    dir.kind(name).is_ok_and(|kind| kind.regular)
 }
 #[cfg(windows)]
 fn try_lock(file: &File) -> bool {
@@ -320,6 +357,54 @@ mod tests {
         // Below a root, the name is the app's.
         call(&dirs, FsOp::Mkdir, "app:/data/sub/.exact-staging", None).unwrap();
         drop(held);
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn an_apps_own_path_named_like_the_staging_directory_is_left_as_it_is() {
+        let path = roots("own");
+        // Made before the name was reserved: a folder of the app's, holding
+        // a name a launch directory would have, and a file.
+        let folder = path.join("data").join(STAGING);
+        fs::create_dir_all(folder.join("0123456789abcdef01234567")).unwrap();
+        fs::write(folder.join("0123456789abcdef01234567/kept"), b"kept").unwrap();
+        fs::write(folder.join("notes"), b"notes").unwrap();
+        fs::write(path.join("cache").join(STAGING), b"file").unwrap();
+        let dirs = directories(&path);
+        dirs.claim_staging();
+        let grants = GrantSet::parse("fs.write app:/data\nfs.write app:/cache").unwrap();
+        let mut staged = dirs.stage(&grants, "app:/data/a").unwrap();
+        staged.write_all(b"staged").unwrap();
+        staged.publish().unwrap();
+        call(
+            &dirs,
+            FsOp::AtomicWriteFile,
+            "app:/cache/b",
+            Some(b"atomic"),
+        )
+        .unwrap();
+        // The writes land, staged beside their targets as before.
+        assert_eq!(fs::read(path.join("data/a")).unwrap(), b"staged");
+        assert_eq!(fs::read(path.join("cache/b")).unwrap(), b"atomic");
+        assert_eq!(listed(path.join("data")), [STAGING, "a"]);
+        assert_eq!(listed(path.join("cache")), [STAGING, "b"]);
+        // Nothing of the app's is changed, and its path stays refused.
+        assert_eq!(
+            listed(folder.clone()),
+            ["0123456789abcdef01234567", "notes"]
+        );
+        assert_eq!(
+            fs::read(folder.join("0123456789abcdef01234567/kept")).unwrap(),
+            b"kept"
+        );
+        assert_eq!(fs::read(path.join("cache").join(STAGING)).unwrap(), b"file");
+        assert!(call(
+            &dirs,
+            FsOp::ReadFile,
+            "app:/data/.exact-staging/notes",
+            None
+        )
+        .is_err());
         let _ = fs::remove_dir_all(path);
     }
 

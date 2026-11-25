@@ -432,7 +432,7 @@ impl AppDirectories {
         let (index, _) = self.parse(path)?;
         crate::boundary::admit(grants, &Operation::FsWrite { path: path.into() })?;
         let (parent, leaf) = self.open_parent(path)?;
-        let staging = self.staging(index)?;
+        let staging = self.staging_or(index, &parent)?;
         Ok(AtomicTarget {
             parent,
             leaf,
@@ -548,7 +548,7 @@ impl AppDirectories {
         let (index, parts) = self.parse(path)?;
         if op == FsOp::AtomicWriteFile {
             let (parent, leaf) = below(path)?.parent()?;
-            let staging = self.staging(index)?;
+            let staging = self.staging_or(index, &parent)?;
             atomic_in(&staging, &parent, &leaf, data.unwrap_or(&[])).map_err(error)?;
             return Ok(FsResult::Done);
         }
@@ -1060,7 +1060,7 @@ impl AppDirectories {
         getrandom::getrandom(&mut bytes).map_err(error)?;
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let temp = format!(".exact-{hex}.partial");
-        let staging = self.staging(index)?;
+        let staging = self.staging_or(index, &parent)?;
         let file = open_at(
             &staging,
             &temp,

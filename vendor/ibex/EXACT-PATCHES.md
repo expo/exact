@@ -1323,8 +1323,13 @@ file (local patch 19), `fs.atomicWriteFile` on an app path and the atomic write
 place, so a process that ends during a write leaves it only there. A launch's
 first use of a root, or `AppDirectories::claim_staging`, removes the launch
 directories whose lock no live process holds, considering only names of 24 hex
-digits. `.exact-staging` is refused as the first component of an app path, in
-any case, and left out of a root's listing. On Windows an atomic write refuses
+digits. Making a launch directory and sweeping hold `.namespace.lock`, which
+also marks the staging directory as the host's: a path of that name the app
+made before (a file, a link, or a folder without the mark that is not empty)
+is left untouched, and that root stages beside the target as before, as does
+a root whose staging directory cannot be made. `.exact-staging` is refused as
+the first component of an app path, in any case, and left out of a root's
+listing. On Windows an atomic write refuses
 a target that is not a regular file before the staging directory is made.
 Document, native and known-folder writes still stage beside their targets.
 Replay on a refresh (expo/exact#1692).

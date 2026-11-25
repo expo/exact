@@ -194,7 +194,7 @@ impl AppDirectories {
         let (index, _) = self.parse(path)?;
         crate::boundary::admit(grants, &Operation::FsWrite { path: path.into() })?;
         let (parent, leaf) = self.parent(path)?;
-        let staging = self.staging(index)?;
+        let staging = self.staging_or(index, &parent)?;
         Ok(AtomicTarget {
             parent,
             leaf,
@@ -325,7 +325,7 @@ impl AppDirectories {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(error(e)),
                 _ => {}
             }
-            let staging = self.staging(index)?;
+            let staging = self.staging_or(index, &parent)?;
             let token = token().map_err(error)?;
             (parent.write_in(&staging, &leaf, data.unwrap_or(&[]), &token)).map_err(error)?;
             return Ok(FsResult::Done);
@@ -426,7 +426,7 @@ impl AppDirectories {
             _ => {}
         }
         let temp = format!(".exact-{}.partial", token().map_err(error)?);
-        let staging = self.staging(index)?;
+        let staging = self.staging_or(index, &parent)?;
         let file = staging
             .file(&temp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)
             .map_err(error)?;
