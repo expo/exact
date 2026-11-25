@@ -351,39 +351,67 @@ enum FrameHealthCardText {
         source.screen ? "Late: sent after UIKit's deadline" : deadline(rates, varied: varied)
     }
 
-    /// The shared summary, in the parts the image draws too.
-    struct Summary {
-        var title: String, context: [String], figures: [String], results: [String], notes: [String]
-        var text: String { ([title] + context + figures + results + notes).joined(separator: "\n") }
-    }
-
-    /// The shared summary: every figure with its window, leaving out windows without one, then the
-    /// results Details gives, from `clock`, the reader of Exact's own frames, where the face measures the screen.
+    /// The summary Share gives, in three parts: what was measured and what was not; every figure with its window,
+    /// leaving out windows without one; then Details' results, from `clock`, the reader of Exact's own frames, where the
+    /// face measures the screen, each with what it assesses.
     static func summary(reader: FrameHealthCardReader, clock: FrameHealthCardReader? = nil, rates: Rates, display: Display,
-                        source: Source = .exact, paused: Bool, health: FrameHealth) -> Summary {
+                        source: Source = .exact, health: FrameHealth) -> String {
         let windows = [(0.5, reader.window(0.5)), (5, reader.window(5)), (30, reader.window(30))]
             .map { (window($0.1, nominal: $0.0, source: source).lowercased(), $0.1) }
         let windowFigures = windows.map { figures($0.1, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) }) }
-        let (verdict, detail) = pacing(windows[1].1, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) })
-        let requested = rates.requestedHz > 0
-            ? "Requested rate: \(Int(rates.requestedHz.rounded())) FPS" + (rates.limited ? ", limited by the system to \(Int(rates.scheduleHz.rounded())) FPS" : "")
-            : "Requested rate: none"
-        let measured: [String] = if case .screen(_, let exact) = source {
-            ["Frames: every UI update of this app on its screen", "Exact's frame clock: " + Self.clock(exact).lowercased()]
-        } else { [requested] }
-        return Summary(title: "Frame health, \(paused ? "paused" : "live")",
-            context: measured + ["Display: \(display.name), \(display.detail)",
-                caption(rates, source: source, varied: windows[2].1.counts.epochs > 0),
-                (source.screen ? "Main thread" : "Pacing") + " (\(windows[1].0)): " + [verdict, detail].filter { !$0.isEmpty }.joined(separator: "; ")],
-            figures: rows(source).map { name, key in
-                let values = zip(windowFigures, windows).filter { $0.0[keyPath: key] != "—" }.map { "\($0.0[keyPath: key]) (\($0.1.0))" }
-                return "\(name): " + (values.isEmpty ? "—" : values.joined(separator: ", "))
-            },
-            results: results(reader: clock ?? reader, health: health, screen: source.screen),
-            notes: ["Frames (\(windows[2].0)): \(source.screen ? UInt64(windows[2].1.counts.callbacks) : windows[2].1.frames)",
-                "Not measured: " + (source.screen
-                ? "frame times, which a passive observer cannot tell from time the app had nothing to draw; when pictures actually appeared on screen, compositor and GPU time, Core Animation's own animations, input latency"
-                : "when pictures appeared on screen, Core Animation's commit, compositor and GPU time, input latency")])
+        func limit(_ rates: Rates) -> String { rates.limited ? ", limited by the system to \(Int(rates.scheduleHz.rounded())) FPS" : "" }
+        let measured: [String]
+        if case .screen(_, let exact) = source {
+            let clock = !exact.running ? "idle" : exact.rates.requestedHz > 0
+                ? "asks for \(Int(exact.rates.requestedHz.rounded())) FPS" + limit(exact.rates) : "running at the default rate"
+            measured = ["Every UI update of this app on its screen, each one a frame. There is one only when something changes, so "
+                + "a frame rate below the display's is normal while little moves.",
+                "Exact's frame clock, the display link that drives Exact's own drawing: " + clock,
+                "Display: \(display.name), \(display.detail)", "A frame is late when the app finishes its changes after UIKit's deadline, the time by which the system "
+                    + "needs the changes to show the frame on time.",
+                "Not measured: the time between the screen's frames (the card cannot tell a pause in drawing from a stall; "
+                    + "the second report gives Exact's own frame times), when pictures actually appeared on screen, compositor and "
+                    + "GPU time, Core Animation's own animations, and input latency"]
+        } else {
+            let varied = windows[2].1.counts.epochs > 0
+            measured = ["Exact's frames", rates.requestedHz > 0 ? "Requested rate: \(Int(rates.requestedHz.rounded())) FPS" + limit(rates)
+                : "Requested rate: none", "Display: \(display.name), \(display.detail)",
+                !FrameHealthAssessment.deadlinesObserved
+                    ? "Lateness is not known on the simulator, whose frame deadlines carry no information."
+                    : "A frame is late when its work ends after its deadline, which is one refresh after the frame starts"
+                        + (rates.periodMs > 0 ? " (\(varied ? "now " : "")\(ms(rates.periodMs)) at \(Int(rates.scheduleHz.rounded())) FPS)."
+                            : "."),
+                "Not measured: when pictures appeared on screen, Core Animation's commit, compositor and GPU time, and input latency"]
+        }
+        var figureLines: [String] = rows(source).map { name, key in
+            let values = zip(windowFigures, windows).filter { $0.0[keyPath: key] != "—" }.map { "\($0.0[keyPath: key]) (\($0.1.0))" }
+            return "\(name): " + (values.isEmpty ? "—" : values.joined(separator: ", "))
+        }
+        // The screen's own rows give its frames and its main thread's work, which stands in for pacing
+        if !source.screen {
+            let (verdict, detail) = pacing(windows[1].1, rates: rates, adaptiveSync: display.adaptiveSync, count: { String($0) })
+            figureLines += ["Pacing (\(windows[1].0)): " + verdict + (detail.isEmpty ? "" : " (\(detail))"),
+                "Frames (\(windows[2].0)): \(windows[2].1.frames)"]
+        }
+        let assessed = clock ?? reader
+        let results = zip(details(reader: assessed, health: health).prefix(3), ["whether every frame kept to the display's schedule",
+            "whether frames came at the requested rate", "whether frames showed the latest content without delay"]).map { detail, meaning in
+            "\(detail.name), \(meaning): \(detail.value)" + (detail.reason.map { ", " + $0 } ?? "")
+        }
+        let reach = "These come from frame timing only, and nothing here sees what reached the screen. So a problem shows as Fail, "
+            + "but nothing can confirm the screen was smooth: the best cadence can read is Pass by proxy, a pass on timing alone, "
+            + "and the best the others can read is Not enough evidence."
+        let span = window(assessed.window(5), nominal: 5).lowercased()
+        let heading = source.screen ? "Results for Exact's frame clock, \(span)" : "Results for the \(span)"
+        let legend = source.screen
+            ? "Work time is the main thread's time to make a frame, less any waits. Main thread, longest is its longest stretch "
+                + "of work without waiting, and Main thread over \(ms(source.refreshMs)) counts the stretches longer than one "
+                + "refresh, which would hold up a frame."
+            : "Work time is how long a frame took to make, from its start until its work was applied. Frame time is the time "
+                + "from one frame to the next. A missed frame was asked for but not made in time. Pacing changes count frames "
+                + "that came a different number of refreshes after the one before."
+        return (["What was measured"] + measured + ["", "Figures", legend] + figureLines + ["", heading, reach] + results)
+            .joined(separator: "\n")
     }
 
     /// A row of Details: a result with its reason, or a count.
@@ -416,12 +444,6 @@ enum FrameHealthCardText {
     static func detailsCaption(reader: FrameHealthCardReader, screen: Bool = false) -> String {
         (screen ? "Exact's frame clock, " + window(reader.window(5), nominal: 5).lowercased() : window(reader.window(5), nominal: 5))
             + ". Exact does not observe presentation, compositor or GPU time, or input latency."
-    }
-
-    /// Each result with its window, as the shared text gives them.
-    static func results(reader: FrameHealthCardReader, health: FrameHealth, screen: Bool = false) -> [String] {
-        let span = (screen ? "Exact's frame clock, " : "") + window(reader.window(5), nominal: 5).lowercased()
-        return details(reader: reader, health: health).prefix(3).map { "\($0.name) (\(span)): \($0.value)" + ($0.reason.map { ", " + $0 } ?? "") }
     }
 
     /// A result in the card's words: the collector's "proxy-pass" reads "Pass by proxy", and every
@@ -569,42 +591,24 @@ struct FrameHealthCardPresentation {
     }
 }
 
-/// What Share offers, each alone, so every app takes it the same way; each holds everything,
-/// whichever view the card shows.
-enum FrameHealthShare {
-    /// The agent report of what the face shows, and, where the face shows the screen's frames, that of Exact's frames
-    /// beside it: an app drawn by GPU surfaces has frame times only on Exact's clock, and each report keeps to its own
-    /// 4000 bytes (LLP 1079.000 §7.4)
-    case report, clockReport
-    case summary, image
-
-    /// The choices for a face that shows the screen's frames, or Exact's.
-    static func choices(screen: Bool) -> [Self] { screen ? [.report, .clockReport, .summary, .image] : [.report, .summary, .image] }
-
-    package func title(screen: Bool) -> String {
-        switch self {
-        case .report: screen ? "Agent Report: Screen" : "Agent Report"
-        case .clockReport: "Agent Report: Exact's Frames"
-        case .summary: "Summary"
-        case .image: "Image"
-        }
-    }
-}
-
 extension FrameHealthCardText {
-    /// The shared image, from the same readers and charts the card shows: the summary's context,
-    /// both charts, every figure and the results.
-    static func picture(reader: FrameHealthCardReader, clock: FrameHealthCardReader? = nil, chart: FrameHealthChart, rates: Rates,
-                        display: Display, source: Source = .exact, paused: Bool, health: FrameHealth,
-                        palette: FrameHealthCardDrawing.Palette) -> Data? {
-        let summary = summary(reader: reader, clock: clock, rates: rates, display: display, source: source, paused: paused, health: health)
-        let windows = [(reader.window(0.5), 0.5), (reader.window(5), 5.0), (reader.window(30), 30.0)]
-        let all = windows.map { figures($0.0, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) }) }
-        let table = [[""] + windows.map { window($0.0, nominal: $0.1, source: source) }]
-            + rows(source).map { name, key in [name] + all.map { $0[keyPath: key] } }
-        let input = FrameHealthCardDrawing.Input(reader: reader, rates: source.screen ? Rates(requestedHz: 0, periodMs: 0) : rates,
-            displayMaximumHz: display.maximumHz, screen: source.screen)
-        return FrameHealthCardDrawing.picture(title: summary.title, context: summary.context, input: input, chart: chart,
-            table: table, results: summary.results, notes: summary.notes, palette: palette)
+    /// What Share gives, one text for a person and an agent alike: what it holds, the summary, then each agent report
+    /// under a heading naming its source. Where the face shows the screen's frames there are two reports, the screen's
+    /// and Exact's frames': an app drawn by GPU surfaces has frame times only on Exact's clock, and each report keeps to
+    /// its own 4000 bytes (LLP 1079.000 §7.4).
+    static func shared(summary: String, status: FrameHealthCardFace.Status, reports: [(source: String, report: Data)]) -> String {
+        let names = [FrameHealth.screenSource: "the screen's frames", "exact-app-display-link": "Exact's frame clock",
+            "native-scroll-ui-update": "native scrolling"]
+        let state = switch status { case .live: "live"; case .paused: "paused"; case .idle: "idle" }
+        let intro = ["Frame health, " + state,
+            "A summary, then the full data for an AI agent as \(reports.count == 1 ? "one JSON report" : "\(reports.count) JSON reports")."]
+            + (status == .paused ? ["Paused: the summary's figures end when the card was paused; the reports are from now."] : [])
+            + ["Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2."]
+        let sections = reports.enumerated().map { index, item in
+            let name = names[item.source].map { "\($0) (\(item.source))" } ?? item.source
+            return "Agent report" + (reports.count > 1 ? " \(index + 1) of \(reports.count)" : "") + ", \(name):\n"
+                + String(decoding: item.report, as: UTF8.self)
+        }
+        return ([intro.joined(separator: "\n"), summary] + sections).joined(separator: "\n\n")
     }
 }

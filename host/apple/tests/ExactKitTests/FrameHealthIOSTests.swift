@@ -441,8 +441,8 @@ final class FrameHealthIOSTests: XCTestCase {
         add(buildInformation)
         root.dismiss(animated: false) { dismissed = true }
         waitFor("the native developer sheet is dismissed") { dismissed }
-        // Details takes the place of the card's charts at the same size, and Share asks what to share,
-        // then opens the share sheet with that one item. The card presents from its own window's root, over itself
+        // Details takes the place of the card's charts at the same size. The card presents from its own window's root,
+        // over itself
         let cardRoot = try XCTUnwrap(cardWindow.rootViewController)
         func presented<Controller: UIViewController>(_: Controller.Type) throws -> Controller {
             wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in cardRoot.presentedViewController is Controller }, object: nil)], timeout: 10)
@@ -497,17 +497,11 @@ final class FrameHealthIOSTests: XCTestCase {
         add(details)
         overlay.card.activate?(.details)
         XCTAssertTrue(overlay.card.detailsScroll.isHidden, "a second tap returns the charts")
-        overlay.card.activate?(.share)
-        let choices = try presented(UIAlertController.self)
-        // Measuring the screen, Share gives Exact's frames as an agent report of their own too
-        XCTAssertEqual(choices.actions.map(\.title), overlay.observing
-            ? ["Agent Report: Screen", "Agent Report: Exact's Frames", "Summary", "Image", "Cancel"]
-            : ["Agent Report", "Summary", "Image", "Cancel"])
+        // Share presents the share sheet itself. On a phone the sheet rises from the bottom edge, and UIKit replaces the
+        // popover's source
         if #available(iOS 18.0, *) { XCTAssertTrue(overlay.observing) }
-        close()
-        overlay.share(.image)
-        // On a phone the sheet rises from the bottom edge, and UIKit replaces the popover's source
-        XCTAssertEqual(try presented(UIActivityViewController.self).excludedActivityTypes, [.assignToContact])
+        overlay.card.activate?(.share)
+        _ = try presented(UIActivityViewController.self)
         close()
         // The title opens the definitions, over the card
         overlay.card.activate?(.title)
@@ -792,9 +786,10 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.setVisible(false)
     }
 
-    /// Measuring the screen, the card's Share gives the screen's report and Exact's frames' as two, each naming the other:
-    /// an app drawn by GPU surfaces has frame times only on Exact's clock, in a production bake too (LLP 1079.000 §7.4)
-    func testMeasuringTheScreenShareGivesExactsFramesAsAReportOfTheirOwn() throws {
+    /// Measuring the screen, the card's Share gives one text, the summary and then the screen's report and Exact's frames',
+    /// each naming the other: an app drawn by GPU surfaces has frame times only on Exact's clock, in a production bake too
+    /// (LLP 1079.000 §7.4)
+    func testMeasuringTheScreenShareGivesBothReportsInOneText() throws {
         guard #available(iOS 18.0, *) else { throw XCTSkip("UIUpdateLink is available from iOS 18") }
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "a real host window for the frame-health card")
@@ -824,24 +819,31 @@ final class FrameHealthIOSTests: XCTestCase {
         let late = CACurrentMediaTime()
         scroll.record(arrival: late, target: late + 1 / 120, period: 1 / 120, finished: late + 0.03)
         XCTAssertTrue(health.reportSource === scroll, "the scroll's late frame is the newest")
-        func report(_ kind: FrameHealthShare) throws -> [String: Any] {
-            var data: Data?
-            overlay.report(kind) { data = $0 }
-            waitFor("the report is encoded") { data != nil }
-            return try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(data)) as? [String: Any])
+        var shared: String?
+        overlay.shareText { shared = $0 }
+        waitFor("the reports are encoded") { shared != nil }
+        let text = try XCTUnwrap(shared)
+        XCTAssertTrue(text.hasPrefix("Frame health, live\nA summary, then the full data for an AI agent as 2 JSON reports.\n"
+            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\nWhat was measured\nEvery UI update of this app on its screen, each one a frame."), "what it holds, then the summary: \(text)")
+        let lines = text.components(separatedBy: "\n")
+        XCTAssertEqual(lines.filter { $0.hasPrefix("Agent report") }, ["Agent report 1 of 2, the screen's frames (ui-update):",
+            "Agent report 2 of 2, Exact's frame clock (\(health.source)):"])
+        func report(_ source: String) throws -> [String: Any] {
+            let heading = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("Agent report") && $0.hasSuffix("(\(source)):") })
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[heading + 1].utf8)) as? [String: Any])
         }
-        let clock = try report(.clockReport)
+        let clock = try report(health.source)
         XCTAssertEqual(clock["source"] as? String, health.source)
-        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update as a report of its own")
+        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update's report beside it")
         XCTAssertTrue((clock["otherSources"] as? [[String: Any]])?.contains { $0["source"] as? String == "ui-update" } == true)
         let core = try XCTUnwrap(clock["coreSinceReload"] as? [String: Any])
         XCTAssertGreaterThan(Int(core["frameIntervals"] as? String ?? "") ?? 0, 30, "its frame times")
         XCTAssertNotNil((core["frameTimeBoundsNs"] as? [String: Any])?["p99"])
         XCTAssertEqual(((core["workBoundsNs"] as? [String: Any])?["maximum"] as? [UInt64])?.first, 24_000_000, "and the work of every frame, in its bin")
         XCTAssertFalse((clock["hitches"] as? [[Any]] ?? []).isEmpty, "with its late frame")
-        let screen = try report(.report)
+        let screen = try report("ui-update")
         XCTAssertEqual(screen["source"] as? String, "ui-update")
-        XCTAssertEqual(screen["selection"] as? String, "one-source; the card's Share gives \(health.source) as a report of its own")
+        XCTAssertEqual(screen["selection"] as? String, "one-source; the card's Share gives \(health.source)'s report beside it")
     }
 
     /// The face draws each band as a picture of its own, and a read draws again only the bands whose figures changed, so

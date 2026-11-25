@@ -28,8 +28,8 @@ enum FrameHealthReport {
     fileprivate static var encoding = false
     fileprivate static var nextAgentReport: Double = 0
 
-    /// The report of `health`'s frames. `beside` is the source the card's Share gives as a report of its own, where the
-    /// card measures the screen.
+    /// The report of `health`'s frames. `beside` is the source whose report the card's Share gives beside this one, where
+    /// the card measures the screen.
     static func snapshot(health: FrameHealth, session: ExactSession?, now: Double = CACurrentMediaTime(),
                          beside: FrameHealth? = nil) -> [String: Any] {
         health.expireCapture(at: now)
@@ -134,7 +134,7 @@ enum FrameHealthReport {
             }
             packet["otherSources"] = others.map { ["source": $0.source, "retainedEvents": $0.historyStatus().retained] as [String: Any] }
             // An agent can ask for another source; a production bake takes no agent, and its card's Share gives the other
-            packet["selection"] = beside.map { "one-source; the card's Share gives \($0.source) as a report of its own" }
+            packet["selection"] = beside.map { "one-source; the card's Share gives \($0.source)'s report beside it" }
                 ?? "one-source; request app or scroll explicitly for another source"
         }
         if var time = packet["time"] as? [String: Any] { time["clamped"] = clamped; packet["time"] = time }
@@ -188,23 +188,30 @@ enum FrameHealthReport {
             "detailMayHaveBeenOff": true]
     }
 
-    /// Copy bounded evidence on the main thread, then encode it on a utility worker, one export at a time so that no
-    /// encoding backlog builds.
     static func prepare(health: FrameHealth, session: ExactSession?, now: Double = CACurrentMediaTime(), beside: FrameHealth? = nil,
                         extra: [String: Any] = [:], completion: @escaping (Data) -> Void) {
-        guard !health.reportInFlight, !encoding else {
-            completion(refusal("report-busy", retryAfterMs: 1000, extra: extra))
+        prepare([(health, beside)], session: session, now: now, extra: extra) { completion($0[0].report) }
+    }
+
+    /// The reports of `sources`, in order, each naming the source given beside it. Copy bounded evidence on the main
+    /// thread, then encode it on a utility worker, one export at a time so that no encoding backlog builds; while one is
+    /// in flight, every report of the batch is refused.
+    static func prepare(_ sources: [(health: FrameHealth, beside: FrameHealth?)], session: ExactSession?,
+                        now: Double = CACurrentMediaTime(), extra: [String: Any] = [:],
+                        completion: @escaping ([(source: String, report: Data)]) -> Void) {
+        guard !encoding, !sources.contains(where: { $0.health.reportInFlight }) else {
+            completion(sources.map { ($0.health.source, refusal("report-busy", retryAfterMs: 1000, extra: extra)) })
             return
         }
-        health.reportInFlight = true
         encoding = true
-        let packet = snapshot(health: health, session: session, now: now, beside: beside)
+        for source in sources { source.health.reportInFlight = true }
+        let packets = sources.map { ($0.health.source, snapshot(health: $0.health, session: session, now: now, beside: $0.beside)) }
         DispatchQueue.global(qos: .utility).async {
-            let data = encode(packet, extra: extra)
-            DispatchQueue.main.async { [weak health] in
-                health?.reportInFlight = false
+            let reports = packets.map { (source: $0.0, report: encode($0.1, extra: extra)) }
+            DispatchQueue.main.async {
+                for source in sources { source.health.reportInFlight = false }
                 encoding = false
-                completion(data)
+                completion(reports)
             }
         }
     }

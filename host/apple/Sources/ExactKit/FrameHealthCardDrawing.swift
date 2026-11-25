@@ -1,15 +1,14 @@
 import CoreGraphics
 import CoreText
 import Foundation
-import ImageIO
 #if canImport(UIKit)
 import UIKit
 #else
 import AppKit
 #endif
 
-/// The card's charts and its shared picture, drawn by hand on one opaque surface in a context whose
-/// y axis points down (LLP 1079.000 §7.2). Shared by iOS and macOS.
+/// The card's charts, drawn by hand on one opaque surface in a context whose y axis points down
+/// (LLP 1079.000 §7.2). Shared by iOS and macOS.
 enum FrameHealthCardDrawing {
     /// Opaque colors: the translucent system roles composited over the card's background ahead of
     /// time, as Exact's roles are on the card's web design.
@@ -94,10 +93,9 @@ enum FrameHealthCardDrawing {
     static let titleFont = semibold(11)
 
     /// Draw the frame-rate chart (0), the frame-time chart (1), or both, 16 points apart, filling
-    /// `rect`, with `lines` up to their newest mark. Without them, the plots are left to the card's
-    /// layers (`FrameHealthChart`).
+    /// `rect`, leaving the plots to the card's layers (`FrameHealthChart`).
     static func charts(_ ctx: CGContext, _ rect: CGRect, _ input: Input, expanded: Int?, palette: Palette,
-                       lines: (columns: [FrameHealthChart.Column], latest: Double)? = nil, within outline: CGPath? = nil) {
+                       within outline: CGPath? = nil) {
         ctx.setFillColor(palette.background)
         ctx.fill(rect)
         for (chart, area, plot) in plots(rect, input, expanded: expanded) {
@@ -121,11 +119,6 @@ enum FrameHealthCardDrawing {
                 }
                 text(ctx, "30s ago", x: plot.left, y: area.maxY - 6, labelFont, palette.secondary, .left, within: outline)
                 text(ctx, "now", x: plot.right, y: area.maxY - 6, labelFont, palette.secondary, .right, within: outline)
-            }
-            if let lines {
-                var plot = plot
-                plot.now = lines.latest
-                plotLines(ctx, chart: chart, plot: plot, columns: lines.columns, latest: lines.latest, palette: palette, margin: 0)
             }
         }
     }
@@ -400,56 +393,6 @@ enum FrameHealthCardDrawing {
         ctx.textPosition = CGPoint(x: align == .right ? x - width : x, y: y + (ascent - descent) / 2)
         CTLineDraw(line, ctx)
         ctx.restoreGState()
-    }
-
-    /// The shared picture: the context lines, both charts, every figure in a table whose columns are
-    /// right-aligned in tabular digits, then Details' results. PNG data at twice the point size.
-    static func picture(title: String, context: [String], input: Input, chart: FrameHealthChart, table: [[String]],
-                        results: [String], notes: [String], palette: Palette) -> Data? {
-        let body = tabular(CTFontCreateUIFontForLanguage(.system, 11, nil)!)
-        let heading = semibold(15)
-        let lineHeight: CGFloat = 18, gap: CGFloat = 16, margin: CGFloat = 16
-        let nameWidth = table.dropFirst().map { width($0[0], body) }.max() ?? 0
-        let column = table.flatMap { $0.dropFirst() }.map { width($0, body) }.max() ?? 0
-        let columns = CGFloat(max(0, (table.first?.count ?? 1) - 1))
-        let prose = (context + results + notes).map { width($0, body) }.max() ?? 0
-        let size = CGSize(width: ceil(max(380 - 2 * margin, nameWidth + columns * (gap + column), prose)) + 2 * margin,
-            height: 40 + CGFloat(context.count) * lineHeight + 12 + 80 + 16 + 104 + 16
-                + CGFloat(table.count + results.count + notes.count) * lineHeight + 24)
-        let scale: CGFloat = 2
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
-                  bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
-        else { return nil }
-        ctx.translateBy(x: 0, y: size.height * scale)
-        ctx.scaleBy(x: scale, y: -scale)
-        ctx.setFillColor(palette.background)
-        ctx.fill(CGRect(origin: .zero, size: size))
-        text(ctx, title, x: margin, y: 22, heading, palette.label, .left)
-        var y: CGFloat = 40
-        for line in context { y += lineHeight; text(ctx, line, x: margin, y: y - 4, body, palette.label, .left) }
-        y += 12
-        let chartWidth = size.width - 2 * margin
-        charts(ctx, CGRect(x: margin, y: y, width: chartWidth, height: 200), input, expanded: nil, palette: palette,
-            lines: (chart.columns, chart.latest))
-        y += 80 + 16 + 104 + 16
-        for (index, row) in table.enumerated() {
-            y += lineHeight
-            if index > 0 { text(ctx, row[0], x: margin, y: y - 4, body, palette.secondary, .left) }
-            for (i, value) in row.dropFirst().enumerated() {
-                text(ctx, value, x: margin + nameWidth + CGFloat(i + 1) * (gap + column), y: y - 4, body,
-                    index == 0 ? palette.secondary : palette.label, .right)
-            }
-        }
-        y += 6
-        for result in results { y += lineHeight; text(ctx, result, x: margin, y: y - 4, body, palette.label, .left) }
-        y += 6
-        for note in notes { y += lineHeight; text(ctx, note, x: margin, y: y - 4, body, palette.secondary, .left) }
-        guard let image = ctx.makeImage() else { return nil }
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, nil)
-        return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
     /// The font with tabular digits, so a column of figures lines up.

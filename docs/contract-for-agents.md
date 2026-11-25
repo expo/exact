@@ -6645,9 +6645,9 @@ or Idle; the requested rate and any system limit; frame rate
 and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate and
 frame time, or a table of work time, late frames, maximum frame time and pacing
 changes. A tap on a chart expands it; a tap on the title defines each figure; Share,
-at its top right, asks what to share, Agent Report, Summary or Image, and opens the
-system's share sheet with that one item; where the card measures the screen, it offers
-two agent reports, the screen's and Exact's frames'. The card states no pass or fail of its own;
+at its top right, opens the system's share sheet at once with one text: the summary,
+then the agent report (two where the card measures the screen, the screen's and
+Exact's frames'). On the Mac the picker offers Copy first. The card states no pass or fail of its own;
 Details, at the end of the line under the header, swaps the figures and charts for
 `perf frames health`'s three results over the last 5 s with their reasons and the counts
 behind them, in rows that scroll within the card; Done in its place returns. These are timing proxies; actual presentation and
@@ -6717,12 +6717,14 @@ no screen's measurement (a video, `XCTApplicationLaunchMetric`). A simulator's n
 
 Run an Apple app on a connected phone with `bun host/apple/build.mjs --device --run`.
 Open the four-finger menu and choose **Frame Health**, which in a production bake starts
-collection, reproduce the hitch, then tap Share on the card and choose Agent Report; the share sheet takes
-the JSON text. Exact creates no report file or automatic upload. A person can send
+collection, reproduce the hitch, then tap Share on the card; the share sheet takes
+one text: a line saying what it holds, the summary, then each JSON report under a
+heading that names its source, such as `Agent report 1 of 2, the screen's frames (ui-update):`.
+Exact creates no report file or automatic upload. A person can send
 that text to an agent. The system share destination controls any storage it creates.
-On iOS 18 and later the card measures the screen, and Share offers **Agent Report:
-Screen** (`ui-update`) and **Agent Report: Exact's Frames** (`exact-app-display-link`),
-each a report of its own within 4 KB. The screen's has no frame times; an app drawn by
+On iOS 18 and later the card measures the screen, and the text holds two reports, the
+screen's (`ui-update`) and Exact's frames' (`exact-app-display-link`), each within
+4 KB. The screen's has no frame times; an app drawn by
 GPU surfaces, whose canvases Exact's frame clock ticks, has its frame times and their
 work in Exact's, its GPU execution and presentation unobserved.
 
@@ -6795,8 +6797,8 @@ packets. No report is automatically persisted, queued for retry or sent periodic
 A report covers one source. The default selects the source with the most recent
 retained hitch; `report app` or `report scroll` selects explicitly. `source` identifies
 it, `otherSources` names retained evidence in other sources, and `selection` says how
-to get another: an agent's request, or, for a report the card's Share gave, its other
-agent report. Counts and generations
+to get another: an agent's request, or, for a report the card's Share gave, the
+report beside it. Counts and generations
 belong to their named source. Forwarded apply context does not count an app apply or
 its deadline again as a native-scroll event.
 
