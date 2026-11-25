@@ -205,8 +205,8 @@ internal class DragIn(private val root: View) {
  * its first link that is not a file. A `file:` URI is no file to take: Android shares files between apps as content
  * URIs, which the drop's grant covers, and a path would be read with the app's own rights. Android's sources send a
  * link as a text item: Exact's own, a link alone in an item (LLP 1094.000 D7); Chrome's, its title, a line break and
- * its address. So while there is no link yet, a text item whose last line is one `http:` or `https:` link is that
- * link, and its lines before it are text, as a link card's title is on iOS; a link anywhere else stays text.
+ * its address. So while there is no link yet, a text item whose whole last line is an `http://` or `https://` link
+ * is that link, and its lines before it are text, as a link card's title is on iOS; a link anywhere else stays text.
  */
 internal data class DropItems(val files: List<Uri>, val text: String, val url: String) {
     /** The items as exact2 reads them (`CanvasHost::drop_landed`), with the copies' [paths]. */

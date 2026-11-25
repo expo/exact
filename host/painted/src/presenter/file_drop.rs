@@ -126,7 +126,8 @@ impl<D: DataSource> Presenter<D> {
     pub fn drag_over(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<ViewId> {
         self.drag_at(point, held);
         self.drag_flush();
-        self.drop_target(point)
+        let hit = self.drag_hit(point);
+        self.drop_target(hit)
     }
 
     /// Cancel the drag, including when it leaves the window: the nodes under
@@ -167,12 +168,12 @@ impl<D: DataSource> Presenter<D> {
     /// heard. All of it is decided before any handler runs. The drop's
     /// number, or None, and the drag ends, when nothing takes it.
     pub fn drop_released(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<u32> {
-        let found = self.drop_target(point).and_then(|t| {
+        let hit = self.drag_at(point, held);
+        let found = self.drop_target(hit).and_then(|t| {
             let key = self.host.kernel().node(t)?.key;
             let record = self.pointer_record(t, point.0, point.1, -1, 0)?;
             Some((key, (record.offset_x, record.offset_y)))
         });
-        self.drag_at(point, held);
         let Some((target, offsets)) = found else {
             self.drag_ended();
             self.drag_flush();
@@ -252,8 +253,7 @@ impl<D: DataSource> Presenter<D> {
         // still under way is over
         self.drag_flush();
         if self.drag_in.over {
-            let chain = self.drag_chain(self.drag_in.point);
-            self.drag_crossings(chain);
+            self.drag_at(self.drag_in.point, self.drag_in.held);
         }
         self.drag_flush();
         delivered
@@ -386,9 +386,9 @@ impl<D: DataSource> Presenter<D> {
 
     /// The nodes under `point` that hear `dragenter` or `dragleave`,
     /// innermost first.
-    fn drag_chain(&mut self, point: (f32, f32)) -> Vec<NodeKey> {
+    fn drag_chain(&mut self, hit: Option<ViewId>) -> Vec<NodeKey> {
         let mut chain = Vec::new();
-        let mut at = self.drag_hit(point);
+        let mut at = hit;
         while let Some(node) =
             at.and_then(|id| self.pointer_node(id, &[EventKind::Dragenter, EventKind::Dragleave]))
         {
@@ -403,19 +403,20 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The drag is at `point`: its chain there is recorded and its enters
-    /// and leaves queued.
-    fn drag_at(&mut self, point: (f32, f32), held: KeyModifiers) {
+    /// and leaves queued, before any is sent. What it hit there.
+    fn drag_at(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<ViewId> {
         self.drag_in.over = true;
         self.drag_in.point = point;
         self.drag_in.held = held;
-        let chain = self.drag_chain(point);
+        let hit = self.drag_hit(point);
+        let chain = self.drag_chain(hit);
         self.drag_crossings(chain);
+        hit
     }
 
-    /// The innermost node that takes a drop at `point`.
-    fn drop_target(&mut self, point: (f32, f32)) -> Option<ViewId> {
-        let hit = self.drag_hit(point)?;
-        self.pointer_node(hit, &[EventKind::Drop])
+    /// The innermost node that takes a drop over `hit`.
+    fn drop_target(&self, hit: Option<ViewId>) -> Option<ViewId> {
+        self.pointer_node(hit?, &[EventKind::Drop])
     }
 
     /// The drag is over `keys`, innermost first: a node it left will hear a
@@ -471,28 +472,37 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Send the queued enters and leaves in order, each to a node still the
-    /// one it was decided for: a handler that renews or disables one runs
-    /// before the next is sent. An enter goes only to a node that still
-    /// hears drags, and one that does not then hears no leave either.
+    /// one it was decided for: a handler that renews, disables or hides one
+    /// runs before the next is sent. An enter goes only to a node that still
+    /// hears drags and has a box, and one that does not then hears no leave
+    /// either.
     fn drag_flush(&mut self) {
         while let Some(sent) = self.drag_in.outbox.pop_front() {
             let Some(id) = self.host.kernel().node_by_key(sent.key).map(|n| n.id) else {
                 continue;
             };
             let kinds = [EventKind::Dragenter, EventKind::Dragleave];
-            if sent.kind == EventKind::Dragenter && self.pointer_node(id, &kinds) != Some(id) {
+            let enter = sent.kind == EventKind::Dragenter;
+            let heard = (!enter || self.pointer_node(id, &kinds) == Some(id))
+                && self.drag_event(id, sent.kind, sent.point, sent.held);
+            if enter && !heard {
                 self.drag_in.unentered(sent.key, sent.drop);
-                continue;
             }
-            self.drag_event(id, sent.kind, sent.point, sent.held);
         }
     }
 
     /// Send an enter or a leave, which carry no data (LLP 1094.001 D1), to
-    /// `id`, its record at `point` with `held`.
-    fn drag_event(&mut self, id: ViewId, kind: EventKind, point: (f32, f32), held: KeyModifiers) {
+    /// `id`, its record at `point` with `held`; false when it has no box to
+    /// take a record from.
+    fn drag_event(
+        &mut self,
+        id: ViewId,
+        kind: EventKind,
+        point: (f32, f32),
+        held: KeyModifiers,
+    ) -> bool {
         let Some(record) = self.pointer_record(id, point.0, point.1, -1, 0) else {
-            return;
+            return false;
         };
         let data = DropEvent {
             offset_x: record.offset_x,
@@ -509,6 +519,7 @@ impl<D: DataSource> Presenter<D> {
         if let Some(error) = self.pointer_dispatch(id, kind, event, self.pointer_now()) {
             self.host.log(error);
         }
+        true
     }
 
     /// Send pending drop `drop` to `target` with what arrived, at the record it had at its release.
@@ -1077,6 +1088,53 @@ mod tests {
             log(&p),
             "leave A;enter B;",
             "A's leave enabled B, under the drag still over the window"
+        );
+    }
+
+    #[test]
+    fn an_enter_to_a_node_hidden_at_the_release_owes_no_leave_when_the_drop_fails() {
+        let mut p = booted(
+            r#"component App
+  state look = "flex"
+  state log = ""
+  action innerIn(e: DragEvent)
+    look = "none"
+    log = `${log}enter inner;`
+  action innerOut(e: DragEvent)
+    log = `${log}leave inner;`
+  action outerIn(e: DragEvent)
+    log = `${log}enter outer;`
+  action outerOut(e: DragEvent)
+    log = `${log}leave outer;`
+  action shown(e: DragEvent)
+    look = "flex"
+  action received(e: DragEvent)
+    log = `${log}drop;`
+  view
+    row width=300 height=200
+      button "Show" width=100 height=100 dragenter=shown
+      column width=150 height=200 display=look dragenter=outerIn dragleave=outerOut
+        button "Zone" width=150 height=100 drop=received dragenter=innerIn dragleave=innerOut
+"#,
+        );
+        let id = p
+            .drop_released((150., 50.), KeyModifiers::default())
+            .unwrap();
+        assert_eq!(
+            log(&p),
+            "enter inner;",
+            "the column was hidden before its enter"
+        );
+        p.drag_over((50., 50.), KeyModifiers::default());
+        assert_eq!(
+            p.drop_landed(id, &Dropped::default()),
+            None,
+            "nothing arrived"
+        );
+        assert_eq!(
+            log(&p),
+            "enter inner;leave inner;",
+            "the column, shown again, hears no leave of the drop"
         );
     }
 }

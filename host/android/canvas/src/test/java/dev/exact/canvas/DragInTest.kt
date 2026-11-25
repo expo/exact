@@ -206,16 +206,17 @@ class DragInTest {
     @Test fun aFieldDecidesAtTheDropByWhatExact2AnswersThenNotByTheFramesState() {
         val two = twoFields(state = 1)
         Journal.owner = 2
-        drag(two.root, 170f, 230f) { Journal.owner = 1 }
+        drag(two.root, 170f, 230f) { assertEquals("the hover asks exact2 nothing", 0, Journal.asked); Journal.owner = 1 }
+        assertEquals("exact2 is asked as the drop lands", 1, Journal.asked)
         assertEquals("its node takes drops as the drop lands", "2", two.second.text.toString())
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
         Journal.drags.clear()
         val owned = twoFields(state = 1 or 4)
         Journal.owner = 1
-        drag(owned.root, 170f, 230f) { Journal.owner = 2 }
+        drag(owned.root, 170f, 230f) { assertEquals("the hover asks exact2 nothing", 1, Journal.asked); Journal.owner = 2 }
+        assertEquals("exact2 is asked as the drop lands", 2, Journal.asked)
         assertTrue("its node took drops at the start and no longer does", owned.second.text.toString().contains("Fuji"))
         assertEquals(listOf("over 170 230", "dropped 170 230"), Journal.drags)
-        assertEquals("exact2 is asked once a drop, as it lands", 2, Journal.asked)
     }
 
     @Test fun aNodePaintedOverTheFieldTakesTheDropThere() {
@@ -238,14 +239,25 @@ class DragInTest {
         assertTrue(resolver.getType(Uri.parse("content://typed/photo.png")) == "image/png")
     }
 
-    /** An item's bytes that the test hands out: the read waits, once it has begun, until [release]. */
+    /** An item's bytes that the test hands out: the read waits, once it has begun, until [release], and fails at
+     * once on the thread that made it, which a copy on the main thread would block. */
     private class Held : java.io.InputStream() {
+        private val maker = Thread.currentThread()
         val reading = java.util.concurrent.CountDownLatch(1)
-        val released = java.util.concurrent.CountDownLatch(1)
+        private val released = java.util.concurrent.CountDownLatch(1)
+        @Volatile var reader: Thread? = null
         private val bytes = "pixels".byteInputStream()
         fun release() = released.countDown()
-        override fun read(): Int { reading.countDown(); released.await(); return bytes.read() }
-        override fun read(b: ByteArray, off: Int, len: Int): Int { reading.countDown(); released.await(); return bytes.read(b, off, len) }
+        override fun read(): Int = held { bytes.read() }
+        override fun read(b: ByteArray, off: Int, len: Int): Int = held { bytes.read(b, off, len) }
+        private fun held(read: () -> Int): Int {
+            val thread = Thread.currentThread()
+            if (thread === maker) throw AssertionError("the copy read on the main thread")
+            reader = thread
+            reading.countDown()
+            released.await()
+            return read()
+        }
     }
 
     @Test fun aDropTheWindowTakesLandsOnceWhenItsCopiesEnd() {
@@ -256,20 +268,19 @@ class DragInTest {
         shadowOf(resolver).registerInputStream(photo, held)
         val landed = { Journal.drags.filter { it.startsWith("landed") } }
         fun idle() = shadowOf(android.os.Looper.getMainLooper()).idle()
-        var copier: Thread? = null
         try {
             val two = twoFields(state = 1 or 4)
             Journal.release = 7
             val clip = ClipData("photo", arrayOf("image/png"), ClipData.Item(photo)).apply { addItem(ClipData.Item("Glasshouse")) }
             assertTrue(drag(two.root, 200f, 330f, clip, local = DragOut.OWN))
             assertTrue("the copy began reading", held.reading.await(5, java.util.concurrent.TimeUnit.SECONDS))
-            copier = Thread.getAllStackTraces().keys.single { it.name == "exact-drop" && it.isAlive }
             idle()
             assertEquals("the drag ended, and its copy is still reading", emptyList<String>(), landed())
         } finally {
             held.release()
         }
-        copier!!.join(5000)
+        val copier = held.reader!!
+        copier.join(5000)
         assertFalse("the copy ended", copier.isAlive)
         idle()
         assertEquals("one landing, once the copy ended", 1, landed().size)

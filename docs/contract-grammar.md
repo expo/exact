@@ -2545,7 +2545,7 @@ readable under `fs.read doc:/`), `text`, `url` and the modifiers. `text` is
 the drag's plain text, its items' joined by line breaks; `url` is its first
 link that is not a file (a `file:` URL is a file), of any scheme, so check
 it before following it. Each is `""` when the drag has none, and neither is
-made from the other, but on Android (below): a link whose source gives no plain text has `text` `""`. Each file
+made from the other: a link whose source gives no plain text has `text` `""`. Each file
 arrives as a `doc:` handle, whatever its type, on the hosts that take files (the reference's table), and a dropped folder, on a host that takes one, is a folder's handle (`fs.stat` says
 `isDirectory`, `fs.readdir` lists it); the app never learns an absolute
 path. A drag with files over an `input` or a `textarea` inside such a node
@@ -2570,10 +2570,10 @@ from the same one, a file as a copy of its `content:` item and no folder,
 and no `file:` path, which another app cannot share; a field there keeps
 text, links and text files, as Android's text views do, unless the field
 declares `drop`, and gives a file to the `drop` above it. Android's apps
-send a link as text, so while a drop has no `url` yet, a text item whose
-last line is one `http:` or `https:` link, alone or after a title as
-Chrome sends one, gives that link as `url` and the lines before it as
-`text`. tvOS, Linux and the terminal take no drop. The driver's
+send a link as text, so Android alone makes `url` from text: while a drop
+has no `url` yet, a text item whose whole last line is an `http://` or
+`https://` link gives that link as `url`, and its lines before it, such as
+the title Chrome sends, as `text`. tvOS, Linux and the terminal take no drop. The driver's
 `tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
 folders (not on iOS or Android), text and a link, at least one of them, as a test's
 `tap "zone" drop …` step does.
