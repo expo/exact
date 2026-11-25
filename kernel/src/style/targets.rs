@@ -189,6 +189,11 @@ pub struct NativeTarget {
     /// Its `safeAreaInsets`, top right bottom left in its own coordinates;
     /// `None` while it is unavailable (unattached, unconvertible).
     pub insets: Option<[f32; 4]>,
+    /// Its view's bounds converted into its window's coordinates, x y width height, the
+    /// bounding rectangle where a transform scales or rotates the view (D9); `None` out of a
+    /// window or where its host gives none. Its insets stay in its own coordinates.
+    /// `exactNativeChain` answers it, and no layout reads it.
+    pub frame: Option<[f32; 4]>,
 }
 
 /// An entry of the native chain.
@@ -298,9 +303,12 @@ const STALE: &str =
 /// taken, as UIKit gives a window's root one under a negative addition past its insets (LLP
 /// 1123 D11); a length that reads it is clamped to its property's range, as a `calc()` is.
 fn insets_refusal(target: &NativeTarget) -> Option<&'static str> {
-    (target.insets)
-        .is_some_and(|i| !i.iter().all(|v| v.is_finite()))
-        .then_some("nonfinite insets; report a target without insets as unavailable")
+    if (target.insets).is_some_and(|i| !i.iter().all(|v| v.is_finite())) {
+        return Some("nonfinite insets; report a target without insets as unavailable");
+    }
+    (target.frame)
+        .is_some_and(|f| !f.iter().all(|v| v.is_finite()) || f[2] < 0.0 || f[3] < 0.0)
+        .then_some("a nonfinite frame or one of negative size; report a target out of its window without one")
 }
 
 /// Why `target` cannot be registered over `last`, the name's last

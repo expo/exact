@@ -6184,7 +6184,13 @@ focus, may read a fact, as a UIKit app chooses a popover or a sheet by its width
 button is pressed: it runs once per event, so it cannot feed back. A fact may decide
 content: sizes, text and which content shows. A report that owes no layout, such as a
 band no style reads, reaches the facts at the next layout. `exactNativeChain(id)` answers
-`available` false, its `entries` `none`, until hosts report their native chains.
+the native targets of the owner holding the node `id` names, or the session view's outside
+every owner, as `entries`: the owner's controller and each `parent` by `number` from 1, then
+the related targets (`presenter`, `session`, `root`, `window` and the rest) by `relation`.
+Each has `kinds` (`navigation`, `tab`, `split`, `column`), `id`, `generation`, `frame` (its
+bounds in its window) and `insets` (its raw safe area in its own coordinates), the last two
+`none` while it is unavailable. It answers `available` false, its `entries` `none`, where the
+host reported no chain, as no host does yet.
 `exactSafeAreaUnsettled()` answers `available`, `count`, the boxes the last layout left
 unsettled, and `ids`, the `id`s of those that have one.
 

@@ -32,12 +32,15 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let first = try XCTUnwrap(update.chain.first)
         XCTAssertEqual(first.target.insets, view.safeAreaInsets)
         XCTAssertEqual(first.target.id, TargetIds.id(of: view))
+        // Each target's coordinate space is its bounds in its window, the window's its own
+        XCTAssertEqual(first.target.frame, view.convert(view.bounds, to: nil))
         let navigation = try XCTUnwrap(route.navigationController?.view)
         let named = update.chain.first { $0.kinds & OwnerUpdateIOS.Kind.navigation != 0 }
         XCTAssertEqual(named?.target.insets, navigation.safeAreaInsets)
         let window = try XCTUnwrap(view.window)
         let windowTarget = update.relations.first { $0.relation == OwnerUpdateIOS.Relation.window }
         XCTAssertEqual(windowTarget?.target.insets, window.safeAreaInsets)
+        XCTAssertEqual(windowTarget?.target.frame, window.bounds)
         let margins = try XCTUnwrap(update.margins)
         XCTAssertEqual(margins.root, view.layoutMargins)
         XCTAssertEqual(margins.plain, UIView().layoutMargins)
@@ -140,6 +143,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertTrue(update.barRegions.allSatisfy { $0 == nil })
         XCTAssertEqual(update.chain.count, 1)
         XCTAssertNil(update.chain[0].target.insets)
+        XCTAssertNil(update.chain[0].target.frame)
     }
 
     func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
@@ -202,7 +206,8 @@ final class OwnerUpdateIOSTests: XCTestCase {
         var update = OwnerUpdateIOS()
         update.band = UIEdgeInsets(top: 1, left: 4, bottom: 3, right: 2)
         update.chain = [.init(target: .init(id: 5, generation: 6, insets: nil), kinds: OwnerUpdateIOS.Kind.navigation)]
-        update.relations = [.init(relation: OwnerUpdateIOS.Relation.window, target: .init(id: 7, generation: 1, insets: UIEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)))]
+        update.relations = [.init(relation: OwnerUpdateIOS.Relation.window, target: .init(id: 7, generation: 1, insets: UIEdgeInsets(top: 8, left: 0, bottom: 0, right: 0),
+                                                                                       frame: CGRect(x: 0, y: 0, width: 402, height: 874)))]
         update.margins = .init(root: UIEdgeInsets(top: 9, left: 12, bottom: 11, right: 10), plain: UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8),
                                minimum: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16), readableWidth: 672)
         update.keyboard = .init(frame: CGRect(x: 0, y: 538, width: 402, height: 336), docked: true)
@@ -213,8 +218,8 @@ final class OwnerUpdateIOSTests: XCTestCase {
         func u64(_ v: UInt64) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
         w.append(1); f(1, 2, 3, 4)
         u32(0)
-        u32(1); u64(5); u64(6); w.append(0); w.append(1 << 2)
-        u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0)
+        u32(1); u64(5); u64(6); w.append(0); w.append(0); w.append(1 << 2)
+        u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0); w.append(1); f(0, 0, 402, 874)
         w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); f(0, 16, 0, 16); f(672)
         w.append(1); f(0, 538, 402, 336); w.append(1)
         w.append(0)
@@ -223,7 +228,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         // A registration: the name's length and bytes, then the target after a presence byte
         let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
         w = [3] + Array("map".utf8) + [1]
-        u64(9); u64(2); w.append(1); f(30, 0, 0, 0)
+        u64(9); u64(2); w.append(1); f(30, 0, 0, 0); w.append(0)
         XCTAssertEqual([UInt8](registration), w)
     }
 

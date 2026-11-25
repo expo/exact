@@ -72,6 +72,7 @@ fn a_targets_start_takes_the_readers_direction_and_a_captures_its_declarers() {
         id: 1,
         generation: 1,
         insets: Some([10.0, 20.0, 30.0, 40.0]),
+        frame: None,
     };
     let report = NativeTargets {
         chain: vec![ChainEntry { target, kinds: 0 }],

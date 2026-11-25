@@ -51,7 +51,7 @@ impl<D: DataSource> Runner<D> {
         let source = self.plan.str(row.source);
         let fact: Fact = match facts::query(source, args)? {
             Query::Geometry { id, space } => facts::geometry(&self.kernel, &id, &space, generation),
-            Query::Chain => facts::chain(generation),
+            Query::Chain { id } => facts::chain(&self.kernel, &id, generation),
             Query::Unsettled => facts::unsettled(&self.kernel, generation),
         };
         facts::project(&self.plan, row.ty, &fact, source)

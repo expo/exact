@@ -10,6 +10,7 @@
 use crate::geometry::view_of;
 use crate::DataError;
 use exact_kernel::style::calc::Family;
+use exact_kernel::style::targets::{Kind, NativeTarget};
 use exact_kernel::{Kernel, ViewId};
 use exact_plan::{Plan, TypeKind, TypesId, Value};
 
@@ -163,8 +164,11 @@ pub enum Query {
         /// The space its frames are in.
         space: Space,
     },
-    /// `exactNativeChain`.
-    Chain,
+    /// `exactNativeChain`: the targets of the owner of the node `id` names.
+    Chain {
+        /// The node's `id`.
+        id: String,
+    },
     /// `exactSafeAreaUnsettled`.
     Unsettled,
 }
@@ -240,7 +244,7 @@ pub fn query(source: &str, args: &[Value]) -> Result<Query, DataError> {
             }
             Ok(Query::Geometry { id, space })
         }
-        CHAIN => id("the node whose owner's chain it reads").map(|_| Query::Chain),
+        CHAIN => id("the node whose owner's chain it reads").map(|id| Query::Chain { id }),
         _ => Ok(Query::Unsettled),
     }
 }
@@ -278,13 +282,57 @@ pub fn unsettled(kernel: &Kernel, generation: u64) -> Fact {
     unsettled_fact(kernel.layouts() > 0, generation, boxes.len(), ids.collect())
 }
 
-/// What `exactNativeChain` reads: the owner's native chain, which only a host that reports one
-/// has (D9; LLP 1123 stage 3).
-pub fn chain(generation: u64) -> Fact {
+/// What `exactNativeChain` reads of the node `id` names (D6, D9): the native chain of its owner,
+/// or the session view's outside every owner, then the relational targets beside it, as the host
+/// last reported them. A node that is gone, or whose holder's host reported no targets, is
+/// unavailable.
+pub fn chain(kernel: &Kernel, id: &str, generation: u64) -> Fact {
+    let Some(targets) = view_of(kernel, id).and_then(|view| kernel.native_targets(view)) else {
+        return chain_fact(false, generation, Fact::Absent);
+    };
+    let numbered = (targets.chain.iter().zip(1..))
+        .map(|(e, number)| target_fact(Some(number), None, e.kinds, &e.target));
+    let related = (targets.relations.iter()).map(|(r, t)| target_fact(None, Some(r.name()), 0, t));
+    chain_fact(
+        true,
+        generation,
+        Fact::List(numbered.chain(related).collect()),
+    )
+}
+
+fn chain_fact(available: bool, generation: u64, entries: Fact) -> Fact {
     Fact::Record(vec![
-        ("available", Fact::Bool(false)),
+        ("available", Fact::Bool(available)),
         ("generation", Fact::Number(generation as f64)),
-        ("entries", Fact::Absent),
+        ("entries", entries),
+    ])
+}
+
+/// One target of a chain answer: its number in the chain from 1 (the owner's controller) or its
+/// relation's name, its kinds' names, its identity and generation, its frame in its window, and
+/// its raw insets in its own coordinates; the frame and insets `none` while it is unavailable.
+fn target_fact(number: Option<u32>, relation: Option<&str>, kinds: u8, t: &NativeTarget) -> Fact {
+    let kinds = (Kind::ALL.iter())
+        .filter(|k| kinds & k.bit() != 0)
+        .map(|k| Fact::Str(k.name().to_string()));
+    let four = |v: Option<[f32; 4]>| v.map(|v| v.map(f64::from));
+    Fact::Record(vec![
+        (
+            "number",
+            number.map_or(Fact::Absent, |n| Fact::Number(n.into())),
+        ),
+        (
+            "relation",
+            relation.map_or(Fact::Absent, |r| Fact::Str(r.to_string())),
+        ),
+        ("kinds", Fact::List(kinds.collect())),
+        ("id", Fact::Number(t.id as f64)),
+        ("generation", Fact::Number(t.generation as f64)),
+        (
+            "frame",
+            four(t.frame).map_or(Fact::Absent, |[x, y, w, h]| Fact::rect(x, y, w, h)),
+        ),
+        ("insets", four(t.insets).map_or(Fact::Absent, Fact::insets)),
     ])
 }
 
@@ -301,7 +349,37 @@ pub fn templates(source: &str) -> Vec<Fact> {
             answer(0, (1.0, 1.0), None, |_| None),
             unavailable(0),
         ],
-        CHAIN => vec![chain(0)],
+        CHAIN => {
+            let target = NativeTarget {
+                id: 1,
+                generation: 1,
+                insets: Some([0.0; 4]),
+                frame: Some([0.0; 4]),
+            };
+            let none = NativeTarget {
+                insets: None,
+                frame: None,
+                ..target
+            };
+            vec![
+                chain_fact(
+                    true,
+                    0,
+                    Fact::List(vec![target_fact(
+                        Some(1),
+                        None,
+                        Kind::Navigation.bit(),
+                        &target,
+                    )]),
+                ),
+                chain_fact(
+                    true,
+                    0,
+                    Fact::List(vec![target_fact(None, Some("window"), 0, &none)]),
+                ),
+                chain_fact(false, 0, Fact::Absent),
+            ]
+        }
         _ => vec![unsettled_fact(true, 0, 1, vec![Fact::Str(String::new())])],
     }
 }

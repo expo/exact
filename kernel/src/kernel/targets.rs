@@ -118,6 +118,17 @@ impl Kernel {
         Ok(!readers.is_empty())
     }
 
+    /// The native targets the box `view` reads (LLP 1123 D9), which D6's `exactNativeChain`
+    /// answers: its owner's last report, or the session view's outside every owner, a document
+    /// top-layer box's content included; `None` where that holder reported none.
+    pub fn native_targets(&self, view: ViewId) -> Option<Arc<NativeTargets>> {
+        let slot = self.arena.slot_of(view)?;
+        self.arena
+            .observations
+            .targets
+            .placed(holder(&self.arena, slot))
+    }
+
     /// Set the session view's native targets, which a box outside every
     /// owner reads (LLP 1123 D9), as [`Kernel::set_owner_targets`] does an
     /// owner's.
@@ -176,7 +187,12 @@ impl Kernel {
             .get(name)
             .copied();
         // Keep a removed registration, unavailable, for its generation
-        let Some(next) = target.or(last.map(|l| NativeTarget { insets: None, ..l })) else {
+        let gone = |l: NativeTarget| NativeTarget {
+            insets: None,
+            frame: None,
+            ..l
+        };
+        let Some(next) = target.or(last.map(gone)) else {
             return Ok(false);
         };
         if last == Some(next) {

@@ -16,6 +16,9 @@ package struct OwnerUpdateIOS: Equatable {
         package var generation: UInt64 = 1
         /// In the view's own coordinates; `nil` while it is out of a window.
         package var insets: UIEdgeInsets?
+        /// Its view's bounds converted into its window's coordinates, a bounding rectangle under a transform
+        /// (D9), `nil` out of a window; its insets stay in the view's own coordinates.
+        package var frame: CGRect?
     }
 
     /// An entry of the native chain: a controller's view and the kinds it is.
@@ -172,7 +175,8 @@ package struct OwnerUpdateIOS: Equatable {
     package static func target(_ view: UIView?) -> Target {
         guard let view else { return Target(id: 0, insets: nil) }
         let attached = view is UIWindow || view.window != nil
-        return Target(id: TargetIds.id(of: view), insets: attached ? view.safeAreaInsets : nil)
+        return Target(id: TargetIds.id(of: view), insets: attached ? view.safeAreaInsets : nil,
+                      frame: attached ? view.convert(view.bounds, to: nil) : nil)
     }
 
     /// The update in the kernel's wire form (`OwnerUpdate::encode`): each field in order, an
@@ -232,19 +236,20 @@ package struct OwnerUpdateIOS: Equatable {
 }
 
 extension OwnerUpdateIOS {
-    /// A target in the kernel's wire form: its id and generation (`u64` each) and its
-    /// insets after a presence byte, top, right, bottom, left.
+    /// A target in the kernel's wire form: its id and generation (`u64` each), its insets after
+    /// a presence byte, top, right, bottom, left, and its frame after one, x, y, width, height.
     static func encode(target t: Target) -> Data {
         var out = Data()
         func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
+        func f32s(_ values: [CGFloat]) {
+            for v in values { withUnsafeBytes(of: Float(v).bitPattern.littleEndian) { out.append(contentsOf: $0) } }
+        }
         u64(t.id)
         u64(t.generation)
         out.append(t.insets == nil ? 0 : 1)
-        if let i = t.insets {
-            for v in [i.top, i.right, i.bottom, i.left] {
-                withUnsafeBytes(of: Float(v).bitPattern.littleEndian) { out.append(contentsOf: $0) }
-            }
-        }
+        if let i = t.insets { f32s([i.top, i.right, i.bottom, i.left]) }
+        out.append(t.frame == nil ? 0 : 1)
+        if let f = t.frame { f32s([f.minX, f.minY, f.width, f.height]) }
         return out
     }
 }

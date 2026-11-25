@@ -292,6 +292,7 @@ fn map(id: u64, generation: u64) -> NativeTarget {
         id,
         generation,
         insets: Some([30.0, 0.0, 0.0, 0.0]),
+        frame: None,
     }
 }
 
