@@ -80,37 +80,6 @@ pub fn bound(app_root: &Path, extensions: &[&str], target: &str) -> Result<Vec<B
     Ok(out)
 }
 
-/// Install-time permissions supplied by the Kotlin implementations bound to a plan.
-pub fn android_package_permissions(
-    app: &Path,
-    plan: &exact_plan::Plan,
-) -> Result<Vec<String>, String> {
-    let mut permissions = Vec::new();
-    for name in plan.package_extensions().into_values() {
-        let Some((root, _)) = located(app, name) else {
-            continue;
-        };
-        let Some((_, _, imp)) = implementation_for(app, name, &root, "android")? else {
-            continue;
-        };
-        if imp["platform"] == "android"
-            && imp["class"].as_str().is_some_and(|s| !s.is_empty())
-            && imp["sources"]["kotlin"]
-                .as_array()
-                .is_some_and(|dirs| !dirs.is_empty())
-        {
-            permissions.extend(
-                imp["manifest"]["permissions"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|name| name.as_str().map(str::to_owned)),
-            );
-        }
-    }
-    Ok(permissions)
-}
-
 /// The text an app's host crate includes for `target`: each bound root as a
 /// `#[path]` module and `exact_packages()`, the table `exact_painted::Composed`
 /// takes. With nothing bound the table is empty.
@@ -242,17 +211,14 @@ fn implementation_for(
         let take = if package.starts_with('@') { 2 } else { 1 };
         let name = parts.get(..take)?.join("/");
         let subpath = parts.get(take..)?.join("/");
+        let (dir, _) = located(app_root, &name)?;
+        let manifest = read(&dir.join("package.json"))?;
         let key = if subpath.is_empty() {
             ".".into()
         } else {
             format!("./{subpath}")
         };
-        let file = app_root.ancestors().find_map(|ancestor| {
-            let dir = ancestor.join("node_modules").join(&name);
-            let manifest = read(&dir.join("package.json"))?;
-            let file = dir.join(export(&manifest["exports"], &key)?);
-            (file.file_name()? == "exact.json").then_some(file)
-        })?;
+        let file = dir.join(export(&manifest["exports"], &key)?);
         Some((file.parent()?.to_path_buf(), read(&file)?))
     };
     let manifest = read(&app_root.join("app.json")).unwrap_or_default();
@@ -404,20 +370,37 @@ mod tests {
 
     #[test]
     fn desktop_binding_stops_at_the_nearest_provider() {
-        let tree = std::env::temp_dir().join(format!("exact-nearest-provider-{}", std::process::id()));
+        let tree =
+            std::env::temp_dir().join(format!("exact-nearest-provider-{}", std::process::id()));
         let app = tree.join("app");
         let package = Path::new("node_modules/@fixture/provider");
         for root in [&tree, &app] {
             let dir = root.join(package);
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("package.json"), r#"{"exports":{".":"./exact.json"}}"#).unwrap();
+            std::fs::write(
+                dir.join("package.json"),
+                r#"{"exports":{".":"./exact.json"}}"#,
+            )
+            .unwrap();
             std::fs::write(dir.join("exact.json"), "{}").unwrap();
         }
         let outer = tree.join(package);
-        std::fs::write(outer.join("package.json"), r#"{"exports":{".":"./exact.json","./linux":"./linux/exact.json"}}"#).unwrap();
+        std::fs::write(
+            outer.join("package.json"),
+            r#"{"exports":{".":"./exact.json","./linux":"./linux/exact.json"}}"#,
+        )
+        .unwrap();
         std::fs::create_dir_all(outer.join("linux")).unwrap();
-        std::fs::write(outer.join("linux/exact.json"), r#"{"kind":"implementation","implements":"sensor","targets":["linux"]}"#).unwrap();
-        std::fs::write(app.join("app.json"), r#"{"implementations":{"sensor":{"linux":"@fixture/provider/linux"}}}"#).unwrap();
+        std::fs::write(
+            outer.join("linux/exact.json"),
+            r#"{"kind":"implementation","implements":"sensor","targets":["linux"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            app.join("app.json"),
+            r#"{"implementations":{"sensor":{"linux":"@fixture/provider/linux"}}}"#,
+        )
+        .unwrap();
         let result = implementation_for(&app, "sensor", &app, "linux");
         std::fs::remove_dir_all(tree).unwrap();
         assert!(result.unwrap_err().contains("not installed"));

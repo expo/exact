@@ -36,7 +36,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { grantLines } from './grant-advice.mjs';
-import { androidImplementations, implementationFor, moduleInterfaces } from '../js/bake/src/typescript.mjs';
+import { implementationFor, moduleInterfaces } from '../js/bake/src/typescript.mjs';
 import { EXACT_PATHS, androidAuthCallbacks } from './links.mjs';
 
 /** The broadcasts a package's receiver may name: the boot, the package replaced, the clock and zone, the exact-alarm
@@ -232,13 +232,6 @@ export function fragmentPermissions(bound, appPermissions = [], appDir) {
   }
   if (problems.length) throw new Error(problems.join('\n'));
   return [...new Set(lists.flat())];
-}
-
-/** The permissions an app declaration can repeat, from the same inputs the APK merges. */
-export function installedNormalPermissions(app, compat, extensions) {
-  const declarations = fragmentPermissions(androidImplementations(app.dir, extensions ?? {}), app.manifest.host?.android?.permissions, app.dir);
-  return [...new Set([...declarations, ...(compat.reach?.android ?? []), ...(compat.inputs.androidLinked?.permissions ?? [])])]
-    .filter(name => NORMAL_PERMISSIONS.has(name)).sort();
 }
 
 const FIELDS = {

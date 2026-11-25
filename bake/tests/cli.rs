@@ -273,26 +273,70 @@ fn android_compat_uses_the_merged_permissions_after_package_resolution() {
     std::fs::write(device.join("package.json"), r#"{"name":"@exact/device","exports":{"contract":"./exact.json","default":"./exact.json"}}"#).unwrap();
     let provider = app.0.join("node_modules/@fixture/provider/android");
     std::fs::create_dir_all(&provider).unwrap();
-    std::fs::write(provider.join("../package.json"), r#"{"name":"@fixture/provider","exports":{"./android":"./android/exact.json"}}"#).unwrap();
-    std::fs::write(provider.join("exact.json"), serde_json::json!({"kind":"implementation","implements":"@exact/device@^1.0","targets":["android"],"sources":{"kotlin":["."]},"class":"capture.Module","manifest":{"permissions":installed}}).to_string()).unwrap();
-    app.write("package.json", r#"{"dependencies":{"@exact/device":"1.0.0"}}"#);
+    std::fs::write(
+        provider.join("../package.json"),
+        r#"{"name":"@fixture/provider","exports":{"./android":"./android/exact.json"}}"#,
+    )
+    .unwrap();
+    std::fs::write(provider.join("exact.json"), serde_json::json!({"kind":"implementation","implements":"@exact/device@^1.0","platform":"android","targets":["android"],"sources":{"kotlin":["."]},"class":"capture.Module","manifest":{"permissions":installed}}).to_string()).unwrap();
+    app.write(
+        "package.json",
+        r#"{"dependencies":{"@exact/device":"1.0.0"}}"#,
+    );
     let bake = |imports: bool, declared: &[&str]| {
         app.write("app.json", &serde_json::json!({"app":{"id":"com.example.capture","name":"Capture"},"implementations":{"@exact/device":{"android":"@fixture/provider/android"}},"host":{"android":{"permissions":declared}}}).to_string());
-        let view = if imports { "use getBattery, BatteryManager from \"@exact/device\"\ncomponent App\n  resource battery = getBattery() as shape BatteryManager else empty(level=-1)\n  view\n    text \"battery\"\n" } else { "component App\n  view\n    text \"battery\"\n" };
+        let view = if imports {
+            "use getBattery, BatteryManager from \"@exact/device\"\ncomponent App\n  resource battery = getBattery() as shape BatteryManager else empty(level=-1)\n  view\n    text \"battery\"\n"
+        } else {
+            "component App\n  view\n    text \"battery\"\n"
+        };
         app.write("app.contract", view);
-        let result = Command::new(env!("CARGO_BIN_EXE_exact-bake")).arg("compat").arg(&app.0)
-            .args(["--target","aarch64-linux-android","--platform","android","--json"])
-            .env("EXACT_ANDROID_MANIFEST_PERMISSIONS",serde_json::to_string(&installed).unwrap())
-            .env_remove("OUT_DIR").output().unwrap();
-        assert!(result.status.success(), "{}",String::from_utf8_lossy(&result.stderr));
+        let result = Command::new(env!("CARGO_BIN_EXE_exact-bake"))
+            .arg("compat")
+            .arg(&app.0)
+            .args([
+                "--target",
+                "aarch64-linux-android",
+                "--platform",
+                "android",
+                "--json",
+            ])
+            .env(
+                "EXACT_ANDROID_MANIFEST_PERMISSIONS",
+                serde_json::to_string(&installed).unwrap(),
+            )
+            .env_remove("OUT_DIR")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
         serde_json::from_slice::<Value>(&result.stdout).unwrap()
     };
     let implicit = bake(true, &[]);
     let repeated = bake(true, &installed);
+    std::fs::write(
+        device.join("package.json"),
+        r#"{"name":"@exact/device","exports":{".":"./exact.json"}}"#,
+    )
+    .unwrap();
+    let bound = bake(true, &installed);
     let dropped = bake(false, &installed);
+    assert_eq!(
+        bound["inputs"]["capabilities"],
+        dropped["inputs"]["capabilities"]
+    );
     assert_eq!(implicit["id"], repeated["id"]);
     for compat in [&implicit, &repeated, &dropped] {
-        assert_eq!(compat["inputs"]["androidLinked"]["manifestPermissions"], serde_json::json!(installed));
-        assert_eq!(compat["inputs"]["capabilities"], implicit["inputs"]["capabilities"]);
+        assert_eq!(
+            compat["inputs"]["androidLinked"]["manifestPermissions"],
+            serde_json::json!(installed)
+        );
+        assert_eq!(
+            compat["inputs"]["capabilities"],
+            implicit["inputs"]["capabilities"]
+        );
     }
 }

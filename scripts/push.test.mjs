@@ -5,7 +5,6 @@ import * as fs from 'node:fs';
 import {tmpdir, homedir} from 'node:os';
 import {resolve, relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import { installedNormalPermissions } from './android-manifest.mjs';
 import {bakedEntryAssets, classifyArtifacts, nativeManifestMetadata} from './app.mjs';
 import {spawnSync as realSpawnSync} from 'node:child_process';
 import {canonicalBytes, classify} from './deploy.mjs';
@@ -55,7 +54,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {appBake, bake, graphT
   const bindings={
     ...Object.fromEntries(['closeSync','existsSync','mkdirSync','openSync','readFileSync','readlinkSync','writeFileSync','mkdtempSync','rmSync'].map(name=>[name,fs[name]])), watch,
     filesystem, filesystemRead, filesystemTree, unbundledTextures, streamBundle,
-    installedNormalPermissions, nativeManifestMetadata, directoryInputNames, watchOutput, addedSwiftPackageInputs, swiftPackageInputChanged, notificationServiceInputChanges, notificationServiceSourceRoot, appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory,
+    nativeManifestMetadata, directoryInputNames, watchOutput, addedSwiftPackageInputs, swiftPackageInputChanged, notificationServiceInputChanges, notificationServiceSourceRoot, appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory,
     channelOf,validateChannel,resolve,relative,homedir,ROOT:fileURLToPath(new URL('..',import.meta.url)),
     process:{env:{EXACT_GAME_PROOF_PROFILE:'gpu-dev',EXACT_UPDATE_TRUST:'development'}},
     console:{log(){}},Refusal:Error,refuse(message){throw Error(message)},
@@ -155,9 +154,9 @@ test('the installed manifest admits the same module with or without a repeated a
       cohort.compat.reach = {androidAppPermissions:names};
       cohort.compat.inputs.androidLinked = {permissions:[], manifestPermissions:[network]};
       const frozen = cohortReceipt(build);
-      expect(classifyArtifacts(build, frozen).bundle).toBe(true);
+      expect(classifyArtifacts(build, frozen, {id:"test",public:"public"}).bundle).toBe(true);
       frozen.compat.inputs.androidLinked.manifestPermissions = [];
-      expect(classifyArtifacts(build, frozen).bundle).toBe(false);
+      expect(classifyArtifacts(build, frozen, {id:"test",public:"public"}).bundle).toBe(false);
     }
   } finally { fs.rmSync(root, {recursive:true, force:true}); }
 });

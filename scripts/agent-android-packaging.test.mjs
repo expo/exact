@@ -201,7 +201,7 @@ for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefine
       }
     }`);
     const result = spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), ['--no-daemon', '--console=plain', '-I', init,
-      ':app:processReleaseMainManifest', ':app:inspectRelease', ...(development ? ['-PdevelopmentApk=1', '-PexactDevelopment=1'] : []), `-PapplicationId=${packageId}.dev`, '-PappName=CI Dev', '-Papp=ci', `-Ppermissions=${permissions.join(',')}`,
+      ':app:writeReleaseManifestPermissions', ':app:inspectRelease', ...(development ? ['-PdevelopmentApk=1', '-PexactDevelopment=1'] : []), `-PapplicationId=${packageId}.dev`, '-PappName=CI Dev', '-Papp=ci', `-Ppermissions=${permissions.join(',')}`,
       ...(id ? ['-PandroidFeatures=android.hardware.bluetooth_le required=false,android.software.companion_device_setup'] : []), `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
     { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000,
       env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk,
@@ -215,6 +215,10 @@ for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefine
       .filter(path => /merged_manifest.*AndroidManifest.xml$/.test(path));
     expect(manifests.length).toBeGreaterThan(0);
     const merged = readFileSync(resolve(dir, 'app/intermediates', manifests[0]), 'utf8');
+    const names = JSON.parse(readFileSync(resolve(dir, 'app/manifest-permissions.json'), 'utf8'));
+    const manifestNames = [...merged.matchAll(/<uses-permission\s[^>]*?android:name="([^"]+)"/g)].map(match => match[1]);
+    expect(names).toEqual([...new Set(manifestNames)].sort());
+    expect(names).toContain('android.permission.INTERNET');
     expect(merged).toContain(`package="${packageId}.dev"`);
     expect(merged).toContain('android:label="CI Dev"');
     expect(merged).not.toContain('android:debuggable="true"');

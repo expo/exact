@@ -581,7 +581,7 @@ export function readManifest(dir, name) {
   return packageGpuManifest(manifest, dir);
 }
 import { DOCUMENT_UTIS, ownDocumentType, documentTypeProblems, canonicalizeDocumentExtensions } from './document-utis.mjs';
-import { installedNormalPermissions, permissionProblems } from './android-manifest.mjs';
+import { permissionProblems } from './android-manifest.mjs';
 import { launchModules, moduleDirectory } from './launch-modules.mjs';
 export { moduleDirectory } from './launch-modules.mjs';
 import { webManifestAtBase, webCspProblems, webHeadProblems } from './web-head.mjs';
@@ -1169,7 +1169,6 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     {name:'app',path:app.dir}, {name:'exact',path:ROOT}, {name:'workspace',path:graph.metadata.workspace_root},
     ...packages.filter(pkg => pkg.source === null).map(pkg => ({name:'workspace',path:graph.metadata.workspace_root, contains:dirname(pkg.manifest_path)})),
   ], watchOutputs);
-  if (platform === 'android') sourceInputsRecord.androidPermissions = installedNormalPermissions(app, compat, bundleGraph.extensions);
   const products=roots.flatMap((r)=>messages.filter((m)=>m.reason==='compiler-artifact'&&m.package_id===r.package&&m.target.name===r.name).flatMap((m)=>m.filenames)).filter((p)=>!p.endsWith('.d')&&!p.endsWith('.dSYM')).map((path)=>prepared.get(path)??path).map((path)=>{const info=statSync(path);return {path,bytes:info.size,sha256:hashes.of(path,info)};})
     .concat(generatedInputs.products);
   hashes.save();
@@ -1332,7 +1331,7 @@ export function buildBake(app, platform, target, options = {}) {
     return {products:messages.filter(m=>m.reason==='compiler-artifact' && bakeSelection(graph,'gpu').some(pkg=>pkg.id===m.package_id)).flatMap(m=>m.filenames).map(f=>preparedProducts.get(f)??f)};
   }
   const receipt=completeBuild(app,platform,target,graph,messages,roots,env,preparedProducts,generatedInputs,privacyManifests);
-  writeFileSync(resolve(env.EXACT_BAKE_OUTPUT,`${platform}-${target}.build.json`),JSON.stringify(receipt)+'\n');
+  if (options.record !== false) writeFileSync(resolve(env.EXACT_BAKE_OUTPUT,`${platform}-${target}.build.json`),JSON.stringify(receipt)+'\n');
   options.capture?.(receipt);
   return receipt;
   } finally { for (const release of releases.reverse()) release(); }
@@ -1364,7 +1363,7 @@ export function classifyArtifacts(candidate, cohort, signingKey = null) {
       for(const [svg, rendition] of Object.entries(need)) if(canonicalBuild(have[key]?.[svg]??null)!==canonicalBuild(rendition)) fail(`.${svg} (requires the installed SVG rendition)`);
     } else if(key==='executors'||key==='hatches') { for(const item of need) if(!have[key]?.includes(item)) fail(key==='hatches'?`.${item} (handled by this platform's module, not by the installed one)`:`.${item}`); // hatches: LLP 1075.003.000.001 §4.3, a cohort from before the capability handles none
     } else if(key==='appleUses') { /* LLP 1047.001 D13: what the binary was composed from, as a subset; a cohort that names no set links everything, and a capability its roster predates was in its core */ if(Array.isArray(have.linked)) for(const item of need) if(!have.linked.includes(item)&&(!Array.isArray(have.linkRoster)||have.linkRoster.includes(item))) fail(`.${item} (not linked into the installed binary; that needs a new binary)`);
-    } else if(['androidUses','androidExtensions','androidPermissions'].includes(key)) { /* LLP 1030.006 D4a: what the APK was composed from, as a subset */ for(const item of need) if(!have.androidLinked?.[key.slice(7).toLowerCase()]?.includes(item) && !(key==='androidPermissions' && cohort.compat.reach?.androidAppPermissions?.includes(item))) fail(`.${item} (not in the installed APK; that needs a new APK)`); } else if(key==='hermesBytecode') { if(have[key]!==need) fail(` (the module is Hermes bytecode ${need}; this cohort's APK runs ${have[key]??'none'}, which needs a new APK)`); } else if(key==='typescriptRuntime') { if(!((have[key]??0)>=need)) fail(` (requires a prelude of runtime ${need} or later; this cohort's is ${have[key]??0})`); /* LLP 1108 D6 R2: an older prelude ignores exactBodyFrom */ } else if(key==='grantCeiling') {
+    } else if(['androidUses','androidExtensions','androidPermissions'].includes(key)) { /* LLP 1030.006 D4a: what the APK was composed from, as a subset */ for(const item of need) if(!(key==='androidPermissions' ? have.androidLinked?.manifestPermissions ?? have.androidLinked?.permissions : have.androidLinked?.[key.slice(7).toLowerCase()])?.includes(item)) fail(`.${item} (not in the installed APK; that needs a new APK)`); } else if(key==='hermesBytecode') { if(have[key]!==need) fail(` (the module is Hermes bytecode ${need}; this cohort's APK runs ${have[key]??'none'}, which needs a new APK)`); } else if(key==='typescriptRuntime') { if(!((have[key]??0)>=need)) fail(` (requires a prelude of runtime ${need} or later; this cohort's is ${have[key]??0})`); /* LLP 1108 D6 R2: an older prelude ignores exactBodyFrom */ } else if(key==='grantCeiling') {
       const grants=new Set((have.grantCeiling??'').split('\n').filter(Boolean));
       if(need===null||have.grantCeiling===null) fail(' (unknown baked grants)',false);
       else for(const grant of need.split('\n').filter(Boolean)) if(!grants.has(grant)) fail(` (${grant})`);

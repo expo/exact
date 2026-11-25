@@ -19,9 +19,7 @@ mod packages;
 mod slot;
 pub mod widgets;
 pub(crate) use packages::implementation_imports;
-pub use packages::{
-    android_package_permissions, bound, plan_packages, rust_packages, write_desktop_packages, Bound,
-};
+pub use packages::{bound, plan_packages, rust_packages, write_desktop_packages, Bound};
 pub use slot::{native_slot, NativeSelection, NativeSlot};
 
 /// The roster in `manifest`, each name checked against the tag grammar.
