@@ -9,7 +9,8 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
    buttons, a `tablist`, a `dialog role="alertdialog"`); each host draws its own control.
    A data table is HTML's `table` (`thead`, `tr`, `th scope="col"`, `td colspan=2`), terms and their descriptions a `dl` (`dt`, `dd`).
 2. **Leave the rest unsaid:** controls, bars, type and dark mode are the platform's, and so
-   are a `list`'s rows: its children are rows, so draw no separator and no press. A
+   are a `list`'s rows: its children are rows, so draw no separator and no press. So are the
+   edges: measure no inset, keyboard, bar or device (`contract vocab edges`). A
    colour or size names a role (`-exact-secondary-label`, `font="-exact-footnote"`; `bun
    <exact2>/scripts/no-tells.mjs .` lists literals). Leave the accent unsaid: it is the
    platform's blue, and a filled button keeps its white label (a pale accent under
@@ -216,6 +217,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a chat header with an avatar, and day pills|`chat-header`|
 |a voice note's waveform, a bubble's tail (SVG in a row)|`waveform-and-tail`|
 |data the app ships and only reads (a JSON file `app.ts` imports)|`shipped-data`|
+|a floating button, a pinned row, a scroll bar's place, the keyboard, an iPhone Duo's fold|`edges`|
 |a long list or grid that loads more|`long-lists`|
 |a large local history with live arrivals and offline sends|[`large-live-list`](recipes/large-live-list.md)|
 |a document or article longer than a screen, a long Markdown note|`long-text`|

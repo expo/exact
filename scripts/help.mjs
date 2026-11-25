@@ -204,14 +204,13 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
   },
   verify: {
     line: 'build if stale, run *.test.contract, check each screen it reaches light and dark, relaunch once',
-    usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]',
+    usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--duo <udid|name>|none] [--shots <dir>] [--rescroll] [--strict] [--json]',
     common: ['verify [ios] [--shots <dir>] [--sim <name>]    done when it says "verify: clean"'],
     flags: [
       DRIVE.find(([flag]) => flag === '--backend <url>'),
-      ['--sim <udid|name> · --variant <name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro) · which app.json variant (or EXACT_VARIANT)'],
+      ['--sim <udid|name> · --duo <udid|name>|none · --variant <name>', 'iOS: which simulator (else EXACT_SIM, a booted iPhone, or the newest Pro) · which iPhone Duo (else the one booted, or the first) · which app.json variant (or EXACT_VARIANT)'],
       ['--shots <dir>', 'also copy every screenshot it captured there, named as in .exact/verify/ (a test\'s own `screenshot` steps too)'],
-      ['--rescroll · --strict', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI)'],
-      ['--json', 'the report as one JSON object (ios: `scrolling`, each finding\'s metric, value, UIKit\'s and remedy)'],
+      ['--rescroll · --strict · --json', 'ios: measure scrolling again though nothing it depends on changed · exit 1 on any counted problem (for CI) · the report as one JSON object (ios: `scrolling`, each finding\'s metric, value, UIKit\'s and remedy)'],
     ],
     internal: ['--app <name>'],
     body: `Host     unnamed: one app.json ships (host, deploy.store, deploy.binaries): web when they name it or nothing, else the
@@ -232,6 +231,7 @@ Large    each of those screens again at the largest text size (ios: the simulato
          projects into its navigation bar and its tab bar. A smaller or fixed font is the tell, as is a line-clamp
          in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
          than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
+Duo      ios: the tests again on an iPhone Duo, where there is one; the first screen and each test's end in its poses, and with the keyboard up.
 Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the accessibility tree or the largest text, or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.

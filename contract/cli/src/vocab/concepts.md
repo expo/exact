@@ -1797,6 +1797,51 @@ for the launch.
 
 More: docs/reference.md ("A setting a launch gives")
 
+## edges: insets, scroll bars, the keyboard and folds
+names: insets, content inset, contentInset, scrollIndicatorInsets, scroll indicator, scroll bar, scrollbar, KeyboardAvoidingView, keyboard avoidance, keyboardVerticalOffset, keyboardLayoutGuide, iPhone Duo, Duo, fold, hinge, floating action button, FAB, bottom bar
+
+On a phone, measure none of these. Say what each part is, and the host keeps it clear of the bars, the home indicator and the docked keyboard:
+
+- **A list, a feed, an article, a form:** the `header`, then the scroller as the next child (`list`, or `scroll flex=1 min-height=0`). Padding goes inside the scroller: around it, it moves the scroll bar in.
+- **A row pinned at the bottom** (a composer, Save, a player): a `row` after the scroller.
+- **A floating button** over a scroller that ends the route: placed by the safe area, as `add` is below.
+- **A field:** nothing. The focused one is shown above the keyboard (`contract vocab keyboard-and-focus`).
+- **A list beside its detail:** `contract vocab navigationSplit`.
+- **One thing a fold must not cross** (a timer, a dial): a box that starts at the viewport's left edge, padded there as `Timer` is below, whose fallback is its padding with no fold; for a fold across, a box at its top and `env(viewport-segment-top 0 1, 24px)`. Panes on either side: `contract vocab foldables`.
+- **A colour behind the bars:** the route's `background-color`. A picture there: `contract vocab safe-area`.
+
+```contract
+component Notes
+  state notes = ["Milk", "Bread"]
+  action add()
+    notes = notes.concat(["Eggs"])
+  view
+    column width="100%" height="100%"
+      column flex=1 min-height=0 position="relative"
+        scroll flex=1 min-height=0
+          column padding=16 gap=12
+            for n, i in notes key=`${i}`
+              text n
+        button press=add() buttonStyle="filled" position="absolute" right=16 bottom="calc(16px + var(--exact-safe-area-inset-bottom))" testId="add"
+          text "Add"
+```
+
+```contract
+component Timer
+  state running = false
+  action start()
+    running = not running
+  view
+    column width="100%" height="100%" box-sizing="border-box" align-items="center" justify-content="center" gap=12 padding="24px 24px 24px env(viewport-segment-left 1 0, 24px)"
+      text (running ? "24:59" : "25:00") font="-exact-large-title" font-variant-numeric="tabular-nums"
+      button press=start() buttonStyle="filled" testId="start"
+        text (running ? "Pause" : "Start")
+```
+
+A keyboard's height, a bar's, a device's name or its size is none of the layout's. Where there is an iPhone Duo simulator, `verify ios` also reads an iPhone app's first screen and the screens its passing tests end on in its poses, and with the keyboard up where a field raises one: `edge` is what lies outside the safe area, `fold` what a fold crosses, `covered` what lies under a bar or the keys.
+
+More: `contract vocab safe-area`, docs/recipes/foldables.md, docs/recipes/keyboard-and-focus.md
+
 ## safe-area: the notch, the status bar and the home indicator
 names: env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator, --exact-safe-area-inset-top, --exact-safe-area-inset-bottom, --exact-safe-area-inset-left, --exact-safe-area-inset-right, bar height, navigation bar height, headerHeight, useHeaderHeight, -exact-safe-area, ignoresSafeArea, contentInsetAdjustmentBehavior
 
