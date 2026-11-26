@@ -17,6 +17,7 @@ internal class VideoPictureInPicture(private val activity: ExactActivity) {
     }
     private var current: Presentation? = null
     private var expanding = false
+    private var returningToPage = false
     private val commands = ArrayDeque<MediaAllocation?>()
 
     // Android can report isInPictureInPictureMode before it delivers the entry callback.
@@ -26,10 +27,19 @@ internal class VideoPictureInPicture(private val activity: ExactActivity) {
         drain()
     }
 
+    fun pageReady() {
+        if (returningToPage) activity.window.decorView.post { drain() }
+    }
+
     private fun drain() {
         while (commands.isNotEmpty()) {
             val presentation = current
             if (expanding || presentation?.entered == false) return
+            // A second entry from the pinned task is refused until its inline activity resumes.
+            if (returningToPage) {
+                if (!activity.nativeResumed || !activity.hasWindowFocus()) return
+                returningToPage = false
+            }
             val next = commands.first()
             if (presentation != null && next != presentation.target) {
                 if (next == null) commands.removeFirst()
@@ -74,6 +84,7 @@ internal class VideoPictureInPicture(private val activity: ExactActivity) {
 
     fun modeChanged(active: Boolean) {
         if (!active) {
+            returningToPage = expanding && commands.isNotEmpty()
             ended()
         } else {
             val presentation = current ?: return

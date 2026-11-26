@@ -81,7 +81,8 @@ open class ExactActivity : Activity() {
 
     private var nativeState: Bundle? = null
     private var nativeStarted = false
-    private var nativeResumed = false
+    internal var nativeResumed = false
+        private set
     /** The app's text fields, each the platform's own ([Fields], LLP 1115.001 D8). */
     private var fields: Fields? = null
     /** The row pitch `start=N` scrolls by (0: the app's plan scrolls to it itself). */
@@ -833,7 +834,10 @@ open class ExactActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus && reads()) pads.background()
-        if (hasFocus) Activities.resumed()
+        if (hasFocus) {
+            Activities.resumed()
+            picture.pageReady()
+        }
         // Over the keyguard's dismissal: focus comes once the phone is unlocked.
         if (hasFocus) Controls.ready(this)
     }
@@ -889,6 +893,7 @@ open class ExactActivity : Activity() {
         window()
         configure()
         nativeResumed = true
+        picture.pageReady()
         modulePhase = 3; moduleOwners?.move(modulePhase)
         natives?.lifecycle?.event(ViewLifecycle.RESUME)
         Auth.resumed()
