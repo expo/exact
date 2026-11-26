@@ -115,6 +115,29 @@ impl Em<'_> {
         }
     }
 
+    pub(super) fn status_scope(
+        &mut self,
+        node: u32,
+        element: &str,
+        status_owner: bool,
+        dev_panel: bool,
+        scope: &Scope,
+        render: impl FnOnce(&mut Self, &Scope) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if status_owner && !self.site_attrs && !self.dev_reload && !dev_panel {
+            let mut inner = scope.clone();
+            std::rc::Rc::make_mut(&mut inner.status_owners).insert(
+                node,
+                (element.to_string(), self.mount_templates.scope_depth + 1),
+            );
+            self.mount_templates.scope_depth += 1;
+            let result = render(self, &inner);
+            self.mount_templates.scope_depth -= 1;
+            return result;
+        }
+        self.template_scope(status_owner || dev_panel, |em| render(em, scope))
+    }
+
     /// Descendant arms may close over bindings introduced here, including a
     /// keyed row's getters or the DOM element that owns a navigation status.
     pub(super) fn template_scope(

@@ -90,7 +90,7 @@ fn the_bounded_feeds_text_run_lowers_with_seven_arms_and_ten_rows() {
         .max()
         .unwrap();
     let item = js[head + 4..].split(',').next().unwrap();
-    assert!(js[at..].starts_with(&format!("Pc(e17,()=>(v=>v===\"code\"?0:v===\"bold\"?1:v===\"mention\"?2:v===\"italic\"?3:v===\"link\"?4:v===\"tag\"?5:6)({item}()[2])")), "{}", &js[at..at + 200]);
+    assert!(js[at..].starts_with(&format!("Pc(v0,()=>(v=>v===\"code\"?0:v===\"bold\"?1:v===\"mention\"?2:v===\"italic\"?3:v===\"link\"?4:v===\"tag\"?5:6)({item}()[2])")), "{}", &js[at..at + 200]);
     assert!(js[at..].contains("[\"font-family\",\"font-size\",\"--exact-style-font-weight\",\"line-height\",\"background-color\",\"font-weight\",\"--exact-said-font-weight\",\"font-style\",\"color\",\"text-decoration-line\"]"), "{js}");
 }
 

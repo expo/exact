@@ -3,6 +3,60 @@
 use std::{collections::HashMap, fmt::Write as _, rc::Rc};
 
 #[derive(Clone, Hash, Eq, PartialEq)]
+struct Binder {
+    prefix: Rc<str>,
+    suffix: Rc<str>,
+}
+
+impl Binder {
+    fn parse(raw: &str) -> (usize, Self) {
+        let (depth, rest) = raw.split_once(':').expect("binder depth");
+        let (prefix, suffix) = rest.split_once(':').expect("binder parts");
+        (
+            depth.parse().expect("binder depth"),
+            Self {
+                prefix: prefix.into(),
+                suffix: suffix.into(),
+            },
+        )
+    }
+
+    fn render_decl(&self, depth: DepthBase, offset: usize, base_depth: usize) -> String {
+        match depth {
+            DepthBase::Absolute(base) => {
+                debug_assert!(base + offset > base_depth);
+                format!(
+                    "{}{}{}",
+                    self.prefix,
+                    base + offset - base_depth - 1,
+                    self.suffix
+                )
+            }
+            DepthBase::Enclosing(base) => {
+                format!("\0D{}:{}:{}\0", base + offset, self.prefix, self.suffix)
+            }
+        }
+    }
+
+    fn render_ref(&self, depth: DepthBase, offset: usize, base_depth: usize) -> String {
+        match depth {
+            DepthBase::Absolute(base) => {
+                debug_assert!(base + offset > base_depth);
+                format!(
+                    "{}{}{}",
+                    self.prefix,
+                    base + offset - base_depth - 1,
+                    self.suffix
+                )
+            }
+            DepthBase::Enclosing(base) => {
+                format!("\0R{}:{}:{}\0", base + offset, self.prefix, self.suffix)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Hash, Eq, PartialEq)]
 enum Value {
     Js(Rc<str>),
     /// The getter ignores its caller's instruction. Any other use may supply it.
@@ -10,8 +64,12 @@ enum Value {
     Param(usize),
     /// A name bound within the function being rendered.
     Local(Rc<str>),
+    /// A depth-indexed binder declared within the function being rendered.
+    LocalBinder(usize, Binder),
     /// A getter or state object captured from an enclosing arm.
     Binding(usize, Rc<str>),
+    /// A depth-indexed lexical binder captured from an enclosing arm.
+    BinderRef(usize, Binder),
 }
 
 impl Value {
@@ -27,6 +85,7 @@ impl Value {
 struct Call {
     id: usize,
     base: Option<u32>,
+    depth_shift: usize,
     args: Vec<Value>,
     parent: Option<Box<str>>,
     /// A slot mount follows the DOM parent in the surrounding expression.
@@ -37,6 +96,8 @@ struct Call {
 enum Part {
     Js(Box<str>),
     Site(u32),
+    /// A depth-indexed lexical binder declared within this template.
+    Binder(usize, Binder),
     /// The DOM parent at which a frame mounts its caller's children.
     Slot(Box<str>),
     Value(Value),
@@ -66,7 +127,7 @@ impl Part {
 struct Template {
     body: Rc<[Part]>,
     /// Mounts also take DOM parameters. An expression factory takes only its captures.
-    params: Option<Rc<str>>,
+    params: Option<Rc<[Part]>>,
     site: bool,
     columns: Vec<Column>,
 }
@@ -108,8 +169,23 @@ pub(super) struct Templates {
     /// A shared computation takes this argument at the point it is evaluated.
     argument: Option<&'static str>,
     bodies: Vec<Template>,
-    index: HashMap<Option<Rc<str>>, HashMap<Rc<[Part]>, usize>>,
+    index: HashMap<Option<Rc<[Part]>>, HashMap<Rc<[Part]>, usize>>,
     calls: Vec<Call>,
+}
+
+#[derive(Clone, Copy)]
+enum DepthBase {
+    Absolute(usize),
+    Enclosing(usize),
+}
+
+impl DepthBase {
+    fn plus(self, n: usize) -> Self {
+        match self {
+            Self::Absolute(base) => Self::Absolute(base + n),
+            Self::Enclosing(base) => Self::Enclosing(base + n),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -139,6 +215,10 @@ impl Base {
 }
 
 impl Templates {
+    pub fn declaration_depth(&self) -> usize {
+        self.declaration_depth
+    }
+
     pub fn mounts(depth: usize) -> Self {
         Self {
             declaration_depth: depth,
@@ -177,6 +257,17 @@ impl Templates {
                         Part::Js(name.into())
                     } else {
                         Part::Value(Value::Binding(depth, name.into()))
+                    }
+                } else if let Some(decl) = op.strip_prefix('D') {
+                    let (depth, binder) = Binder::parse(decl);
+                    Part::Binder(depth, binder)
+                } else if let Some(binding) = op.strip_prefix('R') {
+                    let (depth, binder) = Binder::parse(binding);
+                    if self.scope_depth < depth {
+                        // Declared inside the body being interned right now.
+                        Part::Binder(depth, binder)
+                    } else {
+                        Part::Value(Value::BinderRef(depth, binder))
                     }
                 } else if let Some(pc) = op.strip_prefix("g:").or_else(|| op.strip_prefix("b:")) {
                     Part::GetterArgs {
@@ -218,13 +309,10 @@ impl Templates {
         self.intern(None, source, None, None)
     }
 
-    /// A list effect depends on the fields read inside its getters as well as in its own code.
-    pub fn field_mask(&self, scope: &crate::code::Scope, source: &str) -> Option<u32> {
-        if !scope.frames.iter().any(|frame| frame.item.is_some()) {
-            return None;
-        }
+    /// Expand template tokens inline for static reads (`field_mask`, `pure_key`).
+    pub fn expand_inline(&self, source: &str) -> String {
         if !source.contains('\0') {
-            return crate::reads::field_mask(source);
+            return source.to_string();
         }
         let inline = Render {
             templates: self,
@@ -232,8 +320,22 @@ impl Templates {
             enclosing: false,
         };
         let mut expanded = String::new();
-        inline.expand(&self.parts(source), Base::Absolute(0), &[], &mut expanded);
-        crate::reads::field_mask(&expanded)
+        inline.expand(
+            &self.parts(source),
+            Base::Absolute(0),
+            DepthBase::Absolute(0),
+            &[],
+            &mut expanded,
+        );
+        expanded
+    }
+
+    /// A list effect depends on the fields read inside its getters as well as in its own code.
+    pub fn field_mask(&self, scope: &crate::code::Scope, source: &str) -> Option<u32> {
+        if !scope.frames.iter().any(|frame| frame.item.is_some()) {
+            return None;
+        }
+        crate::reads::field_mask(&self.expand_inline(source))
     }
 
     fn intern(
@@ -260,22 +362,50 @@ impl Templates {
             }
         }
 
+        let scope_depth = self.scope_depth;
+        for part in &mut body {
+            match part {
+                Part::Binder(depth, _) => {
+                    debug_assert!(*depth > scope_depth);
+                    *depth -= scope_depth;
+                }
+                Part::Call(call) => {
+                    debug_assert!(call.depth_shift >= scope_depth);
+                    call.depth_shift -= scope_depth;
+                }
+                _ => {}
+            }
+        }
+
+        let params: Option<Rc<[Part]>> = params.map(|p| {
+            let mut parts = self.parts(p);
+            for part in &mut parts {
+                if let Part::Binder(depth, _) = part {
+                    debug_assert!(*depth > scope_depth);
+                    *depth -= scope_depth;
+                }
+            }
+            parts.into()
+        });
+
         let mut args = Vec::new();
         for value in body.iter_mut().flat_map(Part::values) {
-            if let Value::Binding(depth, name) = value {
-                if *depth > self.scope_depth {
+            match value {
+                Value::Binding(depth, name) if *depth > scope_depth => {
                     // The parent declares this binding before calling the child.
                     *value = Value::Local(name.clone());
                     continue;
                 }
-            }
-            if matches!(value, Value::Local(_)) {
-                continue;
+                Value::BinderRef(depth, binder) if *depth > scope_depth => {
+                    *value = Value::LocalBinder(*depth - scope_depth, binder.clone());
+                    continue;
+                }
+                Value::Local(_) | Value::LocalBinder(..) => continue,
+                _ => {}
             }
             let i = args.len();
             args.push(std::mem::replace(value, Value::Param(i)));
         }
-        let params: Option<Rc<str>> = params.map(Into::into);
         let index = self.index.entry(params.clone()).or_default();
         let id = match index.get(body.as_slice()) {
             Some(&id) => id,
@@ -291,7 +421,11 @@ impl Templates {
                         .iter()
                         .map(|js| Column {
                             fixed: match js {
-                                Value::Binding(depth, _) if *depth > self.declaration_depth => None,
+                                Value::Binding(depth, _) | Value::BinderRef(depth, _)
+                                    if *depth > self.declaration_depth =>
+                                {
+                                    None
+                                }
                                 _ => Some(js.clone()),
                             },
                             first: 0,
@@ -306,6 +440,7 @@ impl Templates {
         self.calls.push(Call {
             id,
             base,
+            depth_shift: scope_depth,
             args,
             parent: parent.map(Into::into),
             takes_slot: false,
@@ -355,7 +490,13 @@ impl Templates {
                             .map(|c| c.fixed.clone().unwrap_or_else(|| Value::Local("$c".into())))
                             .collect();
                         let mut js = String::new();
-                        called.expand(&t.body, Base::Relative(0), &values, &mut js);
+                        called.expand(
+                            &t.body,
+                            Base::Relative(0),
+                            DepthBase::Absolute(self.declaration_depth),
+                            &values,
+                            &mut js,
+                        );
                         js.len() > threshold
                     };
                 if share {
@@ -372,6 +513,16 @@ impl Templates {
             templates: &self,
             names: &names,
             enclosing,
+        };
+        let decl_depth = if enclosing {
+            DepthBase::Enclosing(self.declaration_depth)
+        } else {
+            DepthBase::Absolute(self.declaration_depth)
+        };
+        let view_depth = if enclosing {
+            DepthBase::Enclosing(0)
+        } else {
+            DepthBase::Absolute(0)
         };
         let mut declarations = String::new();
         for (i, name) in names.iter().enumerate() {
@@ -406,13 +557,29 @@ impl Templates {
                     params.push(env);
                 }
                 params.extend(self.argument.map(str::to_owned));
-                params.extend(t.params.iter().map(ToString::to_string));
+                if let Some(t_params) = &t.params {
+                    let mut rendered_params = String::new();
+                    render.expand(
+                        t_params,
+                        Base::Absolute(0),
+                        decl_depth,
+                        &[],
+                        &mut rendered_params,
+                    );
+                    params.push(rendered_params);
+                }
                 write!(declarations, "const {name}=({})=>", params.join(",")).unwrap();
                 if t.params.is_some() {
                     declarations.push('{');
                     declarations.push(crate::hoist::OPEN);
                 }
-                render.expand(&t.body, Base::Relative(0), &values, &mut declarations);
+                render.expand(
+                    &t.body,
+                    Base::Relative(0),
+                    decl_depth,
+                    &values,
+                    &mut declarations,
+                );
                 if t.params.is_some() {
                     declarations.push(crate::hoist::CLOSE);
                     declarations.push('}');
@@ -426,7 +593,7 @@ impl Templates {
             Base::Absolute(0)
         };
         let mut expanded = String::new();
-        render.expand(&view, base, &[], &mut expanded);
+        render.expand(&view, base, view_depth, &[], &mut expanded);
         (declarations, expanded)
     }
 }
@@ -436,6 +603,7 @@ impl Templates {
 struct Slot<'a> {
     call: &'a Call,
     base: Base,
+    depth: DepthBase,
     args: &'a [Value],
 }
 
@@ -446,15 +614,29 @@ struct Render<'a> {
 }
 
 impl Render<'_> {
-    fn operand(&self, value: &Value) -> Rc<str> {
+    fn operand(&self, value: &Value, depth: DepthBase) -> Rc<str> {
         match value {
             Value::Js(js) if self.enclosing => format!("\0v:{js}\0").into(),
-            Value::Binding(depth, js)
-                if self.enclosing && self.templates.declaration_depth > *depth =>
-            {
-                crate::code::lexical_operand(js, *depth).into()
+            Value::Binding(d, js) if self.enclosing && self.templates.declaration_depth > *d => {
+                crate::code::lexical_operand(js, *d).into()
             }
             Value::Binding(_, js) => js.clone(),
+            Value::BinderRef(d, binder) if self.enclosing => {
+                crate::code::binder_ref(*d, &binder.prefix, &binder.suffix).into()
+            }
+            Value::BinderRef(d, binder) => {
+                debug_assert!(*d > self.templates.declaration_depth);
+                format!(
+                    "{}{}{}",
+                    binder.prefix,
+                    d - self.templates.declaration_depth - 1,
+                    binder.suffix
+                )
+                .into()
+            }
+            Value::LocalBinder(rel, binder) => binder
+                .render_ref(depth, *rel, self.templates.declaration_depth)
+                .into(),
             Value::Js(js) | Value::Local(js) => js.clone(),
             Value::NoPc if self.enclosing => "\0no-pc\0".into(),
             Value::NoPc => "null".into(),
@@ -462,14 +644,22 @@ impl Render<'_> {
         }
     }
 
-    fn expand(&self, body: &[Part], base: Base, args: &[Value], out: &mut String) {
-        self.expand_with_slot(body, base, args, None, out);
+    fn expand(
+        &self,
+        body: &[Part],
+        base: Base,
+        depth: DepthBase,
+        args: &[Value],
+        out: &mut String,
+    ) {
+        self.expand_with_slot(body, base, depth, args, None, out);
     }
 
     fn expand_with_slot(
         &self,
         body: &[Part],
         base: Base,
+        depth: DepthBase,
         args: &[Value],
         slot: Option<Slot<'_>>,
         out: &mut String,
@@ -478,20 +668,32 @@ impl Render<'_> {
         while let Some(part) = parts.next() {
             match part {
                 Part::Slot(parent) => match slot {
-                    Some(slot) => {
-                        self.call(slot.call, slot.base, slot.args, Some(parent), None, out)
-                    }
+                    Some(slot) => self.call(
+                        slot.call,
+                        slot.base,
+                        slot.depth,
+                        slot.args,
+                        Some(parent),
+                        None,
+                        out,
+                    ),
                     None => write!(out, "$slot({parent});").unwrap(),
                 },
                 Part::Js(js) => out.push_str(js),
                 Part::Site(n) => out.push_str(&base.plus(*n).js()),
-                Part::Value(value) => out.push_str(&self.operand(value.resolve(args))),
+                Part::Binder(rel, binder) => {
+                    out.push_str(&binder.render_decl(depth, *rel, self.templates.declaration_depth))
+                }
+                Part::Value(value) => out.push_str(&self.operand(value.resolve(args), depth)),
                 Part::GetterArgs { shared, pc } => {
                     let (capture, pc) = match pc.resolve(args) {
                         Value::Js(js) => (self.enclosing, Some(js.as_ref())),
                         Value::Local(js) => (false, Some(js.as_ref())),
                         Value::NoPc => (self.enclosing, None),
-                        Value::Param(_) | Value::Binding(..) => {
+                        Value::Param(_)
+                        | Value::Binding(..)
+                        | Value::BinderRef(..)
+                        | Value::LocalBinder(..) => {
                             unreachable!("invalid getter instruction")
                         }
                     };
@@ -505,19 +707,30 @@ impl Render<'_> {
                         Slot {
                             call: content,
                             base,
+                            depth,
                             args,
                         }
                     });
-                    self.call(call, base, args, call.parent.as_deref(), content, out);
+                    self.call(
+                        call,
+                        base,
+                        depth,
+                        args,
+                        call.parent.as_deref(),
+                        content,
+                        out,
+                    );
                 }
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call(
         &self,
         call: &Call,
         base: Base,
+        depth: DepthBase,
         args: &[Value],
         parent: Option<&str>,
         slot: Option<Slot<'_>>,
@@ -529,7 +742,7 @@ impl Render<'_> {
             let mut inputs: Vec<_> = call.base.map(|n| base.plus(n).js()).into_iter().collect();
             let captures: Vec<_> = t
                 .captures()
-                .map(|i| self.operand(call.args[i].resolve(args)))
+                .map(|i| self.operand(call.args[i].resolve(args), depth))
                 .collect();
             match captures.as_slice() {
                 [] => {}
@@ -541,7 +754,7 @@ impl Render<'_> {
                 write!(out, "({}", inputs.join(",")).unwrap();
                 if let Some(slot) = slot {
                     out.push(',');
-                    self.call(slot.call, slot.base, slot.args, None, None, out);
+                    self.call(slot.call, slot.base, slot.depth, slot.args, None, None, out);
                 }
                 out.push_str(");");
             } else if t.params.is_none() {
@@ -551,19 +764,34 @@ impl Render<'_> {
                 write!(out, ".bind(null,{})", inputs.join(",")).unwrap();
             }
         } else {
-            let values: Vec<_> = call.args.iter().map(|v| v.resolve(args).clone()).collect();
+            let values: Vec<_> = call
+                .args
+                .iter()
+                .map(|v| match v.resolve(args) {
+                    Value::LocalBinder(rel, b) => Value::Local(
+                        b.render_ref(depth, *rel, self.templates.declaration_depth)
+                            .into(),
+                    ),
+                    other => other.clone(),
+                })
+                .collect();
             let base = base.plus(call.base.unwrap_or(0));
+            let call_depth = depth.plus(call.depth_shift);
             let Some(params) = &t.params else {
-                self.expand(&t.body, base, &values, out);
+                self.expand(&t.body, base, call_depth, &values, out);
                 return;
             };
             match parent {
                 Some("p") => out.push('{'),
                 // The parent can have the same local name as a child.
                 Some(parent) => write!(out, "{{const p={parent};{{").unwrap(),
-                None => write!(out, "({params})=>{{{}", crate::hoist::OPEN).unwrap(),
+                None => {
+                    out.push('(');
+                    self.expand(params, Base::Absolute(0), call_depth, &[], out);
+                    write!(out, ")=>{{{}", crate::hoist::OPEN).unwrap();
+                }
             }
-            self.expand_with_slot(&t.body, base, &values, slot, out);
+            self.expand_with_slot(&t.body, base, call_depth, &values, slot, out);
             if parent.is_none() {
                 out.push(crate::hoist::CLOSE);
             }
