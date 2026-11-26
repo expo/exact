@@ -319,12 +319,10 @@ final class NativeEntry {
         return view
         #endif
     }
-    #if os(iOS) || os(tvOS)
     /// What the view declares of its safe area, read as it mounts (LLP 1123 D15), and the scroll
     /// views it lends, which D14's writer writes.
     var safeArea: NativeSafeArea?
-    var lent: [LentScrollIOS] = []
-    #endif
+    var lent: [LentScroll] = []
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
     #if os(iOS) || os(tvOS)
@@ -925,11 +923,7 @@ final class NativeViews: NativeModuleHosting {
         #endif
         entry.handle = handle
         entry.view = view
-        #if os(iOS) || os(tvOS)
         mountView(entry, table: table)
-        #else
-        owner.addSubview(view)
-        #endif
         entry.props = props
         entry.state = "ready"
         entry.error = nil
@@ -1140,10 +1134,8 @@ final class NativeViews: NativeModuleHosting {
     /// The node is gone: the nonce dies first, then the instance (D4).
     func destroy(id: UInt32) {
         guard let entry = entries.removeValue(forKey: id) else { return }
-        #if os(iOS) || os(tvOS)
         // Before a parked instance's reset, which a module may not undo Exact's writes through
         releaseSafeArea(entry)
-        #endif
         if entry.nonce != 0 {
             NativeProcess.owners.removeValue(forKey: entry.nonce)
             NativeProcess.retired[entry.nonce] = WeakNatives(self)

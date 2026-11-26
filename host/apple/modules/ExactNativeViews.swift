@@ -64,9 +64,9 @@ open class ExactNativeInstance {
     /// A native screen (LLP 1075.003 §3.6): a controller whose view is
     /// `view`, contained in the route's controller as a child while it shows.
     open var controller: UIViewController? { nil }
+    #endif
     /// How the view takes part in its owner's safe area (LLP 1123 D15), or nil to keep to itself.
     open var safeArea: ExactNativeSafeArea? { nil }
-    #endif
     /// Optional focus destination: the view itself or an attached descendant.
     /// The host owns first-responder changes; return nil to refuse focus.
     open var focusTarget: ExactNativeView? { nil }
@@ -89,16 +89,25 @@ open class ExactNativeInstance {
 }
 
 #if os(iOS) || os(tvOS)
+public typealias ExactNativeScrollView = UIScrollView
+public typealias ExactNativeEdgeInsets = UIEdgeInsets
+#else
+public typealias ExactNativeScrollView = NSScrollView
+public typealias ExactNativeEdgeInsets = NSEdgeInsets
+#endif
+
 /// How a native view takes part in its owner's safe area (LLP 1123 D15): what the host may write and
 /// what the view lends it, fixed while the view is attached.
 public final class ExactNativeSafeArea {
-    /// Whether the host clears the unsafe area still owed in the view through `controller`'s
-    /// `additionalSafeAreaInsets`, as its own tagged contribution beside the app's; a view with no
-    /// controller is the view of one the host makes and contains, kept with the view while it lives.
+    /// Whether the host clears the unsafe area still owed in the view as its own tagged contribution
+    /// beside the app's: on UIKit through `controller`'s `additionalSafeAreaInsets`, a view with no
+    /// controller being the view of one the host makes and contains, kept with the view while it lives;
+    /// on AppKit through the view's own `additionalSafeAreaInsets`.
     public let adjustsAdditionalSafeAreaInsets: Bool
     /// The scroll views whose content inset, indicator insets and adjustment the view lends the host.
     public let scrollViews: [ScrollView]
-    /// A SwiftUI host's `safeAreaRegions` as its controller has them, nil where no SwiftUI view is hosted.
+    /// A SwiftUI host's `safeAreaRegions` as its controller or hosting view has them, nil where no SwiftUI view is
+    /// hosted.
     public let safeAreaRegions: UInt?
     /// Undoes the view's own changes after the host has given back what it wrote and borrowed.
     public let release: () -> Void
@@ -113,14 +122,14 @@ public final class ExactNativeSafeArea {
 
     /// A scroll view lent to the host, which keeps its native parent.
     public struct ScrollView {
-        public let view: UIScrollView
+        public let view: ExactNativeScrollView
         /// The `id` of the box whose scroll policy it takes, in the same owner; nil for the view's own box.
         public let anchor: String?
         /// Lays the view out clearing no more than the container clearance given, in its own
         /// coordinates, and returns what it cleared; nil where its layout clears none.
-        public let layout: ((UIEdgeInsets) -> UIEdgeInsets)?
+        public let layout: ((ExactNativeEdgeInsets) -> ExactNativeEdgeInsets)?
 
-        public init(_ view: UIScrollView, anchor: String? = nil, layout: ((UIEdgeInsets) -> UIEdgeInsets)? = nil) {
+        public init(_ view: ExactNativeScrollView, anchor: String? = nil, layout: ((ExactNativeEdgeInsets) -> ExactNativeEdgeInsets)? = nil) {
             self.view = view
             self.anchor = anchor
             self.layout = layout
@@ -128,9 +137,9 @@ public final class ExactNativeSafeArea {
     }
 
     /// The declaration as `safe_area(handle)` hands it to the host, which shares no Swift type with
-    /// this module: Foundation and UIKit values, and blocks for the calls.
+    /// this module: Foundation and the toolkit's values, and blocks for the calls.
     var dictionary: NSDictionary {
-        typealias Layout = @convention(block) (UIEdgeInsets) -> UIEdgeInsets
+        typealias Layout = @convention(block) (ExactNativeEdgeInsets) -> ExactNativeEdgeInsets
         typealias Release = @convention(block) () -> Void
         let scrolls: [NSDictionary] = scrollViews.map { s in
             var entry: [String: Any] = ["view": s.view]
@@ -144,6 +153,7 @@ public final class ExactNativeSafeArea {
     }
 }
 
+#if os(iOS) || os(tvOS)
 /// A module view that is a whole screen (LLP 1075.003 §3.6): `screen`'s view
 /// fills the node's box, and `screen` is a child of the route's controller,
 /// with UIKit's appearance, safe-area and trait propagation.
@@ -329,11 +339,7 @@ enum ExactNativeViewABI {
     /// `safe_area(handle) → NSDictionary?`, retained for the host: the view's safe-area declaration
     /// (`ExactNativeSafeArea.dictionary`), or nil.
     static let safeArea: @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? = { raw in
-        #if os(iOS) || os(tvOS)
         handle(raw)?.instance.safeArea.map { Unmanaged.passRetained($0.dictionary).toOpaque() }
-        #else
-        nil
-        #endif
     }
 
     /// `platform_controller(handle) → UIViewController?`: a native screen's
