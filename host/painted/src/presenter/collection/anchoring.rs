@@ -183,6 +183,7 @@ impl<D: DataSource> Presenter<D> {
         // A clamp is the list's own (its range shrank under it): the reader stands where
         // it put it, and its revision stands too.
         self.reader.rebased(view, before, after);
+        self.rebase_wheel_snap(view, before, after);
         self.snap_layout.clamped(view, before, after);
         // It moved the input offset under any pending position too: that position's change is
         // from the clamped offset now, or a reader's next move would carry it again.

@@ -253,23 +253,36 @@ impl<D: DataSource> Presenter<D> {
         } else {
             off.1
         };
-        let (nx, ny) = if self
+        let ((nx, ny), wheel_pending) = if self
             .host
             .kernel()
             .node(id)
             .is_some_and(|n| n.style.scroll_snap_type != exact_kernel::ScrollSnapType::None)
         {
-            self.wheel_snapped(id, off, (nx, ny), max)
+            self.wheel_snapped(
+                id,
+                off,
+                (nx, ny),
+                (if take_x { dx } else { 0.0 }, if take_y { dy } else { 0.0 }),
+            )
         } else {
-            (nx, ny)
+            ((nx, ny), false)
         };
         // A wheel is a new input: the list's own pending position is retired now (`ack.rs`).
         self.retire_for_wheel(id);
         let moved = self.anchor_input(id, off, if take_y { dy } else { 0. }, (nx, ny));
         self.scroll.insert(id, (nx, ny));
         if (nx, ny) != off || moved.is_some_and(|dy| dy != 0.) {
-            self.scroll_end_input(id, off, Completion::Instant);
+            let completion = if wheel_pending {
+                Completion::Wheel
+            } else {
+                Completion::Instant
+            };
+            self.scroll_end_input(id, off, completion);
         }
+        // Stop any running settle glide after transferring completion ownership so
+        // `scroll_end_moved` does not emit a premature end for the replaced glide.
+        self.stop_glide(id);
         self.dirty = true;
         self.collection_scrolled_or_deferred(id, off);
         if let Some(error) = self.refresh_transform_geometry() {

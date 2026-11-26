@@ -13,6 +13,8 @@ pub(super) enum Completion {
     Collection,
     /// An element's smooth reveal (`glide.rs`): over when it lands.
     Glide,
+    /// Fine wheel ticks on a snapping scroller waiting to settle (`snap.rs`).
+    Wheel,
 }
 
 #[derive(Clone, Copy)]
@@ -54,6 +56,7 @@ impl<D: DataSource> Presenter<D> {
             || self.control_contact.is_some()
             || !self.scroll_end.pending.is_empty()
             || !self.scroll_end.model.is_empty()
+            || self.has_active_wheel_snap()
             || self
                 .timer_observations
                 .is_some_and(|(scrolling, _, _)| scrolling)
@@ -133,11 +136,15 @@ impl<D: DataSource> Presenter<D> {
             // and a reader's drag or fling goes on with the same scroll.
             let held = completion == Completion::Reader && self.scroll_end.held.contains_key(&view);
             let continuing = self.scroll_end_frame_blocked(view)
+                || (previous.kind == Completion::Wheel && self.wheel_snap.contains_key(&view))
                 || (completion == previous.kind
                     && (held
                         || matches!(
                             completion,
-                            Completion::Edge(_) | Completion::Collection | Completion::Glide
+                            Completion::Edge(_)
+                                | Completion::Collection
+                                | Completion::Glide
+                                | Completion::Wheel
                         )));
             if !continuing && self.scroll_end_finished(view, &previous) {
                 self.scroll_end.completed.push_back((
@@ -155,7 +162,10 @@ impl<D: DataSource> Presenter<D> {
         let due = match completion {
             Completion::Instant => self.host.now(),
             Completion::Reader => self.host.now() + 100.,
-            Completion::Edge(_) | Completion::Collection | Completion::Glide => f64::INFINITY,
+            Completion::Edge(_)
+            | Completion::Collection
+            | Completion::Glide
+            | Completion::Wheel => f64::INFINITY,
         };
         self.scroll_end.pending.insert(
             view,
@@ -319,6 +329,7 @@ impl<D: DataSource> Presenter<D> {
             .timer_due_ms()
             .into_iter()
             .chain(self.scroll_end_due())
+            .chain(self.wheel_snap_due())
             .chain(self.held_tap_due())
             .reduce(f64::min)
     }
@@ -354,7 +365,10 @@ impl<D: DataSource> Presenter<D> {
             Completion::Edge(token) => !self.scroll_edge_active(view, token),
             Completion::Collection => false,
             Completion::Reader if self.scroll_end.held.contains_key(&view) => false,
-            Completion::Glide => !self.gliding(view) && !self.zoom_animating(view),
+            Completion::Glide => {
+                !self.gliding(view) && !self.zoom_animating(view) && !self.snap_resnap_pending(view)
+            }
+            Completion::Wheel => !self.wheel_snap_pending(view),
             _ => pending.due <= self.host.now(),
         }
     }
@@ -541,7 +555,10 @@ impl<D: DataSource + Default> Presenter<D> {
             if !field_bool(&reply, "settled") {
                 return reply;
             }
-            if self.scroll_end_due().is_none() && !self.scroll_end.command_work {
+            if self.scroll_end_due().is_none()
+                && self.wheel_snap_due().is_none()
+                && !self.scroll_end.command_work
+            {
                 break;
             }
             let command_work = std::mem::take(&mut self.scroll_end.command_work);

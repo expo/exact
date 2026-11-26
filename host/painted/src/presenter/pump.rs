@@ -64,6 +64,7 @@ impl<D: DataSource> Presenter<D> {
             self.executor.cancel(&aborted);
             self.release_held_work();
             let refined = self.refine_collections();
+            self.settle_wheel_snaps();
             return region_error
                 .or(refined)
                 .or(self.refresh_transform_geometry())
@@ -77,6 +78,7 @@ impl<D: DataSource> Presenter<D> {
             self.executor.notify();
         }
         let after = self.after_commit();
+        self.settle_wheel_snaps();
         let ends = self.deliver_scroll_ends();
         region_error.or(e).or(after).or(ends)
     }
