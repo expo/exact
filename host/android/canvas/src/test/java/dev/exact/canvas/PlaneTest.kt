@@ -44,7 +44,7 @@ class PlaneTest {
             canvas.drawRect(150f, 150f, 170f, 170f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLUE })
             val actual = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
             Player(emptyMap()).apply { width = 200; height = 200 }
-                .replayAt(Canvas(actual), ops, 0, ops.limit(), shift, shift)
+                .replayAt(Canvas(actual), ops, 0, ops.limit(), shift.toDouble(), shift.toDouble())
             assertArrayEquals("w=$w, shift=$shift", pixels(expected), pixels(actual))
             assertEquals(10, Structure().end(ops, 0))
             val bounds = RectF()

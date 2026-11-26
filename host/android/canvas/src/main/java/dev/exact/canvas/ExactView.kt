@@ -98,7 +98,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         // are read once. Through [relayer], as the drawing HWUI let go is recorded while [main] replays a row.
         val c = node.beginRecording()
         relayer.memo = memo; relayer.layerScale = scale
-        try { relayer.replayAt(c, IntBuffer.wrap(ops), 0, ops.size, ox, oy, node) } finally { relayer.memo = null; relayer.layerScale = 1f }
+        try { relayer.replayAt(c, IntBuffer.wrap(ops), 0, ops.size, ox.toDouble(), oy.toDouble(), node) } finally { relayer.memo = null; relayer.layerScale = 1f }
         node.endRecording()
     }) { fonts[it] }.also { it.origins = nativeOrigins; if (skipOffscreen) it.rowShows = Layers.RowShows { row -> rowShows(row) } }
     /** layerbounds=0: layers' nodes cover everything, unclipped (each move or fade damages the window), to compare. */
@@ -179,6 +179,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** Driver scrolls the owner has yet to acknowledge, and the feed's translation in the last stream. */
     private var mainSeq = 0
     private val sent = ArrayDeque<Owner.DriverStep>()
+    private var holdingDriver = false
     private var feed = 0
     private var feedBaseX = 0f
     private var feedBaseY = 0f
@@ -384,7 +385,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             return 0
         }
         val s = ++mainSeq
-        o.scrolled(id, dx, dy, rev, s)
+        o.scrolled(id, dx, dy, rev, s, placed = sent.isEmpty())
         return s
     }
 
@@ -534,6 +535,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         var allQuiet = true
         var publication = timerApplied
         var move: Owner.Pub? = null
+        var feedFromStatement = false
         while (true) {
             val next = o.queue.peek() ?: break
             if (next.ops != null && natives?.prepare(next.ops, structure) { post { publish() } } == false) break
@@ -551,18 +553,28 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     move = null; painted = true; feedNext = p.feed; applyStream(ops); feedBaseX = 0f; feedBaseY = 0f
                     allQuiet = allQuiet && retained(ops)
                 }
-                feed = p.feed
+                feed = p.feed; feedFromStatement = false
             }
             while (sent.isNotEmpty() && sent.first().seq <= p.seq) sent.removeFirst()
+            if (sent.isEmpty()) holdingDriver = false
             // What the reader's own scrolling was told with this stream, in the streams' order.
             scrolling.acked(p.seq)
-            p.scrollers?.let { scrolling.told(it) }
+            p.scrollers?.let {
+                scrolling.told(it)
+                if (ops == null) scrolling.publishedFeed?.let { id ->
+                    feed = id
+                    feedBaseX = scrolling.publishedDriverX(id) ?: 0f
+                    feedBaseY = scrolling.publishedDriverY(id) ?: 0f
+                    feedFromStatement = true
+                }
+            }
         }
         val moveOps = move?.ops
         if (moveOps != null) {
             applyMove(moveOps)
-            groups[feed]?.let { feedBaseX = it.translationX; feedBaseY = it.translationY }
+            if (!feedFromStatement) groups[feed]?.let { feedBaseX = it.translationX; feedBaseY = it.translationY }
         }
+        if (feedFromStatement) groups[feed]?.let { nativeOrigins.translate(it, feedBaseX, feedBaseY) }
         if (any) { placeScrolled(); textSelection.refresh() }
         if (coverTrace && painted) traceNewRows()
         moved = !painted
@@ -599,9 +611,16 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         return same
     }
 
-    /** After a stream, and each move of the reader's own, which may make none ([Owner]): the feed, the scrollers' rows,
-     * the hosted fields and a view lent to another element. */
-    internal fun placeScrolled() { placeFeed(); scrolling.place(); fields?.place(); Formas.placed() }
+    internal fun placeScrolled() {
+        if (!holdDriverPlacement()) { placeFeed(); scrolling.place() }
+        fields?.place(); Formas.placed()
+    }
+
+    private fun holdDriverPlacement(): Boolean {
+        if (sent.isEmpty()) return false
+        holdingDriver = holdingDriver || scrolling.driverShift(feed, sent) == null
+        return holdingDriver
+    }
 
     private fun placeFeed() {
         nearNatives()
@@ -670,18 +689,15 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val nearAhead = (context as Activity).intent.getStringExtra("nearahead")?.toFloatOrNull() ?: Structure.NEAR_AHEAD
     private val nearBehind = (context as Activity).intent.getStringExtra("nearbehind")?.toFloatOrNull() ?: Structure.NEAR_BEHIND
     private val nearKeepMore = (context as Activity).intent.getStringExtra("nearkeep")?.toFloatOrNull() ?: Structure.NEAR_KEEP
-    /** The feed's rows in the last stream: ids and tops in the group's coordinates. */
     private var feedIds = IntArray(64)
     private var feedTops = DoubleArray(64)
     private var feedCount = -1
-    /** The feed's group in the stream being applied (the owner names it with the stream). */
     private var feedNext = 0
     private val nearShow = HashSet<Int>()
     private val nearKeep = HashSet<Int>()
     private val nearKnown = HashSet<Int>()
     private val nearSeen = HashSet<Int>()
 
-    /** The last stream's feed rows, read once a stream. */
     private fun feedRows() {
         feedCount = -1
         val n = natives ?: return
@@ -731,33 +747,29 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** Where the feed's group is drawn: the last stream's place, less the scrolls the owner has yet to apply; where a
      * finger moved it, the reader's own place for it ([Scrolling.shift]). */
-    private fun feedY(): Float = scrolling.shift(feed) ?: scrolling.driverShift(feed, sent) ?: feedBaseY
+    private fun feedY(): Float {
+        if (holdDriverPlacement()) return groups[feed]?.translationY ?: feedBaseY
+        return scrolling.shift(feed) ?: scrolling.driverShift(feed, sent) ?: feedBaseY
+    }
 
 
-    /** near=0: a row out of view when exact2 painted it records on the worker however soon the scroll brings it in.
-     * Otherwise a new row within [Structure.NEAR_S] of travel of the view (where the stream draws it, in the direction of the
-     * scroll) records here, as one in view does: on the worker it was drawn a frame or more after it came into view
-     * (its group recorded again only once it was made), and at 24k dp/s rows come into view as they are built. */
+    /** near=0 keeps out-of-view rows on the worker, including rows within [Structure.NEAR_S] of entering view. */
     private val nearOn = (context as Activity).intent.getStringExtra("near") != "0"
     private val nearY = HashMap<Int, Double>()
     private var scrollV = 0f
     private var scrollAt = 0L
 
-    /** The feed's rows' tops in [stream] (device px, where the view will draw them), when the scroll is fast. */
     private fun nearRows(stream: IntBuffer) {
         nearY.clear()
         if (!nearOn || !async || Math.abs(scrollV) * Structure.NEAR_S < height * 0.1f) return
         val range = groupRange(stream, feed) ?: return
-        var residual = 0f
-        for (step in sent) residual += step.dy
         var i = range[0]
         while (i < range[1]) {
-            if (stream.get(i) == 17) nearY[stream.get(i + 1)] = rowPixel(stream, i + 4) - residual
+            if (stream.get(i) == 17) nearY[stream.get(i + 1)] = rowPixel(stream, i + 4)
             i = structure.end(stream, i)
         }
     }
 
-    /** Whether row [id], [h] px tall, is in view or comes into it within [Structure.NEAR_S] of the scroll. */
     private fun near(id: Int, h: Float): Boolean {
         val y = nearY[id] ?: return false
         val reach = Math.abs(scrollV) * Structure.NEAR_S
@@ -766,7 +778,6 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         return y + h > top && y < bottom
     }
 
-    /** The feed travelled [dy] px: its speed, which decides where rows are recorded and which are made first. */
     private fun travelled(dy: Float) {
         val now = System.nanoTime()
         val dt = (now - scrollAt) / 1e9f
@@ -774,8 +785,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         scrollV = if (dt > 0.1f || dt <= 0f) 0f else scrollV * 0.6f + dy / dt * 0.4f
     }
 
-    /** A driver's scroll of the feed by [dy] px ([ExactActivity.drive]): to exact2, on its thread or here. With an
-     * owner, the feed's drawn rows move now. A finger's scroll is [Scrolling]'s. */
+    /** A driver step in device pixels ([ExactActivity.drive]). */
     fun scrollBy(dy: Float) {
         travelled(dy)
         scrolling.released()
@@ -783,7 +793,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (o == null) { Native.scroll(dy); step(); return }
         val batch = o.scroll(dy, ++mainSeq)
         if (sent.lastOrNull() !== batch) sent.addLast(batch)
-        if (groups[feed] != null) { placeFeed(); fields?.place(); Formas.placed(); ticker?.invalidate() }
+        placeScrolled()
+        if (groups[feed] != null) ticker?.invalidate()
     }
 
     /** How far the feed's drawn rows reach from the view, down ([reachDown]) and up ([reachUp]), in the group's own
@@ -859,7 +870,6 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
     private var tookAt = 0L
 
-    /** Group [id]'s body in [b] (after its GROUP_BEGIN, up to its GROUP_END), or null. */
     private fun groupRange(b: IntBuffer, id: Int): IntArray? {
         var i = 0
         var from = -1
@@ -918,7 +928,6 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     }
 
     private var pendingStream: IntBuffer? = null
-    /** A new stream, if exact2 has one: made ready to replay. Whether there was one. */
     private fun take(vsync: Boolean = false): Boolean {
         if (!running) return false
         val stream = pendingStream ?: run {
@@ -975,7 +984,6 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         android.os.Trace.endSection()
     }
 
-    /** A new paint: what it announces made, then replayed by [onDraw]. */
     private fun applyStream(stream: IntBuffer) {
         nativeOrigins.publishing = true
         shared.begin(stream); streamFrame = true
@@ -1193,7 +1201,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     i = j
                 }
                 17 -> {
-                    shared.placeRow(b.get(i + 1), rowPixel(b, i + 2).toFloat(), rowPixel(b, i + 4).toFloat())
+                    shared.placeRow(b.get(i + 1), rowPixel(b, i + 2), rowPixel(b, i + 4))
                     if (ingestRow == 0) { rowTop.put(b.get(i + 1), rowPixel(b, i + 4).toBits()); rowGroup.put(b.get(i + 1), ingestGroup) }
                     i += 6
                 }
@@ -1232,7 +1240,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     layers.flat(id, flatAlpha && main.singleShape(b, body, i + 3 + len))
                     slots.refill(Slots.layer(id))
                     val c = node.beginRecording()
-                    main.replayAt(c, b, body, i + 3 + len, layers.originX(id), layers.originY(id), node)
+                    main.replayAt(c, b, body, i + 3 + len, layers.originX(id).toDouble(), layers.originY(id).toDouble(), node)
                     node.endRecording()
                     i += 3 + len
                 }

@@ -93,8 +93,8 @@ struct Row {
     id: u32,
     /// Commands for replay on a backend without this retained row.
     drawing: Option<Rc<Tape>>,
-    /// The row's top-left in viewport points when recorded.
     origin: (f32, f32),
+    recording_shift: PaintOffset,
     /// Hits and labels for a locally recorded row stay in the recording's space.
     local: bool,
     scale: (f32, f32),
@@ -202,7 +202,7 @@ impl RowPin {
 #[derive(Default)]
 struct Capture {
     clip: Option<Rect4>,
-    viewport_origin: (f32, f32),
+    viewport_origin: Option<PaintOffset>,
     refused: bool,
     split_sections: bool,
     may_have_hit_slop: bool,
@@ -981,20 +981,20 @@ impl Painter {
 
     fn draw_row(&mut self, id: u32, origin: grid::RowOrigin, bounds: Rect4) {
         if !self.backend.row_culled(bounds) {
-            match origin.pixels {
-                Some(pixels) => self
-                    .backend
-                    .row_draw_pixels(id, origin.points, pixels, bounds),
-                None => self.backend.row_draw(id, origin.points, bounds),
-            }
+            self.backend
+                .row_draw_at(id, origin.points, origin.pixels, bounds);
         }
     }
 
-    pub(super) fn row_viewport_origin(&self) -> (f32, f32) {
-        self.rows
-            .recording
-            .as_ref()
-            .map_or((0., 0.), |row| row.viewport_origin)
+    pub(super) fn viewport_recording(&mut self) {
+        self.backend.viewport_recording();
+        if let Some(row) = self.rows.recording.as_mut() {
+            row.refused = true;
+        }
+    }
+
+    pub(super) fn row_viewport_origin(&self) -> Option<PaintOffset> {
+        self.rows.recording.as_ref()?.viewport_origin
     }
 
     /// Whether a kept row draws what it would record now; `pictures`: its
@@ -1037,15 +1037,15 @@ impl Painter {
                 || row.frames.iter().all(|saved| {
                     kernel.node_by_key(saved.node).is_some_and(|n| {
                         let (g, f) = (n.frame, saved.frame);
-                        let same = |a: f32, b: f32| {
+                        let same = |a: f32, at: f32, b: f32, before: f32| {
                             if on_grid {
-                                a == b
+                                f64::from(a) - f64::from(at) == f64::from(b) - f64::from(before)
                             } else {
-                                (a - b).abs() < 0.5
+                                ((a - at) - (b - before)).abs() < 0.5
                             }
                         };
-                        same(g.x - layout_origin.0, f.x - old_origin.0)
-                            && same(g.y - layout_origin.1, f.y - old_origin.1)
+                        same(g.x, layout_origin.0, f.x, old_origin.0)
+                            && same(g.y, layout_origin.1, f.y, old_origin.1)
                             && g.width == f.width
                             && g.height == f.height
                             // At distant coordinates, rounding the absolute edges can change their spacing.
@@ -1053,13 +1053,6 @@ impl Painter {
                                 grid::relative_pixel_box(g, layout_origin, scale)
                                     == grid::relative_pixel_box(f, old_origin, scale)
                             })
-                            && (!on_grid
-                                || (saved.grid.is_some() && n.node_type != NodeType::Text)
-                                || grid::paint_origin((g.x, g.y), self.drawn_offset(layout_origin))
-                                    == grid::paint_origin(
-                                        (f.x, f.y),
-                                        self.drawn_offset(old_origin),
-                                    ))
                             && kernel.resolved_padding(saved.node).unwrap_or_default()
                                 == saved.padding
                     })
@@ -1103,14 +1096,27 @@ impl Painter {
             return;
         }
         let drawn = self.drawn(&node);
-        let placement = self.row_origin(node.frame, offset, ts);
-        let origin = placement.points;
+        let mut placement = self.row_origin(node.frame, offset, ts);
+        let local = self.backend.row_local()
+            && (ts == Transform::identity()
+                || (placement.pixels.is_some() && !grid::changes_axes(ts)));
+        let mut recording_shift = (0., 0.);
+        if let Some((x, y)) = placement.pixels.filter(|_| local) {
+            let (dx, dy) = (grid::recording_shift(x), grid::recording_shift(y));
+            let k = f64::from(self.scale);
+            recording_shift = (dx / k, dy / k);
+            placement.pixels = Some((x + dx, y + dy));
+            placement.points = ((x + dx) / k, (y + dy) / k);
+        }
+        let origin = placement.points();
         let scale = (ts.sx, ts.sy);
         let frame = self.rows.frame;
         let port = (0., 0., self.viewport.0, self.viewport.1);
         let shown = clip_rect.map_or(port, |c| intersect(c, port));
         let kept = self.rows.kept.get(&node.key).filter(|row| {
-            !split_sections || row.can_translate_geometry_to(walk.scene.kernel, origin, shown)
+            row.recording_shift == recording_shift
+                && (!split_sections
+                    || row.can_translate_geometry_to(walk.scene.kernel, origin, shown))
         });
         let suspect = self.rows.suspect.contains(&node.key);
         let can_draw = !geometry
@@ -1222,13 +1228,10 @@ impl Painter {
         self.rows.next += 1;
         let start = walk.boxes.len();
         let unsupported = std::mem::replace(&mut self.damage.unsupported, false);
-        // Grid translations belong to placement, so scroll never enters the recording.
-        let local = self.backend.row_local()
-            && (ts == Transform::identity()
-                || (placement.pixels.is_some() && !grid::changes_axes(ts)));
         let (walk_offset, walk_ts, content) = if local {
+            let (x, y) = self.drawn_offset((node.frame.x, node.frame.y));
             (
-                self.drawn_offset((node.frame.x, node.frame.y)),
+                (x + recording_shift.0, y + recording_shift.1),
                 Transform::identity(),
                 (0.0, 0.0),
             )
@@ -1238,10 +1241,7 @@ impl Painter {
         self.backend.row_begin(self.rows.next, content, previous);
         self.rows.recording = Some(Capture {
             clip: clip_rect,
-            viewport_origin: placement
-                .pixels
-                .filter(|_| local)
-                .map_or((0., 0.), |(x, y)| (-x as f32, -y as f32)),
+            viewport_origin: placement.pixels.filter(|_| local).map(|(x, y)| (-x, -y)),
             split_sections,
             ..Capture::default()
         });
@@ -1323,7 +1323,6 @@ impl Painter {
             Some(r) => union(Some(bounds), (r.0 - content.0, r.1 - content.1, r.2, r.3)),
             None => bounds,
         };
-        // The backend keeps the previous recording when this one is the same.
         let rid = self.backend.row_end(bounds);
         if let Some(old) = previous.filter(|old| *old != rid) {
             self.rows.freed.push(old);
@@ -1341,6 +1340,7 @@ impl Painter {
                 id: rid,
                 drawing: None,
                 origin,
+                recording_shift,
                 local,
                 scale,
                 size: (drawn.width, drawn.height),
@@ -1418,8 +1418,10 @@ impl Painter {
                 pin
             }
         };
-        let r = self.drawn_rect(&node, offset);
-        let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
+        let mut origin = self.row_origin(node.frame, offset, ts).points;
+        let shift = self.rows.kept[&node.key].recording_shift;
+        origin.0 += shift.0 / f64::from(place.0);
+        origin.1 += shift.1 / f64::from(place.1);
         let drawing = match self
             .rows
             .kept
@@ -1432,7 +1434,7 @@ impl Painter {
                 let normalized = Recorder::default();
                 normalized.nest(
                     Rc::new(commands),
-                    Transform::from_translate(-origin.0, -origin.1),
+                    Transform::from_translate(-origin.0 as f32, -origin.1 as f32),
                 );
                 let drawing = Rc::new(normalized.tape());
                 self.rows.kept.get_mut(&node.key).expect("kept").drawing = Some(drawing.clone());

@@ -53,7 +53,7 @@ internal class SharedElements(
     private val flights = LinkedHashMap<Long, Flight>()
     private val alive = HashSet<Long>()
     private val heldFrees = LinkedHashSet<Int>()
-    private val rows = HashMap<Int, Pair<Float, Float>>()
+    private val rows = HashMap<Int, Pair<Double, Double>>()
     private var reduced = false
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val clip = Path()
@@ -130,7 +130,7 @@ internal class SharedElements(
         val height = max(1, ceil(e.box.height().toDouble()).toInt())
         e.content.setPosition(0, 0, width, height)
         val drawing = e.content.beginRecording()
-        player.replayAt(drawing, b, body, end, e.box.left, e.box.top)
+        player.replayAt(drawing, b, body, end, e.box.left.toDouble(), e.box.top.toDouble())
         e.content.endRecording()
         e.slot.setPosition(0, 0, width, height)
         val slot = e.slot.beginRecording()
@@ -147,7 +147,7 @@ internal class SharedElements(
         rows.keys.retainAll(elements.values.map { it.row }.toSet())
     }
 
-    fun placeRow(id: Int, x: Float, y: Float) {
+    fun placeRow(id: Int, x: Double, y: Double) {
         if (elements.isNotEmpty()) rows[id] = Pair(x, y)
     }
 
@@ -168,7 +168,9 @@ internal class SharedElements(
         val out = RectF(r)
         for (id in e.layers.reversed()) layerMap(id, out)
         val row = rows[e.row]
-        if (row != null) out.offset(row.first, row.second) else out.offset(e.originX, e.originY)
+        if (row != null) out.set((out.left + row.first).toFloat(), (out.top + row.second).toFloat(),
+            (out.right + row.first).toFloat(), (out.bottom + row.second).toFloat())
+        else out.offset(e.originX, e.originY)
         if (e.group != 0) groupMap(e.group, out)
         return out
     }

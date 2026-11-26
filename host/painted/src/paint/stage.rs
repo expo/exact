@@ -1077,6 +1077,57 @@ mod tests {
 "#;
 
     #[test]
+    fn an_outgoing_rows_tape_keeps_its_live_device_origin() {
+        let source = r#"component App
+  view
+    column width=200 height=100 testId="route"
+      scroll width=200 height=80 transform-origin="0 0" testId="port"
+        box width=200 height=200 background-color="red" testId="row"
+"#;
+        for (translate, scroll_y, pixels) in [(0.25_f32, 0., 0.), (0.4, 0.375, 1.)] {
+            with_route(source, |painter, scene, id, key| {
+                let node = |name| scene.kernel.find_by_test_id(name)[0];
+                let row = node("row");
+                let port = scene.kernel.node_by_key(node("port")).unwrap().id;
+                let scroll = BTreeMap::from([(port, (0., scroll_y))]);
+                let presented = |id| Presented {
+                    translate: if id == port {
+                        (0., translate)
+                    } else {
+                        (0., 0.)
+                    },
+                    ..Presented::IDENTITY
+                };
+                let scene = Scene {
+                    scroll: &scroll,
+                    presented: &presented,
+                    ..scene
+                };
+                painter.stage.skip = vec![id];
+                painter.stage.sheets = vec![Item::Route {
+                    id,
+                    ts: Transform::identity(),
+                    tape: true,
+                }];
+                painter.paint(&scene, (200., 100.)).unwrap();
+                let row_id = painter.retained_row_id(row).unwrap();
+                assert!(painter.kept.routes[&key].tape.draws_rows());
+                let live = crate::canvas::take_row_y(row_id);
+                let expected = f64::from(translate) * 2.625 - pixels - 126.;
+                assert_eq!(live, expected);
+
+                painter.stage.sheets = vec![
+                    Item::Opacity(0.5),
+                    Item::Taped(key, Transform::identity()),
+                    Item::PopOpacity,
+                ];
+                painter.paint(&scene, (200., 100.)).unwrap();
+                assert_eq!(crate::canvas::take_row_y(row_id), live);
+            });
+        }
+    }
+
+    #[test]
     fn a_scaled_crossing_uses_one_layout_box_for_its_pose_and_clip() {
         with_route(ROUTE, |painter, scene, id, key| {
             painter.stage = Stage {

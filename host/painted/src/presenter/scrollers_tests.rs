@@ -290,7 +290,7 @@ fn the_reader_moves_a_scroller_and_is_told_where_it_is() {
     // Told back with the same revisions: these were the reader's own moves.
     // The page's rows were painted at 0 and are 400 px from there now.
     let all = p.reader_scrollers(&drawn, 2.).unwrap();
-    assert_eq!(told(&all, inner), (2, 0, [0., 300., 0., 600., 0., 300.]));
+    assert_eq!(told(&all, inner), (2, 0, [0., 300., 0., 300., 0., 300.]));
     assert_eq!(told(&all, page), (2 | 4, 0, [0., 200., 0., 0., 0., 1020.]));
 }
 

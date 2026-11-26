@@ -900,7 +900,11 @@ impl Backend for Recorder {
         self.ops[at + 4] = (h.max(1.0) * s).to_bits();
         // The node cannot reach further left or up than the pad: a filter that
         // does is drawn unclipped (LLP 1172.023.001 D1).
-        if filtered && (bounds.0 < -ROW_PAD || bounds.1 < -ROW_PAD) {
+        if (filtered
+            || bounds.0 < -crate::paint::grid::ROW_REBASE_AT as f32 / s / 2.
+            || bounds.1 < -crate::paint::grid::ROW_REBASE_AT as f32 / s / 2.)
+            && (bounds.0 < -ROW_PAD || bounds.1 < -ROW_PAD)
+        {
             self.ops[at + 2] |= UNCLIPPED;
         }
         self.ops.push(ROW_END);
@@ -1025,25 +1029,29 @@ impl Backend for Recorder {
         self.matrix = None;
     }
 
-    fn row_draw(&mut self, id: u32, origin: (f32, f32), bounds: Rect4) {
-        let s = self.scale;
-        let pixels = |v| {
-            let v = f64::from(v * s);
-            let r = v.round();
-            if (v - r).abs() < 1.0 / 64.0 {
-                r
-            } else {
-                v
-            }
-        };
-        self.row_draw_pixels(id, origin, (pixels(origin.0), pixels(origin.1)), bounds);
+    fn viewport_recording(&mut self) {
+        if let Some(id) = self.group {
+            GROUPS.with(|g| g.borrow_mut().retain(|(group, _)| *group != id));
+        }
     }
 
-    fn row_draw_pixels(&mut self, id: u32, _: (f32, f32), pixels: (f64, f64), bounds: Rect4) {
+    fn row_draw(&mut self, id: u32, origin: (f32, f32), bounds: Rect4) {
+        self.row_draw_at(id, (origin.0.into(), origin.1.into()), None, bounds);
+    }
+
+    fn row_draw_at(
+        &mut self,
+        id: u32,
+        origin: (f64, f64),
+        pixels: Option<(f64, f64)>,
+        bounds: Rect4,
+    ) {
         self.row_shown(id, bounds);
         self.ops.extend([ROW_DRAW, id]);
         // The recording pad can be a fraction of a device pixel even when the row is snapped.
-        let pad = f64::from(ROW_PAD * self.scale);
+        let scale = f64::from(self.scale);
+        let pad = f64::from(ROW_PAD) * scale;
+        let pixels = pixels.unwrap_or((origin.0 * scale, origin.1 * scale));
         for v in [pixels.0 - pad, pixels.1 - pad] {
             let bits = v.to_bits();
             self.ops.extend([bits as u32, (bits >> 32) as u32]);
@@ -1079,6 +1087,19 @@ impl Backend for Recorder {
     fn finish(&mut self) -> Result<Pixmap, String> {
         self.finish_stream()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn take_row_y(id: u32) -> f64 {
+    let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+    let mut i = 0;
+    while i < ops.len() {
+        if ops[i] == ROW_DRAW && ops[i + 1] == id {
+            return f64::from_bits(u64::from(ops[i + 4]) | (u64::from(ops[i + 5]) << 32));
+        }
+        i = stream::end(&ops, i).unwrap();
+    }
+    panic!("row {id} was not drawn at unit scale");
 }
 
 /// The presenter on the Android main thread, painting through [`Recorder`].

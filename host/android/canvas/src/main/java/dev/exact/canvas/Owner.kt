@@ -206,7 +206,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private var owedDriver: DriverStep? = null
     private var owedSeq = 0
     private var stepPosted = false
-    private class Moved(val id: Int, val dx: Float, val dy: Float, val rev: Int)
+    private class Moved(val id: Int, val dx: Float, val dy: Float, val rev: Int, val placed: Boolean)
     private var owedMoves = ArrayList<Moved>()
     /** lead=1: the velocity the window leads by (px/s, positive toward the end; otherwise none, a viewport each side).
      * Fast travel ([LEAD_ON] dp/s and on, until it slows below [LEAD_OFF]) leads by all exact2 allows (two viewports
@@ -413,9 +413,9 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it ([Scrolling]); the main
      * thread's [seq]th scroll. exact2 applies each sample in order, as the reader did. */
-    fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
+    fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int, placed: Boolean = true) {
         synchronized(lock) {
-            owedMoves.add(Moved(id, dx, dy, rev))
+            owedMoves.add(Moved(id, dx, dy, rev, placed))
             owedSeq = seq
             if (stepPosted) return
             stepPosted = true
@@ -450,7 +450,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         seq = s
         // A step of the reader's own moves whose frame would only move what it moved itself makes none, unless an
         // accessibility service is on (each frame tells it the scrollers' offsets). What follows a frame still runs.
-        if (running && !accessible && moves.isNotEmpty() && driver == null && Native.moved()) produced()
+        if (running && !accessible && moves.isNotEmpty() && driver == null && moves.all { it.placed } && Native.moved()) produced()
         else produce(ackDriver = driver != null)
         // Every third step: the window's lead mounts, off the main thread.
         if (prefetch && ++steps % 3 == 0) { handler.removeCallbacks(refiner); handler.post(refiner) }

@@ -91,3 +91,48 @@ fn scroll_groups_establish_their_own_matrix_and_leave_the_outer_drawing_independ
         r.pop_clip();
     }
 }
+
+#[test]
+fn a_moved_software_row_has_painted_the_part_that_enters_the_view() {
+    use super::scroll::Painted;
+    use super::stream::tests::{canvas_fixture, software_picture};
+
+    for height in [10, 120] {
+        let mut p = canvas_fixture(
+            &format!(
+                r#"component App
+  view
+    scroll width=200 height=80 testId="port"
+      column
+        box height=75
+        column height=200
+          box width=10 height={height} background-color="red" filter="brightness(1)" translate="0px 0px 1px"
+"#
+            ),
+            1.,
+        );
+        p.frame();
+        let image = software_picture();
+        let k = p.host().kernel();
+        let port = k.node_by_key(k.find_by_test_id("port")[0]).unwrap().id;
+        let painted = Painted::capture(&p).unwrap();
+        assert_eq!(p.scroll_to(port, (0., 10.)), Some((0., 10.)));
+        let shift = painted.shift(&mut p, None, 1., false);
+        if height == 10 {
+            assert_eq!(image.height(), 10);
+            assert_eq!(image.pixel(5, 9).unwrap().red(), 255);
+            assert_eq!(
+                shift.unwrap(),
+                [super::SHIFT, 1, port, 0, (-10_f32).to_bits()]
+            );
+        } else {
+            assert_eq!(image.height(), 5);
+            assert!(
+                shift.is_none(),
+                "the next frame reveals a new part of the picture"
+            );
+            p.frame();
+            assert_eq!(software_picture().height(), 15);
+        }
+    }
+}

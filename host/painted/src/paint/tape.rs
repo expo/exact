@@ -125,7 +125,7 @@ enum Op {
     PopMask(Shape, Result<GradientPaint, [u8; 4]>, Transform),
     /// A kept row at its top-left, covering bounds relative to it, drawn
     /// for a placement of this scale.
-    Row(Rc<RowPin>, (f32, f32), Rect4, (f32, f32), Rc<Tape>),
+    Row(Rc<RowPin>, (f64, f64), Rect4, (f32, f32), Rc<Tape>),
     Sticky(Sticky, Rc<Tape>, Transform),
     Filter(Box<box_filter::Filter>, Rc<Tape>, Transform),
     /// Another tape, through a transform.
@@ -236,7 +236,7 @@ impl Recorder {
     pub(super) fn row(
         &self,
         pin: Rc<RowPin>,
-        origin: (f32, f32),
+        origin: (f64, f64),
         bounds: Rect4,
         scale: (f32, f32),
         drawing: Rc<Tape>,
@@ -492,8 +492,8 @@ impl Tape {
                     if size.0 == 0.0 || size.1 == 0.0 {
                         continue;
                     }
-                    let ts =
-                        Transform::from_translate(at.0, at.1).pre_scale(1.0 / size.0, 1.0 / size.1);
+                    let ts = Transform::from_translate(at.0 as f32, at.1 as f32)
+                        .pre_scale(1.0 / size.0, 1.0 / size.1);
                     drawing.bounds_in(live, mul3(&space, &mul(ts, &IDENTITY)))
                 }
                 Op::Sticky(sticky, drawing, ts) => {
@@ -626,7 +626,15 @@ impl Tape {
                     if scale.0 == 0.0 || scale.1 == 0.0 {
                         continue;
                     }
-                    let at = g.pre_translate(origin.0, origin.1);
+                    let x =
+                        f64::from(g.sx) * origin.0 + f64::from(g.kx) * origin.1 + f64::from(g.tx);
+                    let y =
+                        f64::from(g.ky) * origin.0 + f64::from(g.sy) * origin.1 + f64::from(g.ty);
+                    let at = Transform {
+                        tx: x as f32,
+                        ty: y as f32,
+                        ..g
+                    };
                     let ts = at.pre_scale(1.0 / scale.0, 1.0 / scale.1);
                     if planes != 0 || !b.rows_through() || drawing.dynamic {
                         drawing.replay_live(b, text, ts, live);
@@ -636,7 +644,7 @@ impl Tape {
                         {
                             let page = (at.tx + bounds.0, at.ty + bounds.1, bounds.2, bounds.3);
                             if !b.row_culled(page) {
-                                b.row_draw(pin.id(), (at.tx, at.ty), page);
+                                b.row_draw_at(pin.id(), (x, y), None, page);
                             }
                         } else if !b.row_culled(bbox(ts, *bounds)) {
                             b.row_draw_through(pin.id(), ts, *bounds);

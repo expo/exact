@@ -380,7 +380,10 @@ impl Backend for Raster {
     }
 
     fn raster_extent(&self) -> Option<crate::placement::RasterExtent> {
-        Some((self.origin, (self.width, self.height)))
+        Some((
+            (self.origin.0.into(), self.origin.1.into()),
+            (self.width, self.height),
+        ))
     }
 
     fn begin_damage(

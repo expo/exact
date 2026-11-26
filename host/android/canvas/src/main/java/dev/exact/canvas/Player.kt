@@ -123,8 +123,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
     private var positions = FloatArray(512)
 
     /** Device pixels the stream's matrices are moved by (a backdrop's node is placed at its bounds). */
-    private var shiftX = 0f
-    private var shiftY = 0f
+    private var shiftX = 0.0
+    private var shiftY = 0.0
     /** The stream's Canvas matrix, including clip and opacity restores. */
     private val current = Matrix()
     private class SavedMatrix {
@@ -280,7 +280,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
 
     /** A filter open in a replay (op 53): the canvas it draws into, its node (null when it draws unfiltered), and
      * the shift before it. */
-    private class Filtered(val outer: Canvas, val node: android.graphics.RenderNode?, val shiftX: Float, val shiftY: Float, val clipBase: Int = 0) {
+    private class Filtered(val outer: Canvas, val node: android.graphics.RenderNode?, val shiftX: Double, val shiftY: Double, val clipBase: Int = 0) {
         var parentPlacements: ArrayList<PaintedOrigins.Placement>? = null
     }
     private val filters = ArrayList<Filtered>()
@@ -413,10 +413,10 @@ internal class Player(private val fonts: Map<Int, Font>) {
      * null bound is the view's clip, which cuts off the bands. */
     private fun layerBounds(b: IntBuffer, from: Int, to: Int): RectF? {
         // The stream's matrices are absolute device pixels, moved by the shift: measured there, mapped back.
-        layerMatrix.set(current); layerMatrix.postTranslate(shiftX, shiftY)
+        layerMatrix.set(current); layerMatrix.postTranslate(shiftX.toFloat(), shiftY.toFloat())
         if (to < 0 || !measurer.measure(b, from, to, layerRect, layerMatrix)) layerRect.set(window)
         if (layerRect.isEmpty) return null
-        layerRect.offset(-shiftX, -shiftY)
+        layerRect.offset(-shiftX.toFloat(), -shiftY.toFloat())
         if (!current.invert(layerMatrix)) return null
         layerMatrix.mapRect(layerRect)
         layerRect.inset(-1f, -1f)
@@ -424,7 +424,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
     }
 
     /** [replay] into a node whose origin is at ([dx], [dy]) in the stream's pixels. */
-    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Float, dy: Float, into: android.graphics.RenderNode? = null) {
+    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Double, dy: Double, into: android.graphics.RenderNode? = null) {
         val sx = shiftX; val sy = shiftY
         shiftX = sx + dx; shiftY = sy + dy
         try { replay(canvas, b, from, n, into = into) } finally { shiftX = sx; shiftY = sy }
@@ -466,7 +466,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
      * coordinates so offscreen rows can move into view. The canvas still clips its exact shape. */
     private fun drawScrollPort(canvas: Canvas, content: android.graphics.RenderNode, box: android.graphics.Rect?) {
         val save = canvas.save()
-        matrix.setTranslate(-shiftX, -shiftY)
+        matrix.setTranslate(-shiftX.toFloat(), -shiftY.toFloat())
         if (box == null) {
             canvas.setMatrix(matrix)
             canvas.drawRenderNode(content)
@@ -477,7 +477,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
             port.setClipToBounds(true)
             val local = port.beginRecording()
             local.translate(-box.left.toFloat(), -box.top.toFloat())
-            if (shiftX == 0f && shiftY == 0f) local.drawRenderNode(content)
+            if (shiftX == 0.0 && shiftY == 0.0) local.drawRenderNode(content)
             else {
                 // Keep the replay origin separate from the port origin. At a large page offset,
                 // folding the two translations into a float can move a row by a pixel.
@@ -961,9 +961,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
             when (b.get(i)) {
                 1 -> {
                     values[0] = f(b, i + 1); values[3] = f(b, i + 2); values[1] = f(b, i + 3); values[4] = f(b, i + 4)
-                    values[2] = f(b, i + 5); values[5] = f(b, i + 6); values[6] = 0f; values[7] = 0f; values[8] = 1f
+                    values[2] = (f(b, i + 5) - shiftX).toFloat(); values[5] = (f(b, i + 6) - shiftY).toFloat(); values[6] = 0f; values[7] = 0f; values[8] = 1f
                     matrix.setValues(values)
-                    if (shiftX != 0f || shiftY != 0f) matrix.postTranslate(-shiftX, -shiftY)
                     current.set(matrix)
                     c.setMatrix(matrix)
                     i += 7
@@ -971,7 +970,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 48 -> {
                     for (k in 0 until 9) values[k] = f(b, i + 1 + k)
                     matrix.setValues(values)
-                    if (shiftX != 0f || shiftY != 0f) matrix.postTranslate(-shiftX, -shiftY)
+                    if (shiftX != 0.0 || shiftY != 0.0) matrix.postTranslate(-shiftX.toFloat(), -shiftY.toFloat())
                     current.set(matrix)
                     c.setMatrix(matrix)
                     i += 10
@@ -1203,7 +1202,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         t[2] = f(b, i + 6); t[5] = f(b, i + 7); t[6] = 0f; t[7] = 0f; t[8] = 1f
                         c.save()
                         matrix.setValues(t)
-                        if (shiftX != 0f || shiftY != 0f) matrix.postTranslate(-shiftX, -shiftY)
+                        if (shiftX != 0.0 || shiftY != 0.0) matrix.postTranslate(-shiftX.toFloat(), -shiftY.toFloat())
                         c.setMatrix(matrix)
                         if (children != null) placed(r, 0f, 0f, saves = 1, kept = Matrix(matrix))
                         c.drawRenderNode(r)
@@ -1215,15 +1214,15 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 19 -> { ring(c, b, i); i += 26 }
                 23 -> {
                     // A picture's slot: its own node, so a picture arriving re-records only that.
-                    slot(b.get(i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
+                    slot(b.get(i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX.toFloat(), -shiftY.toFloat()); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
                     i += 2
                 }
                 24 -> i += 3 + b.get(i + 2)
                 29 -> {
                     // A layer the reader moves and fades: drawn in the stream's coordinates, as a slot is.
                     layer(b.get(i + 1))?.let { s ->
-                        placed(s, -shiftX, -shiftY)
-                        c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore()
+                        placed(s, -shiftX.toFloat(), -shiftY.toFloat())
+                        c.save(); matrix.setTranslate(-shiftX.toFloat(), -shiftY.toFloat()); c.setMatrix(matrix); c.drawRenderNode(s); c.restore()
                     }
                     i += 2
                 }
@@ -1232,7 +1231,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 33 -> i += 3
                 50, 51 -> i += 2 + b.get(i + 1)
                 52 -> {
-                    shared(SharedElements.key(b, i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
+                    shared(SharedElements.key(b, i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX.toFloat(), -shiftY.toFloat()); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
                     i += 3
                 }
                 20 -> {
@@ -1263,7 +1262,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                             c = outer!!
                             restoreMatrix()
                         }
-                        placed(g, -shiftX, -shiftY)
+                        placed(g, -shiftX.toFloat(), -shiftY.toFloat())
                         drawScrollPort(c, holder?.invoke(grouped) ?: g, scrollPort(b, matrixBase))
                     }
                     node = null

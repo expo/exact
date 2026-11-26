@@ -273,7 +273,7 @@ mod bleed_tests;
 mod scroll_stream_tests;
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
@@ -1038,7 +1038,7 @@ component App
         assert_ne!(p.hit(4.74, 5.), Some(child));
     }
 
-    fn canvas_fixture(source: &str, scale: f32) -> crate::presenter::Presenter<()> {
+    pub(super) fn canvas_fixture(source: &str, scale: f32) -> crate::presenter::Presenter<()> {
         use crate::presenter::{PainterChoice, Presenter};
         let (p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
@@ -1053,7 +1053,7 @@ component App
         p
     }
 
-    fn software_picture() -> Arc<Pixmap> {
+    pub(super) fn software_picture() -> Arc<Pixmap> {
         let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
         let mut at = 0;
         while at < ops.len() {

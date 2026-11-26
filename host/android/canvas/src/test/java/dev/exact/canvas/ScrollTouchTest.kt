@@ -56,7 +56,7 @@ class ScrollTouchTest {
         @Implementation fun touching(on: Boolean) { touching.add(on) }
         @JvmName("scroll")
         @Implementation internal fun scroll(dy: Float, seq: Int) = Owner.DriverStep(dy, seq)
-        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
+        @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int, placed: Boolean) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
             logicalY = (logicalY + dy / scale).coerceIn(0f, 500f)
             moveSeq = seq
@@ -319,7 +319,7 @@ class ScrollTouchTest {
         val scrolling = view.scrolling()
         fun told(now: Float, drawn: Float) {
             scrolling.told(intArrayOf(
-                scale.toBits(), 1, 6, 0, 0, now.toBits(), 0, drawn.toBits(), 0, logicalMax.toBits(),
+                scale.toBits(), 1, 6, 0, 0, now.toBits(), 0, (drawn / scale).toBits(), 0, logicalMax.toBits(),
             ))
         }
         told(start, recorded)
@@ -358,25 +358,40 @@ class ScrollTouchTest {
     @Test fun aDriverScrollPlacesPendingRowsOnTheRepaintPixel() {
         val scale = 2.625f
         val start = 0.56845236f
-        val shift = java.nio.IntBuffer.wrap(intArrayOf(22, 1, 1, 0, 2f.toBits()))
+        val shift = java.nio.IntBuffer.wrap(intArrayOf(22, 1, 1, 0, 1f.toBits()))
         val queue = java.util.concurrent.ConcurrentLinkedQueue<Owner.Pub>()
         ReflectionHelpers.setField(view.owner, "queue", queue)
         val group = RenderNode("feed")
         ReflectionHelpers.getField<HashMap<Int, RenderNode>>(view, "groups")[1] = group
         ReflectionHelpers.setField(view, "feed", 1)
         fun statement(now: Float) = intArrayOf(
-            scale.toBits(), 1, now.toBits(), 2f.toBits(), 500f.toBits(),
+            scale.toBits(), 1, 0, 0, now.toBits(), 0, start.toBits(), 500f.toBits(),
         )
         view.scrolling().told(statement(start))
 
         view.scrollBy(-1f)
-        assertEquals("pending placement", 2f, group.translationY, 0f)
+        assertEquals("pending placement", 1f, group.translationY, 0f)
         view.scrollBy(0.02f)
-        assertEquals("second pending placement", 1f, group.translationY, 0f)
+        assertEquals("second pending placement", 0f, group.translationY, 0f)
 
         queue.add(Owner.Pub(1L, shift, true, 1, 1, statement(start - 1f / scale), null, null, null))
         view.publish()
-        assertEquals("placement after the first acknowledgment", 1f, group.translationY, 0f)
+        assertEquals("placement after the first acknowledgment", 0f, group.translationY, 0f)
+    }
+
+    @Test fun aNewerFeedStatementWinsOverAnEarlierGroupShift() {
+        val queue = java.util.concurrent.ConcurrentLinkedQueue<Owner.Pub>()
+        ReflectionHelpers.setField(view.owner, "queue", queue)
+        val group = RenderNode("feed")
+        ReflectionHelpers.getField<HashMap<Int, RenderNode>>(view, "groups")[1] = group
+        val move = java.nio.IntBuffer.wrap(intArrayOf(22, 1, 1, (-4f).toBits(), 0))
+        val feed = intArrayOf(1f.toBits(), 1, 1, 8f.toBits(), 1f.toBits(), 0, 0, 500f.toBits())
+        queue.add(Owner.Pub(1L, move, true, 1, 1, null, null, null, null))
+        queue.add(Owner.Pub(2L, null, true, 2, 0, feed, null, null, null))
+
+        assertTrue(view.publish())
+        assertEquals(-8f, group.translationX, 0f)
+        assertEquals(-1f, group.translationY, 0f)
     }
 
     @Test fun theUpsOwnSampleMovesNothing() {

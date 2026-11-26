@@ -408,7 +408,7 @@ class HostedTouchTest {
         }
         val native = intArrayOf(1, 1f.toBits(), 0, 0, 1f.toBits(), 0, 0) +
             intArrayOf(28, 7, 2, 10f.toBits(), 20f.toBits(), 200f.toBits(), 300f.toBits()) + IntArray(9)
-        player.replayAt(canvas, java.nio.IntBuffer.wrap(native), 0, native.size, 5f, 6f, layer)
+        player.replayAt(canvas, java.nio.IntBuffer.wrap(native), 0, native.size, 5.0, 6.0, layer)
         player.replay(canvas, java.nio.IntBuffer.wrap(intArrayOf(29, 11)), 0, 2, into = row)
         fun paint(x: Float, y: Float) {
             val port = intArrayOf(4, 0, 0, 300f.toBits(), 550f.toBits()) + IntArray(8)
@@ -444,7 +444,7 @@ class HostedTouchTest {
         }
         val native = intArrayOf(1, 1f.toBits(), 0, 0, 1f.toBits(), 0, 0) +
             intArrayOf(28, 7, 2, 10f.toBits(), 20f.toBits(), 200f.toBits(), 300f.toBits()) + IntArray(9)
-        player.replayAt(canvas, java.nio.IntBuffer.wrap(native), 0, native.size, 5f, 6f, layer)
+        player.replayAt(canvas, java.nio.IntBuffer.wrap(native), 0, native.size, 5.0, 6.0, layer)
         player.replay(canvas, java.nio.IntBuffer.wrap(intArrayOf(29, 11)), 0, 2, into = row)
         val rows = rowDraw(22, 7.0, 8.0)
         player.replay(canvas, java.nio.IntBuffer.wrap(rows), 0, rows.size)

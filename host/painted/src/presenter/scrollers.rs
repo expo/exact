@@ -711,8 +711,8 @@ impl<D: DataSource> Presenter<D> {
     /// The scrollers the reader knows, sent when they change or a rejected
     /// move needs acknowledging. Nine words per scroller.
     /// Id, flags, revision, then pairs of float bits for the current logical
-    /// offset in points, recorded offset in pixels, and logical maximum in
-    /// points. An omitted scroller is gone: the reader forgets it.
+    /// offset, recorded offset, and logical maximum, all in points.
+    /// An omitted scroller is gone: the reader forgets it.
     #[cfg(any(target_os = "android", test))]
     pub fn reader_scrollers(
         &mut self,
@@ -737,10 +737,9 @@ impl<D: DataSource> Presenter<D> {
             return (removed || missed).then(Vec::new);
         }
         let limits = self.collection_scroll_limits();
-        let pixel = |v| crate::paint::grid::device_pixel(v, scale) as f32;
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
         let mut out =
-            Vec::with_capacity(ids.len() * STATEMENT_WORDS + 4 * usize::from(feed.is_some()));
+            Vec::with_capacity(ids.len() * STATEMENT_WORDS + 7 * usize::from(feed.is_some()));
         for id in ids {
             let Some(mut s) = self.scroller(id, &limits) else {
                 self.reader.tracked.remove(&id);
@@ -749,18 +748,19 @@ impl<D: DataSource> Presenter<D> {
             let rev = self.reader_revision(&s);
             let painted = drawn.iter().find(|(owner, _)| *owner == id);
             s.node = painted.is_some();
-            let at = painted.map_or((s.offset.0 * scale, s.offset.1 * scale), |(_, at)| {
-                (pixel(at.0), pixel(at.1))
-            });
+            let at = painted.map_or(s.offset, |(_, at)| *at);
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
             out.extend([s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1].map(bits));
         }
-        if let Some(&(id, (_, drawn_y))) = feed {
+        if let Some(&(id, (drawn_x, drawn_y))) = feed {
             if let Some(s) = self.scroller(id, &limits) {
                 out.extend([
                     id as i32,
+                    i32::from(s.axes.0),
+                    bits(s.offset.0),
                     bits(s.offset.1),
-                    bits(pixel(drawn_y)),
+                    bits(drawn_x),
+                    bits(drawn_y),
                     bits(s.max.1),
                 ]);
             }

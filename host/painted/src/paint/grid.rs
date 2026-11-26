@@ -67,11 +67,22 @@ fn on_pixels(frame: Frame, scale: f32) -> Frame {
 /// Quantize to 1/64 of a device pixel before rounding half up. This keeps
 /// float noise close to a half pixel from choosing a different edge.
 pub(crate) fn device_pixel(v: f32, scale: f32) -> f64 {
-    round_device_pixel(f64::from(v * scale))
+    round_device_pixel(f64::from(v) * f64::from(scale))
 }
 
 fn round_device_pixel(pixels: f64) -> f64 {
     ((pixels * 64.0).round() / 64.0 + 0.5).floor()
+}
+
+fn offset_pixels(points: f64, scale: f64) -> f64 {
+    let pixels = points * scale;
+    let whole = pixels.round();
+    // Recover the whole pixel if converting a scroll offset to points and back introduced an ulp.
+    if (pixels - whole).abs() <= pixels.abs() * f64::EPSILON {
+        whole
+    } else {
+        pixels
+    }
 }
 
 pub(super) fn page_scroll_grid(scale: Option<f32>) -> Vec<(ViewId, Option<f32>)> {
@@ -162,16 +173,35 @@ pub(super) fn rect_on_grid(frame: Frame, offset: PaintOffset, grid: Option<f32>)
     let k = f64::from(scale);
     let [x, y, w, h] = pixel_box(frame, scale);
     (
-        ((x - offset.0 * k) / k) as f32,
-        ((y - offset.1 * k) / k) as f32,
+        ((x - offset_pixels(offset.0, k)) / k) as f32,
+        ((y - offset_pixels(offset.1, k)) / k) as f32,
         (w / k) as f32,
         (h / k) as f32,
     )
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct RowOrigin {
-    pub(super) points: (f32, f32),
+    pub(super) points: PaintOffset,
     pub(super) pixels: Option<(f64, f64)>,
+}
+
+impl RowOrigin {
+    pub(super) fn points(self) -> (f32, f32) {
+        (self.points.0 as f32, self.points.1 as f32)
+    }
+}
+
+// A distant row's recording starts near the viewport so replay feeds Canvas
+// a small translation. Whole-pixel steps within the same tile reuse the row.
+pub(crate) const ROW_REBASE_AT: f64 = (1 << 22) as f64;
+
+pub(super) fn recording_shift(at: f64) -> f64 {
+    if at.abs() >= ROW_REBASE_AT {
+        -(at / 4096.0).ceil() * 4096.0
+    } else {
+        0.0
+    }
 }
 
 impl BoxPaint {
@@ -218,20 +248,24 @@ impl Painter {
     }
 
     pub(super) fn row_origin(&self, frame: Frame, offset: PaintOffset, ts: Transform) -> RowOrigin {
+        let axis =
+            |at, offset, scale, translate| (at - offset) * f64::from(scale) + f64::from(translate);
         let Some(scale) = self.grid() else {
-            let (x, y) = paint_origin((frame.x, frame.y), offset);
             return RowOrigin {
-                points: (ts.sx * x + ts.tx, ts.sy * y + ts.ty),
+                points: (
+                    axis(f64::from(frame.x), offset.0, ts.sx, ts.tx),
+                    axis(f64::from(frame.y), offset.1, ts.sy, ts.ty),
+                ),
                 pixels: None,
             };
         };
         let k = f64::from(scale);
-        let x = device_pixel(frame.x, scale) - offset.0 * k;
-        let y = device_pixel(frame.y, scale) - offset.1 * k;
-        let px = round_device_pixel(x * f64::from(ts.sx) + f64::from(ts.tx) * k);
-        let py = round_device_pixel(y * f64::from(ts.sy) + f64::from(ts.ty) * k);
+        let px = (device_pixel(frame.x, scale) - offset_pixels(offset.0, k)) * f64::from(ts.sx)
+            + f64::from(ts.tx) * k;
+        let py = (device_pixel(frame.y, scale) - offset_pixels(offset.1, k)) * f64::from(ts.sy)
+            + f64::from(ts.ty) * k;
         RowOrigin {
-            points: ((px / k) as f32, (py / k) as f32),
+            points: (px / k, py / k),
             pixels: Some((px, py)),
         }
     }

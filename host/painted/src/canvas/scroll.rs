@@ -42,6 +42,10 @@ fn shift_groups(
     for (id, at) in groups {
         let to = now.get(id).copied().unwrap_or_default();
         let shift = crate::paint::grid::pixel_delta(*at, to, scale);
+        let limit = crate::paint::grid::ROW_REBASE_AT as f32;
+        if shift.0.abs() >= limit || shift.1.abs() >= limit {
+            return None;
+        }
         if shift != (0., 0.) && !can_place(*id) {
             return None;
         }
@@ -671,12 +675,12 @@ component App
         let start = before[&port].1;
         assert_eq!(f32::from_bits(words[7] as u32), start * scale);
         let rev = words[5] as u32;
-        let target = 7.451_704_5_f32;
+        let target = 7.451_705_f32;
         p.reader_sample_at(port, (0., target - start), rev, 1.)
             .unwrap();
         let words = p.reader_scrollers(&groups, scale).unwrap();
         assert_eq!(f32::from_bits(words[4] as u32), target);
-        assert_eq!(f32::from_bits(words[6] as u32), 20.);
+        assert_eq!(f32::from_bits(words[6] as u32), start);
         let now = super::BTreeMap::from([(port, p.scroll_of(port))]);
         let shift = super::shift_groups(&before, &now, &groups, scale, |_| true).unwrap();
         assert_eq!(shift, [SHIFT, 1, port, 0, (-1_f32).to_bits()]);
@@ -712,7 +716,7 @@ component App
         assert_eq!(hit[3] as ViewId, port);
         let rev = hit[5] as u32;
         let statement = p.reader_scrollers(&painted.groups, scale).unwrap();
-        assert_eq!(f32::from_bits(statement[6] as u32), 1.);
+        assert_eq!(f32::from_bits(statement[6] as u32), start);
         for at in [1., 2.] {
             p.reader_sample_at(port, (0., 5. / scale), rev, at).unwrap();
         }
@@ -726,7 +730,14 @@ component App
         assert_eq!(recorded_row_top() - top, -9.);
     }
 
-    fn check_distant_row_shifts(scale: f32, translation: &str, start: f32, shifts: &[f32]) {
+    fn check_distant_row_shifts(
+        scale: f32,
+        translation: &str,
+        y: f32,
+        start: f32,
+        step: f32,
+        shifts: &[f32],
+    ) {
         use super::super::{
             stream, Recorder, FINISHED, ROW_BEGIN, ROW_DRAW, ROW_PAD, RRECT, SHIFT,
         };
@@ -737,7 +748,7 @@ component App
   view
     scroll width=200 height=100 scrollTop={start} testId="port"{translation}
       column
-        box height=30
+        box height={y}
         box height=6400200 background-color="red" testId="row"
 "#
             ),
@@ -763,9 +774,13 @@ component App
             panic!("row {id} was not drawn");
         };
         let (mut top, mut ink) = row(&p);
+        assert!(
+            top.abs() < 4096.,
+            "the group replays with origin zero: {top}"
+        );
         for (i, &delta) in shifts.iter().enumerate() {
             let painted = Painted::capture(&p).unwrap();
-            let target = (0., start + (i + 1) as f32);
+            let target = (0., start + step * (i + 1) as f32);
             assert_eq!(p.scroll_to(port, target), Some(target));
             let shift = painted.shift(&mut p, None, scale, false).unwrap();
             assert_eq!(shift, [SHIFT, 1, port, 0, delta.to_bits()]);
@@ -773,7 +788,7 @@ component App
             p.frame();
             let (fresh_top, fresh_ink) = row(&p);
             assert_eq!(
-                fresh_top.fract(),
+                (fresh_top - top).fract(),
                 0.,
                 "{scale}× {translation} at {target:?}"
             );
@@ -789,17 +804,52 @@ component App
 
     #[test]
     fn a_distant_row_paints_the_same_pixel_shift_as_a_move_only_frame() {
-        check_distant_row_shifts(2.625, "", 6_400_000., &[-2.]);
-        check_distant_row_shifts(2.59375, "", 4_999_996.5, &[-3., -2.]);
-        check_distant_row_shifts(2.65625, "", 4_000_000., &[-3.]);
-        check_distant_row_shifts(3., "", 6_400_000., &[-4.]);
+        check_distant_row_shifts(2.625, "", 30., 6_400_000., 1., &[-3.]);
+        check_distant_row_shifts(2.59375, "", 30., 4_999_996.5, 1., &[-3., -2.]);
+        check_distant_row_shifts(2.65625, "", 30., 4_000_000., 1., &[-3.]);
+        check_distant_row_shifts(3., "", 30.333334, 5_592_405., 0.5, &[-2.]);
     }
 
     #[test]
     fn a_translated_distant_row_paints_the_same_pixel_shift_as_a_move_only_frame() {
         for translation in [r#" translate="0px 4px""#, r#" translate="0px 0.25px""#] {
-            check_distant_row_shifts(2.625, translation, 4_999_996.5, &[-2., -3., -3.]);
-            check_distant_row_shifts(3., translation, 4_999_996.5, &[-2., -4., -2.]);
+            check_distant_row_shifts(2.625, translation, 30., 4_999_996.5, 1., &[-2., -3., -3.]);
+            check_distant_row_shifts(3., translation, 30., 4_999_996.5, 1., &[-3., -3., -3.]);
+        }
+    }
+
+    #[test]
+    fn a_translated_row_stays_with_its_port_across_a_scroll_tie() {
+        use super::super::{Recorder, ROW_PAD, SHIFT};
+        for (scale, translation, expected) in [
+            (2.625, 0.1875, 0.4921875),
+            (2.625, 0.25, 0.65625),
+            (2.625, 4., 10.5),
+            (1., 0.4, f64::from(0.4_f32)),
+            (1., 0.5, 0.5),
+        ] {
+            let mut p = boot_at(
+                &format!(
+                    r#"component App
+  view
+    scroll width=200 height=80 testId="port" translate="0px {translation}px" transform-origin="0 0"
+      box height=200 background-color="red"
+"#
+                ),
+                scale,
+            );
+            let port = id(&p, "port");
+            let first = recorded_row_top();
+            assert_eq!(first + f64::from(ROW_PAD) * f64::from(scale), expected);
+            let painted = Painted::capture(&p).unwrap();
+            p.scroll_to(port, (0., if scale == 1. { 1. } else { 0.375 }));
+            assert_eq!(
+                painted.shift(&mut p, None, scale, false).unwrap(),
+                [SHIFT, 1, port, 0, (-1_f32).to_bits()]
+            );
+            p.reader_replaced(Box::new(Recorder::new()));
+            p.frame();
+            assert_eq!(recorded_row_top() - first, -1.);
         }
     }
 
@@ -823,8 +873,11 @@ component App
             p.reader_scrollers_with_feed(&painted.groups, scale, Some(port)),
             Some(vec![
                 port as i32,
+                0,
+                0,
                 start.to_bits() as i32,
-                2_f32.to_bits() as i32,
+                0,
+                start.to_bits() as i32,
                 130_f32.to_bits() as i32
             ])
         );
@@ -991,7 +1044,7 @@ component App
         column
           box height=lead
           column width=200 height=8 padding-top=0.125 box-sizing="border-box" testId="row"
-            box width=200 height=4 background-color="red" testId="child"
+            box width=200 height=0.38671875 background-color="red" testId="child"
           box height=200
       button width=20 height=20 press=move testId="move"
 "#;
@@ -1016,28 +1069,26 @@ component App
     }
 
     #[test]
-    fn moving_a_distant_row_with_the_same_pixel_phase_repositions_its_child() {
+    fn moving_a_row_with_the_same_phase_updates_its_childs_snapped_height() {
         let mut p = boot_on_pixels(
             r#"component App
-  state lead = 200000
+  state lead = 0
   action move
-    lead = 200000.375
+    lead = 200000
   view
     column
-      scroll width=200 height=100 scrollTop=200000
+      scroll width=200 height=100 scrollTop=lead
         column
           box height=lead
           column width=200 height=8 padding-top=0.5625 box-sizing="border-box" testId="row"
-            box width=200 height=4 background-color="red" testId="child"
+            box width=200 height=0.38671875 background-color="red" testId="child"
           box height=200
       button width=20 height=20 press=move testId="move"
 "#,
         );
-        let (row, child, button) = (id(&p, "row"), id(&p, "child"), id(&p, "move"));
-        let relative_top = |p: &mut Presenter<()>| {
-            (p.rect_of(child).unwrap().1 - p.rect_of(row).unwrap().1) * 2.625
-        };
-        assert_eq!(relative_top(&mut p), 2.);
+        let (child, button) = (id(&p, "child"), id(&p, "move"));
+        let painted_height = |p: &mut Presenter<()>| p.rect_of(child).unwrap().3 * 2.625;
+        assert_eq!(painted_height(&mut p), 1.);
         assert_eq!(
             p.host_mut()
                 .dispatch_at(button, exact_runner::Event::Press, 0.),
@@ -1045,11 +1096,11 @@ component App
         );
         assert_eq!(p.after_commit(), None);
         p.frame();
-        let replay = relative_top(&mut p);
+        let replay = painted_height(&mut p);
         p.reader_replaced(Box::new(super::super::Recorder::new()));
         p.frame();
-        assert_eq!(relative_top(&mut p), 1.);
-        assert_eq!(replay, 1.);
+        assert_eq!(painted_height(&mut p), 2.);
+        assert_eq!(replay, 2.);
     }
 
     #[test]
@@ -1105,12 +1156,10 @@ component App
         use super::super::{stream, FINISHED, GLYPHS, ROW_BEGIN, RRECT};
 
         for (scale, from, to, shift) in [
-            (2.625, 4_999_996., 5_000_004., 1.),
             (2.625, 4_000_000., 4_000_003.25, -0.46875),
-            (2.625, 8_000_000., 8_000_006.5, -0.9375),
-            (2.625, 16_000_000., 16_000_013., -1.875),
+            (2.625, 8_000_000., 8_000_006.5, 0.0625),
+            (2.625, 16_000_000., 16_000_013., 0.125),
             (3., 4_000_000., 4_000_000.5, -0.5),
-            (3., 8_000_000., 8_000_001., -1.),
         ] {
             for (child, op) in [
                 (r#"text width=40 height=16 "A""#, GLYPHS),

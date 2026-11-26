@@ -3,7 +3,23 @@ use crate::paint::Rect4;
 use tiny_skia::{Pixmap, Transform};
 
 /// Origin and integer size of the destination backing, in device pixels.
-pub(crate) type RasterExtent = ((f32, f32), (u32, u32));
+pub(crate) type RasterExtent = ((f64, f64), (u32, u32));
+
+pub(crate) struct WarpExtent {
+    pub(crate) viewport: RasterExtent,
+    pub(crate) full: bool,
+    pub(crate) clipped: bool,
+}
+
+impl WarpExtent {
+    pub(crate) fn new(viewport: RasterExtent, full: bool) -> Self {
+        Self {
+            viewport,
+            full,
+            clipped: false,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Placement {
@@ -67,7 +83,13 @@ pub(crate) fn warp(
     scale: f32,
     pixels: (u32, u32),
 ) -> Option<(Pixmap, Rect4)> {
-    warp_clipped(source, h, [[0., 0., 1.]; 2], scale, ((0., 0.), pixels))
+    warp_clipped(
+        source,
+        h,
+        [[0., 0., 1.]; 2],
+        scale,
+        &mut WarpExtent::new(((0., 0.), pixels), false),
+    )
 }
 pub(crate) fn accepts(planes: &[[f32; 3]; 2], x: f32, y: f32) -> bool {
     planes.iter().all(|p| p[0] * x + p[1] * y + p[2] >= 0.)
@@ -115,7 +137,7 @@ pub(crate) fn warp_clipped(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    extent: RasterExtent,
+    extent: &mut WarpExtent,
 ) -> Option<(Pixmap, Rect4)> {
     warp_with(source, h, planes, scale, extent, false)
 }
@@ -128,7 +150,7 @@ pub(crate) fn warp_soft(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    extent: RasterExtent,
+    extent: &mut WarpExtent,
 ) -> Option<(Pixmap, Rect4)> {
     warp_with(source, h, planes, scale, extent, true)
 }
@@ -138,7 +160,7 @@ fn warp_with(
     h: [f32; 9],
     planes: [[f32; 3]; 2],
     scale: f32,
-    extent: RasterExtent,
+    extent: &mut WarpExtent,
     soft: bool,
 ) -> Option<(Pixmap, Rect4)> {
     let inv = inverse(h)?;
@@ -155,11 +177,26 @@ fn warp_with(
     if ![b.0, b.1, b.2, b.3].iter().all(|n| n.is_finite()) {
         return None;
     }
-    let ((ox, oy), (width, height)) = extent;
-    let x0 = (b.0 * scale).floor().max(ox);
-    let y0 = (b.1 * scale).floor().max(oy);
-    let x1 = ((b.0 + b.2) * scale).ceil().min(ox + width as f32);
-    let y1 = ((b.1 + b.3) * scale).ceil().min(oy + height as f32);
+    let ((ox, oy), (width, height)) = extent.viewport;
+    let k = f64::from(scale);
+    let x0 = (f64::from(b.0) * k).floor();
+    let y0 = (f64::from(b.1) * k).floor();
+    let x1 = ((f64::from(b.0) + f64::from(b.2)) * k).ceil();
+    let y1 = ((f64::from(b.1) + f64::from(b.3)) * k).ceil();
+    // A row keeps the full warp when it already fits within the viewport's raster budget.
+    let (x0, y0, x1, y1) =
+        if extent.full && x1 - x0 <= f64::from(width) && y1 - y0 <= f64::from(height) {
+            (x0, y0, x1, y1)
+        } else {
+            let bounded = (
+                x0.max(ox.floor()),
+                y0.max(oy.floor()),
+                x1.min((ox + f64::from(width)).ceil()),
+                y1.min((oy + f64::from(height)).ceil()),
+            );
+            extent.clipped = bounded != (x0, y0, x1, y1);
+            bounded
+        };
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
@@ -168,8 +205,8 @@ fn warp_with(
     for (i, pixel) in out.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = map(
             &inv,
-            (x0 + (i as u32 % width) as f32 + 0.5) / scale,
-            (y0 + (i as u32 / width) as f32 + 0.5) / scale,
+            ((x0 + f64::from(i as u32 % width) + 0.5) / k) as f32,
+            ((y0 + f64::from(i as u32 / width) + 0.5) / k) as f32,
         );
         if !accepts(&planes, x, y) || h[6] * x + h[7] * y + h[8] <= 0. {
             continue;
@@ -217,13 +254,31 @@ fn warp_with(
     }
     Some((
         out,
-        (x0 / scale, y0 / scale, (x1 - x0) / scale, (y1 - y0) / scale),
+        (
+            (x0 / k) as f32,
+            (y0 / k) as f32,
+            ((x1 - x0) / k) as f32,
+            ((y1 - y0) / k) as f32,
+        ),
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_distant_software_viewport_keeps_its_first_pixel() {
+        let source = Pixmap::new(1, 16).unwrap();
+        let planes = [[0., 0., 1.]; 2];
+        let h = [1., 0., 0., 0., 1., 16_799_920., 0., 0., 1.];
+        for (origin, height) in [(16_799_921., 15), (16_799_923., 13), (16_799_924., 12)] {
+            let mut extent = WarpExtent::new(((0., origin), (1, 80)), false);
+            let (pixels, _) = warp_clipped(&source, h, planes, 1., &mut extent).unwrap();
+            assert!(extent.clipped);
+            assert_eq!(pixels.height(), height);
+        }
+    }
     #[test]
     fn rotated_edges_are_opaque_and_sampler_uses_the_inverse() {
         let mut src = Pixmap::new(8, 8).unwrap();
@@ -266,7 +321,14 @@ mod tests {
         src.fill(tiny_skia::Color::WHITE);
         let h = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
         let clip = [[1., 0., -50.], [0., 0., 1.]];
-        let (out, rect) = warp_clipped(&src, h, clip, 1., ((0., 0.), (100, 50))).unwrap();
+        let (out, rect) = warp_clipped(
+            &src,
+            h,
+            clip,
+            1.,
+            &mut WarpExtent::new(((0., 0.), (100, 50)), false),
+        )
+        .unwrap();
         assert_eq!(rect, (50., 0., 50., 50.));
         assert!(out.data().as_chunks::<4>().0.iter().all(|p| *p == [255; 4]));
         assert_eq!(
@@ -282,7 +344,7 @@ mod tests {
             h,
             [[1., 0., -30.], [0., 0., 1.]],
             1.,
-            ((0., 0.), (400, 400)),
+            &mut WarpExtent::new(((0., 0.), (400, 400)), false),
         )
         .unwrap();
         assert!(out.data().as_chunks::<4>().0.iter().any(|p| p[3] != 0));

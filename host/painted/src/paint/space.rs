@@ -457,9 +457,13 @@ impl Painter {
         self.emit_boxless_audio(walk.scene.kernel, painter.boxless_audio.take());
         let planes = [[0., 0., 1.]; 2];
         if let Ok(source) = painter.backend.finish() {
-            if let Some((pixels, rect)) =
-                crate::placement::warp_soft(&source, device, planes, self.scale, self.warp_extent())
-            {
+            let mut extent = self.warp_extent();
+            let warped =
+                crate::placement::warp_soft(&source, device, planes, self.scale, &mut extent);
+            if extent.clipped {
+                self.viewport_recording();
+            }
+            if let Some((pixels, rect)) = warped {
                 self.backend.surface_image(Arc::new(pixels), rect);
             }
         }

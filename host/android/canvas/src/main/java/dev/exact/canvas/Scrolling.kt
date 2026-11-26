@@ -60,7 +60,7 @@ internal class Scrolling(private val view: ExactView) {
         /** Current and farthest logical offsets, in points. */
         var pointsX = 0f; var pointsY = 0f; var maxPointsX = 0f; var maxPointsY = 0f
         /** The offset of the recording, in device pixels. */
-        var drawnX = 0f; var drawnY = 0f
+        var drawnX = 0.0; var drawnY = 0.0
         /** What the reader moved it by that no stream it has taken includes yet. */
         var pendX = 0f; var pendY = 0f
         /** The reader has moved it: its rows are placed here, not by exact2's moves. */
@@ -651,7 +651,9 @@ internal class Scrolling(private val view: ExactView) {
         for (s in scrollers.values) {
             if (!s.own || !s.node || !s.told) continue
             val g = view.group(s.id) ?: continue
-            view.nativeOrigins.translate(g, s.drawnX - predictedPixel(s, true), s.drawnY - predictedPixel(s, false))
+            val x = s.drawnX - predictedPixel(s, true)
+            val y = s.drawnY - predictedPixel(s, false)
+            if (canPlace(x) && canPlace(y)) view.nativeOrigins.translate(g, x.toFloat(), y.toFloat())
         }
     }
 
@@ -668,38 +670,35 @@ internal class Scrolling(private val view: ExactView) {
         return points
     }
 
-    private fun predictedPixel(s: Scroller, sideways: Boolean): Float = paintedOffset(predictedPoints(s, sideways) * scale)
+    private fun predictedPixel(s: Scroller, sideways: Boolean): Double = paintedOffset(predictedPoints(s, sideways))
+
+    private fun canPlace(delta: Double) = abs(delta) < (1 shl 22)
 
     // Match the painter's 1/64-pixel quantization and half-up rounding (paint/grid.rs).
-    private fun paintedOffset(pixels: Float): Float {
-        val subpixels = pixels.toDouble() * 64
+    private fun paintedOffset(points: Float): Double {
+        val subpixels = points.toDouble() * scale * 64
         val quantized = if (subpixels < 0) -Math.round(-subpixels) else Math.round(subpixels)
-        return Math.floor(quantized / 64.0 + 0.5).toFloat()
+        return Math.floor(quantized / 64.0 + 0.5)
     }
 
     /** How far scroller [id]'s rows are drawn from where they were painted, down, when the reader moves it. */
     fun shift(id: Int): Float? = scrollers[id]?.takeIf { it.own && it.node && it.told }
-        ?.let { it.drawnY - predictedPixel(it, false) }
+        ?.let { it.drawnY - predictedPixel(it, false) }?.takeIf(::canPlace)?.toFloat()
 
-    private data class DriverFeed(val id: Int, val points: Float, val drawn: Float, val max: Float)
+    private data class DriverFeed(val id: Int, val horizontal: Boolean, val x: Double, val y: Float, val drawn: Double, val max: Float)
     private var driverFeed: DriverFeed? = null
+    val publishedFeed get() = driverFeed?.id
 
-    /** Touch movement precedes a driver's takeover. The owner adds and clamps once per driver step. */
+    fun publishedDriverX(id: Int): Float? = driverFeed?.takeIf { it.id == id }?.x?.toFloat()
+    fun publishedDriverY(id: Int): Float? = driverFeed?.takeIf { it.id == id }?.let { (it.drawn - paintedOffset(it.y)).toFloat() }
+
+    /** The owner adds and clamps once per driver step. */
     fun driverShift(id: Int, pending: Iterable<Owner.DriverStep>): Float? {
-        val touch = scrollers[id]?.takeIf { it.node && it.told }
-        var points: Float
-        val drawn: Float
-        val max: Float
-        if (touch != null) {
-            points = predictedPoints(touch, false)
-            drawn = touch.drawnY; max = touch.maxPointsY
-        } else {
-            val base = driverFeed?.takeIf { it.id == id } ?: return null
-            points = base.points
-            drawn = base.drawn; max = base.max
-        }
-        for (step in pending) points = (points + step.dy / scale).coerceIn(0f, max)
-        return drawn - paintedOffset(points * scale)
+        if (tracker != null || sent.isNotEmpty() || early.isNotEmpty() || owing.isNotEmpty()) return null
+        val base = driverFeed?.takeIf { it.id == id && !it.horizontal } ?: return null
+        var points = base.y
+        for (step in pending) points = (points + step.dy / scale).coerceIn(0f, base.max)
+        return (base.drawn - paintedOffset(points)).takeIf(::canPlace)?.toFloat()
     }
 
     /** A stream that includes the reader's moves up to number [seq] was taken. */
@@ -716,7 +715,7 @@ internal class Scrolling(private val view: ExactView) {
             val s = scrollers.getOrPut(w[i]) { Scroller(w[i]) }
             s.flags = w[i + 1]
             s.pointsX = f(w[i + 3]); s.pointsY = f(w[i + 4])
-            s.drawnX = f(w[i + 5]); s.drawnY = f(w[i + 6])
+            s.drawnX = paintedOffset(f(w[i + 5])); s.drawnY = paintedOffset(f(w[i + 6]))
             s.maxPointsX = f(w[i + 7]); s.maxPointsY = f(w[i + 8])
             s.nowX = s.pointsX * scale; s.nowY = s.pointsY * scale
             s.maxX = s.maxPointsX * scale; s.maxY = s.maxPointsY * scale
@@ -734,10 +733,11 @@ internal class Scrolling(private val view: ExactView) {
             s.pull?.takeIf { it.spinning && !it.leaving }?.let { if (s.refreshing) s.seen = true else if (s.seen) unpull(s) }
             i += STATEMENT_WORDS
         }
-        driverFeed = if (w.size - i == 4) DriverFeed(w[i], f(w[i + 1]), f(w[i + 2]), f(w[i + 3])) else null
+        driverFeed = if (w.size - i == 7) DriverFeed(w[i], w[i + 1] != 0,
+            paintedOffset(f(w[i + 4])) - paintedOffset(f(w[i + 2])), f(w[i + 3]), paintedOffset(f(w[i + 5])), f(w[i + 6])) else null
         // A scroller the statement no longer has is gone (its node went, or a driver took it over): what the reader
         // kept for it goes with it.
-        val count = (w.size - 1) / STATEMENT_WORDS
+        val count = (i - 1) / STATEMENT_WORDS
         if (scrollers.size <= count) return
         for (s in scrollers.values.filter { s -> s.told && (0 until count).none { w[1 + it * STATEMENT_WORDS] == s.id } }) {
             scrollers.remove(s.id)

@@ -3,15 +3,18 @@
 use super::*;
 
 impl Painter {
-    pub(super) fn warp_extent(&self) -> crate::placement::RasterExtent {
-        self.backend.raster_extent().unwrap_or_else(|| {
-            let pixels = |points: f32| (points * self.scale).round() as u32;
+    pub(super) fn warp_extent(&self) -> crate::placement::WarpExtent {
+        let origin = self.row_viewport_origin();
+        let viewport = self.backend.raster_extent().unwrap_or_else(|| {
+            let scale = self.scale;
+            let pixels = |points: f32| (points * scale).round() as u32;
             // A locally recorded row sees the viewport in its own coordinates.
             (
-                self.row_viewport_origin(),
+                origin.unwrap_or((0., 0.)),
                 (pixels(self.viewport.0), pixels(self.viewport.1)),
             )
-        })
+        });
+        crate::placement::WarpExtent::new(viewport, origin.is_some())
     }
 
     pub(super) fn placed(
@@ -83,9 +86,12 @@ impl Painter {
         walk.inline.extend(child_walk.inline);
         self.gather(walk.scene.kernel, &mut painter);
         if let Ok(source) = painter.backend.finish() {
-            if let Some((pixels, rect)) =
-                placement::warp_clipped(&source, h, clip_depth, self.scale, self.warp_extent())
-            {
+            let mut extent = self.warp_extent();
+            let warped = placement::warp_clipped(&source, h, clip_depth, self.scale, &mut extent);
+            if extent.clipped {
+                self.viewport_recording();
+            }
+            if let Some((pixels, rect)) = warped {
                 if opacity < 1. {
                     self.backend.push_opacity(opacity);
                 }

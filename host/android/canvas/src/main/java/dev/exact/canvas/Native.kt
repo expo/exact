@@ -210,11 +210,10 @@ object Native {
     @JvmStatic external fun zoomWheel(x: Float, y: Float, dy: Float)
     /** What exact2 tells the reader of the scrollers it knows, when that is not what this last returned (else
      * null). The producer's scale as float bits, then nine words each: id, flags, revision, and pairs of float bits
-     * for its current offset in points, recorded offset in pixels, and logical maximum in points. The revision
-     * moves on when the app scrolled it (a `scrollTop` write, a reveal): the reader then takes this offset and ends
-     * its fling. A scroller the reader knew that is not among them is gone. An optional four-word trailer
-     * gives the driver's grouped feed id, current offset in points, recorded offset in pixels, and maximum in
-     * points, all along the vertical axis. */
+     * for its current offset, recorded offset, and maximum in points. The revision moves on when the app scrolls
+     * it. The reader takes the new offset and ends its fling. An omitted scroller is gone. The optional seven-word
+     * trailer gives the driver's grouped feed id, whether it scrolls horizontally, its current and recorded offsets
+     * on both axes, and its vertical maximum in points. */
     @JvmStatic external fun scrollers(): IntArray?
     /** A touch (0 down, 1 up, 2 move, 3 cancel) at the view's pixels, and what touched: the event's tool type
      * ([android.view.MotionEvent.getToolType]). A finger is reported to the app as a touch that hovers nothing and

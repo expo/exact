@@ -174,7 +174,7 @@ class PlayerTest {
         for (x in 0..1) {
             val clip = intArrayOf(4, f(x), 0, f(1), f(8)) + IntArray(8)
             val ops = moved + clip + intArrayOf(20, 7) + moved + stripe(0, Color.RED) + stripe(1, Color.BLUE) + intArrayOf(21, 6)
-            player.replayAt(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size, shift.toFloat(), 0f)
+            player.replayAt(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size, shift.toDouble(), 0.0)
             page.endRecording()
             pixels(page) {
                 assertEquals(if (x == 0) Color.RED else Color.BLUE, it.getPixel(x, 3))
@@ -196,12 +196,46 @@ class PlayerTest {
         }
         val page = RenderNode("page").apply { setPosition(0, 0, 4, 4) }
         val player = Player(emptyMap()).apply { row = { stripe } }
-        val ops = rowDraw(1, shift + 1.0, -shift + 1.0)
-        player.replayAt(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size, shift.toFloat(), -shift.toFloat())
+        val ops = rowDraw(1, shift + 2.0, -shift + 2.0)
+        player.replayAt(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size, shift + 1.0, -shift + 1.0)
         page.endRecording()
         pixels(page) {
             assertEquals(Color.BLUE, it.getPixel(1, 1))
             assertEquals(Color.TRANSPARENT, it.getPixel(0, 1))
+        }
+    }
+
+    @Test fun aRebasedRowReplaysAtTheSamePixelAsItsGroupShift() {
+        // Device origins including the recording pad, from the painter's distant-row cases.
+        for ((before, after, delta) in listOf(
+            Triple(-2351.0, -2354.0, -3f), Triple(-851.5, -854.5, -3f),
+            Triple(-23.5, -26.5, -3f), Triple(-52.0, -54.0, -2f),
+        )) {
+            val y = (5.0 - before).toFloat()
+            val row = RenderNode("row").apply {
+                setPosition(0, 0, 8, y.toInt() + 2)
+                beginRecording().drawRect(0f, y, 8f, y + 1f, android.graphics.Paint().apply { color = Color.BLUE })
+                endRecording()
+            }
+            val group = RenderNode("group")
+            val page = RenderNode("page").apply { setPosition(0, 0, 8, 8) }
+            val player = Player(emptyMap()).apply { width = 8; height = 8; this.group = { group }; this.row = { row } }
+            fun record(top: Double) {
+                val ops = intArrayOf(20, 1) + rowDraw(1, 0.0, top) + intArrayOf(21)
+                player.replay(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size)
+                page.endRecording()
+            }
+            fun check(y: Int) = pixels(page) {
+                assertEquals("row at $before, expected line $y", Color.BLUE, it.getPixel(3, y))
+                assertEquals(Color.TRANSPARENT, it.getPixel(3, y + 1))
+            }
+            record(before)
+            check(5)
+            group.translationY = delta
+            check(5 + delta.toInt())
+            group.translationY = 0f
+            record(after)
+            check(5 + delta.toInt())
         }
     }
 

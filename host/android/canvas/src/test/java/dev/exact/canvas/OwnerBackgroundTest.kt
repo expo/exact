@@ -27,7 +27,6 @@ import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.util.ReflectionHelpers.ClassParameter
 import org.robolectric.util.ReflectionHelpers.callInstanceMethod
 import org.robolectric.util.ReflectionHelpers.getField
-import org.robolectric.util.ReflectionHelpers.setField
 
 internal fun withMainSyncBarrier(work: () -> Unit) {
     val looper = Looper.getMainLooper()
@@ -59,7 +58,11 @@ class OwnerBackgroundTest {
             var chromeStatement: IntArray? = null
             var request: IntArray? = null
             var scrollScale = 1f
+            var logicalX = 0f
             var logicalY = 0f
+            var feedId = 0
+            var touchId = 1
+            var horizontal = false
             var recordedY = 0f
             var scrollStatement: IntArray? = null
             var tracksTouch = false
@@ -71,11 +74,12 @@ class OwnerBackgroundTest {
                 return null
             }
             fun statement() = intArrayOf(
-                scrollScale.toBits(), 1, 2 or 4 or 8, 0,
-                0, logicalY.toBits(), 0, recordedY.toBits(), 0, 500f.toBits(),
+                scrollScale.toBits(), touchId, (if (horizontal) 1 else 0) or 2 or 4 or 8, 0,
+                logicalX.toBits(), logicalY.toBits(), 0, recordedY.toBits(), 500f.toBits(), 500f.toBits(),
             )
             fun driverStatement() = intArrayOf(
-                scrollScale.toBits(), 1, logicalY.toBits(), recordedY.toBits(), 500f.toBits(),
+                scrollScale.toBits(), feedId, if (horizontal) 1 else 0, logicalX.toBits(), logicalY.toBits(),
+                0, recordedY.toBits(), 500f.toBits(),
             )
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun start(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean) = true
@@ -99,6 +103,8 @@ class OwnerBackgroundTest {
             }
             @JvmStatic @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int) {
                 samples.add(dy)
+                if (dy != 0f) feedId = id
+                logicalX = (logicalX + dx / scrollScale).coerceIn(0f, 500f)
                 logicalY = (logicalY + dy / scrollScale).coerceIn(0f, 500f)
                 scrollStatement = statement()
             }
@@ -227,10 +233,11 @@ class OwnerBackgroundTest {
 
     private class ScrollReader(
         activity: Activity, owner: Owner, scale: Float, start: Float, recorded: Float,
-        driver: Boolean = false, touch: Boolean = true,
+        driver: Boolean = false, touch: Boolean = true, touchId: Int = 1, horizontal: Boolean = false,
     ) {
         val view = ExactView(activity, false) {}
         val group = RenderNode("group")
+        val other = RenderNode("other group")
         val slop = ViewConfiguration.get(activity).scaledTouchSlop
         private val scrolling = getField<Scrolling>(view, "scrolling")
         private var time = 0L
@@ -239,30 +246,40 @@ class OwnerBackgroundTest {
             view.owner = owner
             view.ownerStarted(true)
             getField<HashMap<Int, RenderNode>>(view, "groups")[1] = group
-            if (driver) setField(view, "feed", 1)
+            if (touchId == 2) getField<HashMap<Int, RenderNode>>(view, "groups")[2] = other
             owner.sync {
                 Host.samples.clear()
                 Host.driverSamples.clear()
                 Host.scrollScale = scale
+                Host.logicalX = 0f
                 Host.logicalY = start
-                Host.recordedY = recorded
+                Host.recordedY = recorded / scale
+                Host.feedId = if (driver) 1 else 0
+                Host.touchId = touchId
+                Host.horizontal = horizontal
                 Host.tracksTouch = touch
-                Host.scrollStatement = if (touch) Host.statement() else Host.driverStatement()
+                Host.scrollStatement = when {
+                    touch && driver -> Host.statement() + Host.driverStatement().drop(1).toIntArray()
+                    touch -> Host.statement()
+                    else -> Host.driverStatement()
+                }
             }
             assertTrue(view.publish())
             if (touch) {
                 touch(MotionEvent.ACTION_DOWN, 400f)
                 scrolling.under(scrolling.serial, intArrayOf(
-                    0, 1, 0, 1, 2 or 4 or 8, 0, 0, (start * scale).toBits(),
-                    0, (500f * scale).toBits(), 0, 0, 400f.toBits(), 800f.toBits(),
+                    0, 1, 0, touchId, (if (horizontal) 1 else 0) or 2 or 4 or 8, 0, 0, (start * scale).toBits(),
+                    (500f * scale).toBits(), (500f * scale).toBits(), 0, 0, 400f.toBits(), 800f.toBits(),
                 ))
             }
         }
 
         fun move(travel: Float) = touch(MotionEvent.ACTION_MOVE, 400f - slop - travel)
 
-        private fun touch(action: Int, y: Float) {
-            val event = MotionEvent.obtain(0, time, action, 100f, y, 0)
+        fun moveAcross(travel: Float) = touch(MotionEvent.ACTION_MOVE, 400f, 100f - slop - travel)
+
+        private fun touch(action: Int, y: Float, x: Float = 100f) {
+            val event = MotionEvent.obtain(0, time, action, x, y, 0)
             time += 10
             scrolling.touch(event)
             event.recycle()
@@ -323,24 +340,59 @@ class OwnerBackgroundTest {
 
     @Test
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
-    fun aDriverTakeoverIncludesTheFingersUnpublishedMove() = withOwner { owner ->
+    fun aDriverHoldsPlacementUntilTheOwnerResolvesTouchAndFeed() = withOwner { owner ->
         val activity = Robolectric.buildActivity(Activity::class.java).get()
-        val reader = ScrollReader(activity, owner, 1f, 0f, 0f, driver = true)
-        owner.sync { Host.scrollStatement = Host.statement() + Host.driverStatement().copyOfRange(1, 5) }
-        assertTrue(reader.view.publish())
+        // An unpublished feed, a different feed, two axes, and a finger that keeps moving.
+        for ((established, scroller, horizontal) in listOf(
+            Triple(false, 1, false), Triple(true, 2, false), Triple(true, 1, true), Triple(true, 1, false),
+        )) {
+            val reader = ScrollReader(activity, owner, 1f, 0f, 0f, driver = established, touchId = scroller, horizontal = horizontal)
+            val touched = if (scroller == 1) reader.group else reader.other
+            val drain = CountDownLatch(1)
+            owner.tell { check(drain.await(5, TimeUnit.SECONDS)) }
+            try {
+                if (horizontal) reader.moveAcross(4f) else reader.move(4f)
+                assertEquals(-4f, if (horizontal) touched.translationX else touched.translationY, 0f)
+                reader.view.scrollBy(1f)
+                if (established && scroller == 1 && !horizontal) reader.move(8f)
+                assertEquals(if (horizontal) -4f else 0f, touched.translationX, 0f)
+                assertEquals(if (horizontal) 0f else -4f, touched.translationY, 0f)
+                if (scroller == 2) assertEquals(0f, reader.group.translationY, 0f)
+            } finally {
+                drain.countDown()
+            }
+            owner.ask { }
+            assertTrue(reader.view.publish())
+            assertEquals(scroller, getField<Int>(reader.view, "feed"))
+            assertEquals(if (horizontal) -4f else 0f, touched.translationX, 0f)
+            assertEquals(if (horizontal) -1f else if (established && scroller == 1) -9f else -5f, touched.translationY, 0f)
+            if (scroller == 2) assertEquals(0f, reader.group.translationY, 0f)
+        }
+        val twoAxes = ScrollReader(activity, owner, 1f, 0f, 0f, driver = true, touch = false, horizontal = true)
+        twoAxes.view.scrollBy(1f)
+        assertEquals(0f, twoAxes.group.translationY, 0f)
+        owner.ask { }
+        assertTrue(twoAxes.view.publish())
+        assertEquals(-1f, twoAxes.group.translationY, 0f)
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun aFingerStillDownCannotReplaceAnUnpublishedDriverStep() = withOwner { owner ->
+        val reader = ScrollReader(Robolectric.buildActivity(Activity::class.java).get(), owner, 1f, 0f, 0f, driver = true)
         val drain = CountDownLatch(1)
         owner.tell { check(drain.await(5, TimeUnit.SECONDS)) }
         try {
             reader.move(4f)
+            reader.view.scrollBy(50f)
+            reader.move(14f)
             assertEquals(-4f, reader.group.translationY, 0f)
-            reader.view.scrollBy(1f)
-            assertEquals(-5f, reader.group.translationY, 0f)
         } finally {
             drain.countDown()
         }
         owner.ask { }
         assertTrue(reader.view.publish())
-        assertEquals(-5f, reader.group.translationY, 0f)
+        assertEquals(-64f, reader.group.translationY, 0f)
     }
 
     @Test
