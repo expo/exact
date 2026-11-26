@@ -251,11 +251,14 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-test('one window listener records an image drag’s path as its dispatch began, kept across the handoff', () => {
+test('one window listener records an image drag’s path as its dispatch began, kept across the handoff', async () => {
   const root = page(), wait = new AbortController(), loaded = new AbortController();
   const recorders = () => root.defaultView.heard.filter(([type, , capture]) => type === 'dragstart' && capture);
   const input = observeDragInput(root, wait.signal);
-  observeDragInput(root, loaded.signal, input);
+  // The loaded listener's bundle has its own copy of the module
+  const bundled = await import('./drag-input.js?bundle');
+  expect(bundled.observeDragInput).not.toBe(observeDragInput);
+  bundled.observeDragInput(root, loaded.signal, input);
   const [[, record]] = recorders();
   expect(recorders()).toHaveLength(1);
   wait.abort();
@@ -263,15 +266,15 @@ test('one window listener records an image drag’s path as its dispatch began, 
   const card = new El('div'), image = new El('img', {}, card);
   const event = { type: 'dragstart', target: image, composedPath: () => [image, card, root] };
   root.defaultView.fire('dragstart', event, true);
-  const recorded = dragPathFrom(event);
+  const recorded = bundled.dragPathFrom(input, event);
   expect(recorded).toEqual([image, card]);
   // A later listener's move changes what the path reads now, not what it read as the drag began
   event.composedPath = () => [image, root];
-  expect(dragPathFrom(event)).toBe(recorded);
+  expect(dragPathFrom(input, event)).toBe(recorded);
   const unrecorded = { type: 'dragstart', target: card, composedPath: () => [card, root] };
   root.defaultView.fire('dragstart', unrecorded, true);
   unrecorded.composedPath = () => [card];
-  expect(dragPathFrom(unrecorded)).toEqual([card]);
+  expect(dragPathFrom(input, unrecorded)).toEqual([card]);
   loaded.abort();
   expect(recorders()).toEqual([]);
 });

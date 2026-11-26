@@ -404,7 +404,7 @@ function waitingDrag(event) {
   const target = event.target;
   if (target.matches?.('[draggable="true" i]') && !waitingView(target)) return;
   if (target.localName === "img") {
-    const path = dragPathFrom(event);
+    const path = dragPathFrom(waitingInput, event);
     if (path.length) {
       if (waits(path)) event.preventDefault();
       return;
