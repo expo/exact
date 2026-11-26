@@ -863,7 +863,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if placedAncestor?.placementHidden == true || hidesBack() { return nil }
         let matrix = layer.transform
         if CATransform3DIsAffine(matrix), matrix.m11 * matrix.m22 - matrix.m12 * matrix.m21 == 0 { return nil }
-        if let clipPath, !clipPath.contains(point, using: clipRule) { return nil }
+        if let clip = presentedClipPath, !clip.contains(point, using: clipRule) { return nil }
         if !fragmentHit(point) { return nil }
         if props["swipeIndicator"] == "true" { return nil }
         if isSurfaceControl, !inert, !isHidden, !cssVisibilityHidden, isUserInteractionEnabled, hitBounds.contains(point) { return self }

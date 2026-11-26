@@ -129,13 +129,13 @@ test('a flag that takes a value is refused by name when the value is missing or 
   for (const [verb, argv] of [['ios', ['--ios', '--sim', 'iPhone 17', '--optimize', 'size']], ['web', ['--port', '-1']], ['agent', ['macos', '--login']], ['agent', ['macos', '--login', 'hidden', 'tree']]]) {
     assert.deepEqual(guarded(verb, argv), [0, ''], argv.join(' '));
   }
-  assert.equal(appleBuildRefusal(['--ios', '--link', 'all']), '--link takes plan, not all');
-  assert.equal(appleBuildRefusal(['--ios', '--link', 'plan']), null);
-  assert.match(appleBuildRefusal(['--ios', '--logs']), /--logs requires a simulator --run/);
-  assert.match(appleBuildRefusal(['--device', '--run', '--logs']), /--logs requires a simulator --run/);
-  assert.equal(appleBuildRefusal(['--ios', '--run', '--logs']), null);
-  assert.match(appleBuildRefusal(['--device', '--pick']), /--pick selects a simulator/);
-  assert.equal(appleBuildRefusal(['--ios', '--run', '--pick']), null);
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'all'], {}, 'darwin'), '--link takes plan, not all');
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'plan'], {}, 'darwin'), null);
+  assert.match(appleBuildRefusal(['--ios', '--logs'], {}, 'darwin'), /--logs requires a simulator --run/);
+  assert.match(appleBuildRefusal(['--device', '--run', '--logs'], {}, 'darwin'), /--logs requires a simulator --run/);
+  assert.equal(appleBuildRefusal(['--ios', '--run', '--logs'], {}, 'darwin'), null);
+  assert.match(appleBuildRefusal(['--device', '--pick'], {}, 'darwin'), /--pick selects a simulator/);
+  assert.equal(appleBuildRefusal(['--ios', '--run', '--pick'], {}, 'darwin'), null);
 });
 
 test('forma help lists every binding language', () => {

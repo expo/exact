@@ -2,7 +2,7 @@
 use super::super::bars::tests::{barred, tap, Nothing, APP};
 use super::super::stage::{sheet_span, SHEET_HANDLE};
 use super::super::*;
-use exact_kernel::{KeyboardReport, OwnerUpdate};
+use exact_kernel::{Keyboard, KeyboardReport, OwnerUpdate};
 
 fn update(p: &Presenter<Nothing>, test_id: &str) -> OwnerUpdate {
     let kernel = p.host().kernel();
@@ -38,7 +38,11 @@ fn a_routes_update_is_the_room_its_bars_take() {
         (&home.margins, &home.segments, &home.chrome, &home.regions),
         (&None, &None, &None, &None)
     );
-    assert_eq!(home.keyboard, KeyboardReport::default());
+    assert_eq!(
+        home.keyboard,
+        KeyboardReport::Dismissed,
+        "Android's window has a software keyboard, none showing"
+    );
     let page = p.page_origin();
     assert_eq!(
         home.window_map.unwrap().0,
@@ -132,4 +136,124 @@ fn a_routes_configuration_follows_the_window() {
     assert_eq!(p.set_window(window), None);
     let _ = p.after_commit();
     assert_ne!(configuration(&p), before);
+}
+
+/// A desktop shell's (Linux's, Windows's): with no bars and no window insets, each route's band stays 0 through a
+/// resize while its configuration follows the window, and a route that leaves its stack has no update.
+#[test]
+fn a_desktop_shells_routes_keep_bands_of_zero_and_retire_with_their_stack() {
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(APP),
+        Nothing,
+        (900., 600.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let home = update(&p, "route-home");
+    assert_eq!(home.band, Some([0.0; 4]), "0, not unavailable");
+    p.resize(1200., 800.);
+    let _ = p.after_commit();
+    let resized = update(&p, "route-home");
+    assert_eq!(resized.band, Some([0.0; 4]));
+    assert_ne!(
+        resized.configuration, home.configuration,
+        "the page's size is its configuration's"
+    );
+    tap(&mut p, "open").unwrap();
+    let _ = p.after_commit();
+    let detail = update(&p, "route-detail");
+    assert_eq!(detail.band, Some([0.0; 4]));
+    let kernel = p.host.runner_mut().kernel_mut();
+    let route = kernel
+        .node_by_key(kernel.find_by_test_id("route-detail")[0])
+        .unwrap()
+        .id;
+    assert!(
+        kernel.update_owner(route, detail).is_ok(),
+        "the kernel takes it"
+    );
+    tap(&mut p, "back").unwrap();
+    let settled = p.host().now() + 2000.;
+    p.tick(settled);
+    let _ = p.after_commit();
+    let kernel = p.host().kernel();
+    let gone = kernel
+        .find_by_test_id("route-detail")
+        .first()
+        .and_then(|k| kernel.node_by_key(*k))
+        .map(|n| n.id);
+    assert!(
+        p.owner_updates().iter().all(|(v, _)| Some(*v) != gone),
+        "no update once it has left its stack"
+    );
+}
+
+/// Android's software keyboard is the window's bottom inset, docked across its width, in each owner's space; a desktop
+/// shell, which tells no window, leaves it unreported.
+#[test]
+fn a_routes_keyboard_is_the_windows_in_its_own_space() {
+    let (mut p, _) = barred(APP);
+    let mut window = *p.window().unwrap();
+    window.keyboard = [0., 0., 300., 0.];
+    assert_eq!(p.set_window(window), None);
+    let _ = p.after_commit();
+    let home = update(&p, "route-home");
+    let [.., ox, oy] = home.window_map.unwrap().0;
+    let (width, height) = window.size;
+    let shown = Keyboard {
+        frame: [-ox, height - 300. - oy, width, 300.],
+        docked: true,
+    };
+    assert_eq!(home.keyboard, KeyboardReport::Shown(shown));
+    let kernel = p.host.runner_mut().kernel_mut();
+    let route = kernel
+        .node_by_key(kernel.find_by_test_id("route-home")[0])
+        .unwrap()
+        .id;
+    assert!(
+        kernel.update_owner(route, home).is_ok(),
+        "the kernel takes it"
+    );
+    let (desktop, error) = Presenter::boot_with(
+        &crate::test_plan(APP),
+        Nothing,
+        (412., 840.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(
+        update(&desktop, "route-home").keyboard,
+        KeyboardReport::Unreported
+    );
+}
+
+/// A route's map is its published frame once, which is already in the page, less the page's scroll: under a
+/// navigation root at (20, 30) the route lies at (20, 30), and 10 higher once the page has scrolled 10.
+#[test]
+fn a_routes_map_is_its_frame_in_the_page_less_the_pages_scroll() {
+    let source = APP.replace(
+        "    main navigationKey",
+        "    main margin-left=20 margin-top=30 navigationKey",
+    );
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(&source),
+        Nothing,
+        (412., 840.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let [.., x, y] = update(&p, "route-home").window_map.unwrap().0;
+    assert_eq!((x, y), (20., 30.));
+    p.page = (0., 10.);
+    let [.., x, y] = update(&p, "route-home").window_map.unwrap().0;
+    assert_eq!((x, y), (20., 20.));
 }

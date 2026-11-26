@@ -526,11 +526,13 @@ fn many_ranged_params_naming_a_token_build_in_moments() {
     let began = cpu();
     let built = contract::compile_path(&path);
     let took = cpu() - began;
-    // (in CPU time: 4.3 s now, 64 s before tokens reading no param batched)
-    assert!(
-        took < std::time::Duration::from_millis(20000),
-        "{took:?} of CPU"
-    );
+    // (in CPU time: 4.3 s on Apple Silicon / ~21 s on unoptimized x86_64 debug, vs >64 s–300 s unbatched)
+    let budget = std::time::Duration::from_millis(if cfg!(debug_assertions) {
+        60_000
+    } else {
+        20_000
+    });
+    assert!(took < budget, "{took:?} of CPU");
     let e = built.unwrap_err();
     assert_eq!(e.id, "forma-param-range", "{e:?}");
     assert!(e.message.contains("p7"), "{e:?}");

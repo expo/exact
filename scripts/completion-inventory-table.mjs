@@ -1281,7 +1281,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/top.rs",
       "Presenter::close_surface Presenter::dialog_close_prevented Presenter::element Presenter::open_surface Presenter::queue_surface_closed Presenter::replace_surface " +
       "Presenter::report_top_layer Presenter::surface_inputs Presenter::sync_surface Presenter::top_replaced"],
-    ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::follow_invocation Presenter::name_of Presenter::popover_command Presenter::press_then_follow Presenter::show_modal Presenter::top_invoker"],
+    ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::eager_open_popover_toggle Presenter::follow_invocation Presenter::name_of Presenter::popover_command Presenter::popover_inset_point Presenter::press_then_follow Presenter::revalidate_surface Presenter::show_modal Presenter::top_invoker"],
     ["painted:host/painted/src/presenter/top/overlay.rs", "Presenter::prepare_overlay"],
     ["painted:host/painted/src/presenter/top/select.rs", "Presenter::choose_option Presenter::is_select Presenter::present_select Presenter::select_plan Presenter::select_surface_key"],
     ["painted:host/painted/src/presenter/transform.rs", "Presenter::begin_transform_drag"],

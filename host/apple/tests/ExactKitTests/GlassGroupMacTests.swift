@@ -808,6 +808,156 @@ final class GlassGroupMacTests: XCTestCase {
         let hit = try XCTUnwrap(group.hitTest(group.convert(NSPoint(x: 10, y: 20), to: parent))), glass = try XCTUnwrap(p.views[2])
         XCTAssertTrue(hit === glass || hit.isDescendant(of: glass), "\(hit)")
     }
+
+    /// Grouped glass on macOS applies 2D translate/scale through its glass view's geometry so
+    /// NSGlassEffectContainerView follows the transform, while hitTest, drawnRect, descend, and
+    /// press conjugation stay aligned with the drawn box (expo/exact#1866).
+    func testGroupedGlassFollowsTranslateScaleHitTestAndGroupTransitions() throws {
+        guard #available(macOS 26.0, *) else { throw XCTSkip("Liquid Glass is macOS 26") }
+        let ops = box(1, ["glassGroup": "12"], w: 260)
+            + box(2, ["backgroundMaterial": "glass"], x: 10, w: 40)
+            + [["op": "create", "id": 3, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+               ["op": "frame", "id": 3, "x": 8.0, "y": 8.0, "w": 24.0, "h": 24.0],
+               ["op": "children", "id": 2, "ids": [3]],
+               ["op": "children", "id": 1, "ids": [2]],
+               ["op": "roots", "ids": [1]]]
+        let p = presenter(ops)
+        let group = try XCTUnwrap(p.views[1]), node = try XCTUnwrap(p.views[2]), child = try XCTUnwrap(p.views[3])
+        let glass = try XCTUnwrap(node.materialView as? NSGlassEffectView)
+        let content = try XCTUnwrap(node.materialContent)
+
+        // Translate + scale 0.5 about center (20, 20): drawn box moves by (+80, +10) and shrinks to 20x20 around (100, 30) -> (90, 20, 20, 20).
+        p.apply(wireBatch([
+            ["op": "present", "id": 2, "property": "translate", "x": 80.0, "y": 10.0, "w": 0.0, "h": 0.0],
+            ["op": "present", "id": 2, "property": "scale", "x": 0.5, "y": 0.5, "w": 0.0, "h": 0.0],
+        ]))
+        XCTAssertTrue(CATransform3DIsIdentity(try XCTUnwrap(node.layer).transform), "grouped glass leaves translate/scale off its layer")
+        XCTAssertEqual(glass.frame, NSRect(x: 90, y: 20, width: 20, height: 20))
+        XCTAssertEqual(content.bounds, NSRect(x: 0, y: 0, width: 40, height: 40))
+        XCTAssertEqual(glass.cornerRadius, 10, accuracy: 0.01, "corner radius scales with geometry")
+        XCTAssertEqual(node.drawnRect(node.bounds, in: group), CGRect(x: 100, y: 20, width: 20, height: 20), "drawnRect reflects geometry transform")
+        // Child at (8..32, 8..32) inside 40x40 scales to (4..16, 4..16) inside glass -> (104..116, 24..36) in group coords.
+        XCTAssertEqual(child.drawnRect(child.bounds, in: group), CGRect(x: 104, y: 24, width: 12, height: 12), "child is not double-transformed")
+        // Hit-testing finds child at drawn spot, glass rim at drawn rim, and nothing at old untranslated spot.
+        let parent = try XCTUnwrap(group.superview)
+        XCTAssertTrue(group.hitTest(group.convert(NSPoint(x: 110, y: 30), to: parent)) === child, "translated child hits at drawn position")
+        XCTAssertTrue(group.hitTest(group.convert(NSPoint(x: 101, y: 30), to: parent)) === node, "translated glass hits at drawn rim")
+        XCTAssertTrue(group.hitTest(group.convert(NSPoint(x: 30, y: 20), to: parent)) === group, "old untranslated box does not intercept clicks")
+        // descend maps drawn coordinates back into logical box coordinates without double-inverting child.
+        XCTAssertEqual(node.descend(NSPoint(x: 110, y: 30), from: group), NSPoint(x: 20, y: 20))
+
+        // Scale to 0 and sub-10 pt survive native AppKit layout without autoresizing enlarging the glass frame.
+        p.apply(wireBatch([["op": "present", "id": 2, "property": "scale", "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0]]))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(glass.frame.size, .zero, "collapsed glass stays 0x0 after native layout")
+        XCTAssertTrue(group.hitTest(group.convert(NSPoint(x: 110, y: 30), to: parent)) === group, "zero-scaled glass takes no hit")
+        XCTAssertTrue(group.hitTest(group.convert(NSPoint(x: 30, y: 20), to: parent)) === group, "zero-scaled glass takes no hit at layout frame")
+        p.apply(wireBatch([["op": "present", "id": 2, "property": "scale", "x": 0.1, "y": 0.1, "w": 0.0, "h": 0.0]]))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(glass.frame.size.width, 4, accuracy: 0.01, "sub-10 pt glass stays 4x4 after native layout")
+        XCTAssertEqual(glass.frame.size.height, 4, accuracy: 0.01)
+        XCTAssertEqual(content.bounds, NSRect(x: 0, y: 0, width: 40, height: 40), "positive scaled glass keeps logical content bounds after native layout")
+
+        // Accessibility frame and authored hit slop follow the transformed glass box.
+        p.apply(wireBatch([
+            ["op": "present", "id": 2, "property": "scale", "x": 1.0, "y": 1.0, "w": 0.0, "h": 0.0],
+            ["op": "style", "id": 2, "style": ["border_radius": 20.0, "hit_slop_top": 10.0, "hit_slop_right": 10.0, "hit_slop_bottom": 10.0, "hit_slop_left": 10.0]],
+        ]))
+        XCTAssertEqual(node.accessibilityFrame(), window.convertToScreen(node.drawnRect(node.laidOutBox)), "accessibilityFrame reflects translated glass")
+        XCTAssertTrue(group.hitTest(group.convert(NSPoint(x: 85, y: 30), to: parent)) === node, "hit slop outside translated glass hits node")
+        XCTAssertTrue(group.hitTest(group.convert(NSPoint(x: 75, y: 30), to: parent)) === group, "beyond hit slop misses node")
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["border_radius": 20.0]]]))
+
+        // Leaving the glass group (clear path, no isolation change) moves transform back onto node.layer.
+        p.apply(wireBatch([["op": "props", "id": 1, "set": [:], "clear": ["glassGroup"]]]))
+        XCTAssertNil(node.glassFollower, "leaving glass group removes follower")
+        XCTAssertEqual(glass.frame, node.bounds, "isolated glass fills node bounds")
+        XCTAssertFalse(CATransform3DIsIdentity(try XCTUnwrap(node.layer).transform), "isolated glass puts transform back on layer")
+
+        // Rejoining the glass group (clear path, no isolation change) restores geometry mode.
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["glassGroup": "12"]]]))
+        XCTAssertNotNil(node.glassFollower, "rejoining glass group installs follower")
+        XCTAssertEqual(glass.frame, NSRect(x: 80, y: 10, width: 40, height: 40))
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["border_radius": 20.0, "overflow_x": "hidden", "overflow_y": "hidden"]]]))
+        XCTAssertEqual(glass.frame, node.bounds, "overflow:hidden clips node layer, so glass falls back to layer transform")
+        XCTAssertFalse(CATransform3DIsIdentity(try XCTUnwrap(node.layer).transform))
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["border_radius": 20.0]]]))
+        XCTAssertEqual(glass.frame, NSRect(x: 80, y: 10, width: 40, height: 40), "removing overflow:hidden returns to geometry mode")
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["border_radius": 20.0, "box_shadow": [["o": [0.0, 2.0], "b": 4.0, "s": 0, "c": [0, 0, 0, 128]]]]]]))
+        XCTAssertEqual(glass.frame, node.bounds, "adding box-shadow falls back to layer transform")
+        XCTAssertFalse(CATransform3DIsIdentity(try XCTUnwrap(node.layer).transform))
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["border_radius": 20.0]]]))
+        XCTAssertEqual(glass.frame, NSRect(x: 80, y: 10, width: 40, height: 40), "removing box-shadow restores geometry mode")
+
+        // A glass input holds its NSTextField directly on the node outside materialContent, so it keeps layer transform.
+        let inputOps: [[String: Any]] = box(10, ["glassGroup": "12"], w: 200)
+            + box(11, ["backgroundMaterial": "glass", "value": "hi"], kind: "input", x: 10, w: 80)
+            + [["op": "children", "id": 10, "ids": [11]], ["op": "roots", "ids": [10]]]
+        let ip = presenter(inputOps)
+        let inputNode = try XCTUnwrap(ip.views[11])
+        ip.apply(wireBatch([["op": "present", "id": 11, "property": "translate", "x": 40.0, "y": 0.0, "w": 0.0, "h": 0.0]]))
+        XCTAssertNil(inputNode.glassGeometry, "input with sibling NSTextField does not take geometry-only transform")
+        XCTAssertFalse(CATransform3DIsIdentity(try XCTUnwrap(inputNode.layer).transform))
+    }
+
+    /// Translate/scale CSS animations on a grouped glass play on its follower proxy layer with exact
+    /// synchronous evaluation for frozen-clock seeks and live press conjugation, while combined rotation
+    /// or negative scale keyframes keep all transform animations together on the node layer.
+    func testGroupedGlassTransformProxyKeepsCombinedRotationTogether() throws {
+        guard #available(macOS 26.0, *) else { throw XCTSkip("Liquid Glass is macOS 26") }
+        let s = ExactApp.shared.makeSession(label: "glass-proxy-test")
+        let p = s.presenter
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        p.apply(wireBatch(box(1, ["glassGroup": "12"], w: 200) + box(2, ["backgroundMaterial": "glass"], x: 10, w: 40)
+            + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]]))
+        let node = try XCTUnwrap(p.views[2]), layer = try XCTUnwrap(node.layer)
+        let glass = try XCTUnwrap(node.materialView as? NSGlassEffectView)
+        let follower = try XCTUnwrap(node.glassFollower, "grouped glass installs its transform proxy follower")
+
+        // Valid lowered BoxAnimations specs: linear translateX 0 -> 100 over 1.0 s.
+        let slide: [String: Any] = ["id": "slide#0", "k": "transform.translation.x", "t": [0.0, 1.0],
+            "v": [0.0, 100.0], "d": 1.0, "n": 1.0, "fill": 1, "s": 0.0, "dl": 0.0]
+        p.boxAnimations.animations(2, ["specs": [slide]], layer: layer, clock: 500.0)
+        node.applyTransform()
+        XCTAssertTrue(follower.animationKeys()?.contains("slide#0") == true, "translate plays on follower")
+        XCTAssertFalse(layer.animationKeys()?.contains("slide#0") == true, "translate stays off node layer")
+        XCTAssertEqual(layer.anchorPoint, .zero)
+        XCTAssertEqual(glass.frame.minX, 50.0, accuracy: 0.01, "frozen-clock animation updates glass frame synchronously")
+
+        // Seeking the frozen clock updates glass frame AND re-conjugates a settled press transform around the new origin.
+        node.press = PressFeedback(from: 0.9, to: 0.9, start: CACurrentMediaTime() - 1)
+        node.applyTransform()
+        p.boxAnimations.seek(clock: 800.0)
+        XCTAssertEqual(glass.frame.minX, 80.0, accuracy: 0.01, "frozen-clock seek moves glass frame without waiting for commit")
+        let expectedOrigin = CGPoint(x: 20.0 + 80.0, y: 20.0) // box center (20, 20) shifted by +80
+        let expectedPress = CGAffineTransform(translationX: expectedOrigin.x, y: expectedOrigin.y).scaledBy(x: 0.9, y: 0.9)
+            .translatedBy(x: -expectedOrigin.x, y: -expectedOrigin.y)
+        XCTAssertEqual(layer.affineTransform().tx, expectedPress.tx, accuracy: 0.01, "settled press re-anchors at animated drawnOrigin")
+        node.press = PressFeedback()
+        node.applyTransform()
+
+        // Negative scale keyframe (1 -> -1) cannot be proxied through unsigned CALayer scale decomposition.
+        let flip: [String: Any] = ["id": "flip#0", "k": "transform.scale.x", "t": [0.0, 1.0],
+            "v": [1.0, -1.0], "d": 1.0, "n": 1.0, "fill": 1, "s": 0.0, "dl": 0.0]
+        p.boxAnimations.animations(2, ["specs": [slide, flip]], layer: layer, clock: 500.0)
+        node.applyTransform()
+        XCTAssertTrue(follower.animationKeys()?.isEmpty ?? true, "negative scale keyframe keeps transforms off follower")
+        XCTAssertTrue(layer.animationKeys()?.contains("slide#0") == true)
+        XCTAssertTrue(layer.animationKeys()?.contains("flip#0") == true)
+        XCTAssertEqual(glass.frame, node.bounds, "fallback resets material frame to node bounds")
+
+        // Combined rotation keeps all transform animations together on node.layer.
+        let spin: [String: Any] = ["id": "spin#0", "k": "transform.rotation.z", "t": [0.0, 1.0],
+            "v": [0.0, Double.pi / 2], "d": 1.0, "n": 1.0, "fill": 1, "s": 0.0, "dl": 0.0]
+        p.boxAnimations.animations(2, ["specs": [slide, spin]], layer: layer, clock: 500.0)
+        node.applyTransform()
+        XCTAssertTrue(follower.animationKeys()?.isEmpty ?? true, "combined rotation clears follower so translate is not dropped")
+        XCTAssertTrue(layer.animationKeys()?.contains("slide#0") == true, "translate moves back to layer alongside rotation")
+        XCTAssertTrue(layer.animationKeys()?.contains("spin#0") == true)
+        XCTAssertEqual(layer.anchorPoint, CGPoint(x: 0.5, y: 0.5))
+    }
 }
 
 private final class GlassCaptureMarker: NSView {

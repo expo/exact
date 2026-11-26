@@ -604,6 +604,16 @@ impl<D: DataSource> Presenter<D> {
                 continue;
             };
             let port = inset(self.brush.split_port(a, port.scroll_rect()), borders);
+            // A claimed scroller aligns what it reveals in its clear region, its reached port less its insets (D14). This
+            // geometry places content at the CSS offset, which under the claim lies `insets - reach` below where it is
+            // painted, so the region begins at the port's laid-out start and is as long as the clear region.
+            let port = match self.host.presented(a).scroll {
+                Some(c) => {
+                    let [t, r, b, l] = std::array::from_fn(|i| c.insets[i] - c.reach[i]);
+                    inset(port, [0.0, l + r, t + b, 0.0])
+                }
+                None => port,
+            };
             let basis = [port.3, port.2, port.3, port.2];
             let padding = std::array::from_fn(|i| {
                 padding[i]

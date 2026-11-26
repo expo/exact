@@ -5,11 +5,13 @@
 //! (`bars.rs`); a sheet's route's band is the sheet's drag handle, the system's bar under its foot and the window's
 //! sides past its span; with no bars, the band is the window's insets, which are 0 on a desktop shell. The painted host
 //! makes no native views and writes to none, and it has no native margins, layout regions, bar layout regions or chrome.
-//! So an update carries no contributions, its native targets are unavailable, and those fields are absent. Android
-//! reports the keyboard and the segments (A1, A3).
+//! So an update carries no contributions, its native targets are unavailable, and those fields are absent. The
+//! keyboard is the window's, which only Android's reader tells: its software keyboard's inset, docked at the window's
+//! bottom, in each owner's space, or dismissed; a desktop shell, which tells no window, has no software keyboard and
+//! leaves it unreported.
 use super::Presenter;
 use crate::navigation::{sheet_of, Presented};
-use exact_kernel::{Kernel, OwnerUpdate, PropId, ViewId, WindowMap};
+use exact_kernel::{Keyboard, KeyboardReport, OwnerUpdate, PropId, ViewId, WindowMap};
 use exact_runner::DataSource;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -50,16 +52,21 @@ impl<D: DataSource> Presenter<D> {
                     .and_then(|m| self.sheet_origin(m.key));
                 let (x, y) = match (shown, split.filter(|s| s.block(*route))) {
                     (Some(at), _) => at,
-                    // A detail's frame is local to its pane
-                    (None, Some(s)) => (s.pane().0 + node.frame.x, s.pane().1 + node.frame.y),
-                    (None, None) => in_page(kernel, *route),
+                    // A detail's frame is local to its pane; other frames are in the page, which scrolls
+                    (None, Some(s)) => (
+                        s.pane().0 + node.frame.x - self.page.0,
+                        s.pane().1 + node.frame.y - self.page.1,
+                    ),
+                    (None, None) => (node.frame.x - self.page.0, node.frame.y - self.page.1),
                 };
                 let band = (bars.bands.get(route).copied())
                     .unwrap_or([env.top, env.right, env.bottom, env.left]);
                 let barred = bars.routes.iter().any(|r| r.route == *route);
+                let (ox, oy) = (page.0 + x, page.1 + y);
                 let update = OwnerUpdate {
                     band: Some(band),
-                    window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, page.0 + x, page.1 + y])),
+                    keyboard: self.owner_keyboard((ox, oy)),
+                    window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, ox, oy])),
                     configuration: Some(self.configuration(barred, sheet.is_some())),
                     ..Default::default()
                 };
@@ -67,6 +74,23 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         updates
+    }
+
+    /// The window's software keyboard in the space of an owner at `origin` in the window: shown while the window's
+    /// bottom inset for it has depth, docked across the window's width at its bottom, as Android docks it; dismissed
+    /// while it has none; unreported where no shell told a window (D7).
+    fn owner_keyboard(&self, (ox, oy): (f32, f32)) -> KeyboardReport {
+        let Some(window) = self.window() else {
+            return KeyboardReport::Unreported;
+        };
+        let (width, height, depth) = (window.size.0, window.size.1, window.keyboard[2]);
+        match depth > 0.0 {
+            true => KeyboardReport::Shown(Keyboard {
+                frame: [-ox, height - depth - oy, width, depth],
+                docked: true,
+            }),
+            false => KeyboardReport::Dismissed,
+        }
     }
 
     /// The identity of a route's configuration, which an `observed-max` reader keeps its largest band for (D9): the
@@ -93,19 +117,6 @@ impl<D: DataSource> Presenter<D> {
         (barred, self.host.bars().tabs.is_some(), sheeted).hash(&mut h);
         h.finish()
     }
-}
-
-/// Where the box `view` lies in the page, its frame's origin and its ancestors', which no scroller holds for a route.
-fn in_page(kernel: &Kernel, view: ViewId) -> (f32, f32) {
-    let arena = kernel.arena();
-    let mut at = arena.slot_of(view);
-    let (mut x, mut y) = (0.0, 0.0);
-    while let Some(slot) = at {
-        let f = arena.frame(slot);
-        (x, y) = (x + f.x, y + f.y);
-        at = arena.parent(slot);
-    }
-    (x, y)
 }
 
 #[cfg(test)]

@@ -240,6 +240,10 @@ extension NodeView {
     /// The casters onto the layer: the outer ones at its bottom, cast from
     /// the border box; the inset ones over the box's paint; or gone.
     func applyShadow(outline makeOutline: @autoclosure () -> CGPath) {
+        #if os(macOS)
+        let hadShadow = shadowCaster != nil || insetCaster != nil
+        defer { if materialView != nil, hadShadow != (shadowCaster != nil || insetCaster != nil) { applyTransform() } }
+        #endif
         defer { overflowClipGeometryChanged() }
         if let card = groupedShadowCard {
             card.syncShadowClip()

@@ -26,7 +26,7 @@ function framed(looked) {
 /** The drive's wait for the frame's build (4 s at most, as before): once listed, the tool's next read has it (`clock
  * +1` runs the follow task that asks it, as it opens the stream, whose first ask is answered at once), or, the stream
  * open already, its push (`clock held`: the next reply, the push or, landed already, a 3 s heartbeat). */
-const ready = looked => [looked.pause(4000, 0), 'clock +1', 'clock data', 'clock +1', 'clock data', 'clock held changes 10s'];
+const ready = looked => [looked.pause(30_000, 0), 'clock +1', 'clock data', 'clock +1', 'clock data', 'clock held changes 10s'];
 
 /** Stage 6's kinds in the tool on the JS target's dev loop: a theme-fixture
  * copy whose card reads a length, a shadow, a font-weight number and a

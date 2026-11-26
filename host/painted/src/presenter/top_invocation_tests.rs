@@ -1056,3 +1056,232 @@ fn replacing_the_only_window_keeps_system_back_registered() {
         );
     });
 }
+
+#[test]
+fn a_popover_whose_rows_mount_on_its_own_toggle_opens_as_a_menu() {
+    let source = r#"component App
+  state picked = "None"
+  state open = false
+  state toggles = 0
+  action pick(v: string)
+    picked = v
+  action toggled(e: ToggleEvent)
+    open = e.newState == "open"
+    toggles = toggles + 1
+  view
+    column padding=16 gap=12
+      text `Picked: ${picked}` testId="picked"
+      button popovertarget="list" testId="open" height=40
+        text "Choose"
+      column id="list" popover="auto" toggle=toggled role="listbox" aria-label="Fruit" testId="list"
+        if open
+          button press=pick("Apple") popovertarget="list" popovertargetaction="hide" role="option" testId="apple"
+            text "Apple"
+          button press=pick("Pear") popovertarget="list" popovertargetaction="hide" role="option" testId="pear"
+            text "Pear"
+"#;
+    let plan = crate::test_plan(source);
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (400., 800.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.serve_windows(Box::new(Nothing));
+    p.frame();
+
+    // Open: toggle mounts Apple and Pear before the shape check runs.
+    p.tap(id(&p, "open")).unwrap();
+    p.run_commands(|| ());
+    let shown = p.surface().expect("menu opened");
+    assert_eq!(shown.kind, SurfaceKind::Menu);
+    let titles: Vec<&str> = shown.plan.rows().map(|r| r.title.as_str()).collect();
+    assert_eq!(titles, vec!["Apple", "Pear"]);
+    assert_eq!(p.host().runner().slot("open"), Some(&Value::Bool(true)));
+    assert_eq!(p.host().runner().slot("toggles"), Some(&Value::Number(1.)));
+    let logs: Vec<String> = p.host().runner().journal().map(str::to_owned).collect();
+    assert!(
+        logs.iter().all(|l| !l.contains("refused")),
+        "unexpected refusal: {logs:?}"
+    );
+
+    // Choose Pear: closes menu, picks Pear, unmounts rows via toggle(closed).
+    let pear = id(&p, "pear");
+    p.tap(pear).unwrap();
+    p.run_commands(|| ());
+    assert!(p.surface().is_none());
+    assert_eq!(p.host().runner().slot("picked"), Some(&Value::str("Pear")));
+    assert_eq!(p.host().runner().slot("open"), Some(&Value::Bool(false)));
+    assert_eq!(p.host().runner().slot("toggles"), Some(&Value::Number(2.)));
+
+    // Opening a second time mounts the rows again cleanly.
+    p.tap(id(&p, "open")).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(p.surface().expect("reopened").plan.rows().count(), 2);
+    assert_eq!(p.host().runner().slot("toggles"), Some(&Value::Number(3.)));
+}
+
+#[test]
+fn a_toggle_popover_that_mounts_no_menu_still_refuses_and_reverts_open_state() {
+    let source = r#"component App
+  state open = false
+  state toggles = 0
+  action toggled(e: ToggleEvent)
+    open = e.newState == "open"
+    toggles = toggles + 1
+  view
+    column padding=16 gap=12
+      button popovertarget="card" testId="open" height=40
+        text "Show card"
+      column id="card" popover="auto" toggle=toggled testId="card"
+        if open
+          text "Not a menu"
+"#;
+    let plan = crate::test_plan(source);
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (400., 800.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.serve_windows(Box::new(Nothing));
+    p.frame();
+
+    p.tap(id(&p, "open")).unwrap();
+    p.run_commands(|| ());
+    assert!(p.surface().is_none());
+    assert_eq!(p.host().runner().slot("open"), Some(&Value::Bool(false)));
+    assert_eq!(p.host().runner().slot("toggles"), Some(&Value::Number(2.)));
+    let logs: Vec<String> = p.host().runner().journal().map(str::to_owned).collect();
+    assert!(
+        logs.iter().any(|l| l.contains("refused")),
+        "expected refusal in {logs:?}"
+    );
+
+    // On desktop overlays, the same non-menu popover opens once without firing toggle twice.
+    p.serve_overlays();
+    p.tap(id(&p, "open")).unwrap();
+    p.run_commands(|| ());
+    assert!(p.top_open());
+    assert_eq!(p.host().runner().slot("open"), Some(&Value::Bool(true)));
+    assert_eq!(p.host().runner().slot("toggles"), Some(&Value::Number(3.)));
+
+    // Re-presenting an already-open desktop popover does not fire another open toggle.
+    let key = p.host().kernel().find_by_id("card")[0];
+    assert!(p.present(Some(key), "card", None, None, false, 10.));
+    p.run_commands(|| ());
+    assert_eq!(p.host().runner().slot("toggles"), Some(&Value::Number(3.)));
+}
+
+#[test]
+fn eager_popover_toggle_preserves_replacement_order_and_revalidates_after_blur() {
+    // 1) Shared active-menu state: switching from A to B closes A before opening B.
+    let shared = r#"component App
+  state active = ""
+  state order = ""
+  action onA(e: ToggleEvent)
+    order = `${order}A:${e.oldState}->${e.newState},`
+    if e.newState == "open"
+      active = "A"
+    else
+      if active == "A"
+        active = ""
+  action onB(e: ToggleEvent)
+    order = `${order}B:${e.oldState}->${e.newState},`
+    if e.newState == "open"
+      active = "B"
+    else
+      if active == "B"
+        active = ""
+  action pick
+    active = ""
+  view
+    column padding=16 gap=8
+      button popovertarget="a" testId="open-a" height=30
+        text "A"
+      button popovertarget="b" testId="open-b" height=30
+        text "B"
+      column id="a" popover="auto" toggle=onA role="menu"
+        if active == "A"
+          button press=pick popovertarget="a" popovertargetaction="hide"
+            text "Row A"
+      column id="b" popover="auto" toggle=onB role="menu"
+        if active == "B"
+          button press=pick popovertarget="b" popovertargetaction="hide"
+            text "Row B"
+"#;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(shared),
+        (),
+        (400., 800.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.serve_windows(Box::new(Nothing));
+    p.frame();
+
+    p.tap(id(&p, "open-a")).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(open(&p).as_deref(), Some("a"));
+    // Present B directly while A is open (as a command/menu switch does): A closes before B opens.
+    let b_key = p.host().kernel().find_by_id("b")[0];
+    assert!(p.present(Some(b_key), "b", Some(id(&p, "open-b")), None, false, 1.));
+    p.run_commands(|| ());
+    assert_eq!(open(&p).as_deref(), Some("b"));
+    assert_eq!(p.host().runner().slot("active"), Some(&Value::str("B")));
+    assert_eq!(
+        p.host().runner().slot("order"),
+        Some(&Value::str("A:closed->open,A:open->closed,B:closed->open,"))
+    );
+
+    // 2) Blur on opener unmounting the newly mounted rows cancels opening instead of leaving a stale plan.
+    let blur_unmount = r#"component App
+  state open = false
+  action onToggle(e: ToggleEvent)
+    open = e.newState == "open"
+  action onBlur
+    open = false
+  action pick
+    open = false
+  view
+    column padding=16
+      button popovertarget="m" blur=onBlur testId="opener" height=30
+        text "Open"
+      column id="m" popover="auto" toggle=onToggle role="menu"
+        if open
+          button press=pick popovertarget="m" popovertargetaction="hide"
+            text "Item"
+"#;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(blur_unmount),
+        (),
+        (400., 800.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.serve_windows(Box::new(Nothing));
+    p.frame();
+    let opener = id(&p, "opener");
+    p.set_focus(Some(opener), 0.0);
+    p.tap(opener).unwrap();
+    p.run_commands(|| ());
+    assert!(
+        p.surface().is_none(),
+        "stale plan must not stay open after blur unmounted rows"
+    );
+    assert_eq!(p.host().runner().slot("open"), Some(&Value::Bool(false)));
+}
