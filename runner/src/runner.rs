@@ -794,11 +794,11 @@ impl<D: DataSource> Runner<D> {
         let same_logic = carried.is_none_or(|c| c.data_revision.as_deref() == data.revision());
         data.bind(plan);
         // A cold boot forgets the kept answers no resource seeds (`kept::obsolete`); an
-        // app granting Health forgets them all, at every boot (LLP 1069.008.000 D7).
+        // app granting Health seeds only a store reader's, and keeps none whose ask
+        // called native code (`keep_answer`, LLP 1069.008.000 D7).
         let private = crate::device::keeps_no_answers(data.grants());
         let obsolete_kept = match carried {
-            _ if private => kept::all(snapshot.iter().map(|(name, _)| name)),
-            None => kept::obsolete(plan, snapshot.iter().map(|(name, _)| name)),
+            None => kept::obsolete(plan, private, snapshot.iter().map(|(name, _)| name)),
             Some(_) => Vec::new(),
         };
         let mut store = Store::new_linked(data.grants(), snapshot, links.grants);
@@ -815,7 +815,10 @@ impl<D: DataSource> Runner<D> {
                 let compatible = same_logic && kept::compatible_on_reload(plan, carried, resource);
                 let transient =
                     (plan.resources.iter()).any(|r| r.transient && plan.str(r.name) == resource);
-                if private || !compatible || transient {
+                let seeded = !private
+                    || (plan.resources.iter().enumerate())
+                        .any(|(i, r)| plan.str(r.name) == resource && kept::seeds_private(plan, i));
+                if !seeded || !compatible || transient {
                     store.forget_kept(name);
                 }
             }
@@ -1092,7 +1095,8 @@ impl<D: DataSource> Runner<D> {
         // placeholder is the fallback (settlement); either way the resource is asked again at
         // `data_ready`.
         let ready = runner.data.ready();
-        runner.keeping.on = !private && (!ready || carried.is_some_and(|c| c.keeps_answers));
+        runner.keeping.on = !ready || carried.is_some_and(|c| c.keeps_answers);
+        runner.keeping.private = private;
         runner.seed_at_boot(&seeded, ready, private);
         runner.carry_waiting_in(carried.filter(|_| same_logic), private);
         // A seeded answer asked again, an open stream's or, on a device with

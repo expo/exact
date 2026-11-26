@@ -148,7 +148,7 @@ pub(crate) unsafe extern "C" fn host_door(
                 Ok(state.later.then(|| "later".into()))
             } else {
                 if let Some(store) = state.store {
-                    (*store).observe_external_read();
+                    (*store).observe_native_call();
                 }
                 // A synchronous package read belongs to the host, even when
                 // the app has a native data module of its own.

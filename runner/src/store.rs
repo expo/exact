@@ -56,6 +56,7 @@ pub struct Store {
     reads: std::cell::Cell<usize>,
     /// Of those, draws of secure randomness (LLP 1069.005 D2).
     entropy: std::cell::Cell<usize>,
+    native: std::cell::Cell<usize>,
     /// Device topics the answer being made watches (`native.watch`, LLP
     /// 1016.002): taken by the runner after each answer.
     topics: std::cell::RefCell<Vec<String>>,
@@ -314,6 +315,7 @@ impl Store {
             revision: 0,
             reads: std::cell::Cell::new(0),
             entropy: std::cell::Cell::new(0),
+            native: std::cell::Cell::new(0),
             topics: Default::default(),
             announced: Default::default(),
             sockets: Vec::new(),
@@ -726,6 +728,18 @@ impl Store {
     pub fn observe_entropy(&self) {
         self.observe_external_read();
         self.entropy.set(self.entropy.get() + 1);
+    }
+
+    /// The answer being made called the app's native module: a device read
+    /// whose reply may come from a store the platform protects.
+    pub fn observe_native_call(&self) {
+        self.observe_external_read();
+        self.native.set(self.native.get() + 1);
+    }
+
+    /// How many native calls so far.
+    pub fn native_calls(&self) -> usize {
+        self.native.get()
     }
 
     /// How many draws of secure randomness so far.
