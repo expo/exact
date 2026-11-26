@@ -2,6 +2,7 @@
 // module keeps its store's rules. The flows are app.test.contract's, driven on
 // the web and iOS.
 import { expect, mock, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { tells, tellsIn } from '../../scripts/no-tells.mjs';
 
 // The build generates the package's module; these tests reach no tag.
@@ -25,6 +26,13 @@ test('no-tells finds literal colours and sizes, and lets roles and text styles b
     '      row background-color="#B5562B" // no-tells: the brand',
   ].join('\n'));
   expect(found.map(t => `${t.line} ${t.property}`)).toEqual(['3 background-color', '3 border', '4 color', '4 font-size', '4 font-weight']);
+});
+
+// AGENTS.md "Numeric typography": a value that changes in place keeps its digits' widths.
+test("the yearly goal's count, which the steppers change in place, has tabular digits", () => {
+  const source = readFileSync(new URL('./app.contract', import.meta.url), 'utf8');
+  const goal = source.split('\n').find(line => /\btestId="goal"/.test(line));
+  expect(goal).toContain('font-variant-numeric="tabular-nums"');
 });
 
 // The store's rules, through the data module's own answers.

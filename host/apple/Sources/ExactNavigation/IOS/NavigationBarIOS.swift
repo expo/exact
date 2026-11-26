@@ -822,7 +822,12 @@ extension NavigationHost {
         item.leftItemsSupplementBackButton = true
         #endif
         c.barPresses = []
-        let leading = shape.map { shown(barItems($0.leading, c), in: c) }, trailing = shape.map { shown(barItems(Array($0.trailing.reversed()), c), in: c) }
+        #if os(iOS)
+        let filters = c.filterBarItems
+        #else
+        let filters: [UIBarButtonItem] = []
+        #endif
+        let leading = shape.map { shown(barItems($0.leading, c), in: c) }, trailing = shape.map { shown(barItems(Array($0.trailing.reversed()), c), in: c) + filters }
         let ids = Set(((shape?.leading ?? []) + (shape?.trailing ?? [])).map(\.id))
         c.barItemsMade = c.barItemsMade.filter { ids.contains($0.key) }
         c.barSpaces = c.barSpaces.filter { ids.contains($0.key) }

@@ -855,17 +855,26 @@ extension NavigationHost {
             if let requests, presenter.collections.lastRequest(node.id) != requests[node.id] ?? 0 { return }
             presenter.collections.readerMoves(node.id)
         }
-        // At its top under a collapsed title it goes on to the open title's
-        // inset, as UIKit's status-bar tap does, and opens it.
-        let inset = max(sv.adjustedContentInset.top, node != nil && node === c.collapseScroll ? node?.scrollOrigin ?? 0 : 0)
-        guard sv.contentOffset.y > 0.5 - inset else { return restAtTop(sv, in: c) }
         guard scrollsToTopAnimated else { return restAtTop(sv, in: c) }
-        sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -inset), in: sv, clamped: false), animated: true)
+        // Where the top is now, asked of UIKit: the content at its start with as much of the bar open as UIKit opens
+        // there (a collapsed title, a search field the scroll hid), found by putting it there and back in this turn,
+        // before anything draws. Then UIKit's animation takes it there, and opens the bar as it arrives, as its
+        // status-bar tap does. No inset sampled before stands in for it: UIKit lays the bar out anew at launch, on a
+        // fold, as a filter moves into it, and the widest it once gave sent the content past the top.
+        let start = sv.contentOffset
+        restAtTop(sv, in: c)
+        let top = sv.contentOffset
+        guard abs(top.y - start.y) > 0.5 else { return }
+        UIView.performWithoutAnimation {
+            sv.contentOffset = start
+            if let nav = c.navigationController { nav.navigationBar.layoutIfNeeded(); nav.view.layoutIfNeeded() }
+        }
+        sv.setContentOffset(top, animated: true)
     }
 
-    /// Where `scrollToTop` ends, in one turn, under the agent's frozen clock,
-    /// where Exact starts no UIKit animation: the content at its top and a
-    /// large title expanded. Measured in UIKit alone on iOS 27, an offset written
+    /// Where `scrollToTop` ends, in one turn: under the agent's frozen clock,
+    /// where Exact starts no UIKit animation, and to find the top it then
+    /// animates to: the content at its top and a large title expanded. Measured in UIKit alone on iOS 27, an offset written
     /// at the top under a collapsed title leaves it collapsed, and one written
     /// above the top opens the title and leaves the content that far below
     /// the bar. So the scroller is pulled past its top and put at rest there,

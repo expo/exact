@@ -219,8 +219,17 @@ package class ScrollView: UIScrollView, SafeIndicators {
         // the port is a `scroll` event's (`clientHeight`): one that changes without moving
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
         (superview as? NodeView)?.queueScrollEvent()
-        guard atEnd, !isTracking, !isDecelerating, was.bottom != keptInset.bottom else { return }
-        contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(under: keptInset)), in: self)
+        guard !isTracking, !isDecelerating else { return }
+        if atEnd {
+            guard was.bottom != keptInset.bottom else { return }
+            contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(under: keptInset)), in: self)
+        } else if was.top > 0, was.top != keptInset.top, contentOffset.y <= 0.5 - was.top, !scrollsItself,
+                  (superview as? NodeView)?.scrollUnderWay(self) != true {
+            // At rest at its start it stays there as the bar above it grows or shrinks (a scope bar shown as an
+            // iPhone Duo closes, a filter moved into the bar), as UIKit's table and collection views keep theirs;
+            // left alone, its content ended that far under the bar.
+            contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: -keptInset.top), in: self)
+        }
     }
     /// Whether it keeps its end as its insets change (`adjustedContentInsetDidChange`, and D14's writer, which moves
     /// the offset itself): a list that opens at its end or follows it, with content, not a horizontal collection, and
