@@ -812,34 +812,45 @@ mod imp {
                 std::io::Error::last_os_error()
             );
             let posted = modal_loop(|| heard.get() > 0, Duration::from_secs(2));
+            let atom = desktop.chords.borrow()[0].atom;
             desktop.unregister_hotkey("test", "chord", keys);
             assert_eq!(posted, 1, "Windows posted the press once");
             assert_eq!(heard.get(), 1, "the press was lost in the modal loop");
+            // Registered to the listener, the atom is free once it leaves.
+            let (modifiers, key) = super::super::chord(keys).unwrap();
+            let listener = desktop.listener();
+            assert_ne!(unsafe { RegisterHotKey(listener, atom, modifiers, key) }, 0);
+            unsafe { UnregisterHotKey(listener, atom) };
         }
 
-        /// The chord's registration names the listener, whose procedure a
-        /// modal loop reaches, and leaves with its last reader. The listener
-        /// lives as long as its thread, as the desktop does.
+        /// A `WM_HOTKEY` posted to the listener, as Windows posts a chord
+        /// registered to it, reaches its reader through a modal loop's
+        /// dispatch. `RegisterHotKey` needs an interactive window station
+        /// (error 1459 over SSH), so the chord is recorded as
+        /// `register_hotkey` records it.
         #[test]
         fn a_hot_key_is_the_listeners_and_a_modal_loop_raises_it() {
             use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
             let (desktop, heard) = counted();
             let listener = desktop.listener();
             assert!(!listener.is_null());
-            let keys = "Control+Alt+Shift+F10";
-            desktop
-                .register_hotkey("test", "chord", keys, false, "test", "press")
-                .expect("Control+Alt+Shift+F10 is free");
-            let atom = desktop.chords.borrow()[0].atom;
+            let reader = Reader {
+                session: "test".into(),
+                id: "chord".into(),
+                repeat: false,
+                extension: "test",
+                event: "press",
+            };
+            desktop.chords.borrow_mut().push(Chord {
+                keys: "Control+Alt+Shift+F10".into(),
+                atom: 1,
+                readers: vec![reader],
+                repeats: false,
+            });
             // As Windows posts a registered chord's press.
-            unsafe { PostMessageW(listener, WM_HOTKEY, atom as usize, 0) };
+            unsafe { PostMessageW(listener, WM_HOTKEY, 1, 0) };
             modal_loop(|| heard.get() > 0, Duration::from_secs(1));
             assert_eq!(heard.get(), 1);
-            desktop.unregister_hotkey("test", "chord", keys);
-            // Registered to the listener, the atom is free once it leaves.
-            let (modifiers, key) = super::super::chord(keys).unwrap();
-            assert_ne!(unsafe { RegisterHotKey(listener, atom, modifiers, key) }, 0);
-            unsafe { UnregisterHotKey(listener, atom) };
         }
     }
 }
