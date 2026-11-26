@@ -91,6 +91,52 @@ final class KeyboardSheetIOSTests: XCTestCase {
         }
     }
 
+    /// LLP 1123 D7: a keyboard that rises while UIKit is still presenting the sheet is taken once the presentation
+    /// lands. Until then the route keeps its block and nothing in it animates its place or size: laid out inside the
+    /// keyboard's animation, the shortened content animated inside a container UIKit was still presenting, which
+    /// drew it out of place until the presentation ended. Then the route ends at the keys.
+    func testAKeyboardThatRisesWhileTheSheetPresentsIsTakenWhenThePresentationLands() throws {
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "a sheet and the system keyboard need the hosted app's window scene")
+        }
+        let session = try fixture(scene)
+        let p = session.presenter
+        p.press(try XCTUnwrap(named("open")).id)
+        until("the sheet's field is up while UIKit presents it") {
+            self.named("name")?.field?.window != nil && p.modalHost.owner?.isBeingPresented == true
+        }
+        let owner = try XCTUnwrap(p.modalHost.owner), field = try XCTUnwrap(named("name")?.field)
+        let route = try XCTUnwrap(p.modalHost.routes.last?.node), container = try XCTUnwrap(route.superview)
+        // What the keyboard takes off the route's block: the route short of its container. UIKit settling the sheet's
+        // own size moves both, the route a frame behind, a few points; the keyboard takes about 300
+        var risen = false, shortened = Set<CGFloat>(), animated = Set<String>()
+        let rising = NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: nil) { _ in
+            if owner.isBeingPresented { risen = true }
+        }
+        defer { NotificationCenter.default.removeObserver(rising) }
+        XCTAssertTrue(field.becomeFirstResponder())
+        // Exact's own views, which its layout places; UIKit's text input animates its cursor views itself
+        func motion(in layer: CALayer) {
+            if let node = layer.delegate as? NodeView {
+                for key in layer.animationKeys() ?? [] where ["position", "bounds", "bounds.size"].contains((layer.animation(forKey: key) as? CAPropertyAnimation)?.keyPath ?? "") {
+                    animated.insert("\(node.kind) \(node.id) \(key)")
+                }
+            }
+            layer.sublayers?.forEach(motion)
+        }
+        until("the presentation lands") {
+            if owner.isBeingPresented { shortened.insert((container.bounds.height - route.bounds.height).rounded()); motion(in: route.layer) }
+            return !owner.isBeingPresented
+        }
+        XCTAssertTrue(risen, "the keyboard rose while the sheet was being presented")
+        XCTAssertLessThan(shortened.max() ?? 0, 100, "the keyboard takes nothing off the route's block while UIKit presents it")
+        XCTAssertEqual(animated, [], "no view of the route's animates its place or size while UIKit presents it")
+        until("then the route ends at the keys") {
+            guard let top = p.keyboardTop else { return false }
+            return abs(route.convert(route.bounds, to: nil).maxY - top) < 1
+        }
+    }
+
     /// A dialog sheet's editor: the page is not avoided under it (the sheet
     /// ends at the keys itself), and the app still reads what they cover.
     func testADialogSheetsEditorStillTellsTheKeyboardHeight() throws {
