@@ -280,7 +280,12 @@ record, even where a view carries the same name. Every other reply is one line t
 `--scale <n>` shrinks each screenshot to n pixels a point: an iPhone's are
 1206×2622 at its own 3, 402×874 with `--scale 1`, one pixel a point as on the
 web, at about a ninth of the pixels. An app's `bun exact.mjs agent ios|macos`
-takes `--scale 1` unless told otherwise; ask for more only to check fine pixels.
+takes `--scale 1` unless told otherwise; ask for more only to check fine pixels,
+and less (`--scale 0.5`) for colour, place and gaps, which read the same at half.
+`screenshot <png> of <target>` (or `window of <target>`) keeps only that box's
+pixels, rounded out to whole pixels and cut before `--scale` shrinks them: read a
+hero's edge or a row's spacing from its box, not the whole screen. A box outside
+the picture is refused, naming its place.
 On a physical iPhone (`agent ios --device`), a still screenshot takes the display
 through Xcode (`pixels="display"`), including video, system bars and the visible
 software keyboard. Its dimensions are in screen points (`captureSpace="screen"`)

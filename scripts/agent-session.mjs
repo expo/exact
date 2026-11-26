@@ -12,6 +12,7 @@ import {
   worldView,
   worldTells,
   WORLD_LIMIT,
+  croppedScreenshot,
   scaledScreenshot,
 } from './agent-inspect.mjs';
 import { preferGroups, preferOp } from './agent-prefer.mjs';
@@ -775,7 +776,7 @@ export async function open({
     },
     /** Pixels as PNG (second argument true includes the native window), or a canvas carry with `(path, target,
      * "save")`, or film: `(path, {over, every, window})` (LLP 1012.001.000 D2). */
-    screenshot: async (path, target = false, form, film = false, of) => {
+    screenshot: async (path, target = false, form, film = false, of, region) => {
       // `screenshot shots/home.png` makes `shots/`, as a shell redirect would not but every agent expects.
       mkdirSync(dirname(resolve(path)), { recursive: true });
       if (target && typeof target === 'object') return s.film(path, target);
@@ -836,7 +837,12 @@ export async function open({
       let r = await carrier.screenshot(resolve(path), area, film || !!s.held, {
         status: form === 'status', own: form === 'app', skipMotion: !!(s.contact || s.held),
       });
-      if (r.captureSpace === 'screen' && r.scale === null) return r;
+      if (r.captureSpace === 'screen' && r.scale === null) {
+        if (region !== undefined) throw new Error(`screenshot of ${region}: ${r.note ?? 'the capture says no scale'}`);
+        return r;
+      }
+      // Cut first, so `--scale` shrinks only the box
+      if (region !== undefined) r = await croppedScreenshot(s, r, region);
       if (scale !== undefined) {
         const { image, shrunk } = s.scaled(r);
         if (shrunk) writeFileSync(r.screenshot, encodePng(image));

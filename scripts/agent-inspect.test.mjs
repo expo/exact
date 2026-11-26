@@ -2,7 +2,7 @@
 // reads by name, down a dotted path, as `expect state` does, even where a view carries the name; a plain view's is the record.
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { render, renderTrace, renderFrameHealthReport, renderFrameHealthMetrics, perfOp, readTrack, renderPerf, stateOp, tapRefusal, nextCommitTasks, settleBound, planLocators, perfDelta, pidTrace, scaledScreenshot } from './agent-inspect.mjs';
+import { render, renderTrace, renderFrameHealthReport, renderFrameHealthMetrics, perfOp, readTrack, renderPerf, stateOp, tapRefusal, nextCommitTasks, settleBound, planLocators, perfDelta, pidTrace, croppedScreenshot, scaledScreenshot } from './agent-inspect.mjs';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -432,6 +432,31 @@ test('rotated panel captures scale on image axes and compare against rotated lay
       expect(result.text).toContain(`under card [${box.x},${box.y} ${box.w}×${box.h}]`);
       expect(await session.layout()).toEqual({ viewport: { w: 120, h: 200 }, nodes: [{ id: 1, ...logical }] });
     }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('screenshot of a target keeps that box alone, in the capture\'s space, before the scale shrinks it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-crop-'));
+  // A 40×30-point window at 2 pixels a point, red where the box is, white elsewhere
+  const box = { x: 10.5, y: 4, w: 12, h: 8 };
+  const data = new Uint8Array(80 * 60 * 4).fill(255);
+  for (let y = 8; y < 24; y++) for (let x = 21; x < 45; x++) data.set([255, 0, 0, 255], (y * 80 + x) * 4);
+  const session = { host: 'ios', layout: async () => ({ node: { space: { window: box, viewport: { x: 0, y: 0, w: 1, h: 1 } } } }) };
+  try {
+    const shot = { screenshot: join(dir, 'shot.png'), w: 40, h: 30, scale: 2, window: true };
+    writeFileSync(shot.screenshot, encodePng({ width: 80, height: 60, data }));
+    const r = await croppedScreenshot(session, shot, 'hero');
+    const cut = decodePng(readFileSync(shot.screenshot));
+    expect([cut.width, cut.height]).toEqual([24, 16]);
+    expect([...cut.data.subarray(0, 4)]).toEqual([255, 0, 0, 255]);
+    expect([r.w, r.h]).toEqual([12, 8]);
+    expect(r.of).toEqual({ target: 'hero', x: 10.5, y: 4 });
+    const half = scaledScreenshot(r, 1, 'ios');
+    expect([half.image.width, half.image.height]).toEqual([12, 8]);
+    // A box past the picture's edge is refused, naming where it is
+    writeFileSync(shot.screenshot, encodePng({ width: 80, height: 60, data }));
+    const away = { ...session, layout: async () => ({ node: { space: { window: { x: 50, y: 0, w: 10, h: 10 } } } }) };
+    await expect(croppedScreenshot(away, shot, 'hero')).rejects.toThrow('lies outside the 80×60 picture');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

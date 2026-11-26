@@ -534,6 +534,9 @@ test('malformed input is labelled before delivery; a state refusal is not', asyn
   await assert.rejects(() => main(['web', 'screenshot x.png --scale 3 window'], { open: async () => ({ close() {} }) }),
     e => e.malformed === true && e.message.endsWith('screenshot: --scale is a flag of the drive, not of the step: write it before the steps, as `web --scale 3 "screenshot x.png window"`'));
   await assert.rejects(() => main(['web', 'screenshot x.png --json'], { open: async () => ({ close() {} }) }), e => e.malformed === true && e.message.endsWith('as `web --json "screenshot x.png"`'));
+  // `of` names one box, and only one
+  for (const step of ['screenshot x.png of', 'screenshot x.png window of', 'screenshot x.png of hero card'])
+    await assert.rejects(() => main(['web', step], { open: async () => ({ close() {} }) }), e => e.malformed === true && e.message.endsWith('screenshot <png> [window] of <target>'));
   // `state thread --json` printed the capped summary again, the flag unread; `--full` is the step's own.
   await assert.rejects(() => main(['web', 'state thread --json'], { open: async () => ({ close() {} }) }),
     e => e.malformed === true && e.message.endsWith('state: --json is a flag of the drive, not of the step: write it before the steps, as `web --json "state thread"`'));
@@ -974,7 +977,7 @@ test('compare: the CLI form and the reference are checked before any comparison'
     assert.throws(() => referenceScale({ width: rw, height: rh }, sw, sh), (e) => e.malformed === true && /under a pixel a point/.test(e.message));
   assert.equal(referenceScale({ width: 1206, height: 2622 }, 402, 874), 3);
   const { helpText } = await import('./help.mjs');
-  assert.match(helpText('agent'), /screenshot <png> \[over <ms> every <ms>\] \[window\] {2}window: bars/);
+  assert.match(helpText('agent'), /screenshot <png> \[over <ms> every <ms>\] \[window\] \[of <target>\] {2}window: bars; of: that box alone/);
   assert.match(helpText('agent'), /screenshot <png> compare <ref>/);
   assert.match(helpText('agent'), /\(a select, date or checkbox: its value\)/);
 });

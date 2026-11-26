@@ -108,7 +108,7 @@ ops:
   tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up (testId, exact text or label)
   type <target> <text>|key <Name>  (a select, date or checkbox: its value)
   clock data|settle|held|+<ms> [real]  replies · transitions · push
-  check [dark|both] · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
+  check [dark|both] · screenshot <png> [over <ms> every <ms>] [window] [of <target>]  window: bars; of: that box alone · --device captures display
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>
 
 how (snippets compile)

@@ -535,6 +535,11 @@ export async function main(argv, injected = {}) {
           if (args[1] !== 'window' || args.length > 4)
             throw new MalformedOperation('screenshot <png> window pictureinpicture [<image>]');
           r = await s.screenshot(args[0], true, 'pictureinpicture', false, args[3]);
+        } else if (args[1] === 'of' || (args[1] === 'window' && args[2] === 'of')) {
+          // One box's pixels alone: a check reads no more of the picture than it asks about
+          const at = args[1] === 'of' ? 2 : 3;
+          if (args.length !== at + 1) throw new MalformedOperation('screenshot <png> [window] of <target>');
+          r = await s.screenshot(args[0], args[1] === 'window', undefined, false, undefined, args[at]);
         } else if (args[1] === 'display' && args[2] !== 'save') {
           if (args.length !== 2) throw new MalformedOperation('screenshot <png> display');
           r = await s.screenshot(args[0], true, 'display');

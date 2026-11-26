@@ -5,7 +5,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { renderAx } from './agent-ax.mjs';
-import { decodePng, encodePng, shrink } from './png.mjs';
+import { crop, decodePng, encodePng, shrink } from './png.mjs';
 
 /** Film's bounds (LLP 1012.001.000 D2): a drive's pictures, not a recording, decoded in memory at once. */
 export const FILM_FRAMES = 240, FILM_PIXELS = 64e6;
@@ -18,6 +18,26 @@ export function worldFile(path) {
 }
 
 /** A capture's pixels, decoded once, at the drive's `--scale`: shrunk by area from the capture's own pixels a point, never enlarged. */
+/** The capture `r` cut to `target`'s box as the picture shows it (`screenshot <png> of <target>`), so a check reads
+ *  the pixels it asks about and no others: the box in the capture's space (`window`, `screen`, else the page's
+ *  viewport), rounded out to whole pixels and kept inside the picture, which is written again. Replies the capture's
+ *  reply with its size in points and `of`, the box's target and place. */
+export async function croppedScreenshot(s, r, target) {
+  const png = decodePng(readFileSync(r.screenshot), { preserveColor: true });
+  const drawn = r.scale ?? png.width / r.w;
+  if (!Number.isFinite(drawn)) throw new Error(`screenshot of ${target}: the ${s.host} capture did not say its size in points, so no box can be cut from it; take the whole picture`);
+  const space = (await s.layout(target)).node?.space, area = r.captureSpace ?? (r.window ? 'window' : 'viewport');
+  const box = space?.[area];
+  if (!box) throw new Error(`screenshot of ${target}: no box in ${area} coordinates (${space?.unavailable ?? 'the host reports none'}); name a target the tree shows`);
+  const x0 = Math.max(0, Math.floor(box.x * drawn)), y0 = Math.max(0, Math.floor(box.y * drawn));
+  const x1 = Math.min(png.width, Math.ceil((box.x + box.w) * drawn)), y1 = Math.min(png.height, Math.ceil((box.y + box.h) * drawn));
+  if (x1 <= x0 || y1 <= y0)
+    throw new Error(`screenshot of ${target}: its box ${box.w}×${box.h} at ${box.x},${box.y} lies outside the ${png.width}×${png.height} picture; scroll it into view, or take the whole picture`);
+  const cut = crop(png, x0, y0, x1 - x0, y1 - y0);
+  writeFileSync(r.screenshot, encodePng(png.colorChunks ? { ...cut, colorChunks: png.colorChunks } : cut));
+  return { ...r, w: (x1 - x0) / drawn, h: (y1 - y0) / drawn, of: { target, x: x0 / drawn, y: y0 / drawn } };
+}
+
 export function scaledScreenshot(r, scale, host) {
   const png = decodePng(readFileSync(r.screenshot), { preserveColor: scale !== undefined });
   if (scale === undefined) return { image: png, shrunk: false };
