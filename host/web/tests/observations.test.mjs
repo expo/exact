@@ -11,9 +11,11 @@ import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 let server;
 beforeAll(() => {
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
-    if (new URL(request.url).pathname === '/observe.js') {
+    const path = new URL(request.url).pathname;
+    if (path === '/observe.js') {
       return new Response(Bun.file(resolve(import.meta.dir, '../navigation/observe.js')), { headers: { 'content-type': 'text/javascript' } });
     }
+    if (path === '/transitions') return new Response(TRANSITIONS, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
       <div id="top" style="position:absolute;top:0;left:0;width:390px;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
@@ -37,6 +39,45 @@ beforeAll(() => {
   } });
 });
 afterAll(() => server?.stop(true));
+
+// Readers whose inputs transition: one at the top padding by its input over a second, one its input moves over a
+// second, beside a box whose opacity is already transitioning, the rounds 100ms in
+const TRANSITIONS = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; width: 50px; height: 50px }</style>
+  <div id="pads" style="top:0;left:0;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px);transition:padding-top 1s linear"></div>
+  <div id="moves" style="left:100px;top:calc(60px - var(--exact-safe-area-inset-top, 60px));transition:top 1s linear"></div>
+  <div id="other" style="left:200px;top:300px;opacity:0;transition:opacity 1s linear"></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const other = document.getElementById('other');
+    other.getBoundingClientRect();
+    other.style.opacity = '1';
+    getComputedStyle(other).opacity;
+    setTimeout(() => {
+      const running = Math.round(other.getAnimations()[0].currentTime);
+      const readers = ['pads', 'moves'].map((id) => document.getElementById(id)), { rounds } = observe(readers, [47, 0, 34, 0]);
+      const transitions = (el) => el.getAnimations().map((a) => [a.transitionProperty, a.effect.getKeyframes()[0][a.transitionProperty === 'top' ? 'top' : 'paddingTop'], a.effect.getKeyframes().at(-1)[a.transitionProperty === 'top' ? 'top' : 'paddingTop']]);
+      window.result = { rounds, pads: transitions(readers[0]), moves: transitions(readers[1]), other: other.getAnimations().map((a) => Math.round(a.currentTime) - running),
+        rule: document.documentElement.classList.contains('exact-rounds') };
+    }, 100);
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's values start no transition, and the settled inputs one each, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}transitions`);
+    await page.waitForFunction(() => window.result);
+    const r = await page.evaluate(() => window.result);
+    // The rounds read the layout, not a transition's first frame: the mover writes 47, 34, 21, 8 and 0, holding at round 5
+    expect(r.rounds).toBe(5);
+    expect(r.pads).toEqual([['padding-top', '5px', '47px']]);
+    expect(r.moves).toEqual([['top', '0px', '60px']]);
+    expect(r.other).toEqual([0]);
+    expect(r.rule).toBe(false);
+  } finally {
+    await browser.close();
+  }
+});
 
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes its own observation, in rounds until it holds or the bound, in ${engine}`, async () => {
   const browser = await suiteBrowser(engine);
