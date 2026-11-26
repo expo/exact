@@ -792,7 +792,7 @@ impl Painter {
             }
             c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
             // A reaching box paints past its row's recorded bounds: painted again each frame (LLP 1123 D13)
-            c.refused |= shown.reach != [0.; 4];
+            c.refused |= shown.claimed();
         }
     }
 

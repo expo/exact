@@ -97,9 +97,13 @@ impl ScrollBounds {
         }
         let (width, height) =
             super::space::content_size_with(node, kernel, presented, scaled_presented);
+        // A claimed scroller's range is its content and its insets past its reached scrollport (LLP 1123 D14)
+        let ([t, r, b, l], [it, ir, ib, il]) = presented(node.id)
+            .scroll
+            .map_or(([0.; 4], [0.; 4]), |c| (c.reach, c.insets));
         let mut max = (
-            (width - node.frame.width).max(0.),
-            (height - node.frame.height).max(0.),
+            (width - node.frame.width + il + ir - l - r).max(0.),
+            (height - node.frame.height + it + ib - t - b).max(0.),
         );
         match collection_max {
             Some(main) if node.style.display == exact_kernel::Display::Flex => max.0 = main,

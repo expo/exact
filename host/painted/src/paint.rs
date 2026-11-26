@@ -976,8 +976,8 @@ impl Painter {
             || !node.style.backdrop_filter.is_none()
             || self.material_note(&node)
             || !p.colors.is_empty()
-            // A reach paints past the box, where damage does not look (LLP 1123 D13)
-            || p.reach != [0.0; 4];
+            // A reach paints past the box, where damage does not look (LLP 1123 D13, D14)
+            || p.claimed();
         let origin = node.style.transform_origin.resolve(w, h);
         let (hit_parent, hit_clip) = walk.hit_space.unwrap_or((ts, clip_rect));
         let mut hit_p = p;
@@ -1026,11 +1026,11 @@ impl Painter {
             projective: None,
             affine: Some((ts, (x, y, w, h))),
             // A reaching box takes the hits in its reached frame; what reads its geometry keeps its laid-out box
-            hit: (walk.hit_space.is_some() || p.reach != [0.0; 4]).then(|| HitGeometry {
+            hit: (walk.hit_space.is_some() || p.claimed()).then(|| HitGeometry {
                 shape_clips: Vec::new(),
-                rect: bbox(hit_ts, p.reached((x, y, w, h))),
+                rect: bbox(hit_ts, p.port_reached(p.reached((x, y, w, h)))),
                 clip: hit_clip,
-                affine: Some((hit_ts, p.reached((x, y, w, h)))),
+                affine: Some((hit_ts, p.port_reached(p.reached((x, y, w, h))))),
                 projective: None,
             }),
             unpress: if p.press == 1. {
@@ -1158,7 +1158,12 @@ impl Painter {
         // Clipped by this box when its overflow is not visible: its children,
         // and a text's own lines (CSS Overflow 3 §3).
         let (ox, oy) = effective_overflow(node);
-        let clip = field::overflow_clip(&surface.outer, paint.widths, (ox, oy));
+        // A claimed scroller's scrollport reaches with it; its decoration keeps its box (LLP 1123 D13)
+        let port = Shape {
+            rect: shown.port_reached(surface.outer.rect),
+            ..surface.outer
+        };
+        let clip = field::overflow_clip(&port, paint.widths, (ox, oy));
         let mut cover = surface.outer;
         match node.node_type {
             NodeType::Video if native::is_audio(node) && (content.2 <= 0.0 || content.3 <= 0.0) => {
