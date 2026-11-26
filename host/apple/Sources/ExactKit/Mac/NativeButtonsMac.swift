@@ -321,6 +321,9 @@ final class NativeButtonMac: NSButton {
     override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
         if let tracked { owner?.holdPresenter?.mouseLayoutPan.trackingEnded(tracked) }
         guard !cancelsHeldContact else { return false }
+        // A release AppKit tracked to its laid-out frame, where a move no longer shows the face, is no click, as one off
+        // the face is: neither its press nor its double click
+        if let release = trackedClick, let owner, !owner.pressInside(release.locationInWindow) { return false }
         clicked = true
         owner?.pointerReleased(nil)
         return super.sendAction(action, to: target)
@@ -352,16 +355,20 @@ extension NodeView {
 
     /// D4: the button's action is what a custom button's click does, once.
     /// The target is this node or, without a handler, the nearest ancestor
-    /// with one whose box holds the click (refused at a disabled or inert
-    /// one), as iOS resolves it. The focus stays where it is, for a click,
-    /// for Space on the focused button and for Return's press of a default
-    /// button alike (LLP 1115.000 D7.1): the action's own `focus()` is what
-    /// moves it. Then `press` and the canvas's pointer return. `mouse`: the
+    /// with one, if its box holds the point the mouse was released at, or
+    /// the button's centre for a key or an assistive press, each where it
+    /// shows; a miss there, or a disabled or inert one, presses nothing, as
+    /// iOS resolves it. The focus stays where it is, for a click, for Space
+    /// on the focused button and for Return's press of a default button
+    /// alike (LLP 1115.000 D7.1): the action's own `focus()` is what moves
+    /// it. Then `press` and the canvas's pointer return. `mouse`: the
     /// mouse's press AppKit sent the action for, whose point the press
     /// carries (`Presenter.pressPoint`); a key's has none.
     func activateNative(mouse: NSEvent? = nil) {
         guard let presenter, !disabled, !inert else { return }
-        let click = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil)
+        // Through the transforms that show a box elsewhere, as a layout transition moving it does, which AppKit's
+        // `convert` leaves out
+        let point = mouse?.locationInWindow ?? drawnPoint(NSPoint(x: bounds.midX, y: bounds.midY))
         var target: NodeView?, bubbled = false
         var path = PressPath()
         var at: NSView? = self
@@ -371,7 +378,9 @@ extension NodeView {
                 path.nodes.append(PressNode(node, bubbled: bubbled))
                 // Its own command is a press as its handler is (a close row in a dialog).
                 if node.pressable {
-                    if bubbled || node.bounds.contains(node.convert(click, from: nil)) { target = node }
+                    // Its own press is the action AppKit sent, whose release `sendAction` tested; an ancestor's by where
+                    // it shows, a release as a click is tested and a key's centre by the box alone, with no pointer's slop
+                    if bubbled || node === self || (mouse == nil ? node.bounds.contains(node.local(point)) : node.pressInside(point)) { target = node }
                     break
                 }
             }
