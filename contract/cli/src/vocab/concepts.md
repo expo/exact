@@ -1363,7 +1363,7 @@ component App
   literal or a choice of literals (`still ? "none" : "fade-in 180ms"`).
 - A sheet (`navigationPresentation="modal"`), a route with `navigationSource` (the zoom), and
   any element that is no route refuse the parts; an element that moves between states takes
-  `sharedElement` instead. A tab switch keeps the platform's.
+  `sharedElement` (paired with `-exact-layout-transition`) instead. A tab switch keeps the platform's.
 - Under reduce motion the change cuts. On iOS the edge swipe keeps UIKit's interactive pop;
   Android's predictive Back scrubs the authored exit.
 

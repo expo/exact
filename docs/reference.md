@@ -1004,8 +1004,14 @@ the app first publishes it). The receipt admits both the entry plan and bytecode
 It can return immediately or await `fetch`
 and `storage.fs` reads from `app:/`. File writes, SQLite, document handles and
 native modules are unavailable in stage 1; `secret.keep` values are read from
-the shared Keychain only during refresh. The extension never persists store
+the shared Keychain only during refresh. Because SQLite is unavailable in a
+refresh, apps backed by SQLite should mirror widget-needed fields into a small
+JSON file under `app:/data/` with `storage.fs.atomicWriteFile` alongside
+mutations so the refresh reads it directly. The extension never persists store
 writes. The app reloads widget timelines after a successful write readable by a refresh, once the store has been quiet for half a second, so a burst of writes asks once.
+Successful refreshes return a WidgetKit timeline with reload policy
+`.after(max(now + 15 min, lastEntry + 1 s))`. Widget views take literal colors
+only (not runtime-computed color bindings).
 Refresh has a 900 ms deadline starting when it begins, including boot. Each JS
 turn gets the time remaining to that deadline, rather than the app's 100 ms
 per-call budget. This leaves 100 ms below LLP 1126 D8's one-second
@@ -1689,7 +1695,10 @@ retain the baked digests.
 
 An external Swift host links `ExactKit` plus each capability product its plans
 use, then calls that product's public `install()` before creating sessions.
-The generated `--embed` composition lists the capabilities to link.
+The generated `--embed` composition lists the capabilities to link. Implement
+`ExactSessionDelegate`'s `exactSession(_:command:args:)` on the embedding host
+to handle `openURL` (for links and deep links) and `setScheme` (to apply the
+app's appearance choice to the embedding window or scene).
 
 | Product | Capability | Installation |
 | --- | --- | --- |

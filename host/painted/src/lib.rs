@@ -95,6 +95,7 @@ pub use portal::transfer as file_transfer;
 pub mod presence_secrets;
 pub mod presenter;
 pub mod raster;
+mod safe_area;
 mod scroll_anchor;
 pub mod snapshot;
 mod sound;

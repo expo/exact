@@ -2569,3 +2569,30 @@ once, then reports it again only after its valid bindings disappear and return. 
   another writer. Use SQLite statements and constraints for shared collections
   (`pattern list-detail`); close each connection in `finally` so other web tabs
   can acquire it.
+
+- **`role="menu"` popovers are positioned at runtime.** On iOS and macOS the platform
+  presents `role="menu"` as a native menu (and under the driver as a managed popover),
+  so manual `top`/`left` coordinates on the menu box are overridden or drift. Anchor
+  the menu via `popovertarget` on its trigger button instead of explicit offsets.
+
+- **A `:hover` rule can override `:checked` or active button styling.** When a `:hover`
+  background or color shares specificity with (or follows) a selected/checked state, it
+  paints over the active state while the pointer stays on the control. Narrow hover
+  selectors with `:not(:checked)` or `:not([aria-pressed="true"])`, or omit custom
+  hover paint on platform controls.
+
+- **Same-origin absolute `href` links open outside the router unless `target="_self"` is set.**
+  A `link` with an `http(s)://` URL opens externally by default even on the same origin.
+  Use a relative path (`path(...)`) for in-app routes, or add `target="_self"` when an
+  absolute same-origin URL should navigate in place.
+
+- **Web tests exercising `showNotification` need notifications granted.** Headless Chrome
+  denies notification permission by default; add `prefer permission.notifications granted`
+  at the top of the `.test.contract` test (or in an interactive `agent web` drive) before
+  triggering the notification path.
+
+- **Live clocks cannot feed a `resource` argument directly.** Passing `performanceNow()`
+  into a `resource` argument re-requests data every frame (`analyze-resource-clock`), and
+  `Date.now()` is refused inside `app.ts`. Sample the current timestamp or day key into
+  `state` inside an action or timer task (`task` `every(...)`), then pass that state to
+  the `resource`.

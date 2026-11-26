@@ -251,7 +251,7 @@ export function tellsIn(source, tokens = new Set()) {
     if (property === 'font-size' || property === 'font-weight' || property === 'font') {
       const words = literals(value);
       const computed = !words.length && value !== '';
-      const bad = computed ? value : words.find(word => !TEXT_STYLE.test(word.trim()) && !['inherit', 'unset'].includes(word.trim()));
+      const bad = computed ? value : words.find(word => !TEXT_STYLE.test(word.trim()) && !['inherit', 'unset'].includes(word.trim()) && !tokens.has(word.trim()));
       if (bad !== undefined) found.push({ line, column, property: name, value, kind: 'type' });
     } else if (COLOUR_PROPERTY.test(property)) {
       for (const literal of literals(value)) {

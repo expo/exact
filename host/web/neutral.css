@@ -92,6 +92,7 @@
      size, SegmentsIOS.swift) and a menu item's (MenuRowsIOS.swift). An icon of the app's own draws its viewBox at
      1em, as the Apple hosts draw its path. The symbol glue reads the scale for the image's natural size, and a page
      built ahead of time sizes the image's source by it (document.rs). */
+  :where(#exact-root img[data-symbol-file]) { width: 1em; height: 1em; object-fit: contain; }
   :where(#exact-root img[data-symbol-path]:not([data-symbol-path=""], [data-symbol-source^="symbol:icon||"], button[data-button-style] > *)) { --exact-symbol-scale: 1.2; }
   :where(#exact-root button[data-button-style]:not([role="tab"], [role="radio"], :is([role="menu"], [data-exact-chooser]) *) > img[data-symbol-path]:not([data-symbol-path=""], [data-symbol-source^="symbol:icon||"])) { --exact-symbol-scale: 1.5; margin: calc((1 - var(--exact-symbol-scale)) * .5em); }
   :where(#exact-root button[data-button-style]:not([role="tab"], [role="radio"], :is([role="menu"], [data-exact-chooser]) *):has(> :not(img, [data-exact-text]:empty)) > img[data-symbol-path]:not([data-symbol-path=""], [data-symbol-source^="symbol:icon||"])) { --exact-symbol-away: calc((1 - var(--exact-symbol-scale)) * .5em * (1 - var(--exact-button-stacked, 0))); --exact-symbol-toward: calc((1 - var(--exact-symbol-scale)) * .5em * (1 - var(--exact-button-stacked, 0) / 2)); margin-inline: 0; margin-block: var(--exact-symbol-away) var(--exact-symbol-toward); }

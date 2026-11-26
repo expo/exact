@@ -37,7 +37,8 @@ pub fn apple_uses(plan: &Plan) -> Uses {
     // A link's own context menu offers Share (`ExactSharing`).
     add(Capability::Share, has_link_menu(plan));
     // A height or transform drag is the drag family's; a reorder is the
-    // lists' (`Capability::Collections`, below), and its motion is `Motion`.
+    // lists' (`Capability::Collections`, below), and keeps `Motion` and
+    // `Transitions` for its row spring animations.
     add(
         Capability::Drag,
         binds(plan, BindingKind::Prop, PropId::HeightDragFor as u16)

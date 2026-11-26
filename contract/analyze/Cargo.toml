@@ -11,8 +11,6 @@ publish = false
 [lib]
 name = "contract_analyze"
 crate-type = ["rlib"]
-test = false
-bench = false
 
 [dependencies]
 contract-checking = { path = "../checking" }

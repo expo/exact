@@ -89,7 +89,7 @@ function everyRole() {
 // In forced colours the mask takes the parent's used foreground. Explicit inheritance
 // lets preserve-parent-color use that foreground while keeping the mask's background paint.
 // https://www.w3.org/TR/css-color-adjust-1/#forced-color-adjust-prop
-const STYLE = '@property --exact-tint{syntax:"<color>";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:var(--exact-symbol-position,center);mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}' +
+const STYLE = '@property --exact-tint{syntax:"<color>";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}:where(img[data-symbol-file]){width:1em;height:1em;object-fit:contain}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:var(--exact-symbol-position,center);mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}' +
   '@media (forced-colors:active){img[data-symbol-path]{color:inherit!important;forced-color-adjust:preserve-parent-color;background-color:currentColor!important}}';
 /** `table`: role → [path, filled], for sources a binding names. */
 export function symbols(table) {

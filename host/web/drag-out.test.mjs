@@ -10,6 +10,7 @@ import { glueDeclarations } from './tests/glue-fixture.mjs';
 import { EXTENSION_TYPES } from '../../scripts/share-target.mjs';
 import { carried, listen, start, typeOf, writeDraggable } from './drag-out.js';
 import { downForDrag, dragPathFrom, elementOf, observeDragInput, pressedAt } from './drag-input.js';
+import { loadOnce } from './load-once.js';
 
 const BASE = 'https://example.com/app/';
 const node = (attrs) => ({
@@ -1227,7 +1228,7 @@ function wasmGlue(loadAfterPaint) {
     constructor() { super(); cleanups.push(() => this.abort()); }
   }
   const context = vm.createContext({ host: {}, document, views, retiredViews, log: (line) => logs.push(line), loadAfterPaint, exact,
-    downForDrag, dragPathFrom, elementOf, observeDragInput, pressedAt, AbortController: Controller,
+    downForDrag, dragPathFrom, elementOf, loadOnce, observeDragInput, pressedAt, AbortController: Controller,
     setTimeout: (fn, ms) => timers.push([fn, ms]) });
   vm.runInContext(DECLARATIONS, context);
   const element = (id, view, parent = null, localName = 'div', attrs = {}) => {

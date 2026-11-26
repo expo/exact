@@ -108,10 +108,13 @@ static LINKED: std::sync::OnceLock<&'static TransitionGrammar> = std::sync::Once
 
 /// Link the `transition` shorthand's grammar and check (LLP 1047 D2, linked
 /// by use). An artifact links them when its plan binds a `transition` or
-/// `-exact-layout-transition` row, and a plan that does so unlinked is
-/// refused at boot (D6), so an unlinked artifact never parses one. The
-/// kernel's all-linking constructor, the compiler and the JS target's
-/// emitter link them always.
+/// `-exact-layout-transition` row, uses a `sharedElement`, or uses list
+/// reorder (whose runtime writes `transition` on rows in
+/// `runner/src/instance/collection/reorder.rs` and
+/// `runner/src/runner/mounted_reorder.rs`, selected by `runner/src/uses.rs`),
+/// and a plan that does so unlinked is refused at boot (D6), so an unlinked
+/// artifact never parses one. The kernel's all-linking constructor, the
+/// compiler and the JS target's emitter link them always.
 pub fn link_transitions() {
     #[cfg(not(test))]
     let _ = LINKED.set(&TRANSITIONS);

@@ -261,6 +261,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a GPU module whose crates call into Java on Android: the app's Java VM and `Context`|`gpu-module-android`|
 |data answered in Rust instead of `app.ts` (`exact new --rust`, app.json's `rust.data`)|`bun exact.mjs docs Rust data sources`|
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
+|localised copy and plural strings (`t()`, `strings/<locale>.json`)|`t`, `rtl`|
 |labels in Arabic, Hebrew, Persian or Urdu, laid out right to left; a second language|`rtl`|
 |an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
 |a button outside the app: Control Center, the Lock Screen, a Quick Settings tile; recording from one|`system-controls`|

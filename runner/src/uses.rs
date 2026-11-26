@@ -598,8 +598,17 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
                 Some(PropId::Markup) if can_be(&binding, &|v| v == "markdown") => {
                     uses = uses.with(Capability::Markdown);
                 }
-                Some(PropId::HeightDragFor | PropId::TransformDragFor | PropId::ReorderFor) => {
+                Some(PropId::HeightDragFor | PropId::TransformDragFor) => {
                     uses = uses.with(Capability::Motion).with(Capability::Drag);
+                }
+                // Arrange synthesizes `transition: translate -exact-spring(…)`
+                // on list rows (`collection/reorder.rs`, `mounted_reorder.rs`),
+                // so a plan with reorder needs the transition grammar too.
+                Some(PropId::ReorderFor | PropId::ReorderGroup) => {
+                    uses = uses
+                        .with(Capability::Motion)
+                        .with(Capability::Drag)
+                        .with(Capability::Transitions);
                 }
                 // A drag's data is admitted for its host whether or not the
                 // node drags now, and `draggable=false` is the web's too.
@@ -683,10 +692,14 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
             }
             EventKind::Heightrelease
             | EventKind::Transformgeometry
-            | EventKind::Transformrelease
-            | EventKind::Reorderdrop
-            | EventKind::Reordertargetchange => {
+            | EventKind::Transformrelease => {
                 uses = uses.with(Capability::Motion).with(Capability::Drag);
+            }
+            EventKind::Reorderdrop | EventKind::Reordertargetchange => {
+                uses = uses
+                    .with(Capability::Motion)
+                    .with(Capability::Drag)
+                    .with(Capability::Transitions);
             }
             // Dropped and pasted files become `doc:` handles; the web's drag
             // is heard beside its drop (files.js), and UIKit's is a module's.
@@ -700,7 +713,10 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
     if plan.handlers.iter().any(|h| {
         matches!(
             h.event,
-            EventKind::Reachstart | EventKind::Reachend | EventKind::Reorderdrop
+            EventKind::Reachstart
+                | EventKind::Reachend
+                | EventKind::Reorderdrop
+                | EventKind::Reordertargetchange
         )
     }) {
         uses = uses.with(Capability::Collections);

@@ -17,7 +17,7 @@ impl<D: DataSource> Presenter<D> {
     /// The update of each route in the first navigation root's stacks as of the last commit, as the shell lays them
     /// out: its band, its map into the window (a translation to where it lies), and its configuration's identity. A
     /// route that has left its stack has no update.
-    pub(crate) fn owner_updates(&self) -> Vec<(ViewId, OwnerUpdate)> {
+    pub fn owner_updates(&self) -> Vec<(ViewId, OwnerUpdate)> {
         let kernel = self.host.kernel();
         let roots = self.host.roots();
         let found = kernel.preorder_where(&roots, |_, props| {

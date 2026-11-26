@@ -192,7 +192,7 @@ pub fn static_tree(
                 // implied it: LLP 1115.000 D2), which the page's marks read (`data-exact-said`).
                 (BindingKind::Style, Some(v)) => {
                     bridge::set_binding_style(&mut patch, &row, &v, plan)
-                        .map_err(|e| format!("node {i}: {e:?}"))?;
+                        .map_err(|e| style_binding_error(i, e))?;
                     styled = true;
                 }
                 (BindingKind::Style, None) => {}
@@ -242,7 +242,7 @@ pub fn static_tree(
                     continue;
                 }
                 bridge::set_binding_style(&mut patch, &row, &v, plan)
-                    .map_err(|e| format!("node {i}: {e:?}"))?;
+                    .map_err(|e| style_binding_error(i, e))?;
             }
             looks.push((look.state, patch));
         }
@@ -266,6 +266,18 @@ pub fn static_tree(
         .apply(0, 1, &ops)
         .map_err(|e| format!("kernel refused the static tree: {e:?}"))?;
     Ok((kernel, tree))
+}
+
+fn style_binding_error(node: usize, err: bridge::BridgeError) -> String {
+    match err {
+        bridge::BridgeError::StyleKind {
+            style: StyleId::FontFamily,
+            value,
+        } => format!(
+            "node {node}: computed `font-family` cannot take a CSS family string ({value:?}): declare `style` classes with literal `font-family` stacks (or theme tokens) and switch `class` instead"
+        ),
+        other => format!("node {node}: {other:?}"),
+    }
 }
 
 /// Every node's parts, by node index (`None` for a head, which is no element).
@@ -1452,4 +1464,24 @@ pub(crate) fn press_translation_writes() -> Vec<(String, String, Option<String>)
         ));
     }
     writes
+}
+
+#[cfg(test)]
+mod font_family_error_tests {
+    use super::*;
+
+    #[test]
+    fn computed_font_family_string_error_suggests_style_classes() {
+        let msg = style_binding_error(
+            4,
+            bridge::BridgeError::StyleKind {
+                style: StyleId::FontFamily,
+                value: exact_plan::Value::Str("Inter, sans-serif".into()),
+            },
+        );
+        assert!(
+            msg.contains("computed `font-family`") && msg.contains("`style` classes"),
+            "{msg}"
+        );
+    }
 }

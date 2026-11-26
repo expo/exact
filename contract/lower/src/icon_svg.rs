@@ -21,6 +21,9 @@ pub(crate) struct Svg {
     pub even_odd: bool,
     /// Why it is no one-colour shape, when it is not.
     pub not_template: Option<String>,
+    /// True only when an outline/stroke issue (a non-`none` stroke or an unfilled path)
+    /// stopped it from being a template — never for intentional multi-colour brand SVGs.
+    pub has_outline_issue: bool,
     /// What to change in the file so that it is one, beside `not_template`.
     pub fix: String,
 }
@@ -169,8 +172,13 @@ fn note(why: &mut Why, reason: impl FnOnce() -> (String, &'static str)) {
 /// Read `text` as an icon's SVG, or why it is none.
 pub(crate) fn read(text: &str) -> Result<Svg, String> {
     // Every reason it is no template, so one build names each fix.
-    let (mut view_box, mut paths, mut fill, mut why) =
-        (None, Vec::<String>::new(), None::<String>, Why::new());
+    let (mut view_box, mut paths, mut fill, mut why, mut has_outline_issue) = (
+        None,
+        Vec::<String>::new(),
+        None::<String>,
+        Why::new(),
+        false,
+    );
     // Each path's fill rule after the cascade, in order: `true` even-odd.
     let mut rules: Vec<bool> = Vec::new();
     let mut stack: Vec<Open> = Vec::new();
@@ -353,9 +361,11 @@ pub(crate) fn read(text: &str) -> Result<Svg, String> {
                 // An outline icon: its lines are strokes, which a template does not draw.
                 let outline = "outline the stroke into a filled path and remove the `stroke` (Inkscape's Path > Stroke to Path, Figma's and Illustrator's Outline Stroke)";
                 if stroke_here.as_deref().is_some_and(|s| s != "none") {
+                    has_outline_issue = true;
                     note(&mut why, || ("it has a stroke".to_string(), outline));
                 }
                 if painted == "none" {
+                    has_outline_issue = true;
                     note(&mut why, || ("a path is not filled".to_string(), outline));
                 } else if fill.as_ref().is_some_and(|f| *f != painted) {
                     note(&mut why, || {
@@ -433,6 +443,7 @@ pub(crate) fn read(text: &str) -> Result<Svg, String> {
             .join(" "),
         path: paths.join(";"),
         even_odd,
+        has_outline_issue,
         fix: fixes.join("; "),
         not_template: (!why.is_empty()).then(|| {
             why.into_iter()
@@ -922,5 +933,22 @@ mod tests {
             }
         }
         assert!(seen >= 23, "{seen} package SVGs");
+    }
+
+    #[test]
+    fn outline_issue_flags_strokes_only_not_multicolor_brand_marks() {
+        let stroked = read(
+            r#"<svg viewBox="0 0 24 24"><path d="M4 12h16" fill="none" stroke="currentColor"/></svg>"#,
+        )
+        .unwrap();
+        assert!(stroked.not_template.is_some());
+        assert!(stroked.has_outline_issue);
+
+        let brand = read(
+            r##"<svg viewBox="0 0 24 24"><path d="M0 0h12v24H0Z" fill="#e11d48"/><path d="M12 0h12v24H12Z" fill="#2563eb"/></svg>"##,
+        )
+        .unwrap();
+        assert!(brand.not_template.is_some());
+        assert!(!brand.has_outline_issue);
     }
 }

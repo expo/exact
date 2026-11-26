@@ -993,5 +993,27 @@ mod tests {
         assert!(none.transition_grammar.is_none() && none.gradient_grammar.is_none());
         assert!(with(Capability::Transitions).transition_grammar.is_some());
         assert!(with(Capability::Gradients).gradient_grammar.is_some());
+
+        // Reorder synthesizes `transition: translate -exact-spring(300,30,1)` and
+        // `transition: none` on list rows at runtime (#1851), so virtualized and
+        // grouped `listStyle` reorder plans with no authored transition style must
+        // link `link_transitions`.
+        for source in [
+            "component A\n  state rows = [\"a\", \"b\"]\n  action drop(item: string, before: option<string>)\n    rows = rows\n  view\n    list id=\"rows\" virtualized=true estimated-item-height=20 height=100 reorderdrop=drop\n      for x in rows key=x\n        column reorderFor=\"rows\" height=20\n          text x\n",
+            "component A\n  state rows = [\"a\", \"b\"]\n  action drop(item: string, before: option<string>)\n    rows = rows\n  view\n    list id=\"rows\" listStyle=\"inset-grouped\" reorderdrop=drop\n      section\n        for x in rows key=x\n          column reorderFor=\"rows\" height=20\n            text x\n",
+        ] {
+            let reorder_only = contract::compile(source).unwrap();
+            let reorder_uses = exact_runner::uses::apple_uses(&reorder_only);
+            assert!(reorder_uses.has(Capability::Transitions));
+            assert!(
+                Grammars::of(reorder_uses)
+                    .transition_grammar
+                    .is_some_and(|f| std::ptr::fn_addr_eq(
+                        f,
+                        exact_kernel::style::link_transitions as fn()
+                    )),
+                "reorder plan must link exact_kernel::style::link_transitions"
+            );
+        }
     }
 }
