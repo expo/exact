@@ -292,11 +292,7 @@ extension NodeView {
             let caster = shadowCaster ?? ShadowCaster()
             if caster.superlayer !== outerHost { outerHost.insertSublayer(caster, at: 0) }
             shadowCaster = caster
-            #if os(iOS) || os(tvOS)
             let extended = extensionFrame
-            #else
-            let extended: CGRect? = nil
-            #endif
             caster.cast(box: bounds, outline: outline, shadows: outer.map { spec in
                 guard spec.spread != 0 else { return (outline, spec) }
                 let grown = bounds.insetBy(dx: -spec.spread, dy: -spec.spread)
@@ -322,12 +318,8 @@ extension NodeView {
             .map { CGSize(width: max(0, $0.width), height: max(0, $0.height)) }
         let caster = insetCaster ?? InsetShadowCaster()
         insetCaster = caster
-        #if os(iOS) || os(tvOS)
         // Where `insertBoxSublayer` puts it: with the picture, in an extended box's extension picture (LLP 1123 D13)
         let home = pictureHost
-        #else
-        let home = host
-        #endif
         if caster.superlayer !== home { insertInsetCaster(caster, into: host) }
         caster.cast(box: bounds, padding: BorderPaint.roundedRect(padding, padRadii, shape: shape), shadows: inner.map { spec in
             let hole = padding.insetBy(dx: spec.spread, dy: spec.spread)
@@ -582,10 +574,8 @@ extension NodeView {
             }
             func views(_ view: View) {
                 include(view.convert(view.bounds, to: self))
-                #if os(iOS) || os(tvOS)
-                // A box's extension paints its own frame; what UIKit holds inside it is UIKit's (LLP 1123 D13)
+                // A box's extension paints its own frame; what the platform holds inside it is its own (LLP 1123 D13)
                 if view.isBoxExtension { return }
-                #endif
                 for child in view.subviews { views(child) }
             }
             // AppKit may not have attached backing layers yet; views still

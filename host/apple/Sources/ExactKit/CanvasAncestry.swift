@@ -19,8 +19,12 @@ extension CanvasView {
 
 #if os(macOS)
 extension NSView {
-    /// Its subviews: the Mac adds no extension view to a box, as iOS does (LLP 1123 D13, `heldSubviews` on iOS).
-    package var heldSubviews: [NSView] { subviews }
+    /// Its subviews less its extension view, which the host adds behind a box's children and which no reader of what a
+    /// box holds counts (LLP 1123 D13, `ExtensionMac.swift`).
+    package var heldSubviews: [NSView] {
+        guard let mirror = NodeView.extensionStates.object(forKey: self)?.made?.view else { return subviews }
+        return subviews.filter { $0 !== mirror }
+    }
 }
 #endif
 
