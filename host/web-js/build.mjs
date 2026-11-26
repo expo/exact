@@ -121,7 +121,7 @@ if (rust && (process.env.EXACT_RUST_PLACEMENT ?? manifest.rust?.platforms?.web?.
 // Rust one (LLP 1027.002), the Rust module answers what it owns and the
 // TypeScript module the rest (ts-data.js, rust-data.js). A synthetic plan
 // over another app's sources (`--data`) asks the Rust module only.
-const ts = existsSync(resolve(appDir, 'app.ts')) && !(rust && opt('--data'));
+const ts = existsSync(resolve(appDir, 'app.ts')) && !(rust && opt('--data')); if (!ts && !existsSync(resolve(appDir, 'app.ts'))) rmSync(resolve(appDir, '.exact/typescript-inputs.json'), { force: true });
 const fixture = frameFixture(appDir, frame);
 if (fixture && !ts) { console.error(`error: ${fixture} supplies TypeScript answers and needs the app's app.ts`); process.exit(1); }
 const appTypes = ts && (frame || (opt('--contract') && !opt('--plan') && !opt('--data') && resolve(input) !== resolve(appDir, 'app.contract')));

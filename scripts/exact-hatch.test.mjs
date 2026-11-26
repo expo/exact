@@ -97,3 +97,43 @@ test('exact hatch writes each target\'s stub, wires it in, and declares the word
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('hatch preserves raw app.json keys without injecting defaults, variants sort, stale ts inputs are ignored, and unjoined gpu/src/lib.rs is named (LLP 1156.008.000 D10)', async () => {
+  const { hatch } = await import('./exact.mjs');
+  const { resolveVariant } = await import('./variants.mjs');
+  const { appSourceInputs } = await import('./app-imports.mjs');
+  const { resolveApp } = await import('./app.mjs');
+  const { readFileSync } = await import('node:fs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-d10-'));
+  const was = process.env.EXACT_APP_DIR;
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    column hatch="avatar"\n');
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Clean', app: { id: 'com.example.clean', name: 'Clean' }, host: { web: {} } }, null, 2) + '\n');
+    process.env.EXACT_APP_DIR = dir;
+    hatch(['avatar'], () => {});
+    const after = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+    assert.deepEqual(Object.keys(after), ['name', 'app', 'host', 'hatches']);
+    assert.equal('deploy' in after, false);
+
+    assert.throws(() => resolveVariant({ app: { id: 'com.example.clean' }, variants: { prod: {}, beta: {}, alpha: {} } }, 'staging'),
+      /it declares alpha, beta, prod/);
+
+    mkdirSync(resolve(dir, '.exact'), { recursive: true });
+    writeFileSync(resolve(dir, '.exact/typescript-inputs.json'), JSON.stringify({ modules: [['app.ts', resolve(dir, 'app.ts')]], types: [] }));
+    assert.equal(appSourceInputs(dir), null, 'stale typescript-inputs.json ignored without app.ts');
+
+    mkdirSync(resolve(dir, 'gpu/src'), { recursive: true });
+    writeFileSync(resolve(dir, 'gpu/src/lib.rs'), '');
+    assert.throws(() => resolveApp(dir).hasGpu, /\.\.\/\.exact\/gpu.*-gpu/);
+
+    // D10.1: running update twice does not rewrite or report exact.mjs when its bytes already match.
+    const { createApp } = await import('../game/new.mjs');
+    const firstUpdate = createApp(dir, { update: true });
+    assert.ok(firstUpdate.includes('exact.mjs'), firstUpdate);
+    const secondUpdate = createApp(dir, { update: true });
+    assert.ok(!secondUpdate.includes('exact.mjs'), secondUpdate);
+  } finally {
+    if (was === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = was;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

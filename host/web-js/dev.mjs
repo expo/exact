@@ -921,6 +921,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
       watchers.push(watch(at, { recursive: !file }, (event, name) => {
         if (file && name !== basename(file)) return;
         const path = resolve(dir, name ?? '');
+        if (/(?:^|[\\/])\.exact[\\/]shells(?:[\\/]|$)/.test(path)) return;
         if (!compilerInput(path) && !existsSync(path)) return;
         notify(event, name);
       }));

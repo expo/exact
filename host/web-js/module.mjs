@@ -289,7 +289,7 @@ const held = new Map();
 // fails, `input` copied there unoptimized and said so, as host/web/build.mjs
 // does: a missing tool is named, never left for a later ENOENT to report.
 const unoptimized = new Set();
-const OPT = ['-Oz', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals'];
+const OPT = ['-Oz', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-simd'];
 function optimized(opt, input, output, label) {
   if (opt.status === 0) return output;
   // Not optimized: a leaf is not kept for other checkouts (`buildLeaf`).

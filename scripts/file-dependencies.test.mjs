@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { fileDependencies, installDifference, installedFileDependencies } from './file-dependencies.mjs';
+import { fileDependencies, installDifference, installedFileDependencies, mixedCheckoutWarnings } from './file-dependencies.mjs';
 import { installLock, withInstallLock } from './filesystem.mjs';
 
 // Makes a package inside the app a copy: Bun's own choice is a clone on macOS, which keeps the source's time, and hard
@@ -225,3 +225,23 @@ test('a file: package installed in a workspace store or an ancestor node_modules
     }
   } finally { removeFixture(dir); }
 }, 60_000);
+
+test('mixedCheckoutWarnings warns only when an @exact/* file: package belongs to another Exact checkout (LLP 1156.008.000 D10.10)', () => {
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-mixed-checkout-')));
+  try {
+    const active = resolve(dir, 'checkout-a'), other = resolve(dir, 'checkout-b');
+    for (const root of [active, other]) {
+      mkdirSync(resolve(root, 'scripts'), { recursive: true });
+      writeFileSync(resolve(root, 'scripts/exact.mjs'), '');
+      mkdirSync(resolve(root, 'packages/passkeys'), { recursive: true });
+    }
+    const own = [{ name: '@exact/passkeys', source: resolve(active, 'packages/passkeys') }];
+    const stale = [{ name: '@exact/passkeys', source: resolve(other, 'packages/passkeys') }];
+    const thirdParty = [{ name: '@acme/pkg', source: resolve(other, 'packages/passkeys') }];
+    assert.deepEqual(mixedCheckoutWarnings(own, active), []);
+    assert.deepEqual(mixedCheckoutWarnings(thirdParty, active), []);
+    const warnings = mixedCheckoutWarnings(stale, active);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes(other) && warnings[0].includes(active) && warnings[0].includes('bun exact.mjs update'), warnings[0]);
+  } finally { removeFixture(dir); }
+});

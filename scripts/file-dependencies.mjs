@@ -7,7 +7,7 @@
 // install: the one that decides what an install is.
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { installLock, withInstallLock } from './filesystem.mjs';
 
 // Not a package's sources: its own installs, and its repository. Bun copies both; no build reads either from it.
@@ -114,12 +114,34 @@ export const installDifference = (dependency) => installDifferences(dependency).
  * judge a file by its time would keep that build's output. A package that still differs after the install is what
  * Bun installs, which no install by hand would change, so it is said and the build goes on. One process installs at
  * a time (`withInstallLock`); `install` is the install a test stands in for. */
+/** Warns when any `@exact/*` `file:` dependency points into a different Exact checkout than the active one (LLP 1156.008.000 D10.10). */
+export function mixedCheckoutWarnings(dependencies, activeRoot = resolve(import.meta.dir, '..')) {
+  let active;
+  try { active = realpathSync(activeRoot); } catch { active = resolve(activeRoot); }
+  const out = [];
+  for (const { name, source } of dependencies) {
+    if (!name.startsWith('@exact/')) continue;
+    let real;
+    try { real = realpathSync(source); } catch { continue; }
+    for (let dir = dirname(real); ; dir = dirname(dir)) {
+      if (basename(dir) === 'packages' && existsSync(join(dirname(dir), 'scripts', 'exact.mjs'))) {
+        const checkout = dirname(dir);
+        if (checkout !== active) out.push(`warning: ${name} points to a different Exact checkout (${checkout}) than the active one (${active}); run \`bun exact.mjs update\` or repoint package.json to match`);
+        break;
+      }
+      if (dirname(dir) === dir) break;
+    }
+  }
+  return out;
+}
+
 export function installedFileDependencies(appDir, { install = (root) => spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: root, stdio: ['ignore', 2, 2] }).status === 0 } = {}) {
   const dependencies = fileDependencies(appDir);
   // A declared directory that is gone (removed, renamed) leaves its last install in node_modules, which every reader
   // would go on reading: no install mends that, so the build stops.
   const gone = dependencies.filter(({ source }) => !isDirectory(source));
   if (gone.length) throw new Error(gone.map(({ name, spec, source, installed, root }) => `${name} is ${spec} in ${join(root, 'package.json')}, and ${source} is not a directory, so the build would read the copy at ${installed} as of its last install: restore the directory, or point ${name} at its new place (or remove it) and run bun install`).join('\n'));
+  for (const warning of mixedCheckoutWarnings(dependencies)) console.error(warning);
   const said = (list) => list.map(({ dependency, found: [[path, what], ...more] }) => `${dependency.name} (${dependency.spec}): ${path} ${what}${more.length ? ` and ${more.length} more` : ''}`).join('; ');
   // Installed again where the install is, when a package.json there declares it (an ancestor's install, or the app's
   // own; Bun finds a workspace from a member), else where the app's package.json is.

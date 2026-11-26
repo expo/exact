@@ -627,7 +627,7 @@ test('a new app and a new game get VS Code tasks over their own verbs, and updat
     assert.doesNotMatch(createApp(app, { update: true }), /tasks\.json/);
     assert.equal(readFileSync(tasksPath, 'utf8'), '{"version": "2.0.0", "tasks": []}\n');
     rmSync(resolve(app, '.vscode'), { recursive: true });
-    assert.match(createApp(app, { update: true }), /, \.vscode\/tasks\.json/);
+    assert.match(createApp(app, { update: true }), /[:,] \.vscode\/tasks\.json/);
     assert.ok(JSON.parse(readFileSync(tasksPath, 'utf8')).tasks.length > 0);
   } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 60_000); // Three offline Cargo resolutions.

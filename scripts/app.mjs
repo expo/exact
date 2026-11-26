@@ -503,6 +503,7 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
       const gpu = resolve(dir, 'gpu');
       if (generated && joinsGpu(dir, crate('gpu'))) return true;
       const pkg = existsSync(resolve(gpu, 'Cargo.toml')) && !generated ? cargoPackage('gpu') : false;
+      if (pkg === false && existsSync(resolve(gpu, 'src/lib.rs'))) throw new Error(`${gpu}/src/lib.rs did not join ${generated ? '../.exact/gpu' : 'the Cargo workspace'}: add ${gpu}/Cargo.toml with package name "${crate('gpu')}"${generated ? ' and an exact-gpu dependency' : ' and list "gpu" in workspace members'}`);
       if (pkg === false || pkg && realpathSync(dirname(pkg.manifest_path)) === realpathSync(gpu)) return pkg !== false;
       const named = (() => { try { return Bun.TOML.parse(readFileSync(resolve(gpu, 'Cargo.toml'), 'utf8')).package?.name; } catch { return undefined; } })();
       throw new Error(named === crate('gpu') ? `${gpu}/Cargo.toml (${named}) is not a member of the app's Cargo workspace: add "gpu" to its members` : `${gpu}/Cargo.toml names the package ${named ?? 'nothing'}; the app's GPU module must be named ${crate('gpu')}`);

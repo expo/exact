@@ -1152,9 +1152,10 @@ process.exit(await run({ dir: import.meta.dir, name: ${JSON.stringify(name)},${g
 function writeCommands(dir, name, options) {
   const file = resolve(dir, 'exact.mjs'), next = commandsFor(dir, name, options);
   const previous = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  if (previous === next) return [];
   writeFileSync(file, next);
   chmodSync(file, 0o755);
-  return !previous || previous.includes('const seed = ') ? [] : ['exact.mjs now bootstraps .exact/checkout'];
+  return !previous || previous.includes('const seed = ') ? ['exact.mjs'] : ['exact.mjs', 'exact.mjs now bootstraps .exact/checkout'];
 }
 
 /** Cargo re-resolves the copied lock for this workspace, offline and minimally.
@@ -1363,7 +1364,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
       gameShells(dir, gameDefaults(dir).game, resolve(ROOT, 'game'));
       drift = capturedLockDrift(dir);
     } catch { /* The next build says what is wrong. */ }
-    return finish(`Updated ${dir}: exact.mjs${notes.length ? `, ${notes.join(', ')}` : ''}${drift ? `\n${drift}` : ''}`);
+    return finish(`${notes.length ? `Updated ${dir}: ${notes.join(', ')}` : `Up to date: ${dir}`}${drift ? `\n${drift}` : ''}`);
   }
   if (!existsSync(resolve(dir, 'app.contract'))) throw new Error(`${dir}: no app here to update (no app.contract)`);
   checkPlatforms('update', platforms);
@@ -1375,7 +1376,8 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
     if (editorTasks(dir)) notes.push('.vscode/tasks.json');
     const unmounted = refreshManifestPaths(dir);
     defaultTest(dir);
-    return finish(`Updated ${dir}: exact.mjs${edits.length ? `, ${edits.join(', ')}` : ''}${notes.length ? `, ${notes.join(', ')}` : ''}${unmounted ? `\n${unmounted}` : ''}`);
+    const items = [...edits, ...notes];
+    return finish(`${items.length ? `Updated ${dir}: ${items.join(', ')}` : `Up to date: ${dir}`}${unmounted ? `\n${unmounted}` : ''}`);
   }
   if (!existsSync(resolve(dir, 'Cargo.toml'))) throw new Error(notAMember(appCrates(dir).find(crate => !crate.joins)));
   // Before anything is written: a host crate update would add needs the root the copied-up workspace has.
@@ -1451,7 +1453,7 @@ function updateApp(dir, name, { without = null, with: platforms = [] } = {}) {
   const crates = new Map(JSON.parse(metadata.stdout).packages.map(p => [p.name, dirname(p.manifest_path)]));
   crates.set('ibex2-sqlite', resolve(ROOT, 'vendor/ibex/crates/ibex2-sqlite'));
   const { changed, unresolved } = updateManifests(dir, crates, rootText);
-  const said = `Updated ${dir}: patches, toolchain, exact.mjs${hosts.linux ? ', a linux/ host crate' : ''}${hosts.android ? ', an android/ crate (bun exact.mjs android builds the APK)' : ''}${edits.length ? `, ${edits.join(', ')}` : ''}${without && ['linux', 'android'].includes(without) ? ', Cargo.lock' : ''}${notes.length ? `, ${notes.join(', ')}` : ''}${changed.length ? `, exact2 paths in ${changed.join(', ')}` : ''}${unresolved.length ? `\n<exact2> left unresolved in ${unresolved.join(', ')}: a path into exact2 is written \`<exact2>/\` and then forward slashes` : ''}${unmounted ? `\n${unmounted}` : ''}`;
+  const said = `Updated ${dir}: patches, toolchain${hosts.linux ? ', a linux/ host crate' : ''}${hosts.android ? ', an android/ crate (bun exact.mjs android builds the APK)' : ''}${edits.length ? `, ${edits.join(', ')}` : ''}${without && ['linux', 'android'].includes(without) ? ', Cargo.lock' : ''}${notes.length ? `, ${notes.join(', ')}` : ''}${changed.length ? `, exact2 paths in ${changed.join(', ')}` : ''}${unresolved.length ? `\n<exact2> left unresolved in ${unresolved.join(', ')}: a path into exact2 is written \`<exact2>/\` and then forward slashes` : ''}${unmounted ? `\n${unmounted}` : ''}`;
   // Whether the workspace loads: every member's manifest read, nothing resolved or fetched, so only the app's files can
   // fail it. One that does not load builds nothing, so the update failed, though its files are written.
   const loads = spawnSync('cargo', ['metadata', '--no-deps', '--offline', '--format-version', '1'], { cwd: dir, env: cargoEnvironment(), stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });

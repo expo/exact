@@ -765,3 +765,15 @@ test('Markdown home pages and the missing page negotiate within current and reta
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('foreignBeside ignores macOS .DS_Store files inside dist.gen and dist.leases (LLP 1156.008.000 D10.2)', () => {
+  const { root, dist, stage } = workspace();
+  try {
+    replaceBuild(stage(1), dist);
+    replaceBuild(stage(2), dist);
+    writeFileSync(join(dist + '.gen', '.DS_Store'), '');
+    mkdirSync(dist + '.leases', { recursive: true });
+    writeFileSync(join(dist + '.leases', '.DS_Store'), '');
+    expect(foreignBeside(dist)).toBeNull();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

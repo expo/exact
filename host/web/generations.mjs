@@ -52,7 +52,7 @@ export function foreignBeside(dist) {
   const entries = (dir, each) => {
     let names;
     try { names = realDirectory(dir) ? readdirSync(dir) : null; } catch (e) { return e.code === 'ENOENT'; }
-    return names ? names.every((name) => each(name, resolve(dir, name))) : gone(dir);
+    return names ? names.filter((name) => name !== '.DS_Store').every((name) => each(name, resolve(dir, name))) : gone(dir);
   };
   const lines = (file, form) => realFile(file) && readFileSync(file, 'utf8').split('\n').every((line) => line === '' || form.test(line));
   const owned = {
