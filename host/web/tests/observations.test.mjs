@@ -12,9 +12,11 @@ let server;
 beforeAll(() => {
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/observe.js') {
-      return new Response(Bun.file(resolve(import.meta.dir, '../navigation/observe.js')), { headers: { 'content-type': 'text/javascript' } });
+    // The web host's navigation modules, the executor among them, as the page imports them
+    if (/^\/[\w-]+\.js$/.test(path)) {
+      return new Response(Bun.file(resolve(import.meta.dir, '../navigation' + path)), { headers: { 'content-type': 'text/javascript' } });
     }
+    if (path === '/keyboard') return new Response(KEYBOARD, { headers: { 'content-type': 'text/html' } });
     if (path === '/transitions') return new Response(TRANSITIONS, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
@@ -61,6 +63,40 @@ const TRANSITIONS = `<!doctype html><style>body { margin: 0 } div { box-sizing: 
     }, 100);
   </script>`;
 
+// A reader at the bottom under a 300-point keyboard, one above it, asked with the keyboard and with none showing
+const KEYBOARD = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
+  <div id="foot" style="top:600px;height:200px;padding-bottom:var(--exact-keyboard-inset-bottom, 7px)"></div>
+  <div id="head" style="top:0;height:100px"></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const readers = ['foot', 'head'].map((id) => document.getElementById(id));
+    const inputs = (el) => ['keyboard-inset', 'keyboard-undocked-inset'].map((f) => ['top', 'right', 'bottom', 'left'].map((e) => el.style.getPropertyValue('--exact-' + f + '-' + e)));
+    observe(readers, [0, 0, 0, 0], 300);
+    const shown = { foot: inputs(readers[0]), head: inputs(readers[1]), padding: parseFloat(getComputedStyle(readers[0]).paddingBottom) };
+    observe(readers, [0, 0, 0, 0], 0);
+    window.result = { shown, none: inputs(readers[0]), padding: parseFloat(getComputedStyle(readers[0]).paddingBottom) };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes the keyboard's depth from its own bottom, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}keyboard`);
+    await page.waitForFunction(() => window.result);
+    const r = await page.evaluate(() => window.result);
+    // The reader at the bottom: the keyboard's 300 on its bottom edge, in both families, not limited by its 200-point
+    // height, as a native view's guide is not; the one above: none
+    expect(r.shown.foot).toEqual([['0px', '0px', '300px', '0px'], ['0px', '0px', '300px', '0px']]);
+    expect(r.shown.padding).toBe(300);
+    expect(r.shown.head).toEqual([['0px', '0px', '0px', '0px'], ['0px', '0px', '0px', '0px']]);
+    // With no keyboard showing, each is 0, as the kernel gives a placed box
+    expect(r.none).toEqual([['0px', '0px', '0px', '0px'], ['0px', '0px', '0px', '0px']]);
+    expect(r.padding).toBe(0);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's values start no transition, and the settled inputs one each, in ${engine}`, async () => {
   const browser = await suiteBrowser(engine);
   try {
@@ -77,7 +113,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's values s
   } finally {
     await browser.close();
   }
-});
+}, 30_000);
 
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes its own observation, in rounds until it holds or the bound, in ${engine}`, async () => {
   const browser = await suiteBrowser(engine);
@@ -108,4 +144,4 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes 
   } finally {
     await browser.close();
   }
-});
+}, 30_000);
