@@ -31,9 +31,11 @@ public final class ExactSidebarController: NSSplitViewController {
     private weak var footerPane: BlockView?
     private var removeFooter: (() -> Void)?
     let detail: SplitDetail
-    private let sidebarItem: NSSplitViewItem?
-    private let pageItem: NSSplitViewItem
-    private var inspectorItem: NSSplitViewItem?
+    let sidebarItem: NSSplitViewItem?
+    let pageItem: NSSplitViewItem
+    private(set) var inspectorItem: NSSplitViewItem?
+    /// What Exact last wrote to each item from the element that projects it (`SplitItemsMac.swift`).
+    let itemControls = SplitItemControls()
     private(set) weak var inspectorNode: NodeView?
     private(set) weak var inspectorPane: BlockView?
     private var inspectorPins: [NSLayoutConstraint] = []
@@ -47,7 +49,7 @@ public final class ExactSidebarController: NSSplitViewController {
     private lazy var inspectorWidth: Double? = inspectorWidthKey.flatMap { UserDefaults.standard.object(forKey: $0) as? Double }
     private lazy var inspectorHidden = inspectorHiddenKey.map { UserDefaults.standard.bool(forKey: $0) } ?? false
 
-    private let detailItem: NSSplitViewItem
+    let detailItem: NSSplitViewItem
     private let autosave: String?
     private let minimumPageWidth: CGFloat
     private let minimumDetailWidth: CGFloat

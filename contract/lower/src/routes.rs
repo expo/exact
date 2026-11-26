@@ -6,6 +6,7 @@ pub(crate) mod allocation;
 pub(crate) mod arrangement;
 pub(crate) mod bottom_toolbar;
 pub(crate) mod popover;
+pub(crate) mod split_items;
 pub(crate) mod tab_accessory;
 
 impl Lowerer<'_> {
@@ -463,6 +464,7 @@ impl NavPlace {
         let path = |p: &[String]| [p, &[tag.to_string()]].concat();
         let root = self.is_root(first_root, attrs);
         self.check_accessory_place(tag, attrs)?;
+        split_items::check(self, tag, attrs, self.is_route(attrs))?;
         if has("navigationKey") && has("navigationBack") && !root {
             return err(
                 "lower-route-place",

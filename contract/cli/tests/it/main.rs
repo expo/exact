@@ -291,6 +291,7 @@ mod source;
 mod source_locations;
 mod source_map;
 mod spelling;
+mod split_items;
 mod stack_depth;
 mod stack_split;
 mod state_looks;
