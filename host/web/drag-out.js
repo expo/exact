@@ -80,9 +80,9 @@ function decide(event, owns, down, inPage) {
   if (!target || (target.matches('[draggable="true" i]') && !declared(target))) return;
   const draggable = (el) => (off.has(el) && declared(el)) || explicit(el);
   const image = target.localName === 'img', keepers = down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS;
-  // An earlier capture listener can take the image out of the page. The path its press recorded still names its card.
+  // An earlier capture listener can take the image out of the page. The path its window recorded still names its card.
   if (image && inPage && !inPage(target)) {
-    const ancestors = dragPathFrom(down, event, target);
+    const ancestors = dragPathFrom(event);
     if (ancestors.length) {
       const node = ancestors.find(draggable);
       if (!node || !declared(node) || !owns(node)) return;

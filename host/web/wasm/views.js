@@ -403,15 +403,15 @@ function waitingDrag(event) {
   if (event.isTrusted === false) return;
   const target = event.target;
   if (target.matches?.('[draggable="true" i]') && !waitingView(target)) return;
-  const element = elementOf(target);
-  const down = downForDrag(waitingInput, event, element);
   if (target.localName === "img") {
-    const path = dragPathFrom(down, event, target);
+    const path = dragPathFrom(event);
     if (path.length) {
       if (waits(path)) event.preventDefault();
       return;
     }
   }
+  const element = elementOf(target);
+  const down = downForDrag(waitingInput, event, element);
   const at = (element && pressedAt(down, event, element)) ?? document.elementFromPoint?.(event.clientX, event.clientY);
   if (waits(ancestorElements(target)) || (at && target.contains?.(at) && waits(ancestorElements(at)))) event.preventDefault();
 }

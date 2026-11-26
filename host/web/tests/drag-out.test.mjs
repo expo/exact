@@ -87,7 +87,7 @@ ${rules}
 </script>`;
 
 const waitingDragFixture = `
-  import { downForDrag, dragPathFrom, elementOf, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
+  import { downForDrag, dragPathFrom, elementOf, observeDragInput, pressedAt } from './drag-input.js';
   const host = {}, views = new Map(), retiredViews = new WeakSet();
   const loadAfterPaint = () => new Promise(() => {});
   ${glueDeclarations(wasmSource, ['liveView', 'dragOutWait', 'waitingInput', 'waitingView',
@@ -365,7 +365,7 @@ need('chromium', chromium().unavailable).each([
         window.imageDrag = {
           imageTarget: event.target === image,
           wrapperOnPath: !wrapper || event.composedPath().includes(wrapper),
-          moved: moved.parentNode === destination,
+          moved: moved.parentNode === destination && (move !== 'both' || wrapper.parentNode === card.shadowRoot),
           connected: image.isConnected,
           cardInDocument: card.ownerDocument === document,
           cancelled: event.defaultPrevented,
@@ -383,6 +383,75 @@ need('chromium', chromium().unavailable).each([
       imageTarget: true, wrapperOnPath: true, moved: true, connected: true,
       cardInDocument: move !== 'card', cancelled: move !== 'wrapper' && !own, text: own ? 'card' : '',
     });
+  } finally {
+    await browser.close();
+  }
+});
+
+// The tree a waiting card's image drag is judged by is the one its dispatch began in, whatever a listener changed before:
+// a press's tree changed before the drag began gives way to the drag's, which a `dragstart` listener then changes.
+need('chromium', chromium().unavailable).each([
+  ['a slot above the card is swapped at the press, and its fallback wrapper moves out of its slot as the drag begins',
+    'reslot'],
+  ['the image changes owner after the press through the same nodes, by way of a slot', 'owner'],
+])('chromium: a waiting card cancels its image drag after %s', async (_, change) => {
+  const browser = await suiteBrowser('chromium');
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.goto(`http://127.0.0.1:${server.port}/?waiting`);
+    await page.waitForFunction('window.ready');
+    await page.evaluate(async (change) => {
+      const card = document.getElementById('card2'), image = document.getElementById('picture');
+      card.replaceChildren(image);
+      const { waitForDrag } = await import('./waiting-drag.js');
+      waitForDrag(card);
+      const slot = (name) => Object.assign(document.createElement('slot'), name ? { name } : {});
+      const wrapper = Object.assign(document.createElement('div'), { draggable: true });
+      const changed = window.changed = [];
+      if (change === 'reslot') {
+        // The card in an outer host's slot, its image assigned to a slot in the card's fallback wrapper
+        const outer = document.createElement('div');
+        card.before(outer);
+        outer.append(card);
+        outer.attachShadow({ mode: 'open' }).append(slot('a'), slot('b'));
+        card.slot = 'a';
+        const unused = slot('unused');
+        wrapper.append(slot());
+        unused.append(wrapper);
+        card.attachShadow({ mode: 'open' }).append(unused);
+        window.addEventListener('pointerdown', () => {
+          card.slot = 'b';
+          changed.push(card.assignedSlot?.name);
+        }, { capture: true, once: true });
+        window.addEventListener('dragstart', () => {
+          card.shadowRoot.append(wrapper);
+          changed.push(wrapper.parentNode === card.shadowRoot);
+        }, { capture: true, once: true });
+      } else {
+        // A script's wrapper in the card's light DOM, assigned to the card's outer slot, holding the image in a slot
+        // element of its own; once the press is heard the wrapper becomes the outer slot's fallback and the image the
+        // card's child, assigned to that same slot element
+        const outerSlot = slot('outer'), innerSlot = slot();
+        card.attachShadow({ mode: 'open' }).append(outerSlot);
+        innerSlot.append(image);
+        wrapper.append(innerSlot);
+        wrapper.slot = 'outer';
+        card.append(wrapper);
+        window.addEventListener('pointerdown', () => {
+          wrapper.removeAttribute('slot');
+          outerSlot.append(wrapper);
+          card.append(image);
+          changed.push(image.assignedSlot === innerSlot && wrapper.parentNode === outerSlot);
+        }, { once: true });
+      }
+      image.addEventListener('dragstart', (event) => {
+        window.imageDrag = { wrapperOnPath: event.composedPath().includes(wrapper), cancelled: event.defaultPrevented };
+        event.stopPropagation();
+      });
+    }, change);
+    await drag(page, '#picture', [0, 20]);
+    expect(await page.evaluate(() => window.changed)).toEqual(change === 'reslot' ? ['b', true] : [true]);
+    expect(await page.evaluate(() => window.imageDrag)).toEqual({ wrapperOnPath: true, cancelled: true });
   } finally {
     await browser.close();
   }
