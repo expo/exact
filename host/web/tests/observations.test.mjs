@@ -23,6 +23,8 @@ beforeAll(() => {
     if (path === '/observed') return new Response(OBSERVED, { headers: { 'content-type': 'text/html' } });
     if (path === '/readers') return new Response(READERS, { headers: { 'content-type': 'text/html' } });
     if (path === '/motion') return new Response(MOTION, { headers: { 'content-type': 'text/html' } });
+    if (path === '/placed') return new Response(PLACED, { headers: { 'content-type': 'text/html' } });
+    if (path === '/clamped') return new Response(CLAMPED, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
       <div id="top" style="position:absolute;top:0;left:0;width:390px;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
@@ -98,6 +100,78 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader is measur
     // At rest 100, 600 and, in a fixed panel the page's scroll does not move, 500 below the top, clear of the 47-point
     // band, though scrolling has moved each under it
     expect(await page.evaluate(() => window.result)).toEqual(['0px', '0px', '0px']);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// Readers placed by their containing blocks, each 10 below a top the page or a 300-point scroller lays it at, every
+// scroller then scrolled by 100: an absolute box in a scroller that is not its containing block, which that scroller
+// does not move; a fixed box whose containing block is a transformed scroller, which moves it; and a sticky box stuck
+// to the page's top
+const PLACED = `<!doctype html><style>body { margin: 0; height: 3000px } .r { height: 20px; padding-top: var(--exact-safe-area-inset-top, 0px) }
+  .s { overflow: auto; height: 300px; width: 100px }</style>
+  <div style="position:relative;height:300px"><div class="s" id="plain"><div style="height:1000px"></div>
+    <div class="r" id="absolute" style="position:absolute;top:10px;width:50px"></div></div></div>
+  <div class="s" id="transformed" style="position:absolute;top:0;left:200px;transform:translateX(0)"><div style="height:1000px"></div>
+    <div class="r" id="fixed" style="position:fixed;top:10px;width:50px"></div></div>
+  <div class="r" id="sticky" style="position:sticky;top:0;width:50px;margin-top:-290px;margin-left:120px"></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    for (const id of ['plain', 'transformed']) document.getElementById(id).scrollTop = 100;
+    scrollTo(0, 100);
+    const readers = ['absolute', 'fixed', 'sticky'].map((id) => document.getElementById(id));
+    observe(readers, [47, 0, 34, 0]);
+    window.result = { inputs: readers.map((el) => el.style.getPropertyValue('--exact-safe-area-inset-top')),
+      stuck: document.getElementById('sticky').getBoundingClientRect().top, marked: document.querySelectorAll('[data-exact-at-rest]').length };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader is measured where its containing blocks lay it, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}placed`);
+    await page.waitForFunction(() => window.result);
+    const r = await page.evaluate(() => window.result);
+    // Each at rest 10 below its top, under 37 of the 47-point band, the absolute box at 10 on the page though its
+    // scroller has moved, the fixed one 10 down its scroller, which moves it, and the sticky one laid out at 10, though stuck
+    expect(r.inputs).toEqual(['37px', '37px', '37px']);
+    // The sticky box is stuck again once the rounds end
+    expect(r.stuck).toBe(0);
+    expect(r.marked).toBe(0);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A reader at the top of a 100-point scroller scrolled by 500, its margin 37 less half its input, so its input settles
+// at 20 under the 47-point band, and in it a box 50 times its input tall, 1000 until the rounds write one: the first
+// round's input, 10, leaves too little to scroll to 500, but the settled one, 20, enough
+const CLAMPED = `<!doctype html><style>body { margin: 0 }</style>
+  <div id="port" style="overflow:auto;height:100px;width:100px">
+    <div id="reader" style="margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));height:10px">
+      <div style="height:calc(50 * var(--exact-safe-area-inset-top, 20px))"></div></div></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const port = document.getElementById('port'), reader = document.getElementById('reader');
+    port.scrollTop = 500;
+    const { rounds, unsettled } = observe([reader], [47, 0, 34, 0]);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    window.result = { rounds, unsettled: unsettled.length, input: reader.style.getPropertyValue('--exact-safe-area-inset-top'), scrolled: port.scrollTop };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's clamped scroll offset is not kept, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}clamped`);
+    await page.waitForFunction(() => window.result);
+    const r = await page.evaluate(() => window.result);
+    expect(r.rounds).toBeGreaterThan(1);
+    // Within D9's half-pixel residual of 20, a window of one point either side at this slope
+    expect(Math.abs(parseFloat(r.input) - 20)).toBeLessThan(1);
+    // Where it was: the rounds read each round's offset, and the one they clamped is put back
+    expect(r.scrolled).toBe(500);
   } finally {
     await browser.close();
   }
