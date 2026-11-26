@@ -55,3 +55,42 @@ fn the_facts_answer_from_the_terminals_layout() {
     let screen = vt.text(false);
     assert!(screen.contains("box true 240 top 0"), "{screen}");
 }
+
+const FEEDBACK: &str = "shape Rect
+  x: number
+  y: number
+  width: number
+  height: number
+shape G
+  available: bool
+  frame: option<Rect>
+component App
+  resource g = exactGeometry(\"box\") as shape G
+  derive width = match g.frame { case some(f) => f.width, case none => 80 }
+  view
+    column width=\"100%\" height=\"100%\"
+      column id=\"box\" width=`${width + 8}px` height=\"1lh\"
+      text `width ${width}`
+";
+
+#[test]
+fn a_fact_that_moves_its_own_box_stops_at_the_bound() {
+    // Each answer widens the box it reads by 8, so each commit that answers again lays it out
+    // wider; the terminal lays out after each until the runner's bound of 8 ends the chain, and
+    // the fact holds its eighth answer while the box lies one step past it
+    let plan = contract::compile_terminal(FEEDBACK).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 40, 6).unwrap();
+    host.arm = false;
+    let mut vt = Vt::new(&mut host);
+    vt.render(&mut host);
+    let held = vt.text(false);
+    assert!(held.contains("width 144"), "88, then 7 more of 8: {held}");
+    // A layout with another cause starts a new chain, which the bound ends again
+    host.resize(60, 6);
+    vt.render(&mut host);
+    let again = vt.text(false);
+    assert!(
+        again.contains("width 208"),
+        "152, then 7 more of 8: {again}"
+    );
+}
