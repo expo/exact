@@ -41,6 +41,7 @@
 #![deny(missing_docs)]
 
 pub mod animation;
+pub mod clip;
 pub mod color;
 pub mod easing;
 pub mod engine;
@@ -63,6 +64,7 @@ pub use animation::{
     Animation, AnimationError, Animations, Direction, FillMode, Keyframes, Phase, Picture,
     MAX_ANIMATIONS, MAX_KEYFRAMES, MAX_VALUES,
 };
+pub use clip::ClipValue;
 pub use easing::{Easing, EasingError, LinearStop, StepPosition};
 pub use engine::{
     AnimationPlay, Change, Engine, EngineError, EngineLinks, HoldEnd, HoldStart, HoldToken,

@@ -455,7 +455,7 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   const used = dir ? resolve(dir, '.exact', tv ? 'simulator-tv' : 'simulator') : null;
   const lastUsed = () => { try { return used && readFileSync(used, 'utf8').trim(); } catch { return null; } };
   const remember = (dev, last) => {
-    if (rememberChoice && used && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
+    if (rememberChoice && !process.env.EXACT_SIM_NO_REMEMBER && used && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
   };
   const kept = cached && driveSimulators.get(key(pick));
   if (kept) {
@@ -665,6 +665,7 @@ export async function withSoftwareKeyboard(dev, open, { records = resolve(homedi
   try { carrier = await open(); } catch (e) { done(); throw e; }
   if (!keyboard.cleared) { done(); return carrier; }
   const close = carrier.close.bind(carrier);
+  carrier.restoreSync = done;
   carrier.close = async (...args) => { try { return await close(...args); } finally { done(); } };
   return carrier;
 }

@@ -39,6 +39,14 @@ impl<D: DataSource> Host<D> {
         self.engine.presented_filter(motion_node(key))
     }
 
+    /// A box's `clip-path` while a transition moves it (LLP 1003.003 D7);
+    /// `None` paints the row.
+    pub fn presented_clip(&self, id: ViewId) -> Option<exact_kernel::clip::ClipPath> {
+        let key = self.runner.kernel().node(id)?.key;
+        let clip = self.engine.presented_clip(motion_node(key))?;
+        exact_kernel::clip::ClipPath::from_motion(&clip)
+    }
+
     /// Adopt a commit's paint, after its `motion_sync` set the rows.
     pub(super) fn sync_paint(&mut self, receipt: &CommitReceipt) {
         let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
@@ -283,7 +291,7 @@ impl<D: DataSource> Host<D> {
             // they are painted.
             if Property::TRANSITION_ONLY.contains(&p.property) {
                 changed = true;
-                self.row_dirty.node(key);
+                self.row_dirty.moving(key);
                 continue;
             }
             if Property::PAINT.contains(&p.property) {

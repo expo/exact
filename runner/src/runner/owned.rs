@@ -424,6 +424,7 @@ fn merged(mut a: CommitReceipt, b: CommitReceipt) -> CommitReceipt {
     for (into, from) in [
         (&mut a.touched, b.touched),
         (&mut a.display_changed, b.display_changed),
+        (&mut a.reparented, b.reparented),
         (&mut a.timelines, b.timelines),
         (&mut a.renewed, b.renewed),
         (&mut a.revealed, b.revealed),
@@ -434,6 +435,7 @@ fn merged(mut a: CommitReceipt, b: CommitReceipt) -> CommitReceipt {
     }
     a.touched.retain(live);
     a.display_changed.retain(|k| !gone.contains(k));
+    a.reparented.retain(|k| !gone.contains(k));
     a.timelines.retain(|k| !gone.contains(k));
     a.renewed.retain(|k| !gone.contains(k));
     a.revealed.retain(|k| !gone.contains(k));

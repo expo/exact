@@ -120,6 +120,9 @@ mod box_motion_tests;
 #[path = "canvas_link_tests.rs"]
 mod canvas_link_tests;
 #[cfg(test)]
+#[path = "clip_motion_tests.rs"]
+mod clip_motion_tests;
+#[cfg(test)]
 #[path = "filter_motion_tests.rs"]
 mod filter_motion_tests;
 #[path = "layout.rs"]

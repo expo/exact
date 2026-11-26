@@ -3,10 +3,13 @@
 //! `url(#id)` (LLP 1055.000 D10). The string is SVG path data in full, read
 //! by the SVG path parser (LLP 1055.000 addendum A); the parsed commands
 //! (absolute `M L C Z`) cross the Apple batch, so presenters parse no CSS.
+//! A `path()` also keeps its authored commands made absolute, each kept as
+//! its kind, which a `clip-path` transition interpolates as a `d` does (LLP
+//! 1003.003 D2) and which its CSS text carries.
 
 mod basic;
 use crate::generated::FillRule;
-use crate::svg::{parse_d_whole, Paint, PaintFallback, Seg};
+use crate::svg::{parse_d_motion, parse_d_whole, Paint, PaintFallback, Seg};
 use basic::BasicShape;
 
 /// A validated clipping path. The initial value has no clipping.
@@ -16,6 +19,7 @@ pub struct ClipPath {
     rule: FillRule,
     url: Option<Box<str>>,
     shape: Option<Box<BasicShape>>,
+    absolute: Option<std::sync::Arc<exact_motion::PathValue>>,
 }
 
 impl ClipPath {
@@ -76,7 +80,33 @@ impl ClipPath {
             rule,
             url: None,
             shape: None,
+            absolute: parse_d_motion(data).map(std::sync::Arc::new),
         })
+    }
+
+    /// The `path()` as a transition moves it (LLP 1003.003 D2): its fill
+    /// rule and its authored commands made absolute. `None` for `none`, a
+    /// basic shape and `url()`, which interpolate with nothing.
+    pub fn motion(&self) -> Option<exact_motion::ClipValue> {
+        Some(exact_motion::ClipValue {
+            even_odd: self.rule == FillRule::Evenodd,
+            path: (**self.absolute.as_ref()?).clone(),
+        })
+    }
+
+    /// The clip a transition presents, as the kernel draws it.
+    pub fn from_motion(clip: &exact_motion::ClipValue) -> Option<Self> {
+        Self::grammar(&clip.to_css())
+    }
+
+    /// Whether the path draws no area, only moves (an arc whose ends meet
+    /// draws none), so it clips the whole box, as an empty clipping region
+    /// does (CSS Masking 1 §5): a value a transition passes through between
+    /// two that draw, or a stylesheet's.
+    pub fn draws_nothing(&self) -> bool {
+        self.shape.is_none()
+            && !self.commands.is_empty()
+            && self.commands.iter().all(|(c, _)| matches!(c, 'M' | 'Z'))
     }
 
     /// Which points are inside: CSS's `nonzero` unless the value said
@@ -169,6 +199,28 @@ impl ClipPath {
             text.push_str("evenodd, ");
         }
         text.push('"');
+        // The authored commands, absolute, so the browser and a transition
+        // compare what was written (LLP 1003.003 D2, D7), each number as the
+        // `f32` the parser read, at its shortest
+        if let Some(absolute) = &self.absolute {
+            for c in &absolute.0 {
+                text.push(c.verb as char);
+                let n = exact_motion::path::arity(c.verb).unwrap_or(0);
+                for (i, a) in c.args[..n].iter().enumerate() {
+                    if i > 0 {
+                        text.push(' ');
+                    }
+                    let flag = c.verb == b'A' && (i == 3 || i == 4);
+                    if flag {
+                        text.push(if *a != 0.0 { '1' } else { '0' });
+                    } else {
+                        let _ = write!(text, "{}", exact_num::Shortest32(*a as f32));
+                    }
+                }
+            }
+            text.push_str("\")");
+            return text;
+        }
         for (i, (command, values)) in self.commands.iter().enumerate() {
             if i > 0 {
                 text.push(' ');
@@ -217,23 +269,83 @@ mod tests {
         );
     }
 
+    /// LLP 1003.003 D2: a value between two ends that draws nothing (an
+    /// arc whose ends meet) clips everything; and a clip's text keeps each
+    /// number as the `f32` the parser read, at its shortest.
+    #[test]
+    fn a_moving_value_that_draws_nothing_clips_all_and_text_keeps_f32_numbers() {
+        let a = ClipPath::parse("path('M10 30 A20 20 0 0 1 50 30')")
+            .unwrap()
+            .motion()
+            .unwrap();
+        let b = ClipPath::parse("path('M50 30 A20 20 0 0 1 10 30')")
+            .unwrap()
+            .motion()
+            .unwrap();
+        let half = ClipPath::from_motion(&a.lerp(&b, 0.5)).unwrap();
+        assert!(
+            half.has_path() && half.draws_nothing(),
+            "{:?}",
+            half.commands()
+        );
+        assert!(!ClipPath::from_motion(&a.lerp(&b, 0.25))
+            .unwrap()
+            .draws_nothing());
+        assert!(ClipPath::parse("path('M10 30 A20 20 0 0 1 10 30')")
+            .unwrap()
+            .draws_nothing());
+        let tenths = ClipPath::parse("path('M0 0 C0.1 0.2 0.3 0.4 0.6 0.7 Z')").unwrap();
+        assert_eq!(tenths.css(), "path(\"M0 0C0.1 0.2 0.3 0.4 0.6 0.7Z\")");
+    }
+
+    /// LLP 1003.003 D2: an easing that overshoots far moves a sample's
+    /// numbers no further than the motion limit, so a smooth command's
+    /// reflection of them, which the parser computes, stays finite.
+    #[test]
+    fn a_far_overshooting_sample_parses_to_finite_points() {
+        let motion = |d: &str| {
+            ClipPath::parse(&format!("path('M0 0H20V20H0Z {d}')"))
+                .unwrap()
+                .motion()
+                .unwrap()
+        };
+        let (a, b) = (
+            motion("M0 0C0 0 1 0 1 0S1 0 1 0"),
+            motion("M0 0C0 0 3 0 3 0S3 0 3 0"),
+        );
+        let far = ClipPath::from_motion(&a.lerp(&b, 2e38)).unwrap();
+        assert!(
+            (far.commands().iter()).all(|(_, v)| v.iter().all(|n| n.is_finite())),
+            "{:?}",
+            far.commands()
+        );
+    }
+
     #[test]
     fn curves_round_trip_and_invalid_paths_are_refused() {
         // Quadratics (and arcs) arrive as cubics: presenters draw four verbs.
+        // The text keeps the authored commands, absolute (LLP 1003.003 D2).
         let path = ClipPath::parse("path('M0,0 C0,10 5,18 20,18 Q14,15 14,0 Z')").unwrap();
-        assert_eq!(
-            path.css(),
-            "path(\"M 0 0 C 0 10 5 18 20 18 C 16 16 14 10 14 0 Z\")"
-        );
+        let verbs: String = path.commands().iter().map(|(c, _)| *c).collect();
+        assert_eq!(verbs, "MCCZ");
+        assert_eq!(path.commands()[2].1, [16.0, 16.0, 14.0, 10.0, 14.0, 0.0]);
+        assert_eq!(path.css(), "path(\"M0 0C0 10 5 18 20 18Q14 15 14 0Z\")");
         assert_eq!(ClipPath::parse(&path.css()), Some(path));
         assert_eq!(ClipPath::default().css(), "none");
         // SVG path data in full, relative and implicit commands included, and
         // a fill rule before it.
         let full = ClipPath::parse("path(evenodd, 'm10 10 h20 v20 h-20 z M0 0 l5 5')").unwrap();
         assert_eq!(full.rule(), crate::generated::FillRule::Evenodd);
+        assert_eq!(full.css(), "path(evenodd, \"M10 10H30V30H10ZM0 0L5 5\")");
+        let motion = full.motion().unwrap();
+        assert!(motion.even_odd);
+        assert_eq!(motion.path.to_d(), "M10 10H30V30H10ZM0 0L5 5");
+        assert_eq!(ClipPath::from_motion(&motion), Some(full.clone()));
+        assert_eq!(ClipPath::default().motion(), None, "none moves nothing");
         assert_eq!(
-            full.css(),
-            "path(evenodd, \"M 10 10 L 30 10 L 30 30 L 10 30 Z M 0 0 L 5 5\")"
+            ClipPath::parse("inset(10px)").unwrap().motion(),
+            None,
+            "nor does a basic shape"
         );
         assert_eq!(ClipPath::parse(&full.css()), Some(full));
         for data in [

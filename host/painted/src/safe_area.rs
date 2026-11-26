@@ -30,6 +30,7 @@ impl ScrollClaim {
 pub(crate) struct SafeArea {
     reach: HashMap<NodeKey, [f32; 4]>,
     scrollers: HashMap<NodeKey, ScrollClaim>,
+    extension: HashMap<NodeKey, [f32; 4]>,
     /// Moves on with each change, so a still frame, which nothing else of this moves, is no longer still.
     generation: u64,
 }
@@ -59,9 +60,30 @@ impl SafeArea {
         changed
     }
 
-    /// The box `key`'s reach and, for a claimed scroller, its claim.
-    pub(crate) fn of(&self, key: NodeKey) -> ([f32; 4], Option<ScrollClaim>) {
-        (self.reach(key), self.scroll_claim(key))
+    /// The box `key`'s reach, its claim for a claimed scroller, and its colour-only extension.
+    pub(crate) fn of(&self, key: NodeKey) -> ([f32; 4], Option<ScrollClaim>, [f32; 4]) {
+        let extension = self.extension.get(&key).copied().unwrap_or_default();
+        (self.reach(key), self.scroll_claim(key), extension)
+    }
+
+    /// Set or clear (`None`, or 0 on each edge) how far the box `key`'s colour-only extension reaches past its border
+    /// box; whether it changed. As `set_reach`, each call drops those of boxes no longer live.
+    pub(crate) fn set_extension(
+        &mut self,
+        kernel: &Kernel,
+        key: NodeKey,
+        extension: Option<[f32; 4]>,
+    ) -> bool {
+        self.extension
+            .retain(|k, _| kernel.node_by_key(*k).is_some());
+        let extension =
+            extension.filter(|e| *e != [0.0; 4] && e.iter().all(|v| v.is_finite() && *v >= 0.0));
+        let changed = match extension {
+            Some(e) => self.extension.insert(key, e) != Some(e),
+            None => self.extension.remove(&key).is_some(),
+        };
+        self.generation += u64::from(changed);
+        changed
     }
 
     /// The scroller `key`'s claim, while it has one.
@@ -101,7 +123,9 @@ impl SafeArea {
             .filter_map(|id| kernel.node(*id))
             .map(|n| n.key)
         {
-            let dropped = self.reach.remove(&key).is_some() | self.scrollers.remove(&key).is_some();
+            let dropped = self.reach.remove(&key).is_some()
+                | self.scrollers.remove(&key).is_some()
+                | self.extension.remove(&key).is_some();
             self.generation += u64::from(dropped);
         }
     }

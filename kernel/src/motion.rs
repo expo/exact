@@ -132,6 +132,10 @@ pub struct MotionSync {
     /// or booted): a node it already knew that has no filter kept moves from
     /// `none`. `None` for a list that never interpolates.
     pub filters: Vec<(u64, Option<exact_motion::FilterValue>, bool)>,
+    /// Each synced box's `path()` clip (LLP 1003.003 D6): `None` for any
+    /// other clip, for an SVG element (its scene reads the authored clip), and
+    /// for a box that is not rendered, which forgets what moved it.
+    pub clips: Vec<(u64, Option<exact_motion::ClipValue>)>,
 }
 
 impl MotionSync {
@@ -167,6 +171,7 @@ impl MotionSync {
                     f.as_ref().filter(|f| !f.0.is_empty()).map(|_| *node)
                 }),
             )
+            .chain((self.clips.iter()).filter_map(|(node, clip)| clip.as_ref().map(|_| *node)))
             .collect();
         moving.sort_unstable();
         moving
@@ -228,6 +233,9 @@ impl MotionSync {
         }
         for (node, filter, new) in &self.filters {
             engine.observe_filter(*node, filter.clone(), *new);
+        }
+        for (node, clip) in &self.clips {
+            engine.observe_clip(*node, clip.clone());
         }
         for (node, clock) in &self.clocks {
             engine.set_animation_clock(*node, clock.as_deref());
@@ -841,6 +849,27 @@ impl Kernel {
                     };
                     sync.animations.push((motion_node(d.key), row));
                 }
+                if d.style.rare.clip_path.motion().is_some() {
+                    sync.clips.push((motion_node(d.key), self.clip_value(&d)));
+                }
+                stack.extend(d.children());
+            }
+        }
+        // @ref LLP 1003.003 D6 — a subtree detached, attached or moved: each
+        // clip below it is observed as it is rendered now, so one no root
+        // reaches stops, and one attached again takes its clip at once.
+        for key in &receipt.reparented {
+            let Some(node) = self.node_by_key(*key) else {
+                continue;
+            };
+            let mut stack = vec![node.id];
+            while let Some(id) = stack.pop() {
+                let Some(d) = self.node(id) else {
+                    continue;
+                };
+                if d.style.rare.clip_path.motion().is_some() {
+                    sync.clips.push((motion_node(d.key), self.clip_value(&d)));
+                }
                 stack.extend(d.children());
             }
         }
@@ -937,6 +966,29 @@ impl Kernel {
         row
     }
 
+    /// A box's clip as a transition moves it (LLP 1003.003 D6): its `path()`
+    /// while it is rendered, `None` otherwise and for an SVG element, whose
+    /// scene reads its authored clip (D1). Rendered: no `display: none` on
+    /// it or an ancestor, and a root above it (CSS Transitions 2 §3).
+    fn clip_value(&self, node: &crate::kernel::NodeRef<'_>) -> Option<exact_motion::ClipValue> {
+        if node.node_type.is_svg_element() || node.node_type == NodeType::Svg {
+            return None;
+        }
+        let clip = node.style.rare.clip_path.motion()?;
+        let arena = self.arena();
+        let mut slot = node.key.index;
+        loop {
+            if arena.style(slot).display == Display::None {
+                return None;
+            }
+            match arena.parent(slot) {
+                Some(parent) => slot = parent,
+                None => break,
+            }
+        }
+        arena.is_root(slot).then_some(clip)
+    }
+
     /// Whether the node or an ancestor is `display: none`: CSS runs no
     /// animation there (CSS Animations 1 §3).
     fn hidden(&self, node: &crate::kernel::NodeRef<'_>) -> bool {
@@ -1003,6 +1055,7 @@ impl Kernel {
             // with no row. The engine keeps nothing for a settled `none`.
             let filter = filter_value(&node.style.filter);
             sync.filters.push((id, filter, new));
+            sync.clips.push((id, self.clip_value(&node)));
             if node.node_type.is_svg_shape() {
                 let targets = self.svg_targets(*key);
                 // A geometry row that is not a length now (a percentage)

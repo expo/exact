@@ -4,6 +4,8 @@ use crate::content_region::ContentRegionRegistration;
 use exact_runner::Value;
 use std::time::Instant;
 
+#[path = "clip_motion_tests.rs"]
+mod clip_motion;
 #[path = "fail_backend.rs"]
 mod fail_backend;
 #[path = "inline_opacity_tests.rs"]

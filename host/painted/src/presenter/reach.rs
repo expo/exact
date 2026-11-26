@@ -19,6 +19,21 @@ impl<D: DataSource> Presenter<D> {
         changed
     }
 
+    /// Set or clear (`None`) how far the box `view`'s colour-only extension paints its background colour past its
+    /// laid-out border box, top right bottom left in points (D13): a strip around what the box paints, which takes no
+    /// hits and leaves its picture, its children and its geometry as they were. Whether it changed; a change is
+    /// painted in full.
+    pub fn set_box_extension(&mut self, view: ViewId, extension: Option<[f32; 4]>) -> bool {
+        let Some(key) = self.host.kernel().node(view).map(|n| n.key) else {
+            return false;
+        };
+        let mut area = std::mem::take(&mut self.host.safe_area);
+        let changed = area.set_extension(self.host.kernel(), key, extension);
+        self.host.safe_area = area;
+        self.dirty |= changed;
+        changed
+    }
+
     /// Set or release (`None`) the scroller `view`'s claim, its reach and its content insets (D13, D14), each top right
     /// bottom left in points: its scrollport and the frame that takes its hits reach, its decoration keeps its box, its
     /// range is its content and insets past the reached scrollport, and its content is painted at the displacement

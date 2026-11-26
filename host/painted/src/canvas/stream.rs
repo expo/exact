@@ -729,6 +729,7 @@ mod tests {
             scaled_presented: &Default::default(),
             paths: &|_| None,
             filters: &|_| None,
+            clips: &|_| None,
             scroll: &Default::default(),
             page: (0., 0.),
             images: &Default::default(),
