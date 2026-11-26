@@ -201,15 +201,18 @@ impl Took {
                 )
             });
         }
+        // One thread runs for no longer than the wall clock moved: a thread CPU clock that reads more (one that
+        // counts other threads' time, as a translating simulator's can) is held to the wall.
+        let own_ms = self.own_ms.min(self.wall_ms);
         // (a zero budget refuses any turn in its own words: a coarse CPU clock can read 0)
-        if self.own_ms > budget_ms || (budget_ms <= 0.0 && self.wall_ms > 0.0) {
+        if own_ms > budget_ms || (budget_ms <= 0.0 && self.wall_ms > 0.0) {
             let clock = if self.cpu {
                 format!(
                     "{:.1} ms of its own (CPU) time ({:.1} ms of wall)",
-                    self.own_ms, self.wall_ms
+                    own_ms, self.wall_ms
                 )
             } else {
-                format!("{:.1} ms", self.own_ms)
+                format!("{:.1} ms", own_ms)
             };
             return Some(format!(
                 "took {clock}, over the {budget_ms} ms budget for one turn"
@@ -308,6 +311,13 @@ mod tests {
             .over(0.0, false)
             .unwrap()
             .contains("over the 0 ms budget for one turn"));
+        // A thread CPU clock that reads past the wall is held to the wall: 3357 ms of "CPU" in 87 ms of wall is
+        // 87 ms, within 100 ms; past the budget on the wall it is refused at the wall's time.
+        assert!(took(3357.0, 87.0).over(100.0, false).is_none());
+        assert!(took(3357.0, 140.0)
+            .over(100.0, false)
+            .unwrap()
+            .contains("140.0 ms of its own (CPU) time (140.0 ms of wall)"));
         // An unlimited budget never refuses.
         assert!(took(1e6, 1e7).over(f64::INFINITY, false).is_none());
     }
