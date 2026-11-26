@@ -21,17 +21,19 @@ export function lightDomDragPath(event) {
       // A slot can also wrap that slot as fallback content, so prefer the entry reached by a jump.
       const entry = elements.findLastIndex((el, i) => isSlot(el) && elements[i - 1]?.parentNode !== el);
       const slot = entry < 0 ? elements.findLastIndex(isSlot) : entry;
-      // A listener that moved the fallback content within this tree makes its slot look like a jump, so the first
-      // element still in this tree bounds the detour too
-      const inside = elements.findIndex((el) => el.getRootNode?.() === node);
-      const cut = Math.min(...[slot, inside].filter((at) => at >= 0));
-      if (cut < elements.length) elements.length = cut;
+      if (slot >= 0) elements.length = slot;
     }
   }
   return elements;
 }
 /** What `down` went down on, when `event` is at its point and `target`, where the browser began the drag, holds it. */
 export const pressedAt = (down, event, target) => atPoint(down, event) && target.contains(down.target) ? down.target : null;
+
+/** The light-DOM elements a drag that began at `target` passed through: as the press it began from recorded them,
+ * when it went down on `target` itself, else as the drag's own dispatch path has them. */
+export function dragPathFrom(down, event, target) {
+  return down?.path?.length && pressedAt(down, event, target) === target ? down.path : lightDomDragPath(event);
+}
 
 /** The most recent press still held where a drag at `target` began. */
 const heldAt = (input, event, target = elementOf(event.target)) =>
@@ -97,8 +99,10 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
       if (press || mouse) return;
     }
     const type = event.type === 'mousedown' ? 'mouse' : event.pointerType || 'mouse';
+    // Its light path is taken now, before a `dragstart` listener can move what it passes through: `composedPath()`
+    // keeps its order when a node moves, but not the parents it was ordered by
     const press = { type, down: event, target, x: event.clientX, y: event.clientY, mouse: type === 'mouse',
-      field: target.closest(DRAG_FIELDS), sawMouseDown: event.type === 'mousedown' };
+      field: target.closest(DRAG_FIELDS), sawMouseDown: event.type === 'mousedown', path: lightDomDragPath(event) };
     // Keep the most recent down last, including when a new press replaces the same pointer type.
     held.delete(type);
     held.set(type, press);

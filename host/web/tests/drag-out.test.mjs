@@ -87,7 +87,7 @@ ${rules}
 </script>`;
 
 const waitingDragFixture = `
-  import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
+  import { downForDrag, dragPathFrom, elementOf, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
   const host = {}, views = new Map(), retiredViews = new WeakSet();
   const loadAfterPaint = () => new Promise(() => {});
   ${glueDeclarations(wasmSource, ['liveView', 'dragOutWait', 'waitingInput', 'waitingView',
@@ -297,13 +297,23 @@ need('chromium', chromium().unavailable).each([
   ['the card’s fallback wrapper moves out of its slot within the card’s shadow root', { move: 'fallback', to: 'root' }],
   ['the card’s fallback wrapper moves out of its slot within the card’s shadow root while the wasm listener loads',
     { move: 'fallback', to: 'root', waiting: true }],
-])('chromium: capture checks the image drag owner after %s', async (_, { move, to, waiting }) => {
+  ['the card’s fallback wrapper moves into the same document’s body while the wasm listener loads',
+    { move: 'fallback', to: 'body', waiting: true }],
+  ['the card’s fallback wrapper moves into a frame', { move: 'fallback' }],
+  ['the card’s fallback wrapper moves into a frame while the wasm listener loads', { move: 'fallback', waiting: true }],
+  ['the image of a card with a fallback wrapper moves into a frame', { move: 'image', fallback: true }],
+  ['the image of a card with a fallback wrapper moves into a frame while the wasm listener loads',
+    { move: 'image', fallback: true, waiting: true }],
+  ['a script-owned wrapper moves into the card’s shadow root', { move: 'wrapper', to: 'root' }],
+  ['a script-owned wrapper moves into the card’s shadow root while the wasm listener loads',
+    { move: 'wrapper', to: 'root', waiting: true }],
+])('chromium: capture checks the image drag owner after %s', async (_, { move, to, waiting, fallback }) => {
   const browser = await suiteBrowser('chromium');
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     await page.goto(`http://127.0.0.1:${server.port}/${waiting ? '?waiting' : ''}`);
     await page.waitForFunction('window.ready');
-    const draggable = await page.evaluate(async ({ move, to, waiting }) => {
+    const draggable = await page.evaluate(async ({ move, to, waiting, fallback }) => {
       const card = document.getElementById('card2'), image = document.getElementById('picture');
       card.replaceChildren(image);
       if (waiting) {
@@ -311,6 +321,14 @@ need('chromium', chromium().unavailable).each([
         waitForDrag(card);
       }
       let wrapper = null;
+      if (fallback) {
+        // `<slot name="unused"><div draggable="true"><slot></slot></div></slot>`, the image assigned to the inner slot
+        const unused = Object.assign(document.createElement('slot'), { name: 'unused' }), inner = document.createElement('div');
+        inner.draggable = true;
+        inner.append(document.createElement('slot'));
+        unused.append(inner);
+        card.attachShadow({ mode: 'open' }).append(unused);
+      }
       if (move !== 'image') {
         wrapper = document.createElement('div');
         wrapper.draggable = true;
@@ -326,6 +344,7 @@ need('chromium', chromium().unavailable).each([
         } else {
           wrapper.append(image);
           card.append(wrapper);
+          if (to === 'root') card.attachShadow({ mode: 'open' }).append(document.createElement('slot'));
         }
       }
       let destination = document.body;
@@ -352,10 +371,10 @@ need('chromium', chromium().unavailable).each([
         event.stopPropagation();
       });
       return card.draggable;
-    }, { move, to, waiting });
+    }, { move, to, waiting, fallback });
     expect(draggable).toBe(!waiting);
     await drag(page, '#picture', [0, 20]);
-    // A card still in the document and draggable drags as itself, its text on the drag
+    // A card whose image stays in it drags as itself once the listener listens
     const own = move === 'fallback' && !waiting;
     expect(await page.evaluate(() => window.imageDrag)).toEqual({
       imageTarget: true, wrapperOnPath: true, moved: true, connected: true,

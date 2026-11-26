@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // State looks in a real browser (LLP 1121 D8, stage 8 B): a `:hover` look as the
 // host writes it into the page's looks sheet (src/host/looks.rs), over a node's
 // inline base, at once; `:active` lowered to the press paint (LLP 1061 D7), whose
@@ -64,7 +64,9 @@ beforeAll(async () => {
   if (unavailable) return;
   server = createServer((req, res) => {
     if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url.slice(1)))); // each module the glue imports by its own name
+    const module = hostFixtureModule(req.url.slice(1));
+    if (module === null) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(module);
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
 });

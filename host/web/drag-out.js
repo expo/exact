@@ -6,7 +6,7 @@
 // receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
 // `drag.js`; the wasm target's glue loads it when a node first turns draggable.
 
-import { DRAG_FIELDS, downForDrag, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
+import { DRAG_FIELDS, downForDrag, dragPathFrom, observeDragInput, pressedAt } from './drag-input.js';
 
 /** Whether `el` is a drag's source by its own `draggable`, HTML's enumerated attribute, read in any case. Firefox ignores
  * it on an SVG element and begins the drag of the draggable node around it; Chromium and WebKit begin the drag at the
@@ -80,9 +80,9 @@ function decide(event, owns, down, inPage) {
   if (!target || (target.matches('[draggable="true" i]') && !declared(target))) return;
   const draggable = (el) => (off.has(el) && declared(el)) || explicit(el);
   const image = target.localName === 'img', keepers = down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS;
-  // An earlier capture listener can take the image out of the page. Its dispatch path still names its card.
+  // An earlier capture listener can take the image out of the page. The path its press recorded still names its card.
   if (image && inPage && !inPage(target)) {
-    const ancestors = lightDomDragPath(event);
+    const ancestors = dragPathFrom(down, event, target);
     if (ancestors.length) {
       const node = ancestors.find(draggable);
       if (!node || !declared(node) || !owns(node)) return;
