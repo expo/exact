@@ -33,8 +33,7 @@ public enum ExactEnv {
         for key in dropped { environment[key] = nil; unset(key) }
         return environment
     }
-    /// Whether this binary was baked with `EXACT_UPDATE_TRUST=production`
-    /// (`BakedCompatibility.production`).
+    /// Whether this binary was baked with `EXACT_UPDATE_TRUST=production` (`BakedCompatibility.production`).
     static package let productionBake = BakedCompatibility.production(BakedCompatibility.json)
     public static let agentMode = environment["EXACT_AGENT"] == "1"
     /// `EXACT_AGENT=live` (the driver's `--live`): an ordinary launch on the
@@ -51,8 +50,7 @@ public enum ExactEnv {
     /// socket, for observing a gesture's native motion. The default freezes
     /// them, which the smoke depends on.
     public static let agentTiming = environment["EXACT_AGENT_TIMING"] ?? "agent"
-    /// Whether the agent's world is settled between calls: native animation
-    /// applies at once. False under `platform` timing.
+    /// Whether the agent's world is settled between calls: native animation applies at once. False under `platform` timing.
     public static let agentFreezes = agentMode && agentTiming != "platform"
     static let postsLiveWork = !agentFreezes && environment["EXACT_FILL_SYNC"] != "1"
     public static let smoke = environment["EXACT_SMOKE"] == "1"
@@ -524,8 +522,7 @@ public final class ExactSession {
     var canvasOwed = false
     private var canvasAsked = false
     var landing = false // also the reveal's order barrier (`finishStage`)
-    /// A large batch being prepared (`StagedApply.swift`), and the batches
-    /// that wait their turn in the runtime's order (`order`).
+    /// A large batch being prepared (`StagedApply.swift`), and the batches that wait their turn in the runtime's order (`order`).
     var stage: StagePlan?, pending: [PendingBatch] = []
     /// The newest batch applied, and the number of the newest with a commit, whose state a batch applied after it leaves
     /// (`followRunner`); and whether a batch is applying its own ops, so one made meanwhile (a callback's) waits for them (`order`).
@@ -1466,6 +1463,9 @@ public final class ExactSession {
         guard state != .destroyed else { return }
         runtime.completions.close()
         state = .destroyed
+        #if os(iOS) || os(tvOS)
+        view?.sessionEnded()
+        #endif
         natives.endViewBindings()
         agentPasteboard.map(AgentPasteboard.remove)
         let waiting = afterFill; afterFill.removeAll(); outside.removeAll()

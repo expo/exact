@@ -97,6 +97,34 @@ final class AspectFitIOSTests: XCTestCase {
         until("the new runner's root is laid out in the guide") { fitted() }
     }
 
+    func testTheSessionsEndGivesTheWindowItsRatioBack() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the guide is a window's") }
+        let (session, _, window) = try fixture(scene, standalone: true)
+        until("claimed") { abs(window.safeAreaAspectFitLayoutGuide.aspectRatio - 16.0 / 9.0) < 0.001 }
+        session.destroy()
+        XCTAssertEqual(window.safeAreaAspectFitLayoutGuide.aspectRatio, windowRatio, "the window's own ratio, the view still mounted")
+    }
+
+    func testASecondClaimInTheWindowIsRefused() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the guide is a window's") }
+        let (_, _, window) = try fixture(scene, standalone: true)
+        until("the first root claims the guide") { abs(window.safeAreaAspectFitLayoutGuide.aspectRatio - 16.0 / 9.0) < 0.001 }
+        // A second standalone session over the same window, whose root then asks for another ratio
+        let other = ExactApp.shared.makeSession(label: "aspect-fit-second")
+        sessions.append(other)
+        let view = ExactView(session: other)
+        view.standaloneWindow = true
+        view.frame = window.bounds
+        try XCTUnwrap(window.rootViewController?.view).addSubview(view)
+        XCTAssertNil(other.boot(plan: try plan(), size: window.bounds.size).error)
+        view.layoutIfNeeded()
+        until("the second booted") { (try? self.node(other, "root")) != nil }
+        other.presenter.press(try node(other, "wide").id)
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(window.safeAreaAspectFitLayoutGuide.aspectRatio, 16.0 / 9.0, accuracy: 0.001, "the first claim's ratio")
+        XCTAssertEqual(try node(other, "root").frame.height, window.bounds.height, accuracy: 0.5, "the second root keeps the whole view")
+    }
+
     func testAnEmbeddedSessionClaimsNoGuide() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "the guide is a window's") }
         let (session, _, window) = try fixture(scene, standalone: false)

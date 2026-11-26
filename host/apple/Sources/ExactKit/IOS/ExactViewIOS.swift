@@ -226,6 +226,13 @@ public final class ExactView: UIView {
     public override func tintColorDidChange() { super.tintColorDidChange(); fitAheadOfLayout(); session.reportColors() }
 
     required init?(coder: NSCoder) { nil }
+
+    /// The session ended: its claim on the window's guide ends with it (LLP 1123 D16), its view or not still mounted.
+    func sessionEnded() {
+        aspectFit.release()
+        lastAspectFit = nil
+    }
+
     deinit {
         (editingObservers + sceneObservers).forEach(NotificationCenter.default.removeObserver)
     }
@@ -696,6 +703,7 @@ public final class ExactView: UIView {
         if segments != lastFold, (segments.posture, segments.cols, segments.rows) == (lastFold.posture, lastFold.cols, lastFold.rows) {
             keyed = segments; lastFold = segments
         }
+        // The first root is the runner's for its life (Contract admits the fit on no branch's root), and a new runner is told it again (`rebooted`)
         let fit = aspectFit.rectangle(for: self)
         if fit != lastAspectFit {
             lastAspectFit = fit

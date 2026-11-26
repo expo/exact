@@ -1,12 +1,15 @@
 // The window's aspect-fit guide (LLP 1123 D16, `-exact-safe-area-aspect-fit`): the first root of a
 // standalone session whose view spans its window claims the guide at the root's ratio, and the
 // kernel lays the root out in the guide's rectangle. Exact saves the ratio the guide had and gives it
-// back as the claim ends, unless something else wrote the guide since. A hidden view constrained to
-// the guide keeps UIKit laying it out.
+// back as the claim ends, unless something else wrote the guide since. A window has one claim: a
+// second is refused before it writes anything. A hidden view constrained to the guide keeps UIKit
+// laying it out.
 #if os(iOS) || os(tvOS)
 import UIKit
 
 final class AspectFitIOS {
+    /// The claim each window holds.
+    private static let claims = NSMapTable<UIWindow, AspectFitIOS>.weakToWeakObjects()
     private weak var window: UIWindow?
     /// The ratio the guide had before the claim, the one Exact asked for, and UIKit's reading of it.
     private var saved: CGFloat = 1, asked: CGFloat?, written: CGFloat?
@@ -24,6 +27,10 @@ final class AspectFitIOS {
         }
         if self.window !== window {
             release()
+            if let other = Self.claims.object(forKey: window), other !== self {
+                view.session.log("aspect fit: the window's guide is already claimed by another session's first root, so this one keeps the whole view")
+                return nil
+            }
             claim(window)
         }
         let guide = window.safeAreaAspectFitLayoutGuide
@@ -45,12 +52,14 @@ final class AspectFitIOS {
         guard let window else { return }
         let guide = window.safeAreaAspectFitLayoutGuide
         if let written, guide.aspectRatio == written { guide.aspectRatio = saved }
+        if Self.claims.object(forKey: window) === self { Self.claims.removeObject(forKey: window) }
         proxy?.removeFromSuperview()
         (proxy, asked, written, self.window) = (nil, nil, nil, nil)
     }
 
     private func claim(_ window: UIWindow) {
         self.window = window
+        Self.claims.setObject(self, forKey: window)
         let guide = window.safeAreaAspectFitLayoutGuide
         saved = guide.aspectRatio
         let proxy = UIView()
