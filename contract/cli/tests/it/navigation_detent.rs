@@ -228,8 +228,8 @@ fn the_sheet_choices_take_their_words() {
         ),
         (
             "navigationSizing",
-            &["page", "form"],
-            &["automatic", "fitted", "full", ""],
+            &["page", "form", "automatic"],
+            &["fitted", "full", ""],
         ),
     ] {
         for value in good {

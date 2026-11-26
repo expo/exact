@@ -477,6 +477,16 @@ shows as UIKit's centred `.formSheet`; a host whose sheets have one size
 ignores it. T3 Code's Add environment sheet is the consumer, and Nathan
 Schroeder implements it. Take: none offered; waived by Charlie. Still out:
 D7's `automatic` and `fitted`, which stay in stage 6.
+**Expanded (James, 2026-11-25: "you can grant a waiver when we are certain
+about the API after rigorous review. we want to be aligned with each host
+platform"):** `navigationSizing` also takes `automatic`, UIKit's own
+`.automatic`, which resolves a form sheet on iOS 18 and later and a page sheet
+before; tvOS presents the route over the full screen as every modal route,
+and a host whose sheets have one size ignores it. The review: the iOS 27.1
+SDK's `modalPresentationStyle`, a hosted XCTest on the iPhone 18 Pro, an iPad
+and the iPhone Duo, and Codex Sol and Astra's rulings (LLP 1123, "D7's
+automatic sizing"). Take: none offered. Still out: D7's `fitted`, which waits
+on D7's fitted transaction at activation.
 **Expanded (James, 2026-11-21: "We ideally can support any view and any role
 each host platform supports to be uncompromising in UX and aligned with the
 host platforms"), then narrowed (James, 2026-11-22: "on iOS we need to have

@@ -425,9 +425,9 @@ final class ModalDetentIOSTests: XCTestCase {
         XCTAssertFalse(controller.prefersEdgeAttachedInCompactHeight, "UIKit's default once it stops")
         XCTAssertFalse(controller.widthFollowsPreferredContentSizeWhenEdgeAttached)
         XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge)
-        // UIKit reads a style back as it resolves it for the device (on an iPhone a form sheet reads as a page
-        // sheet), so the sheet is made as a controller given the same style is
-        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("page", .pageSheet), (nil, .pageSheet)] {
+        // UIKit reads a style back as it resolves it (`automatic` as a form sheet on iOS 18 and later, a page sheet
+        // before), so the sheet is made as a plain controller given the same style is
+        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .pageSheet)] {
             XCTAssertEqual(ModalController.sheetStyle(sizing), style, sizing ?? "unsaid")
             route.props["navigationSizing"] = sizing
             let made = ModalController(host: session.presenter.modalHost, route: route, kind: "modal", detent: nil, grabber: nil)
@@ -435,6 +435,9 @@ final class ModalDetentIOSTests: XCTestCase {
             plain.modalPresentationStyle = style
             XCTAssertEqual(made.modalPresentationStyle, plain.modalPresentationStyle, sizing ?? "unsaid")
             XCTAssertNotNil(made.sheetPresentationController, "\(sizing ?? "unsaid"): a sheet to configure")
+            // Each sizing's sheet takes its route's detents, as any sheet does
+            made.updateSheet(detent: "medium large", cornerRadius: nil, grabber: nil)
+            XCTAssertEqual(made.sheetPresentationController?.detents.count, 2, "\(sizing ?? "unsaid"): its detents")
         }
     }
 

@@ -33,7 +33,7 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         self.route = route
         super.init(nibName: nil, bundle: nil)
         #if os(tvOS)
-        // tvOS has no sheets or popovers; every modal covers the screen.
+        // tvOS presents a modal route over the full screen (LLP 1123 §"Host matrix"): it has no page sheet, popover or sheet controller
         modalPresentationStyle = .overFullScreen
         #else
         switch kind {
@@ -47,13 +47,15 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         #endif
     }
     /// A sheet route's presentation, its `navigationSizing` as it is presented (LLP 1123 D7): a page sheet unsaid, as
-    /// the LLP keeps it, and `form` UIKit's form sheet.
+    /// the LLP keeps it, `form` UIKit's form sheet and `automatic` UIKit's own choice, which resolves a form sheet
+    /// on iOS 18 and later and a page sheet before. tvOS presents a route over the full screen (§"Host matrix").
     static func sheetStyle(_ sizing: String?) -> UIModalPresentationStyle {
         #if os(tvOS)
         .overFullScreen
         #else
         switch sizing {
         case "form": .formSheet
+        case "automatic": .automatic
         default: .pageSheet
         }
         #endif

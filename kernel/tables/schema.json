@@ -2098,7 +2098,7 @@
       "id": 326,
       "name": "navigationSizing",
       "kind": "str",
-      "_comment": "@ref LLP 1123 D7: `page` (the default) or `form`: a sheet route's presentation, read as the sheet is presented. `page` is UIKit's page sheet, `form` its form sheet (a centred sheet of a standard size in a regular-width window); `automatic` and `fitted` stay out (rules/DEFERRED.md). UIKit's `modalPresentationStyle`, SwiftUI's `presentationSizing`."
+      "_comment": "@ref LLP 1123 D7: `page` (the default), `form` or `automatic`: a sheet route's presentation, read as the sheet is presented. `page` is UIKit's page sheet, `form` its form sheet (a centred sheet of a standard size in a regular-width window), `automatic` UIKit's own choice, a form sheet on iOS 18 and later and a page sheet before; `fitted` stays out (rules/DEFERRED.md). UIKit's `modalPresentationStyle`, SwiftUI's `presentationSizing`."
     },
     {
       "id": 327,
