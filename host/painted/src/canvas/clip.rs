@@ -143,7 +143,7 @@ impl Recorder {
                 && ts == Transform::identity()
                 && self.direct.isolation == 0
                 && self.row.is_none()
-                && self.group.is_none()
+                && self.groups.is_empty()
                 && self.layers.unlayered()
                 && self.slot.is_none()
                 && self.again.is_none()
@@ -323,24 +323,29 @@ impl Recorder {
         }
     }
 
-    /// The reader can move a retained layer past a clip around it. Only clips
-    /// recorded inside the layer can permanently hide its content.
-    fn recording_clips(&self) -> impl Iterator<Item = &Clip> {
-        self.clips.iter().skip(self.layers.clips_outside())
+    /// How many clips lie outside the innermost retained layer or scroll group:
+    /// the reader can move either past those clips, so only clips inside the
+    /// current rigid frame can permanently hide a drawing.
+    fn clips_outside(&self) -> usize {
+        self.layers
+            .clips_outside()
+            .max(self.groups.last().map_or(0, |&(_, depth)| depth))
     }
 
-    /// Whether the drawing's page bounds lie outside a recorded clip.
+    fn recording_clips(&self) -> impl Iterator<Item = &Clip> {
+        self.clips.iter().skip(self.clips_outside())
+    }
+
+    /// Whether the drawing's page bounds lie outside a clip in its rigid frame.
     pub(super) fn culled(&self, bounds: Option<Rect4>) -> bool {
         let Some(b) = bounds else { return false };
         self.recording_clips()
             .any(|c| c.page.is_some_and(|(r, _)| !overlaps(b, r)))
     }
 
-    /// Whether the clips leave nothing at all (two of them do not meet: a
-    /// scroller moved out of its page's view).
-    pub(super) fn clipped_out(&self) -> bool {
+    fn segment_clipped_out(clips: &[Clip]) -> bool {
         let mut left: Option<Rect4> = None;
-        for (r, _) in self.recording_clips().filter_map(|c| c.page) {
+        for (r, _) in clips.iter().filter_map(|c| c.page) {
             let meet = left.map_or(r, |l| intersect(l, r));
             if meet.2 <= 0.0 || meet.3 <= 0.0 {
                 return true;
@@ -348,6 +353,23 @@ impl Recorder {
             left = Some(meet);
         }
         false
+    }
+
+    /// Whether clips within any rigid frame leave nothing at all (two clips
+    /// that cannot move relative to each other do not meet: e.g. a scroller on
+    /// an offscreen route). Clips separated by a scroll group boundary can move
+    /// into view relative to one another, so each rigid segment is checked on
+    /// its own.
+    pub(super) fn clipped_out(&self) -> bool {
+        let mut from = self.layers.clips_outside();
+        for &(_, depth) in &self.groups {
+            let end = depth.min(self.clips.len());
+            if end > from && Self::segment_clipped_out(&self.clips[from..end]) {
+                return true;
+            }
+            from = from.max(end);
+        }
+        Self::segment_clipped_out(&self.clips[from..])
     }
 
     /// Before drawing within `bounds` (page space; `None` when unknown):

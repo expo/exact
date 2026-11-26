@@ -8,10 +8,12 @@
 //! So an update carries no contributions, its native targets are unavailable, and those fields are absent. The
 //! keyboard is the window's, which only Android's reader tells: its software keyboard's inset, docked at the window's
 //! bottom, in each owner's space, or dismissed; a desktop shell, which tells no window, has no software keyboard and
-//! leaves it unreported.
+//! leaves it unreported. An owner's segments are the document's, which a fold gives Android's window, clipped to the
+//! owner and in its space, as D16 commonly has them: none where it lies on one segment.
 use super::Presenter;
 use crate::navigation::{sheet_of, Presented};
-use exact_kernel::{Keyboard, KeyboardReport, OwnerUpdate, PropId, ViewId, WindowMap};
+use exact_kernel::style::env::SegmentGrid;
+use exact_kernel::{Keyboard, KeyboardReport, OwnerUpdate, PropId, Rect, ViewId, WindowMap};
 use exact_runner::DataSource;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -66,6 +68,7 @@ impl<D: DataSource> Presenter<D> {
                 let update = OwnerUpdate {
                     band: Some(band),
                     keyboard: self.owner_keyboard((ox, oy)),
+                    segments: owner_segments(&env, (x, y, node.frame.width, node.frame.height)),
                     window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, ox, oy])),
                     configuration: Some(self.configuration(barred, sheet.is_some())),
                     ..Default::default()
@@ -83,7 +86,9 @@ impl<D: DataSource> Presenter<D> {
         let Some(window) = self.window() else {
             return KeyboardReport::Unreported;
         };
-        let (width, height, depth) = (window.size.0, window.size.1, window.keyboard[2]);
+        // As its inset animation shows it while one runs, else as the window's inset says
+        let depth = self.window.keyboard_progress.unwrap_or(window.keyboard[2]);
+        let (width, height) = window.size;
         match depth > 0.0 {
             true => KeyboardReport::Shown(Keyboard {
                 frame: [-ox, height - depth - oy, width, depth],
@@ -117,6 +122,48 @@ impl<D: DataSource> Presenter<D> {
         (barred, self.host.bars().tabs.is_some(), sheeted).hash(&mut h);
         h.finish()
     }
+}
+
+/// The document's segments in `env`, in the viewport's points, clipped to an owner that lies at `(x, y)` in the page and
+/// is `w` by `h`, each in the owner's space: the columns and rows it lies across, or `None` where that is one segment
+/// (D16, LLP 1078).
+fn owner_segments(
+    env: &exact_kernel::Env,
+    (x, y, w, h): (f32, f32, f32, f32),
+) -> Option<SegmentGrid> {
+    let (cols, rows) = (usize::from(env.cols), usize::from(env.rows));
+    if env.segments.len() != cols * rows || cols * rows < 2 {
+        return None;
+    }
+    let clip = |s: &Rect| {
+        let (x0, y0) = (s.x.max(x), s.y.max(y));
+        let (x1, y1) = ((s.x + s.width).min(x + w), (s.y + s.height).min(y + h));
+        (x1 > x0 && y1 > y0).then(|| Rect {
+            x: x0 - x,
+            y: y0 - y,
+            width: x1 - x0,
+            height: y1 - y0,
+        })
+    };
+    let at = |c: usize, r: usize| clip(&env.segments[r * cols + c]);
+    let hit_cols: Vec<usize> = (0..cols)
+        .filter(|&c| (0..rows).any(|r| at(c, r).is_some()))
+        .collect();
+    let hit_rows: Vec<usize> = (0..rows)
+        .filter(|&r| (0..cols).any(|c| at(c, r).is_some()))
+        .collect();
+    if hit_cols.len() * hit_rows.len() < 2 {
+        return None;
+    }
+    let rects = hit_rows
+        .iter()
+        .flat_map(|&r| hit_cols.iter().map(move |&c| (c, r)));
+    let rects: Option<Vec<Rect>> = rects.map(|(c, r)| at(c, r)).collect();
+    Some(SegmentGrid {
+        cols: hit_cols.len() as u8,
+        rows: hit_rows.len() as u8,
+        rects: rects?,
+    })
 }
 
 #[cfg(test)]

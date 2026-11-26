@@ -117,7 +117,7 @@ impl Recorder {
             e.key as u32,
             (e.key >> 32) as u32,
             self.shared.order.get(&e.key).copied().unwrap_or(0),
-            self.group.unwrap_or(0),
+            self.groups.last().map_or(0, |&(id, _)| id),
             self.row.as_ref().map_or(0, |r| r.id),
         ];
         header.extend([self.origin.0 * self.scale, self.origin.1 * self.scale].map(f32::to_bits));

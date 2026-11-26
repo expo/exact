@@ -106,11 +106,16 @@ fn guards_in<'a>(guards: &[&'a Expr], bindings: Binds<'_>) -> Vec<&'a Expr> {
         .collect()
 }
 
-type WarningContext<'a> = (bool, Option<&'a str>, Vec<&'a Expr>);
+type WarningContext<'a> = (
+    bool,
+    Option<&'a str>,
+    Vec<&'a Expr>,
+    Vec<(&'a str, Option<&'a Expr>)>,
+);
 
 fn warning_regions<'a>(
     node: Visit<'a>,
-    (in_root, back, guards): &WarningContext<'a>,
+    (in_root, back, guards, view_bindings): &WarningContext<'a>,
 ) -> [Option<WarningContext<'a>>; 2] {
     let (in_root, mut back) = (*in_root, *back);
     if let Some((_, _, attrs)) = node.element() {
@@ -118,15 +123,34 @@ fn warning_regions<'a>(
         if keyed && !in_root {
             back = literal(attrs, "navigationBack").filter(|name| !name.is_empty());
         }
-        let inner = (in_root || keyed, back, guards.clone());
+        let inner = (
+            in_root || keyed,
+            back,
+            guards.clone(),
+            view_bindings.clone(),
+        );
         return [Some(inner), None];
     }
     let [then_bindings, else_bindings] = node.bindings();
     let mut then = guards_in(guards, then_bindings);
     then.extend(node.condition().into_iter().flat_map(ruled_out));
+    let mut then_view = view_bindings.clone();
+    if let Some((subject, var)) = node.option_match() {
+        then_view.push((var, Some(subject)));
+    } else if let Some((_, var, index, ..)) = node.repetition() {
+        then_view.push((var, None));
+        if let Some(idx) = index {
+            then_view.push((idx, None));
+        }
+    }
     [
-        Some((in_root, back, then)),
-        Some((in_root, back, guards_in(guards, else_bindings))),
+        Some((in_root, back, then, then_view)),
+        Some((
+            in_root,
+            back,
+            guards_in(guards, else_bindings),
+            view_bindings.clone(),
+        )),
     ]
 }
 
@@ -146,7 +170,7 @@ pub(crate) fn with_text_styles(
     let controlled = roles::controlled(&checked_view);
     crate::menu_rows::notes(&checked_view, &mut out);
     crate::symbols::tints(&root.view, checked.file, lowered, &mut out);
-    let start = (false, None, Vec::new());
+    let start = (false, None, Vec::new(), Vec::new());
     let visits = checked_view
         .structure()
         .walk_regions_with(start, warning_regions);
@@ -154,7 +178,7 @@ pub(crate) fn with_text_styles(
     let mut seen_buttons = BTreeSet::new();
     let (var_tokens, mut undeclared) =
         (crate::var_tokens::FileTokens::new(checked.file), Vec::new());
-    for (visit, (in_root, back, guards)) in visits {
+    for (visit, (in_root, back, guards, view_bindings)) in visits {
         if let Some((tag, positional, attrs)) = visit.element() {
             // @ref LLP 1123 D5 — an argument's `var()` that only its fallback answers, where a row reads it.
             crate::var_tokens::carried_undeclared(attrs, &var_tokens, &mut undeclared);
@@ -175,7 +199,17 @@ pub(crate) fn with_text_styles(
                     .filter(|w| seen_buttons.insert((w.id, w.span))),
             );
             out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
-            out.extend(roles::alert_font(tag, attrs, &checked.file.styles).filter(|_| fresh));
+            out.extend(
+                roles::alert_font(
+                    tag,
+                    attrs,
+                    &checked.file.styles,
+                    root,
+                    &view_bindings,
+                    &checked.file.fns,
+                )
+                .filter(|_| fresh),
+            );
             out.extend(roles::level_without_heading(tag, attrs, span).filter(|_| fresh));
             out.extend(roles::keys(attrs, visit, span, &controlled).filter(|_| fresh));
             if fresh {

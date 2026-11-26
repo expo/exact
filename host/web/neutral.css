@@ -463,16 +463,16 @@
   :where(#exact-root dialog)::backdrop { background-color: var(--exact-backdrop-color, var(--exact-scrim)); transition: background-color .25s; }
   @starting-style { :where(#exact-root dialog[open])::backdrop { background-color: transparent; } }
   :where(#exact-root dialog:is([data-exiting], [data-exact-dialog-closing]))::backdrop { background-color: transparent; }
-  :where(#exact-root dialog[role="alertdialog"]) { width: min(26rem, calc(100vw - 32px)); padding: 24px; gap: 8px 12px; text-align: start; }
-  :where(#exact-root dialog[role="alertdialog"][aria-label])::before { font-size: 1.125em; }
-  :where(#exact-root dialog[role="alertdialog"] > :not(button, [data-alertpart="message"], [data-alertpart="actions"]), #exact-root dialog[role="alertdialog"] > [data-alertpart="message"] > *) { font-size: 1em; color: var(--exact-secondary-label); }
-  :where(#exact-root dialog[role="alertdialog"] > :is([data-alertpart="message"], [data-alertpart="actions"])) { gap: 8px 12px; }
-  :where(#exact-root dialog[role="alertdialog"] > [data-alertpart="message"]) { padding-inline-end: 8px; }
-  :where(#exact-root dialog[role="alertdialog"] > :not(button):has(+ button)) { margin-bottom: 16px; }
-  :where(#exact-root dialog[role="alertdialog"] > :not([data-alertpart="message"]:empty) ~ [data-alertpart="actions"]) { margin-top: 16px; }
-  #exact-root dialog[role="alertdialog"] > button, #exact-root dialog[role="alertdialog"] > [data-alertpart="actions"] > button { min-width: min-content; }
-  #exact-root dialog[role="alertdialog"] > button[data-button-style="bordered"][data-destructive="true"]:enabled,
-  #exact-root dialog[role="alertdialog"] > [data-alertpart="actions"] > button[data-button-style="bordered"][data-destructive="true"]:enabled { border-color: var(--exact-accent); }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog])) { width: min(26rem, calc(100vw - 32px)); padding: 24px; gap: 8px 12px; text-align: start; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog])[aria-label])::before { font-size: 1.125em; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > :not(button, [data-alertpart="message"], [data-alertpart="actions"]), #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > [data-alertpart="message"] > *) { font-size: 1em; color: var(--exact-secondary-label); }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > :is([data-alertpart="message"], [data-alertpart="actions"])) { gap: 8px 12px; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > [data-alertpart="message"]) { padding-inline-end: 8px; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > :not(button):has(+ button)) { margin-bottom: 16px; }
+  :where(#exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > :not([data-alertpart="message"]:empty) ~ [data-alertpart="actions"]) { margin-top: 16px; }
+  #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > button, #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > [data-alertpart="actions"] > button { min-width: min-content; }
+  #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > button[data-button-style="bordered"][data-destructive="true"]:enabled,
+  #exact-root dialog[role="alertdialog"]:not([data-exact-authored-dialog]) > [data-alertpart="actions"] > button[data-button-style="bordered"][data-destructive="true"]:enabled { border-color: var(--exact-accent); }
 
   /* A popover is a raised surface, and opens at its invoker: under it, from its inline start, and where that does not
      fit, the other way. A menu's rows are rows: the label's ink (red when destructive), a wash under the pointer. A

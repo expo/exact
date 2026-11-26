@@ -115,3 +115,75 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
     expect([engine, await open()]).toEqual([engine, [true, false]]);
   } finally { await browser.close(); }
 }, 30000);
+
+engineTest.chromium('an authored laid-out dialog with runtime role="alertdialog" keeps its own box', async () => {
+  const browser = await suiteBrowser('chromium');
+  try {
+    const tab = await browser.newPage({ viewport: { width: 500, height: 400 } });
+    await tab.setContent(`<style>${withLook(read('../index.html')).match(/<style>([\s\S]*?)<\/style>/)[1]}</style>
+      <div id="exact-root">
+        <dialog id="authored" role="alertdialog" aria-label="Upload failed" style="padding:12px">
+          <div id="grabber" style="width:40px;height:5px;background:gray"></div>
+          <div data-exact-text id="msg">Your video did not upload.</div>
+          <button id="ok" type="button">OK</button>
+        </dialog>
+        <dialog id="real-alert" role="alertdialog" aria-label="Sure?">
+          <div data-exact-text id="alert-msg">Cannot undo.</div>
+          <button id="alert-ok" type="button">OK</button>
+        </dialog>
+      </div>
+      <script type="module">${read('../navigation.js')}
+        window.openModal = (id) => modalCommand(document.getElementById(id), id, 'showModal', () => {});
+        window.ready = true;
+      </script>`);
+    await tab.waitForFunction('window.ready === true');
+    const authored = await tab.evaluate(() => {
+      openModal('authored');
+      const d = document.getElementById('authored');
+      const g = document.getElementById('grabber').getBoundingClientRect();
+      const before = getComputedStyle(d, '::before').content;
+      const marked = d.hasAttribute('data-exact-authored-dialog');
+      d.close();
+      return { marked, width: Math.round(g.width), before, closedMarked: d.hasAttribute('data-exact-authored-dialog') };
+    });
+    expect(authored).toEqual({ marked: true, width: 40, before: 'none', closedMarked: false });
+    const real = await tab.evaluate(() => {
+      openModal('real-alert');
+      const d = document.getElementById('real-alert');
+      const before = getComputedStyle(d, '::before').content;
+      const marked = d.hasAttribute('data-exact-authored-dialog');
+      d.close();
+      return { marked, before };
+    });
+    expect(real.marked).toBe(false);
+    expect(real.before).toContain('Sure?');
+    // Mutating role or children while the dialog stays open updates the authored marker live.
+    const live = await tab.evaluate(async () => {
+      const d = document.getElementById('real-alert');
+      d.setAttribute('role', 'dialog');
+      openModal('real-alert');
+      const startMarked = d.hasAttribute('data-exact-authored-dialog');
+      const extra = document.createElement('div');
+      extra.id = 'extra-box';
+      d.prepend(extra);
+      d.setAttribute('role', 'alertdialog');
+      await Promise.resolve();
+      const afterAdd = {
+        marked: d.hasAttribute('data-exact-authored-dialog'),
+        before: getComputedStyle(d, '::before').content,
+      };
+      extra.remove();
+      await Promise.resolve();
+      const afterRemove = {
+        marked: d.hasAttribute('data-exact-authored-dialog'),
+        before: getComputedStyle(d, '::before').content,
+      };
+      d.close();
+      return { startMarked, afterAdd, afterRemove };
+    });
+    expect(live.startMarked).toBe(false);
+    expect(live.afterAdd).toEqual({ marked: true, before: 'none' });
+    expect(live.afterRemove.marked).toBe(false);
+    expect(live.afterRemove.before).toContain('Sure?');
+  } finally { await browser.close(); }
+}, 30000);

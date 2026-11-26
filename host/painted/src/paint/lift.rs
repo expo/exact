@@ -85,6 +85,7 @@ impl Painter {
         let sections = (split_sections && !wrap).then(|| self.row_sections(walk.scene.kernel));
         let group = group
             && (!self.pixel_grid || self.grid().is_some())
+            && self.backend.can_group()
             && self.group_can_move(walk.scene.kernel, node.id);
         if group {
             self.group_begin(walk, node.id);
@@ -143,6 +144,62 @@ impl Painter {
             self.node(walk, bar, ts, offset, Some(clip));
         }
         self.backend.pop_clip();
+    }
+
+    /// Whether `id` is, or contains, a visible vertical scroller that can open
+    /// its own row group (so an enclosing scroller walks `id` directly instead
+    /// of baking the inner scroller into an outer row recording).
+    pub(super) fn holds_nested_group(&mut self, kernel: &Kernel, id: ViewId) -> bool {
+        let frame = self.rows.frame;
+        if let Some((_, set)) = self
+            .rows
+            .scroller_ancestors
+            .as_ref()
+            .filter(|(f, _)| *f == frame)
+        {
+            return set.contains(&id);
+        }
+        let mut ancestors = exact_kernel::id::IdSet::default();
+        let arena = kernel.arena();
+        for slot in arena.iter_live() {
+            let sid = arena.local_id(slot);
+            let Some(n) = kernel.node(sid) else {
+                continue;
+            };
+            let (_, oy) = super::effective_overflow(&n);
+            let eligible = n.node_type.can_hold_children()
+                && n.node_type.lays_out_children()
+                && !n.children().is_empty()
+                && matches!(
+                    oy,
+                    exact_kernel::Overflow::Scroll | exact_kernel::Overflow::Auto
+                )
+                && super::zoom::range(&n).is_none()
+                && self.group_can_move(kernel, sid);
+            if !eligible {
+                continue;
+            }
+            let mut chain = Vec::new();
+            let mut cur = Some(sid);
+            while let Some(v) = cur {
+                let Some(cn) = kernel.node(v) else {
+                    break;
+                };
+                if cn.style.display == exact_kernel::Display::None {
+                    chain.clear();
+                    break;
+                }
+                chain.push(v);
+                if ancestors.contains(&v) {
+                    break;
+                }
+                cur = cn.parent;
+            }
+            ancestors.extend(chain);
+        }
+        let hit = ancestors.contains(&id);
+        self.rows.scroller_ancestors = Some((frame, std::rc::Rc::new(ancestors)));
+        hit
     }
 
     /// The row a list carries within itself, painted after its siblings.

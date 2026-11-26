@@ -909,3 +909,133 @@ fn a_menu_order_is_one_of_three_words_on_its_trigger() {
     ));
     assert!(message.contains("menuOrder"), "{message}");
 }
+
+#[test]
+fn computed_alertdialog_role_checks_shape_and_preserves_non_alert_dialog() {
+    // Exact #1876 repro: dynamic conditional role reaching "alertdialog" on a laid-out dialog.
+    let (id, message) = refused(
+        "dialog id=\"sheet\" role=(busy ? \"alertdialog\" : \"dialog\") aria-label=\"Upload failed\"\n  view width=40 height=5\n  text \"Your video didn't upload.\"\n  button commandfor=\"sheet\" command=\"close\"\n    text \"OK\"",
+    );
+    assert_eq!(id, "lower-alertdialog", "{message}");
+    assert!(message.contains("a `view` row"), "{message}");
+
+    // Component prop forwarding: alert=true refuses laid-out dialog; alert=false compiles cleanly.
+    let component_base = r#"component App
+  view
+    column
+      Sheet(alert=ALERT)
+component Sheet
+  props
+    alert: bool
+  view
+    dialog id="sheet" role=(alert ? "alertdialog" : "dialog") aria-label="Upload failed"
+      view width=40 height=5
+      text "Body"
+      button commandfor="sheet" command="close"
+        text "OK"
+"#;
+    let err = contract::compile(&component_base.replace("ALERT", "true")).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "{err}");
+    assert!(
+        contract::compile(&component_base.replace("ALERT", "false")).is_ok(),
+        "alert=false folds away alertdialog"
+    );
+
+    // Derive, fn, state assignment, match, and template reaching "alertdialog" are all refused.
+    for (label, src) in [
+        (
+            "derive",
+            "component App\n  state a = false\n  derive r = a ? \"alertdialog\" : \"dialog\"\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "fn",
+            "fn pickRole(a: bool): string = a ? \"alertdialog\" : \"dialog\"\ncomponent App\n  state a = false\n  view\n    dialog id=\"d\" role=pickRole(a)\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "state-assign",
+            "component App\n  state r = \"dialog\"\n  action escalate\n    r = \"alertdialog\"\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "match",
+            "component App\n  state err: option<string> = none\n  view\n    dialog id=\"d\" role=(match err { case some(m) => \"alertdialog\", case none => \"dialog\" })\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "template",
+            "component App\n  state prefix = \"alert\"\n  view\n    dialog id=\"d\" role=`${prefix}dialog`\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+    ] {
+        let err = contract::compile(src).unwrap_err();
+        assert_eq!(err.id, "lower-alertdialog", "{label}: {err}");
+    }
+
+    // Valid alert confirmation with dynamic role compiles and does not imply closedby,
+    // while an inlined prop that folds to Always implies closedby="closerequest".
+    let r = boot(&app(
+        "dialog id=\"c\" testId=\"c\" role=(busy ? \"alertdialog\" : \"dialog\") aria-label=\"Sure?\"\n  text \"Cannot undo.\"\n  button press=go commandfor=\"c\" command=\"close\"\n    text \"Delete\"\n  button commandfor=\"c\" command=\"close\"\n    text \"Cancel\"",
+    ));
+    assert_eq!(node(&r, "c").props.str(PropId::Closedby), None);
+
+    let always_confirm = r#"component App
+  view
+    column
+      Ask(alert=true)
+component Ask
+  props
+    alert: bool
+  action go
+    showModal("c")
+  view
+    dialog id="c" testId="c" role=(alert ? "alertdialog" : "dialog") aria-label="Sure?"
+      text "Cannot undo."
+      button commandfor="c" command="close"
+        text "OK"
+"#;
+    let r = boot(always_confirm);
+    assert_eq!(
+        node(&r, "c").props.str(PropId::Closedby),
+        Some("closerequest")
+    );
+
+    // Non-alert templates, unreachable state assigns, view match/for shadowing,
+    // nested fn calls, and aliased `some(...)` matches are resolved precisely.
+    for (label, src) in [
+        (
+            "non-alert-template",
+            "component App\n  state busy = false\n  view\n    dialog id=\"d\" role=`${busy ? \"dia\" : \"dia\"}log`\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "dead-state-assign",
+            "component App\n  state r = \"dialog\"\n  action dead\n    if false\n      r = \"alertdialog\"\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "view-match-false",
+            "component App\n  view\n    column\n      match some(false)\n        case some(alert)\n          dialog id=\"d\" role=(alert ? \"alertdialog\" : \"dialog\")\n            view\n            button commandfor=\"d\" command=\"close\"\n              text \"OK\"\n        case none\n          view\n",
+        ),
+        (
+            "view-for-shadow",
+            "component App\n  derive r = \"alertdialog\"\n  view\n    column\n      for r in [\"dialog\"] key=r\n        dialog id=\"d\" role=r\n          view\n          button commandfor=\"d\" command=\"close\"\n            text \"OK\"\n",
+        ),
+    ] {
+        if let Err(err) = contract::compile(src) {
+            panic!("{label} should compile: {err}");
+        }
+    }
+
+    for (label, src) in [
+        (
+            "view-match-alert",
+            "component App\n  view\n    column\n      match some(\"alertdialog\")\n        case some(r)\n          dialog id=\"d\" role=r\n            view\n            button commandfor=\"d\" command=\"close\"\n              text \"OK\"\n        case none\n          view\n",
+        ),
+        (
+            "nested-fn-call",
+            "fn id(x: string): string = x\ncomponent App\n  view\n    dialog id=\"d\" role=id(id(\"alertdialog\"))\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "aliased-some-match",
+            "component App\n  derive opt = some(\"alertdialog\")\n  view\n    dialog id=\"d\" role=(match opt { case some(r) => r, case none => \"dialog\" })\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+    ] {
+        let err = contract::compile(src).unwrap_err();
+        assert_eq!(err.id, "lower-alertdialog", "{label}: {err}");
+    }
+}

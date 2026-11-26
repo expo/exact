@@ -68,10 +68,14 @@ internal class Structure {
 
     private var words = IntArray(1024)
     private var size = 0
-    /** Each group's id and its rows' range in the stream (after GROUP_BEGIN, up to GROUP_END). */
+    /** Each group's id and its rows' range in the stream (after GROUP_BEGIN, up to GROUP_END), outermost first. */
     val groups = ArrayList<IntArray>()
     /** Each group's signature, by id. */
     val groupSigs = HashMap<Int, IntArray>()
+    /** Enclosing group id for each nested group (absent for top-level groups). */
+    val groupParents = HashMap<Int, Int>()
+    private class OpenGroup(val id: Int, val outer: Int, val slot: Int)
+    private val openGroups = ArrayList<OpenGroup>(4)
     // For each row placement, its ID, containing group (-1 for the page) and token index in that signature.
     private var placements = IntArray(0)
     private var used = 0
@@ -127,16 +131,53 @@ internal class Structure {
         return -1
     }
 
-    /** [b]'s top-level signature (returned) and its groups' ([groups], [groupSigs]); [token] names a row's node. */
-    fun read(b: IntBuffer, native: (Int) -> Long = { 0L }, token: (Int) -> Int): IntArray {
-        groups.clear(); groupSigs.clear(); opaque = false; used = 0
-        size = 0
+    /** Group [id]'s body in [b] (after its GROUP_BEGIN, up to its matching GROUP_END), or null. */
+    fun groupRange(b: IntBuffer, id: Int): IntArray? {
         var i = 0
+        var from = -1
+        var depth = 0
         val n = b.limit()
-        var group = -1; var groupFrom = 0; var outer = 0
         while (i < n) {
             val op = b.get(i)
             val j = end(b, i)
+            if (op == 20) {
+                if (from >= 0) depth++
+                else if (b.get(i + 1) == id) from = j
+            } else if (op == 21 && from >= 0) {
+                if (depth == 0) return intArrayOf(from, i)
+                depth--
+            }
+            i = j
+        }
+        return null
+    }
+
+    /** Visit each direct op 17 (ROW_DRAW) inside group [id]'s body, skipping nested groups. */
+    inline fun forEachDirectRow(b: IntBuffer, range: IntArray, visit: (Int) -> Unit) {
+        var i = range[0]
+        var depth = 0
+        while (i < range[1]) {
+            when (b.get(i)) {
+                20 -> depth++
+                21 -> if (depth > 0) depth--
+                17 -> if (depth == 0) visit(i)
+            }
+            i = end(b, i)
+        }
+    }
+
+    /** [b]'s top-level signature (returned) and its groups' ([groups], [groupSigs]); [token] names a row's node. */
+    fun read(b: IntBuffer, native: (Int) -> Long = { 0L }, token: (Int) -> Int): IntArray {
+        groups.clear(); groupSigs.clear(); groupParents.clear(); openGroups.clear(); opaque = false; used = 0
+        size = 0
+        var i = 0
+        val n = b.limit()
+        while (i < n) {
+            val op = b.get(i)
+            val j = end(b, i)
+            val top = openGroups.lastOrNull()
+            val group = top?.id ?: -1
+            val outer = top?.outer ?: 0
             when (op) {
                 // Definitions: the reader's kept things, not this drawing.
                 10, 11, 12, 15, 18, 24, 26, 30, 31, 32, 33, 41 -> {}
@@ -150,15 +191,19 @@ internal class Structure {
                     put(token(id)); copy(b, i + 2, j)
                 }
                 20 -> {
-                    put(20); put(b.get(i + 1))
-                    group = b.get(i + 1); groupFrom = j; outer = size
+                    val id = b.get(i + 1)
+                    put(20); put(id)
+                    if (group >= 0) groupParents[id] = group
+                    val slot = groups.size
+                    groups.add(intArrayOf(id, j, j))
+                    openGroups.add(OpenGroup(id, size, slot))
                 }
                 21 -> {
-                    if (group >= 0) {
-                        groupSigs[group] = words.copyOfRange(outer, size)
-                        groups.add(intArrayOf(group, groupFrom, i))
-                        size = outer
-                        group = -1
+                    if (openGroups.isNotEmpty()) {
+                        val closed = openGroups.removeAt(openGroups.lastIndex)
+                        groupSigs[closed.id] = words.copyOfRange(closed.outer, size)
+                        groups[closed.slot][2] = i
+                        size = closed.outer
                     }
                     put(21)
                 }

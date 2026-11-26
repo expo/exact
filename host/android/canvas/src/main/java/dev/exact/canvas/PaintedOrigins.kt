@@ -18,7 +18,8 @@ internal class PaintedOrigins {
     var publishing = false
     @Volatile var tracksFrames = false
     @Volatile var hasHostedViews = false
-    val frameClips get() = tracksFrames || planHasFrames || hasHostedViews
+    @Volatile var tracksFields = false
+    val frameClips get() = tracksFrames || planHasFrames || hasHostedViews || tracksFields
     @Volatile var version = 0L
         private set
     private var topology = 0L
