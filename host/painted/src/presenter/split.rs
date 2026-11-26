@@ -71,12 +71,22 @@ struct RetainedList {
 }
 
 /// The columns a root could not narrow to, as its trials used them (as asked, clamped to the allocation), while its
-/// style, as a failed trial's layout left it, and its allocation, measured before that trial, stand: a split refused
-/// for one column is tried again for another, and once for each column, not every frame.
+/// style, as a failed trial's layout left it, and its allocation and viewport, measured before that trial, stand: a
+/// split refused for one column is tried again for another, or once the viewport its lengths resolve against moves,
+/// and once for each, not every frame.
 struct Refusal {
     style: exact_kernel::StyleProps,
     allocation: Rect4,
+    reading: Reading,
     columns: Vec<f32>,
+}
+
+/// What a trial is judged by beside the root's style and allocation, read before it is made and kept apart from the
+/// `Split` it applies, which a shown split compares to know whether to lay out again: the viewport the root's viewport
+/// lengths resolve against, which the split's own layout cannot move.
+#[derive(Clone, PartialEq)]
+struct Reading {
+    viewport: (f32, f32),
 }
 
 #[derive(Default)]
@@ -229,7 +239,7 @@ impl<D: DataSource> Presenter<D> {
         );
     }
 
-    fn read_split(&mut self) -> Option<Split> {
+    fn read_split(&mut self) -> Option<(Split, Reading)> {
         self.validate_split_rows();
         let stack = self.host.shown_stack()?.to_vec();
         let root = *stack.first()?;
@@ -280,9 +290,18 @@ impl<D: DataSource> Presenter<D> {
             .unwrap_or(LIST_WIDTH)
             .max(MIN_LIST)
             .min(rect.2 - DIVIDER - MIN_DETAIL);
+        // Read the page's environment, not the root's local one, since viewport lengths resolve against the page's
+        let env = kernel.arena().env();
+        let reading = Reading {
+            // The basis `vw` and `vh` resolve against (`ViewportUnit::basis`): the window's, where the host sets it
+            viewport: env
+                .screen
+                .unwrap_or((env.viewport_width, env.viewport_height)),
+        };
         if (self.host.navigation.split.refused.get(&key)).is_some_and(|r| {
             kernel.node(root).is_some_and(|n| r.style == *n.style)
                 && r.allocation == rect
+                && r.reading == reading
                 && r.columns.contains(&list_width)
         }) {
             return None;
@@ -342,27 +361,30 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        Some(Split {
-            root,
-            within: within_id,
-            list: rule.list,
-            list_width,
-            authored_width: rule.width,
-            rect,
-            detail,
-            base,
-            row,
-            placeholder,
-            inert: stack.len() > routes.len() + 1,
-            hidden: stack.iter().skip(routes.len() + 1).any(|id| {
-                kernel.node(*id).is_some_and(|n| {
-                    n.props.presentation() == Some(Presentation::FullScreen)
-                        && !crate::navigation::over_page(&n)
-                })
-            }),
-            routes,
-            chevrons,
-        })
+        Some((
+            Split {
+                root,
+                within: within_id,
+                list: rule.list,
+                list_width,
+                authored_width: rule.width,
+                rect,
+                detail,
+                base,
+                row,
+                placeholder,
+                inert: stack.len() > routes.len() + 1,
+                hidden: stack.iter().skip(routes.len() + 1).any(|id| {
+                    kernel.node(*id).is_some_and(|n| {
+                        n.props.presentation() == Some(Presentation::FullScreen)
+                            && !crate::navigation::over_page(&n)
+                    })
+                }),
+                routes,
+                chevrons,
+            },
+            reading,
+        ))
     }
 
     fn validate_split_rows(&mut self) {
@@ -449,11 +471,15 @@ impl<D: DataSource> Presenter<D> {
     }
 
     fn apply_split(&mut self) -> Result<(), String> {
-        let next = self.read_split();
-        self.apply_split_to(next)
+        let (next, reading) = self.read_split().unzip();
+        self.apply_split_to(next, reading)
     }
 
-    fn apply_split_to(&mut self, next: Option<Split>) -> Result<(), String> {
+    fn apply_split_to(
+        &mut self,
+        next: Option<Split>,
+        reading: Option<Reading>,
+    ) -> Result<(), String> {
         let old = self.host.navigation.split.active.clone();
         let mut changed = old != next;
         if let Some(root) = old
@@ -593,25 +619,32 @@ impl<D: DataSource> Presenter<D> {
             };
             let content = root.frame.x + root.frame.width - cover - s.rect.0;
             if (content - s.list_width).abs() > 0.5 {
-                // Kept against the root's style as the trial's layout left it
+                // Kept against the root's style as the trial's layout left it, and what it read before it
                 let (key, style) = (root.key, root.style.clone());
                 let refused = &mut self.host.navigation.split.refused;
-                match refused.get_mut(&key) {
-                    Some(r) if r.style == style && r.allocation == s.rect => {
-                        if !r.columns.contains(&s.list_width) {
-                            r.columns.push(s.list_width);
+                if let Some(reading) = reading {
+                    match refused.get_mut(&key) {
+                        Some(r)
+                            if r.style == style
+                                && r.allocation == s.rect
+                                && r.reading == reading =>
+                        {
+                            if !r.columns.contains(&s.list_width) {
+                                r.columns.push(s.list_width);
+                            }
                         }
-                    }
-                    _ => {
-                        let columns = vec![s.list_width];
-                        refused.insert(
-                            key,
-                            Refusal {
-                                style,
-                                allocation: s.rect,
-                                columns,
-                            },
-                        );
+                        _ => {
+                            let columns = vec![s.list_width];
+                            refused.insert(
+                                key,
+                                Refusal {
+                                    style,
+                                    allocation: s.rect,
+                                    reading,
+                                    columns,
+                                },
+                            );
+                        }
                     }
                 }
                 if self.host.navigation.split.logged.insert(key) {
@@ -620,7 +653,7 @@ impl<D: DataSource> Presenter<D> {
                         s.root, s.list_width
                     ));
                 }
-                return self.apply_split_to(None);
+                return self.apply_split_to(None, None);
             }
         }
         self.place_split();

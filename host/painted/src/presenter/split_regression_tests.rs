@@ -913,3 +913,77 @@ fn a_split_refused_for_several_columns_tries_each_once() {
     assert_eq!(passes(&p) - before, back, "nor the refused 250 px one");
     assert!(state(&mut p).is_null());
 }
+
+#[test]
+fn a_refused_split_is_tried_again_once_the_viewport_changes() {
+    // A root whose minimum is 30% of the viewport cannot narrow to the 320 px column in a 1200 px window, and can in
+    // a 1000 px one, though its 1000 px container and its style stay the same
+    let source = APP
+        .replace("\"SPLIT\"", "\"split\"")
+        .replace(
+            "navigate=follow width=\"100%\"",
+            "navigate=follow width=1000",
+        )
+        .replace(
+            "position=\"absolute\" inset=0 testId",
+            "position=\"absolute\" inset=0 min-width=\"30vw\" testId",
+        );
+    let mut p = boot_source(1200., &source);
+    p.sync_split();
+    assert!(state(&mut p).is_null());
+    assert_eq!(p.resize(1000., 800.), None);
+    p.sync_split();
+    assert!(!state(&mut p).is_null());
+}
+
+#[test]
+fn a_refused_split_is_tried_again_once_the_window_its_viewport_lengths_read_changes() {
+    // Where a host sets the window's size apart from the layout viewport (`Env.screen`), viewport lengths resolve
+    // against the window: a 30vw minimum fits the 320 px column once the window is 1000 px wide, though the layout
+    // viewport, the container and the style stay the same
+    let source = APP
+        .replace("\"SPLIT\"", "\"split\"")
+        .replace(
+            "navigate=follow width=\"100%\"",
+            "navigate=follow width=1000",
+        )
+        .replace(
+            "position=\"absolute\" inset=0 testId",
+            "position=\"absolute\" inset=0 min-width=\"30vw\" testId",
+        );
+    let mut p = boot_source(1200., &source);
+    let window = |p: &mut Presenter<()>, width: f32| {
+        let env = p.host.kernel().env();
+        let env = env.with_screen(Some((width, env.viewport_height)));
+        assert_eq!(
+            p.host.runner_mut().kernel_mut().set_env(env).map(|_| ()),
+            Ok(())
+        );
+        assert!(p.host.layout().is_ok());
+    };
+    // The window is set apart from the layout viewport, at the size refused, before its size changes
+    window(&mut p, 1200.);
+    p.sync_split();
+    assert!(state(&mut p).is_null());
+    window(&mut p, 1000.);
+    p.sync_split();
+    assert!(!state(&mut p).is_null());
+}
+
+#[test]
+fn a_shown_split_is_not_laid_out_again_for_a_resize_it_does_not_read() {
+    // A split shown in a fixed 1000 px container reads nothing a window resize moves: once the page is laid out for
+    // the new window, the split's sync lays out nothing more, as what a refusal is kept against is not part of it
+    let source = APP.replace("\"SPLIT\"", "\"split\"").replace(
+        "navigate=follow width=\"100%\"",
+        "navigate=follow width=1000",
+    );
+    let mut p = boot_source(1200., &source);
+    p.sync_split();
+    assert!(!state(&mut p).is_null());
+    assert_eq!(p.host.resize(1100., 800.), None);
+    let before = p.host.kernel().layout_stamp().2;
+    p.sync_split();
+    assert_eq!(p.host.kernel().layout_stamp().2, before);
+    assert!(!state(&mut p).is_null());
+}
