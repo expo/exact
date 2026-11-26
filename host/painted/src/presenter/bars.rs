@@ -845,8 +845,18 @@ impl<D: DataSource> Presenter<D> {
                         latest == before.iter().find(|b| b.0 == *id).map_or(0, |b| b.1)
                     });
                 if let Some(id) = scroller {
-                    let x = self.scroll.get(&id).map_or(0.0, |at| at.0);
-                    self.scroll_to(id, (x, 0.0));
+                    let (x, y) = self.scroll_of(id);
+                    // Material's destination tapped again returns to its top as a scroll the person sees, as
+                    // Compose's `animateScrollToItem(0)` and Views' `smoothScrollToPosition(0)` do: a glide where
+                    // the platform animates (`reveal_glides`), else at once.
+                    if y != 0.0 && self.reveal_glides(None) {
+                        self.person_scrolls += 1;
+                        self.cancel_anchor_correction(id);
+                        self.collection_reader_moves(id);
+                        self.begin_glide(id, (x, y), (x, 0.0));
+                    } else {
+                        self.scroll_to(id, (x, 0.0));
+                    }
                 }
             }
         }

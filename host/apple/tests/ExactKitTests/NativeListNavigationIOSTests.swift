@@ -251,7 +251,6 @@ final class NativeListNavigationIOSTests: XCTestCase {
         XCTAssertTrue(RouteGeometry.ownedChanges(collection, of: node, insetByUIKit: true).contains("delegate"), "a hatch replacing that delegate is detected")
         collection.delegate = delegate
         node.scrollOrigin = 123
-        node.scrollCollapsed = 45
         collection.removeFromSuperview()
         let replacement = mount()
         XCTAssertTrue(route.collapseScroll === node, "the logical owner did not change")
@@ -260,7 +259,6 @@ final class NativeListNavigationIOSTests: XCTestCase {
         XCTAssertTrue(route.contentScrollView(for: .bottom) === replacement, "the bottom edge follows the replacement too")
         XCTAssertEqual(replacement.contentInsetAdjustmentBehavior, .automatic)
         XCTAssertEqual(node.scrollOrigin, 0, "the previous backend's title inset is not carried over")
-        XCTAssertEqual(node.scrollCollapsed, 0)
         XCTAssertTrue(navigation.shownScroll(navigation.contentScroller(of: route)) === replacement)
         route.setContentScrollView(replacement, for: .top)
         navigation.prepareRoutes([route], in: nav)

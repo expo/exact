@@ -127,3 +127,22 @@ fn a_row_is_estimated_until_a_layout_measures_it() {
         "a new estimate resets the rows it does not keep"
     );
 }
+
+/// LLP 1123 D14: a negative content inset lies in the padding as a negative
+/// padding, which takes room off the range at either end: here a range from 10
+/// past the first row's start to 20 short of the rows' end, where the end is
+/// followed.
+#[test]
+fn negative_padding_takes_room_off_the_range() {
+    let mut i = index(&[100.; 10]);
+    i.set_leading(-10.);
+    i.set_trailing(-20.);
+    near(i.max_offset(600.), 380.);
+    let end = i.capture_anchor(380., 600., true).unwrap();
+    assert!(SizeIndex::follows_end(&end));
+    near(i.restore_anchor(&end, 600.).unwrap(), 380.);
+    // A port at the range's start keeps the rows from 10 in view
+    let w = i.window(10., 600., [None, None]).unwrap();
+    near(w.offset, 10.);
+    assert_eq!(w.visible.start, 0);
+}

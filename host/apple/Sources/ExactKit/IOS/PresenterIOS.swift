@@ -108,7 +108,7 @@ package final class Presenter {
     package func carrying(_ key: String) -> [NodeView] { chrome.ids(key).sorted().compactMap { views[$0] } }
     package func takeChangedNames() -> Set<String> { chrome.takeChangedNames() }
     var scrollers: Set<UInt32> = []
-    var pendingScrolls: Set<UInt32> = []
+    var pendingScrolls: Set<UInt32> = []; package var scrollAskCount: UInt64 = 0 // every ask of a scroller to move (`NodeView.lastScrollAsk`)
     /// The batch's suppression triggers for scroll anchoring (`ScrollAnchoring.swift`).
     var anchorChanges = ScrollAnchoring.Changes()
     var materialNodes: Set<UInt32> = []

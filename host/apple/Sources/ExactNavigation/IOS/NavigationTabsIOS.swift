@@ -809,11 +809,11 @@ extension NavigationHost {
 
     /// Press `tab` as a tap on its item does, unless the tab is disabled.
     /// Then scroll `screen` (`reselectedRoot`), if given, to its top unless
-    /// the press asked for a row there (`scrollToTop`).
+    /// the press asked its list to move (`scrollToTop`).
     func pressTab(_ tab: NodeView, scrolling screen: RouteController? = nil) {
-        let requests = screen == nil ? nil : presenter.collections.lastRequests()
+        let requests = screen == nil ? nil : presenter.collections.lastRequests(), asks = presenter.scrollAskCount
         if !tab.disabled { presenter.press(tab.id) }
-        if let screen { scrollToTop(screen, since: requests) }
+        if let screen { scrollToTop(screen, since: requests, asks: asks) }
     }
 
     /// The authored tab whose panel is tab `index`.
@@ -837,45 +837,86 @@ extension NavigationHost {
     }
 
     /// A route's content scroller (`contentScroller`, the status bar's) to
-    /// its top, as the status bar's tap takes it: UIKit's animation, to where
-    /// a large title is open, which UIKit opens as the offset arrives.
+    /// its top, where the status bar's tap takes it: UIKit's animation to the
+    /// top with a large title and a hidden search field open (`openTop`).
     /// UIKit's tab bar does not do this itself: a selected tab tapped again
     /// scrolls nothing in UIKit alone (iOS 27, a real touch). It is the
-    /// reader's move of a list there (`CollectionHost.readerMoves`), and it
-    /// gives way to a `scrollIntoView` the tab's press asked for there,
-    /// landed, under way or already shown: the author's answer to the tap
-    /// wins over the platform's (LLP 1070.000 §2.6). `requests`: every
-    /// list's latest request before the press (`CollectionHost.lastRequests`),
-    /// read for them all because the press may make the screen's list, or
-    /// make another list the screen's.
-    func scrollToTop(_ c: RouteController, since requests: [UInt32: UInt64]? = nil) {
-        guard let sv = contentScrollView(of: c) else { return }
+    /// reader's move of the list, as the status bar's tap is, and it gives way
+    /// to any scroll the tab's press asked of the list, landed, under way or
+    /// already shown: the author's answer to the tap wins over the platform's
+    /// (LLP 1070.000 §2.6). `requests`: every list's latest request before the
+    /// press (`CollectionHost.lastRequests`), read for them all because the
+    /// press may make the screen's list, or make another list the screen's;
+    /// `asks`: the presenter's count of scroll asks before it
+    /// (`NodeView.lastScrollAsk`).
+    func scrollToTop(_ c: RouteController, since requests: [UInt32: UInt64]? = nil, asks: UInt64? = nil) {
+        // What the press left decides: it may have shown another tab or route, or answered the tap itself.
+        let selected = tabController.map { tabs in sequence(first: c as UIViewController, next: \.parent).contains { $0 === tabs.selectedViewController } } ?? true
+        guard selected, presentedNavigations.isEmpty, c.navigationController.map({ $0.topViewController === c }) ?? true,
+              let sv = contentScrollView(of: c) else { return }
         let node = contentScroller(of: c)
-        if let node, presenter.collections.owns(node.id) {
-            if let requests, presenter.collections.lastRequest(node.id) != requests[node.id] ?? 0 { return }
-            presenter.collections.readerMoves(node.id)
-        }
-        // At its top under a collapsed title it goes on to the open title's
-        // inset, as UIKit's status-bar tap does, and opens it.
-        let inset = max(sv.adjustedContentInset.top, node != nil && node === c.collapseScroll ? node?.scrollOrigin ?? 0 : 0)
-        guard sv.contentOffset.y > 0.5 - inset else { return restAtTop(sv, in: c) }
+        if let node, presenter.collections.owns(node.id), let requests, presenter.collections.lastRequest(node.id) != requests[node.id] ?? 0 { return }
+        if let node, let asks, node.lastScrollAsk > asks { return }
+        #if os(iOS)
+        // Older reveals and carried positions give way, and a far windowed list cuts to two screens from the top
+        _ = node?.scrollViewShouldScrollToTop(sv)
+        #else
+        if let node, presenter.collections.owns(node.id) { presenter.collections.readerMoves(node.id) }
+        #endif
         guard scrollsToTopAnimated else { return restAtTop(sv, in: c) }
-        sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -inset), in: sv, clamped: false), animated: true)
+        let top = openTop(sv, in: c)
+        guard abs(top - sv.contentOffset.y) > 0.5 else { return }
+        let aim = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: top), in: sv, clamped: false)
+        sv.setContentOffset(aim, animated: true)
+        // The bar can change in flight (a filter projected into it, a fold): where the scroll landed as aimed, it goes
+        // on to the top under the bar as it is then
+        node?.afterScrollAnimation = { [weak sv] in
+            guard let sv, abs(sv.contentOffset.y - aim.y) < 0.5, abs(sv.contentOffset.y + sv.adjustedContentInset.top) > 0.5 else { return nil }
+            return PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv)
+        }
     }
 
-    /// Where `scrollToTop` ends, in one turn, under the agent's frozen clock,
-    /// where Exact starts no UIKit animation: the content at its top and a
-    /// large title expanded. Measured in UIKit alone on iOS 27, an offset written
-    /// at the top under a collapsed title leaves it collapsed, and one written
-    /// above the top opens the title and leaves the content that far below
-    /// the bar. So the scroller is pulled past its top and put at rest there,
-    /// unanimated: no frame shows the pull. This is the one place Exact moves
-    /// a large title itself.
+    /// Where the content's top is now, with as much of the bar open as UIKit opens there: a large title, a search
+    /// field the scroll hid. UIKit's own scroll to top (the status-bar tap) opens both, and UIKit publishes neither
+    /// that operation nor the open inset, so the scroller is put at its top with the bar opened (`restAtTop`) and
+    /// back in this turn, before anything draws, with Exact's own scroll reactions muted (`probingScroll`). Where
+    /// nothing can open, it is the inset UIKit has. Nothing sampled before stands in for it: UIKit lays the bar out
+    /// anew at launch, on a fold, as a filter moves into it.
+    func openTop(_ sv: UIScrollView, in c: RouteController) -> CGFloat {
+        #if os(iOS)
+        // A refresh holds its room open, which a pull would change
+        if sv.refreshControl?.isRefreshing == true { return -sv.adjustedContentInset.top }
+        #endif
+        guard c.navigationItem.barOpensAtTop, let nav = c.navigationController, !nav.isNavigationBarHidden else { return -sv.adjustedContentInset.top }
+        let start = sv.contentOffset
+        NodeView.probingScroll = true
+        defer { NodeView.probingScroll = false }
+        restAtTop(sv, in: c)
+        let top = sv.contentOffset.y
+        UIView.performWithoutAnimation {
+            sv.contentOffset = start
+            nav.navigationBar.setNeedsLayout()
+            nav.view.setNeedsLayout()
+            nav.navigationBar.layoutIfNeeded()
+            nav.view.layoutIfNeeded()
+        }
+        return top
+    }
+
+    /// Puts the scroller at its top with a large title expanded and a search
+    /// field the scroll hid shown, in one turn. `scrollToTop` lands there under
+    /// the agent's frozen clock, where Exact starts no UIKit animation, and
+    /// `openTop` reads where its animation should end from it. Measured in
+    /// UIKit alone on iOS 27, an offset written at the top under a collapsed
+    /// title leaves it collapsed, and one written above the top opens the
+    /// title and leaves the content that far below the bar. So the scroller is
+    /// pulled past its top and put at rest there, unanimated, and no frame
+    /// shows the pull.
     func restAtTop(_ sv: UIScrollView, in c: RouteController) {
         sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv, clamped: false)
         // tvOS has no large titles.
         #if !os(tvOS)
-        guard c.navigationItem.largeTitleDisplayMode == .always, c.viewIfLoaded?.window != nil,
+        guard c.navigationItem.barOpensAtTop, c.viewIfLoaded?.window != nil,
               let nav = c.navigationController, nav.topViewController === c, nav.transitionCoordinator == nil,
               !nav.isNavigationBarHidden else { return }
         UIView.performWithoutAnimation {
