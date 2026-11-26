@@ -23,6 +23,18 @@ impl ScrollClaim {
         let ([top, _, _, left], [inset_top, _, _, inset_left]) = (self.reach, self.insets);
         (x + left - inset_left, y + top - inset_top)
     }
+
+    /// The CSS offset whose displacement is `(x, y)`.
+    pub(crate) fn offset(&self, (x, y): (f32, f32)) -> (f32, f32) {
+        let ([top, _, _, left], [inset_top, _, _, inset_left]) = (self.reach, self.insets);
+        (x - left + inset_left, y - top + inset_top)
+    }
+
+    /// How much longer the range is on each axis, x then y: the insets on its two edges less the reach there.
+    pub(crate) fn range_change(&self) -> (f32, f32) {
+        let ([t, r, b, l], [it, ir, ib, il]) = (self.reach, self.insets);
+        (il + ir - l - r, it + ib - t - b)
+    }
 }
 
 /// Each reaching box's reach and each scroller's claim, by its node.

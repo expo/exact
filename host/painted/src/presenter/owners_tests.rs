@@ -232,3 +232,28 @@ fn a_routes_keyboard_is_the_windows_in_its_own_space() {
         KeyboardReport::Unreported
     );
 }
+
+/// A route's map is its published frame once, which is already in the page, less the page's scroll: under a
+/// navigation root at (20, 30) the route lies at (20, 30), and 10 higher once the page has scrolled 10.
+#[test]
+fn a_routes_map_is_its_frame_in_the_page_less_the_pages_scroll() {
+    let source = APP.replace(
+        "    main navigationKey",
+        "    main margin-left=20 margin-top=30 navigationKey",
+    );
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(&source),
+        Nothing,
+        (412., 840.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let [.., x, y] = update(&p, "route-home").window_map.unwrap().0;
+    assert_eq!((x, y), (20., 30.));
+    p.page = (0., 10.);
+    let [.., x, y] = update(&p, "route-home").window_map.unwrap().0;
+    assert_eq!((x, y), (20., 20.));
+}
