@@ -7020,6 +7020,16 @@ logged once. `bun exact.mjs forma gen swift .` writes the names
 (`.exact/forma/forma.swift`, never committed), which a module's build
 compiles in. `apps/forma-host` is the sample.
 
+A GPU canvas reads the same design with `surface=board(color("surface.board"))`.
+Its explicit token arguments follow its own place, including a scheme or mode
+pinned on an ancestor. A change in the complete resolved inputs causes one
+bind and frame request, including after an ancestor pin changes on its own or
+a live design value edit. Apple system colours use the reported light or dark
+palette for the session's current contrast and app tint, with the kernel's
+fallback until a colour is reported. A changed palette rebinds affected
+surfaces. A native view's own contrast override, elevation and local tint are
+outside that palette.
+
 **Whose window.** `window.window` is nil unless the embedder set
 `session.hatchesOwnWindow`, and `app.application` unless it set
 `session.hatchesOwnProcess`. The standalone iOS app sets both; the standalone
@@ -7145,6 +7155,30 @@ An authored GPU module passes a static `&[exact_gpu::grants::Requirements]` as t
 second argument to `exact_gpu::module!`. See [the GPU module recipe](recipes/gpu-module.md)
 for a declaration and [package GPU surfaces](contract-for-agents.md#a-packages-gpu-surfaces)
 for packaging. Packages declare `exactGpu: "0.4"` and depend on `exact-gpu = "0.4"`.
+
+A GPU surface reads a `color("surface.board")` argument in `bind` with
+`exact_gpu::json::color(&inputs[0], "fill")?`. The result is four finite
+`f32` components: straight linear sRGB (D65) and alpha in [0, 1].
+RGB may extend below zero or above one. Keep the `ColorTarget` from
+`Surface::color_target`. Use `target.fragment(rgba)` for a shader constant
+written with replacement blending and `target.clear(rgba)` for a clear.
+Both convert to the attachment's primaries, transfer and alpha association.
+A change of attachment format, colour space or alpha mode rebinds colour
+inputs even when their RGBA is unchanged. A straight linear-sRGB working
+texture can use the input directly. For transparency leave `Surface::opaque()`
+false. On an opaque-only target the helper writes straight colour at full alpha.
+
+The opaque board matched its sibling in light, dark and under a mode pin on
+Chrome WebGPU, macOS Metal, the iOS simulator and the painted Linux host on
+macOS. On Chrome the half-alpha `color(display-p3 .6 .4 .3 / .5)` matched
+over white on a float target and on an 8-bit target with the display's sRGB
+primaries. With an 8-bit Display P3 target and an sRGB destination the GPU
+gave (207, 177, 162) and the sibling (208, 177, 163). Other swatches can
+quantise differently. A literal clear on the iOS 27.2 and 26.5 simulators
+gave (208, 177, 162) beside (208, 177, 163) in the display capture with and
+without colour-input support. The agent's app-drawing capture can differ
+from that display. Translucent output on an iOS device, HDR displays and
+Windows presentation are unverified.
 
 A surface opts into raw input with `Surface::wants_input`. On macOS the canvas
 also dispatches Contract pointer, wheel and context menu events. [GPU module recipe](recipes/gpu-module.md)

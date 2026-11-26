@@ -1251,6 +1251,8 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## GPU surfaces
 
+- A GPU board and grid can bind their own tokens with `surface=board(color("surface.board"), color("board.dot"))`. A transparent clear over a token-painted view also works for the board.
+
 - **A record's named fields reach the wrong surface arguments.** Records cross
   into a GPU surface by position, not by field name. Import the package's
   shapes (`ModelNode` and `ModelHotspot` for `@exact/model-viewer`); if you

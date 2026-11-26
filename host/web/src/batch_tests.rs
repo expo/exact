@@ -74,6 +74,7 @@ fn cases() -> Vec<(&'static str, String)> {
             Value::list(vec![Value::Number(1.5), Value::Number(-2.0)]),
             Value::str("a\"b"),
         ],
+        colors: vec![],
         types: vec![None, None],
     };
     vec![

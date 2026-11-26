@@ -785,6 +785,11 @@
         {
           "name": "ty",
           "codec": "opt:types"
+        },
+        {
+          "name": "color",
+          "codec": "opt:theme",
+          "_comment": "The Forma colour resolved at this canvas after commit (LLP 1009 D2a)."
         }
       ]
     },

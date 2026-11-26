@@ -196,7 +196,9 @@ impl<D: DataSource> Runner<D> {
             });
             set += 1;
         }
-        Ok((self.apply(ops)?, set))
+        let receipt = self.apply(ops)?;
+        self.refresh_surface_colors();
+        Ok((receipt, set))
     }
 }
 

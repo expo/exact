@@ -419,6 +419,9 @@ pub(super) fn unknown_function(
     shapes: &Shapes,
     span: Span,
 ) -> TypeError {
+    if name == "color" {
+        return TypeError { id: "type-surface-color", message: "color() belongs in a surface argument and takes one literal design colour token name".into(), span };
+    }
     if name == "now" {
         return TypeError {
             id: "type-now-renamed",

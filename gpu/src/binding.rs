@@ -1,5 +1,22 @@
 use crate::{json, Module, Value};
 
+// Only complete arguments can be colour slots. A named rest argument is stored
+// in the last input as a list of [name, value] pairs.
+pub(crate) fn has_color(inputs: &[Value], rest: bool) -> bool {
+    if inputs.iter().any(|value| matches!(value, Value::Record(_))) {
+        return true;
+    }
+    let Some(Value::List(pairs)) = inputs.last().filter(|_| rest) else {
+        return false;
+    };
+    pairs.iter().any(|pair| {
+        let Value::List(fields) = pair else {
+            return false;
+        };
+        matches!(fields.get(1), Some(Value::Record(_)))
+    })
+}
+
 impl Module {
     /// Bind a positional JSON array or named JSON object through the same typed
     /// bind operation. A named argument the object omits takes its default.

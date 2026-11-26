@@ -4044,6 +4044,16 @@ instantiates does not link its views' implementations.
 
 ### A package's GPU surfaces
 
+Pass a design colour to a GPU surface with `canvas surface=board(color("surface.board"))`.
+The name must be a literal naming a colour token. Put a CSS colour or a `light-dark()` pair
+in the token definition. The argument resolves at the canvas, including its inherited
+`color-scheme` and Forma mode pins. A change in the resolved inputs binds them together
+and requests a frame, even if only an ancestor's pin changed. In the module,
+`ColorTarget::fragment` gives the shader output and `ColorTarget::clear` the
+render-pass clear. The [GPU module reference](reference.md#gpu-device-requirements)
+describes target precision and Apple system colours. An ordinary string
+argument passes its text to the module.
+
 To show a static glTF model, add `@exact/model-viewer` from
 `packages/model-viewer` in this checkout. Its `modelViewer` surface supplies
 the camera, picking, node styles, faded-behind rendering, clipping and

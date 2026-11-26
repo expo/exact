@@ -254,18 +254,26 @@ impl Module {
             inst.drain();
             return Some(false);
         }
-        // The host composes these untagged RGBA8 bytes as sRGB, even when
-        // this surface normally draws into a Display P3 swapchain.
-        let presentation_space = target::granted(inst.config.as_ref());
-        // A hidden window can bind different alpha before its next drawable is configured.
-        let opaque = if present && inst.config.is_some() {
-            target::alpha_mode(inst.surface.opaque(), &inst.alpha_modes)
-                == wgpu::CompositeAlphaMode::Opaque
-        } else {
-            inst.surface.opaque()
-        };
-        if out.is_some() {
-            inst.surface.color_space_granted(ColorSpace::Srgb);
+        let mut capture_target = ColorTarget::readback(format);
+        let presentation_target = inst.config.as_ref().map_or(capture_target, ColorTarget::of);
+        if present {
+            capture_target.space = presentation_target.space;
+            // Hidden windows can bind new alpha before configuring their next drawable.
+            capture_target.alpha = if inst.config.is_some() {
+                target::alpha_mode(inst.surface.opaque(), &inst.alpha_modes)
+            } else if inst.surface.opaque() {
+                wgpu::CompositeAlphaMode::Opaque
+            } else {
+                capture_target.alpha
+            };
+        }
+        // Byte readback always reports sRGB. A sampled presentation keeps the drawable's primaries.
+        if !present || inst.destination != capture_target {
+            if let Err(e) = inst.set_color_target(capture_target) {
+                let _ = inst.set_color_target(presentation_target);
+                self.error = e.0;
+                return None;
+            }
         }
         inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
         if inst.readback.as_ref().is_none_or(|r| {
@@ -295,7 +303,10 @@ impl Module {
                     &mut recording.encoder,
                     &target.texture,
                 )
-                .presented(presentation_space, opaque)
+                .presented(
+                    capture_target.space,
+                    capture_target.alpha == wgpu::CompositeAlphaMode::Opaque,
+                )
             })
         } else {
             target.rows = Some(Rows::capture(
@@ -309,8 +320,11 @@ impl Module {
         let commands = match recording.finish() {
             Ok(commands) => commands,
             Err(e) => {
-                if out.is_some() && presentation_space != ColorSpace::Srgb {
-                    inst.surface.color_space_granted(presentation_space);
+                if inst.config.is_some() && inst.destination != presentation_target {
+                    if let Err(e) = inst.set_color_target(presentation_target) {
+                        self.error = e.0;
+                        return None;
+                    }
                 }
                 inst.drain();
                 self.error = failure
@@ -338,8 +352,11 @@ impl Module {
                 .read(gpu, &mut out[..len]),
             None => Ok(()),
         };
-        if !present && presentation_space != ColorSpace::Srgb {
-            inst.surface.color_space_granted(presentation_space);
+        if inst.config.is_some() && inst.destination != presentation_target {
+            if let Err(e) = inst.set_color_target(presentation_target) {
+                self.error = e.0;
+                return None;
+            }
         }
         inst.drain();
         if let Some(SurfaceError(e)) = failure.or_else(|| inst.surface.take_error()) {
@@ -507,5 +524,103 @@ mod tests {
         }
         module.lose_device();
         assert!(module.instances[&id].readback.is_none());
+    }
+    #[derive(Default)]
+    struct Board {
+        fill: wgpu::Color,
+        binds: u32,
+        srgb_view: bool,
+        destination: ColorTarget,
+    }
+    impl Surface for Board {
+        fn bind(&mut self, values: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+            self.fill = self.destination.clear(json::color(&values[0], "board")?);
+            self.binds += 1;
+            Ok(())
+        }
+        fn agent(&mut self, _: &str) -> Option<String> {
+            Some(self.binds.to_string())
+        }
+        fn srgb_target(&self) -> bool {
+            self.srgb_view
+        }
+        fn color_target(&mut self, destination: ColorTarget) {
+            self.destination = destination;
+        }
+        fn render(
+            &mut self,
+            _: &Frame,
+            _: &wgpu::Device,
+            _: &wgpu::Queue,
+            encoder: &mut wgpu::CommandEncoder,
+            view: &wgpu::TextureView,
+            _: wgpu::TextureFormat,
+        ) -> bool {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(self.fill),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            false
+        }
+    }
+
+    #[test]
+    fn bound_board_colours_clear_both_sdr_attachments_to_the_view_bytes() {
+        static BOARDS: Registry = Registry {
+            surfaces: &[
+                ("unorm", 1, || Box::<Board>::default()),
+                ("srgb", 1, || {
+                    Box::new(Board {
+                        srgb_view: true,
+                        ..Default::default()
+                    })
+                }),
+            ],
+            shaders: &[],
+        };
+        let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+            return;
+        };
+        let mut module = Module::new(&BOARDS);
+        module.set_gpu(gpu);
+        let frame = Frame {
+            width: 1.,
+            height: 1.,
+            scale: 1.,
+            now_ms: 0.,
+            seekable: true,
+            period_ms: 0.,
+            children_generation: 0,
+            shader_generation: 0,
+            headroom: 1.,
+        };
+        for name in ["unorm", "srgb"] {
+            let id = module.create_headless(name).unwrap();
+            for (rgb, a, want) in [
+                ([236, 236, 239], 1., [236, 236, 239, 255]),
+                ([20, 20, 22], 1., [20, 20, 22, 255]),
+                ([236, 100, 40], 0.5, [118, 50, 20, 128]),
+            ] {
+                let [r, g, b] =
+                    rgb.map(|v| exact_color::srgb_to_linear(f64::from(v) / 255.) as f32);
+                assert!(module.bind_json(id, &format!(r#"[{{"color":[{r},{g},{b},{a}]}}]"#), None));
+                let (pixels, _) = module.readback(id, &frame).unwrap();
+                assert_eq!(pixels.data, want, "{name}");
+            }
+            assert_eq!(module.agent(id, "binds").as_deref(), Some("3"));
+            let inst = module.instances.get_mut(&id).unwrap();
+            let other = ColorTarget::readback(wgpu::TextureFormat::Rgba16Float);
+            inst.set_color_target(other).unwrap();
+            inst.set_color_target(other).unwrap();
+            assert_eq!(module.agent(id, "binds").as_deref(), Some("4"));
+        }
     }
 }

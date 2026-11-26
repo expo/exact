@@ -73,26 +73,43 @@ impl Em<'_> {
                 );
             } else {
                 let mut values = Vec::new();
+                let mut colors = Vec::new();
                 for (k, a) in sf.args.iter().enumerate() {
                     let a = &plan.surface_args[a.0 as usize];
-                    let v = code::expression(
-                        plan,
-                        plan.code(a.expr),
-                        &self.site_evaluation(
-                            scope,
-                            i,
-                            format!("surface argument {}", k + 1),
-                            true,
-                        ),
-                        &mut self.uses,
-                    )?;
+                    let v = if let Some(token) = a.color {
+                        let slot = if named {
+                            serde_json::to_string(plan.str(a.name)).unwrap()
+                        } else {
+                            k.to_string()
+                        };
+                        let css = serde_json::to_string(&crate::modes::surface_color(plan, token))
+                            .unwrap();
+                        colors.push(format!("[{slot},{css}]"));
+                        "null".to_owned()
+                    } else {
+                        code::expression(
+                            plan,
+                            plan.code(a.expr),
+                            &self.site_evaluation(
+                                scope,
+                                i,
+                                format!("surface argument {}", k + 1),
+                                true,
+                            ),
+                            &mut self.uses,
+                        )?
+                    };
                     values.push(if named {
                         format!("{}:{v}", serde_json::to_string(plan.str(a.name)).unwrap())
                     } else {
                         v
                     });
                 }
-                let gs = self.uses.rt("gs");
+                let (gs, colors) = if colors.is_empty() {
+                    (self.uses.rt("gs"), String::new())
+                } else {
+                    (self.uses.rt("gsc"), format!(",[{}]", colors.join(",")))
+                };
                 let body = if named {
                     format!("({{{}}})", values.join(","))
                 } else {
@@ -100,7 +117,7 @@ impl Em<'_> {
                 };
                 let _ = write!(
                     self.out,
-                    "{gs}({e},{},()=>{body});",
+                    "{gs}({e},{},()=>{body}{colors});",
                     serde_json::to_string(name).unwrap()
                 );
             }

@@ -823,6 +823,13 @@ alpha. Consumer: the reporter's avatar, a soft glowing blob over a ground
 that changes. Take: none offered; waived by Charlie, 2026-11-22, after it
 landed.
 
+**Expanded for AR5 (panel, 2026-11-25), 4–0 (Charlie, 2026-11-24,
+"ask panel about questions then follow recs of panel"; expo/exact#1764;
+LLP 1009 D2a, LLP 1121 D12):** a colour token named in a GPU surface
+call reaches bind as straight linear-sRGB RGBA at the canvas. A changed
+value redraws the design canvas's board and grid in its views' colours.
+AT1 (panel, 2026-11-25) sets the presentation and verification rules in D2a.
+
 **Expanded (Charlie, 2026-11-17, expo/exact#724; LLP 1133.039):**
 `@exact/model-viewer`, a GPU package showing a binary glTF from the app's
 assets or files, with meshopt and quantization, an orbit camera, pick,

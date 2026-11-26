@@ -141,6 +141,10 @@ impl<D: DataSource> Host<D> {
 
     /// Re-present what the kernel resolved from the reported table.
     fn re_present_colors(&mut self, batch: &mut Batch, first: bool) {
+        self.runner.refresh_surface_colors();
+        for update in self.runner.take_surface_updates() {
+            batch.surface(&update);
+        }
         self.repaint_colors(batch, first);
         self.svg.all_dirty();
         let kernel = self.runner.kernel();

@@ -87,14 +87,16 @@ impl<D: DataSource> Runner<D> {
         preferences: Preferences,
         bold: bool,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let appearance =
+            !self.surface_colors.is_empty() && self.viewport.preferences != preferences;
         self.replace_fact(
             |r| &mut r.viewport,
             viewport,
             SOURCE,
             |r, _, readers| {
                 let result = r.recommit(readers, "preferences").and_then(|receipt| {
-                    if bold && receipt.is_none() {
-                        r.commit_again(Vec::new(), "bold text").map(Some)
+                    if (bold || appearance) && receipt.is_none() {
+                        r.commit_again(Vec::new(), "appearance").map(Some)
                     } else {
                         Ok(receipt)
                     }

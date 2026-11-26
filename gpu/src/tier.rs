@@ -185,7 +185,10 @@ impl crate::Module {
             if let Some(gpu) = &self.gpu {
                 inst.surface
                     .device_ready(gpu.device.features(), gpu.device.limits());
-                inst.report_color_space();
+                if let Err(e) = inst.report_color_space() {
+                    self.error = e.0;
+                    continue;
+                }
                 if let Some(config) = &inst.config {
                     inst.surface.prepare_assets(
                         &gpu.device,

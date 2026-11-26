@@ -2,8 +2,7 @@ import { helperClassifications } from './completion-inventory-helpers.mjs';
 // Ownership and protocol inferences for LLP 1172.019 §3 and LLP 1172.005 E11–E12.
 // Concrete symbols are intentional: a new declaration cannot inherit a classification by name pattern.
 function group(family, protocol, lifetime, kind, evidence, sites, durableWhen) {
-  return { family, protocol, lifetime, class: kind, inference: true, evidence,
-    ...(durableWhen ? { durableWhen } : {}),
+  return { family, protocol, lifetime, class: kind, inference: true, evidence, ...(durableWhen ? { durableWhen } : {}),
     ids: sites.flatMap(([scope, names]) => names.split(/\s+/).filter(Boolean).map(name => `${scope}:${name}`)) };
 }
 
@@ -101,6 +100,7 @@ export const classifications = [
     ["runner:runner/src/runner/geometry_facts.rs", "Runner::deliver_geometry#chain:1"],
     ["runner:runner/src/runner/root_font.rs", "Runner::display_scale Runner::host_root_font_size Runner::root_font_size Runner::set_bold_text Runner::set_display_scale Runner::set_root_font_size"],
     ["runner:runner/src/runner/shown.rs", "Runner::place_blocks Runner::top_layer Runner::top_layer_backdrop Runner::top_layer_frames"],
+    ["runner:runner/src/runner/surface_colors.rs", "Runner::refresh_surface_colors"],
     ["runner:runner/src/runner/surface_record.rs", "Runner::set_surface_record Runner::surface_refusals"],
     ["runner:runner/src/runner/theme.rs", "Runner::set_token Runner::set_tokens"],
     ["runner:runner/src/runner/time.rs", "Runner::chosen_locale Runner::direction Runner::place Runner::resolved_locale Runner::set_place Runner::set_place_formatted Runner::set_time Runner::wall_time"],

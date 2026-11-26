@@ -20,10 +20,102 @@ pub(crate) fn granted(config: Option<&wgpu::SurfaceConfiguration>) -> ColorSpace
     }
 }
 
+/// The compositor convention for the current render destination, including native readback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColorTarget {
+    /// The granted RGB primaries.
+    pub space: ColorSpace,
+    /// The attachment view the module renders into.
+    pub format: wgpu::TextureFormat,
+    pub(crate) alpha: wgpu::CompositeAlphaMode,
+}
+
+impl Default for ColorTarget {
+    fn default() -> Self {
+        Self {
+            space: ColorSpace::Srgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            alpha: wgpu::CompositeAlphaMode::PreMultiplied,
+        }
+    }
+}
+
+impl ColorTarget {
+    /// Fragment output for a replacement draw into the presentation attachment.
+    pub fn fragment(self, rgba: [f32; 4]) -> [f32; 4] {
+        let [r, g, b, a] = rgba.map(f64::from);
+        let space = match self.space {
+            ColorSpace::Srgb => exact_color::MixSpace::Srgb,
+            ColorSpace::DisplayP3 => exact_color::MixSpace::DisplayP3,
+        };
+        use wgpu::CompositeAlphaMode::*;
+        let associated = match self.alpha {
+            Opaque => false,
+            // Metal's PostMultiplied selects a nonopaque layer. Core Animation
+            // composites its associated pixels, like other layer contents.
+            PostMultiplied => cfg!(target_vendor = "apple"),
+            _ => true,
+        };
+        let [r, g, b] = space.from_linear_srgb([r, g, b]).map(|mut c| {
+            if self.format != wgpu::TextureFormat::Rgba16Float {
+                c = c.clamp(0.0, 1.0);
+            }
+            if associated {
+                c *= a;
+            }
+            if self.format.is_srgb() {
+                c = exact_color::srgb_to_linear(c);
+            }
+            c as f32
+        });
+        [r, g, b, if self.alpha == Opaque { 1.0 } else { a as f32 }]
+    }
+
+    /// The same attachment value for a render-pass clear.
+    pub fn clear(self, rgba: [f32; 4]) -> wgpu::Color {
+        let [r, g, b, a] = self.fragment(rgba).map(f64::from);
+        wgpu::Color { r, g, b, a }
+    }
+
+    pub(crate) fn of(config: &wgpu::SurfaceConfiguration) -> Self {
+        Self {
+            space: granted(Some(config)),
+            format: crate::view_format(config),
+            alpha: config.alpha_mode,
+        }
+    }
+
+    pub(crate) fn readback(format: wgpu::TextureFormat) -> Self {
+        Self {
+            format,
+            ..Self::default()
+        }
+    }
+}
+
 impl crate::Instance {
-    pub(crate) fn report_color_space(&mut self) {
-        self.surface
-            .color_space_granted(granted(self.config.as_ref()));
+    pub(crate) fn report_color_space(&mut self) -> Result<(), crate::SurfaceError> {
+        let destination = self.config.as_ref().map_or_else(
+            || ColorTarget::readback(self.offscreen_format()),
+            ColorTarget::of,
+        );
+        self.set_color_target(destination)
+    }
+
+    pub(crate) fn set_color_target(
+        &mut self,
+        target: ColorTarget,
+    ) -> Result<(), crate::SurfaceError> {
+        self.surface.color_target(target);
+        if self.destination != target {
+            self.destination = target;
+            if self.has_color_inputs {
+                let result = self.surface.bind(&self.inputs, None);
+                self.bound = result.is_ok();
+                result?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -112,7 +204,7 @@ impl Module {
             return false;
         }
         self.settle(id);
-        self.detach(id);
+        self.release(id);
         self.check_device();
         let Some(gpu) = self.gpu.as_ref() else {
             return self.fail::<()>("no device").is_some();
@@ -144,7 +236,10 @@ impl Module {
         inst.presentation = Some(SurfaceRef::new(target));
         inst.config = Some(config);
         inst.surface.device_ready(features, limits);
-        inst.report_color_space();
+        if let Err(e) = inst.report_color_space() {
+            self.error = e.0;
+            return false;
+        }
         inst.invalidate();
         true
     }
@@ -154,6 +249,11 @@ impl Module {
     pub fn detach(&mut self, id: u32) {
         self.settle(id);
         self.release(id);
+        if let Some(inst) = self.instances.get_mut(&id).filter(|i| i.has_color_inputs) {
+            if let Err(e) = inst.report_color_space() {
+                self.error = e.0;
+            }
+        }
     }
 
     /// Give a canvas made without a target buffers to render into, which a
@@ -206,7 +306,10 @@ impl Module {
         let inst = self.instances.get_mut(&id).unwrap();
         inst.hdr = false;
         inst.surface.device_ready(features, limits);
-        inst.surface.color_space_granted(ColorSpace::Srgb);
+        if let Err(e) = inst.set_color_target(ColorTarget::readback(inst.offscreen_format())) {
+            self.error = e.0;
+            return None;
+        }
         inst.invalidate();
         Some(inst)
     }
@@ -324,6 +427,15 @@ impl crate::Module {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opaque_output_keeps_straight_rgb_and_writes_full_alpha() {
+        let target = ColorTarget {
+            alpha: wgpu::CompositeAlphaMode::Opaque,
+            ..Default::default()
+        };
+        assert_eq!(target.fragment([1.0, 0.0, 0.0, 0.5]), [1.0, 0.0, 0.0, 1.0]);
+    }
 
     #[test]
     fn sdr_color_space_requires_both_the_request_and_the_targets_capability() {

@@ -1263,6 +1263,21 @@ fn check_attr(a: &Attr, scope: &Scope, shapes: &Shapes) -> Result<(), TypeError>
                     }
                     _ => arg,
                 };
+                if let Expr::Call(head, args, span) = value {
+                    if head == "color" {
+                        if shapes.fns.contains_key(head) {
+                            return err("type-surface-color", "color() is reserved for a design colour in a surface argument; rename the declared function to call it here", *span);
+                        }
+                        if !matches!(args.as_slice(), [Expr::Str(..)]) {
+                            return err(
+                                "type-surface-color",
+                                "color() takes one literal string naming a design colour token",
+                                *span,
+                            );
+                        }
+                        continue;
+                    }
+                }
                 infer(value, scope, shapes)?;
             }
         }

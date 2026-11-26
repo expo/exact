@@ -202,37 +202,35 @@ impl Module {
         }
         let target = inst.presentation.as_ref()?;
         let config = inst.config.as_mut()?;
-        // Configuring again needs nothing of the surface acquired.
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut idle = || inst.acquire.reconfigure();
-        #[cfg(target_arch = "wasm32")]
-        let idle = || true;
         let alpha = crate::target::alpha_mode(inst.surface.opaque(), &inst.alpha_modes);
-        if config.alpha_mode != alpha {
-            if !idle() {
+        if config.alpha_mode != alpha || config.width != w || config.height != h {
+            #[cfg(not(target_arch = "wasm32"))]
+            if !inst.acquire.reconfigure() {
                 return Some(true);
             }
             inst.held = None;
+            let alpha_changed = config.alpha_mode != alpha;
             config.alpha_mode = alpha;
+            config.width = w;
+            config.height = h;
             crate::swapchains(|| target.configure(&gpu.device, config));
+            if alpha_changed {
+                let destination = crate::ColorTarget::of(config);
+                if let Err(e) = inst.set_color_target(destination) {
+                    self.error = e.0;
+                    return None;
+                }
+            }
         }
+        let target = inst.presentation.as_ref()?;
+        let config = inst.config.as_mut()?;
         let format = crate::view_format(config);
         inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
-        // Off the presenter's thread (`acquire`) unless the clock is the
-        // agent's, whose frames are rendered when asked for.
+        // Off the presenter's thread unless the clock is the agent's.
         #[cfg(not(target_arch = "wasm32"))]
         let off_thread = crate::acquire::Acquire::ENABLED && !self.seekable;
         #[cfg(target_arch = "wasm32")]
         let off_thread = false;
-        if config.width != w || config.height != h {
-            if !idle() {
-                return Some(true);
-            }
-            inst.held = None;
-            config.width = w;
-            config.height = h;
-            crate::swapchains(|| target.configure(&gpu.device, config));
-        }
         use wgpu::CurrentSurfaceTexture as Current;
         // The drawable an incomplete frame was submitted into.
         let retry = inst.held.is_some();

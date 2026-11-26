@@ -363,6 +363,8 @@ pub struct SurfaceUpdate {
     pub names: Vec<String>,
     /// Its arguments, evaluated.
     pub values: Vec<Value>,
+    /// Colour argument positions and the design tokens they read at this canvas.
+    pub colors: Vec<(usize, exact_plan::ThemeId)>,
     /// Each argument's declared type, where it has one (LLP 1056 D1).
     pub types: Vec<Option<exact_plan::TypesId>>,
 }
@@ -381,7 +383,14 @@ impl SurfaceUpdate {
                 crate::json::quote(&self.names[i], &mut out);
                 out.push(':');
             }
+            let color = self.colors.iter().any(|(slot, _)| *slot == i);
+            if color {
+                out.push_str("{\"color\":");
+            }
             value_json(value, &mut out);
+            if color {
+                out.push('}');
+            }
         }
         out.push(if named { '}' } else { ']' });
         out
@@ -1157,6 +1166,12 @@ impl NodeInst {
                         .map(str::to_owned)
                         .collect(),
                     values: values.clone(),
+                    colors: s
+                        .args
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, a)| plan.surface_arg(a).color.map(|t| (i, t)))
+                        .collect(),
                     types: s.args.iter().map(|a| plan.surface_arg(a).ty).collect(),
                 });
                 self.rare().last_surface = Some(values);

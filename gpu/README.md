@@ -37,6 +37,23 @@ and optionally `EXACT_AGENT_WINDOW_TAP` to a launch button's test ID.
 `EXACT_AGENT_WINDOW_UNPACED=1` removes pacing to measure rendering capacity.
 These switches require a bounded development run and are stripped in production.
 
+## Colour inputs
+
+A Contract surface argument `color("surface.board")` binds straight linear-sRGB
+(D65) RGBA. Read it with `exact_gpu::json::color(&inputs[0], "fill")?`. All four
+components are `f32`. RGB retains out-of-gamut and extended values. Alpha ranges
+from zero to one. Keep the `ColorTarget` passed to `Surface::color_target`.
+Use `target.fragment(rgba)` as a fragment shader's RGBA output with replacement
+blending, or `target.clear(rgba)` as a render pass's clear colour. Both account
+for the attachment's primaries, transfer and alpha mode, including the hardware
+encode on an sRGB view. You can cache either value in `bind`. A changed format,
+colour space or alpha mode delivers the new target and rebinds colour inputs.
+A private straight linear-sRGB working texture takes the original input directly.
+
+Leave `opaque()` false for transparency. If the target offers only opaque
+presentation, the helper writes the straight colour at full alpha. Use a
+transparent canvas over a token-painted view where the compositor supports it.
+
 ## Android initialization
 
 `dlopen` runs no `JNI_OnLoad`, so a module that calls into Java exports the

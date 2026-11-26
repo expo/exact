@@ -803,6 +803,12 @@ and specialized host commands such as `share`, `scrollIntoView` and the three do
 as the callbacks to `map` and `filter`, with at most item and index parameters;
 they are not first-class values or event handlers.
 
+In a GPU surface call, a complete positional or named argument may be
+`color("token.name")`. The operand must be one literal string naming a
+Forma colour token. This position reserves `color`. If the app also declares a
+function named `color`, the surface call reports the collision. The function
+can still be called elsewhere. The token constructor requires a surface argument.
+
 An app-declared shape's call constructs a record: either all named fields, or one
 positional base followed by zero or more replacements. A `list` literal is
 a list of its items, left to right; their types meet as a ternary's arms do (`type-list-item` when they do

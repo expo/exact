@@ -126,10 +126,11 @@ pub async fn recover(
             let config = inst.config.as_ref().unwrap();
             inst.surface
                 .device_ready(gpu.device.features(), gpu.device.limits());
+            let destination = crate::ColorTarget::of(config);
+            inst.set_color_target(destination)
+                .map_err(|e| crate::recovery::RecoveryFailure::other(e.0))?;
             inst.surface
-                .color_space_granted(crate::target::granted(Some(config)));
-            inst.surface
-                .prepare_assets(&gpu.device, &gpu.queue, crate::view_format(config));
+                .prepare_assets(&gpu.device, &gpu.queue, destination.format);
             inst.presentation = Some(SurfaceRef::new(target));
         }
         if module

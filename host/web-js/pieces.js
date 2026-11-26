@@ -5,7 +5,7 @@ import { committedCanvas } from './request-send.js';
 import { releaseAsset as rel } from './elements.js';
 import { liveById, sheetLeaves, inertAncestor } from './navigation.js';
 import { startDecoration, decorationPiece } from './editor.js';
-import { Owner, onEnd, effect, say, inflight, data, journal, After, Before, Finishes, Hosts, Probes, Media } from './rt.js';
+import { Owner, onEnd, effect, eq, say, inflight, data, journal, After, Before, Finishes, Hosts, Probes, Media } from './rt.js';
 import { clock, advance } from './clock.js';
 import { Views, Ids, viewId, Hooks } from './tree.js';
 import { OnHooks } from './events.js';
@@ -16,7 +16,7 @@ import { replaced } from './focus.js';
  * host's own `gpu-glue.js` over `gpu.js`, fetched after the first painted
  * frame, only when a canvas is on the page (a loaded capability). */
 let Gpu = null;
-export function gs(e, name, values) {
+function gpuBinding(e, name) {
   const id = viewId(e);
   e.exactSurfaceName = name;
   onEnd(() => {
@@ -26,8 +26,7 @@ export function gs(e, name, values) {
       say(`gpu: ${err.message}`);
     }
   });
-  effect(() => {
-    const v = values();
+  return v => {
     const x = (globalThis.exact ??= {});
     // Published after the commit applied, as the runner publishes surface
     // inputs: the canvas is in the document by then.
@@ -81,6 +80,51 @@ export function gs(e, name, values) {
         .catch(err => say(`gpu: ${err.message}`))
         .finally(() => inflight.n--);
     }
+  };
+}
+export function gs(e, name, values) {
+  const bind = gpuBinding(e, name);
+  effect(() => bind(values()));
+}
+
+/** Hidden children inherit the canvas's style. Their transition
+ * events report computed colour changes, including changes through the CSSOM. */
+export function gsc(e, name, values, colors) {
+  if (globalThis.__exactRender) return;
+  const bind = gpuBinding(e, name);
+  const slots = colors.map(([slot, css]) => {
+    const probe = document.createElement("span");
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.cssText = `all:unset;position:absolute!important;visibility:hidden!important;width:0;height:0;pointer-events:none;color:color(from ${css} srgb-linear r g b / alpha)!important;transition:color 1ms step-start!important;forced-color-adjust:none`;
+    e.appendChild(probe);
+    return [slot, probe];
+  });
+  let base, frame, previous;
+  const update = () => {
+    frame = null;
+    if (!e.isConnected) return;
+    const args = Array.isArray(base) ? [...base] : {...base};
+    for (const [slot, probe] of slots) {
+      const text = getComputedStyle(probe).color;
+      const parts = /^color\(srgb-linear ([^)]*)\)$/.exec(text);
+      if (!parts) { previous = undefined; say(`gpu: could not resolve colour slot ${slot} as linear sRGB (${text})`); return; }
+      const rgba = parts[1].split(/[ /]+/).map(v => v === "none" ? 0 : Math.fround(Number(v)));
+      if (rgba.length === 3) rgba.push(1);
+      args[slot] = {color: rgba};
+    }
+    const inputs = Object.values(args).map(value => value?.color ?? value);
+    if (!eq(previous, inputs)) { previous = inputs; bind(args); }
+  };
+  const schedule = () => { if (frame == null) frame = requestAnimationFrame(update); };
+  for (const [, probe] of slots) probe.addEventListener("transitionend", schedule);
+  // Transitions do not run while a canvas is display:none.
+  const visible = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) schedule(); });
+  visible.observe(e);
+  effect(() => { base = values(); schedule(); });
+  onEnd(() => {
+    visible.disconnect();
+    if (frame != null) cancelAnimationFrame(frame);
+    for (const [, probe] of slots) probe.remove();
   });
 }
 /** A Canvas 2D surface (LLP 1056): its arguments, drawn by the data

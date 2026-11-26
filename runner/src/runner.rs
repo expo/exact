@@ -65,6 +65,7 @@ mod forma;
 mod root_font;
 mod shown;
 mod sounds;
+mod surface_colors;
 mod theme;
 pub use event::{
     ActionBinding, ActionBindingError, ActionBindingRefusal, ControlValue, Event, KeyModifiers,
@@ -432,6 +433,7 @@ pub struct Runner<D: DataSource> {
     /// Refused requests, for `state` (LLP 1070.000 §2.2).
     into_view_refused: std::collections::VecDeque<String>,
     surfaces: Vec<SurfaceUpdate>,
+    surface_colors: surface_colors::Bindings,
     /// Views the next applied batch renews (LLP 1078): rebound list rows.
     renewed: Vec<ViewId>,
     /// Rows the next batch mounts out of their port, and those that showed (LLP 1055 D13).
@@ -925,6 +927,7 @@ impl<D: DataSource> Runner<D> {
             intersections: Vec::new(),
             into_view_refused: Default::default(),
             surfaces: Vec::new(),
+            surface_colors: Default::default(),
             renewed: Vec::new(),
             shown: Default::default(),
             reuse: false,

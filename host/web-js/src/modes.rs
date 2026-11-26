@@ -638,6 +638,27 @@ fn css_of(entry: &exact_kernel::style::theme::Entry) -> String {
     text
 }
 
+/// The same CSS source a painted row reads for this colour in the canvas's tuple.
+pub(super) fn surface_color(plan: &Plan, id: exact_plan::ThemeId) -> String {
+    let row = &plan.theme[id.0 as usize];
+    let name = plan.str(row.name);
+    if let Some(role) = exact_kernel::style::roles::role(plan.str(row.role)) {
+        let mut css = String::new();
+        exact_kernel::gradient::color_css(&mut css, exact_kernel::ColorValue::Role(role));
+        return css;
+    }
+    if let Some((_, property)) = properties(plan).into_iter().find(|(n, _)| n == name) {
+        return format!("var({property})");
+    }
+    let table = bridge::theme_table_at(plan, 0);
+    css_of(
+        table
+            .iter()
+            .find(|e| e.name.as_ref() == name)
+            .expect("checked colour token"),
+    )
+}
+
 /// A development build's design for the live table (LLP 1121 stage 4): the
 /// plan's structure and design digests and each token's wire text, and for
 /// each token the page declares, its property and its CSS per full tuple, as

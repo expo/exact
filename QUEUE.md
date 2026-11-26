@@ -1650,6 +1650,10 @@ sits on that list carries the trade it would take.
 
 ## Cheap, any time
 
+- Exercise a checked GPU colour slot whose native Forma resolver loses both its colour and fallback. The runner clears the bind comparison but emits no per-canvas refusal. Verify recovery when the same colour returns.
+- Compare an iOS agent window screenshot with the simulator display for a translucent GPU canvas. Clear an 8-bit Display P3 target to associated RGBA (0.3, 0.2, 0.15, 0.5) over white beside a view painted with `color(display-p3 .6 .4 .3 / .5)`. On the 27.2 simulator the parent app-drawing fallback gave (183,138,118), the display (208,177,162) and the sibling (208,177,163).
+- Check a freshly built external Linux app with its GPU dylib on macOS. For an app with an app-owned GPU module, `bun exact.mjs linux` followed by `bun exact.mjs agent linux tree` reports the linked GPU dylib changed, including after a second build.
+- Capture an HDR Metal canvas in a macOS agent window screenshot. With `Surface::high_dynamic_range()` true and a granted RGBA16Float target, `screenshot board.png window` logs “Rgba16Float is not an RGBA8 or BGRA8 format” and shows the backing view.
 - On macOS, run `RUST_TEST_THREADS=1 cargo test -p exact-executor --lib`. The URLSession fixture sometimes counts two connections for six sequential reads. The two `lane_tests::platform_reads` tests passed in isolation.
 - Run `cargo test -p exact-runner --lib geometry::modal_tests`. Seven modal and popover geometry cases miss descendants in hit tests or selectors. One backdrop probe returns `upper` where `upper-child` was expected.
 - Run `cargo test -p exact-runner --lib a_data_send_carries_the_grants_it_was_admitted_under`. The handler sees an empty authority on a send admitted with `net.fetch https://source.test`.

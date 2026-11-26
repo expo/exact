@@ -87,6 +87,7 @@ mod stmts;
 mod strings;
 mod style_hosts;
 pub mod style_names;
+mod surface;
 mod svg;
 mod swipe_rows;
 mod symbols;
@@ -1460,16 +1461,7 @@ impl<'a> Lowerer<'a> {
                         )
                     }
                 };
-                let mut codes = Vec::new();
-                for arg in args {
-                    let (name, value) = match arg {
-                        Expr::NamedArg(name, value, _) => (name.as_str(), value.as_ref()),
-                        _ => ("", arg),
-                    };
-                    let (code, ty) = self.typed_code(value, scope, locals)?;
-                    codes.push((name, code, self.ty_id(&ty).ok()));
-                }
-                *surface = Some(self.b.surface(name, &codes));
+                *surface = Some(self.lower_surface(name, args, scope, locals)?);
             }
             tags::AttrTarget::Handler(event) => {
                 self.handler(tag, event, control, a, scope, locals, handlers)?;
