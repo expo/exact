@@ -21,7 +21,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     private var restoreActivation = false
     private var restoreEditing = false
     private var savedSelection: (start: Int, end: Int)?
-    var hasDeferredPostureRestore: Bool { restoreActivation || restoreEditing }
+    var hasDeferredPostureRestore: Bool { restoreActivation || restoreEditing || savedSelection != nil }
     package var shownField: UITextField { bindEditor() }
     #endif
     weak var host: NavigationHost?
@@ -210,11 +210,12 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
 
     func preparePostureMove() {
         prepareCoverMove()
-        // One move can report both a width change and a display-mode change.
-        guard restoreActivation, !restoreEditing, host?.split?.searchState.resultBase == nil else { return }
+        // One move can report both a width change and a display-mode change: its first report keeps the field's state.
+        guard restoreActivation, !restoreEditing, savedSelection == nil, host?.split?.searchState.resultBase == nil else { return }
         let editor = bindEditor()
-        guard editor.isFirstResponder else { return }
-        restoreEditing = true
+        // UIKit can take the field out of the window, and so out of editing, before it reports the move, and gives it
+        // editing back itself after the move: the range is kept either way, and Exact restores only editing it saw.
+        restoreEditing = editor.isFirstResponder
         guard editor.markedTextRange == nil, let range = editor.selectedTextRange else { return }
         savedSelection = (editor.offset(from: editor.beginningOfDocument, to: range.start),
                           editor.offset(from: editor.beginningOfDocument, to: range.end))
@@ -232,7 +233,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     }
 
     func restoreEditingAfterPosture() {
-        guard restoreEditing, !restoreActivation, open, pairedClose == nil, controller.isActive, !presenting,
+        guard restoreEditing || savedSelection != nil, !restoreActivation, open, pairedClose == nil, controller.isActive, !presenting,
               let host, host.exposesSearchOwner(self) else { return }
         let editor = bindEditor()
         if let other = host.presenter.keyboardEditor, other !== editor {
@@ -246,6 +247,8 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
             return
         }
         guard editor.isFirstResponder else {
+            // Drop the range of a field that was not editing and that the move gave no editing back
+            guard restoreEditing else { return discardPostureEditing() }
             // Give UIKit's editing callbacks and any ensuing projection a turn before restoring the range.
             if editor.becomeFirstResponder() { host.scheduleSplitProjection() }
             return
