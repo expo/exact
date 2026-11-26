@@ -994,14 +994,14 @@ fn tree<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
     tree.to_string()
 }
 
-/// The engine's settle time, milliseconds, when a transition is in flight.
-/// A reorder ghost's return counts too (LLP 1094 D8), and a pad's effect.
+/// The engine's settle time (ms) while transitions, reorder ghosts, pads, or wheel snaps run.
 fn settle<D: DataSource>(p: &Presenter<D>) -> Option<f64> {
     field_num(&p.host().agent("{\"op\":\"settle\"}"), "settle")
         .into_iter()
         .chain(crate::pads::due())
         .chain(p.group_settles_at())
         .chain(p.scroll_end_due())
+        .chain(p.wheel_snap_due())
         .chain(p.brush.settles_at())
         .chain(p.stage_settles_at())
         .reduce(f64::max)

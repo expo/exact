@@ -90,6 +90,7 @@ impl<D: DataSource> Presenter<D> {
         let after = self.finish_commit();
         self.hatch_timers(now_ms);
         let held = self.release_held_tap(false);
+        self.settle_wheel_snaps();
         let ends = self.deliver_scroll_ends();
         e.or(after)
             .or(held)
@@ -118,6 +119,7 @@ impl<D: DataSource> Presenter<D> {
         self.dirty |= paint;
         let after = self.finish_commit();
         self.hatch_presented(now_ms);
+        self.settle_wheel_snaps();
         let ends = self.deliver_scroll_ends();
         admission.or(e).or(after).or(ends)
     }
@@ -341,6 +343,7 @@ impl<D: DataSource> Presenter<D> {
         self.dirty = true;
         let after = self.after_commit();
         let held = self.release_held_tap(false);
+        self.settle_wheel_snaps();
         let ends = self.deliver_scroll_ends();
         (landed, e.or(after).or(held).or(ends))
     }
