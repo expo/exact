@@ -398,6 +398,156 @@ final class NativeButtonsMacTests: XCTestCase {
         XCTAssertEqual(pressed, [4], "outside its ancestor's box: no press, as on iOS")
     }
 
+    /// A mouse's click bubbles from where the mouse was released: inside its ancestor's box, though the button's centre and
+    /// the press are outside it, the ancestor's press, through the button's action with the release. A key's activation
+    /// has no point and goes by the centre (LLP 1069.011 D4).
+    func testAClickBubblesFromWhereTheMouseWasReleased() throws {
+        let p = presenter(box(4, handlers: ["press"]) + native(6, handlers: [], x: 80)
+                          + [["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0], ["op": "children", "id": 4, "ids": [6]], ["op": "roots", "ids": [4]]],
+                          faces: [6: face("Half")])
+        let button = try XCTUnwrap(p.controls.controls[6] as? NativeButtonMac)
+        showForClicks(p)
+        var pressed: [UInt32] = [], carried: [NSEvent.EventType?] = []
+        p.onPress = { pressed.append($0); carried.append(p.nativeClick?.type) }
+        click(button, at: NSPoint(x: 30, y: 12), releasedAt: NSPoint(x: 10, y: 12))
+        XCTAssertEqual(pressed, [4], "pressed at 110, outside its ancestor, and released at 90, inside it")
+        XCTAssertEqual(carried, [.leftMouseUp], "through the button's action, with the release")
+        click(button, at: NSPoint(x: 10, y: 12), releasedAt: NSPoint(x: 30, y: 12))
+        XCTAssertEqual(pressed, [4], "pressed at 90, inside its ancestor, and released at 110, outside it")
+        button.performClick(nil)
+        XCTAssertEqual(pressed, [4], "a key's activation, at the centre, 140: outside it")
+    }
+
+    /// A native button moving with its layout (LLP 1069.011 D6) takes one press for a click on the face it shows there,
+    /// and none for one on the frame it was laid out at. AppKit declines a press outside the frame its own conversion
+    /// places the button at, so the node's own mouse-up takes it, as a custom button's.
+    func testAMovingButtonTakesAClickOnTheFaceItShows() throws {
+        let p = presenter(native(2, x: 200) + [["op": "roots", "ids": [2]]], faces: [2: face("Go")])
+        let node = try XCTUnwrap(p.views[2]), button = try XCTUnwrap(p.controls.controls[2] as? NativeButtonMac)
+        showForClicks(p)
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        // Halfway through a move from the left: its face shows 120 points left of its frame
+        node.layoutOffset = CGPoint(x: -120, y: 0)
+        node.applyTransform()
+        click(button, at: NSPoint(x: -60, y: 12))
+        XCTAssertEqual(pressed, [2], "on its face")
+        click(button, at: NSPoint(x: 60, y: 12))
+        XCTAssertEqual(pressed, [2], "on its frame, where its face no longer is")
+    }
+
+    /// A native button in a moving box takes one press for a click on the face the box's move shows.
+    func testAButtonInAMovingBoxTakesAClickOnTheFaceItShows() throws {
+        let p = presenter(box(1) + native(2, x: 200)
+                          + [["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 40.0], ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]],
+                          faces: [2: face("Go")])
+        let box = try XCTUnwrap(p.views[1]), button = try XCTUnwrap(p.controls.controls[2] as? NativeButtonMac)
+        showForClicks(p)
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        box.layoutOffset = CGPoint(x: -120, y: 0)
+        box.applyTransform()
+        click(button, at: NSPoint(x: -60, y: 12))
+        XCTAssertEqual(pressed, [2], "on its face")
+    }
+
+    /// A release on a moving button's laid-out frame, where its face no longer shows, presses nothing, though AppKit
+    /// tracks the frame and sends the action; one on the face bubbles (LLP 1069.011 D4).
+    func testAReleaseOffAMovingFaceBubblesNothing() throws {
+        let p = presenter(box(4, handlers: ["press"]) + native(6, handlers: [], x: 80)
+                          + [["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 400.0, "h": 40.0], ["op": "children", "id": 4, "ids": [6]], ["op": "roots", "ids": [4]]],
+                          faces: [6: face("Half")])
+        let node = try XCTUnwrap(p.views[6]), button = try XCTUnwrap(p.controls.controls[6] as? NativeButtonMac)
+        showForClicks(p)
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        // Its frame spans 80 to 200 and its face, moving in from the left, 20 to 140
+        node.layoutOffset = CGPoint(x: -60, y: 0)
+        node.applyTransform()
+        click(button, at: NSPoint(x: 30, y: 12), releasedAt: NSPoint(x: 100, y: 12))
+        XCTAssertEqual(pressed, [], "pressed at 110 on both and released at 180, on the frame alone")
+        click(button, at: NSPoint(x: 30, y: 12), releasedAt: NSPoint(x: 10, y: 12))
+        XCTAssertEqual(pressed, [4], "released at 90, on both")
+    }
+
+    /// The second of two clicks released on a moving button's laid-out frame alone is no click, so no double click
+    /// reaches its ancestor's listener; one released on its face does.
+    func testADoubleClickReleasedOffAMovingFaceIsNone() throws {
+        let p = presenter(box(4, handlers: ["dblclick"]) + native(6, handlers: [], x: 80)
+                          + [["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 400.0, "h": 40.0], ["op": "children", "id": 4, "ids": [6]], ["op": "roots", "ids": [4]]],
+                          faces: [6: face("Half")])
+        let node = try XCTUnwrap(p.views[6]), button = try XCTUnwrap(p.controls.controls[6] as? NativeButtonMac)
+        showForClicks(p)
+        var doubled: [UInt32] = []
+        p.onDblclick = { doubled.append($0) }
+        // Its frame spans 80 to 200 and its face, moving in from the left, 20 to 140
+        node.layoutOffset = CGPoint(x: -60, y: 0)
+        node.applyTransform()
+        click(button, at: NSPoint(x: 30, y: 12))
+        click(button, at: NSPoint(x: 30, y: 12), releasedAt: NSPoint(x: 100, y: 12), count: 2)
+        XCTAssertEqual(doubled, [], "the second released at 180, on the frame alone")
+        click(button, at: NSPoint(x: 30, y: 12), releasedAt: NSPoint(x: 10, y: 12), count: 2)
+        XCTAssertEqual(doubled, [4], "the second released at 90, on both")
+    }
+
+    /// A button with its own press takes a key's activation wherever it shows, even at a scale of 0, where no point
+    /// maps back into it.
+    func testAKeyPressesAButtonWithItsOwnPressAtAScaleOfZero() throws {
+        let p = presenter(native(2) + [["op": "roots", "ids": [2]]], faces: [2: face("Go")])
+        let node = try XCTUnwrap(p.views[2]), button = try XCTUnwrap(p.controls.controls[2] as? NativeButtonMac)
+        p.viewport.layoutSubtreeIfNeeded()
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        node.scale = .zero
+        node.applyTransform()
+        button.performClick(nil)
+        XCTAssertEqual(pressed, [2])
+    }
+
+    /// A handlerless button moving with its layout bubbles a key's activation from the centre it shows: inside its
+    /// ancestor's box there, though its laid-out centre is outside it (LLP 1069.011 D4).
+    func testAKeyOnAMovingButtonBubblesFromTheCentreItShows() throws {
+        let p = presenter(box(4, handlers: ["press"]) + native(6, handlers: [], x: 80)
+                          + [["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0], ["op": "children", "id": 4, "ids": [6]], ["op": "roots", "ids": [4]]],
+                          faces: [6: face("Half")])
+        let node = try XCTUnwrap(p.views[6]), button = try XCTUnwrap(p.controls.controls[6] as? NativeButtonMac)
+        p.viewport.layoutSubtreeIfNeeded()
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        button.performClick(nil)
+        XCTAssertEqual(pressed, [], "at rest its centre, 140, is outside its ancestor")
+        // Moving in from the left: its centre shows at 90
+        node.layoutOffset = CGPoint(x: -50, y: 0)
+        node.applyTransform()
+        button.performClick(nil)
+        XCTAssertEqual(pressed, [4], "its centre shows at 90, inside its ancestor")
+    }
+
+    /// The window in front, where a click through the application reaches the buttons, and every click counting, as the
+    /// agent's do in a window that is not key.
+    private func showForClicks(_ p: Presenter) {
+        p.viewport.layoutSubtreeIfNeeded()
+        window.orderFrontRegardless()
+        let counted = NodeView.everyClickCounts
+        addTeardownBlock { NodeView.everyClickCounts = counted }
+        NodeView.everyClickCounts = true
+    }
+
+    /// A click through the application, pressed at `down` and released at `up` (`down` too when nil) in `button`'s
+    /// coordinates, the `count`th of a run, as the agent sends one: its release is queued for the button's tracking, and sent after it only while
+    /// the queue still holds that release.
+    private func click(_ button: NSButton, at down: NSPoint, releasedAt up: NSPoint? = nil, count: Int = 1) {
+        let number = AgentMouseRelease.nextEventNumber(), time = ProcessInfo.processInfo.systemUptime
+        func event(_ type: NSEvent.EventType, _ local: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: button.convert(local, to: nil), modifierFlags: [], timestamp: time,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: count, pressure: type == .leftMouseDown ? 1 : 0)!
+        }
+        let release = event(.leftMouseUp, up ?? down)
+        NSApp.postEvent(release, atStart: true)
+        NSApp.sendEvent(event(.leftMouseDown, down))
+        if AgentMouseRelease(release)?.takeQueued(from: NSApp) != nil { NSApp.sendEvent(release) }
+    }
+
     /// An assistive app's press (AXPress, at the cell VoiceOver lands on)
     /// clicks the button once AppKit's request has returned, and once: run
     /// inside it, a press that landed answered kAXErrorAttributeUnsupported

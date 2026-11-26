@@ -646,6 +646,15 @@ extension NodeView {
             }
             return true
         }
+        // A handlerless native button that names no popover or command target presses the ancestor its centre shows
+        // inside, as its control's action does (LLP 1069.011 D4), with no focus handed on, as a key's press hands none; it
+        // takes the key whether or not that finds one, so no ancestor's own key path presses past the test
+        if isNativeButton, !takesPress, let presenter {
+            if !inert, let target = activationTarget(at: convert(CGPoint(x: bounds.midX, y: bounds.midY), to: nil)) {
+                presenter.press(target.id, bubbled: presenter.pressBox(of: target, from: self) !== target)
+            }
+            return true
+        }
         #endif
         guard handlers.contains("press") || defaultLink != nil else { return false }
         presenter?.press(id)
