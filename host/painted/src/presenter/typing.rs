@@ -293,7 +293,7 @@ impl<D: DataSource> Presenter<D> {
             }
             // The page's shortcuts hear the chord first, as the web's capture
             // listener does: a button declaring Control+V takes it.
-            let (error, prevented) = if self.shortcut("v", false, now) {
+            let (error, prevented) = if self.shortcut("v", "KeyV", false, now) {
                 (None, true)
             } else {
                 self.key_event(EventKind::Key, "v", "KeyV", false, now)
@@ -432,7 +432,7 @@ impl<D: DataSource> Presenter<D> {
             }
             if down {
                 let name = if key == "Space" { " " } else { key };
-                if self.shortcut(name, repeat, self.host.now()) {
+                if self.shortcut(name, code, repeat, self.host.now()) {
                     self.shortcut_keys.insert(code.to_string());
                     return Ok(format!(
                         "{{\"typed\":{id},\"delivery\":\"recognized\",\"shortcut\":true}}"
@@ -471,7 +471,7 @@ impl<D: DataSource> Presenter<D> {
                 "NumpadEnter" => "Enter",
                 name => name,
             };
-            if self.shortcut(name, repeat, self.host.now()) {
+            if self.shortcut(name, code, repeat, self.host.now()) {
                 return Ok(format!(
                     "{{\"typed\":{id},\"delivery\":\"recognized\",\"shortcut\":true}}"
                 ));
@@ -754,7 +754,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // The page's shortcuts first, focus or none (`shortcuts.rs`); a
         // repeat is the shortcut's, and presses nothing.
-        if self.shortcut(name, repeat, now_ms) {
+        if self.shortcut(name, code, repeat, now_ms) {
             return;
         }
         // Then a desktop's Back or Forward key (LLP 1115.000 D5.4, D5.5),
@@ -813,7 +813,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// Default keyboard behavior shared by the page and authored top-layer boxes.
     pub(super) fn key_default(&mut self, name: &str, code: &str, repeat: bool, now_ms: f64) {
-        if self.copy_reader_key(name) {
+        // Control+C and the field's editing chords take the US layout's key
+        // on one that types no Latin letter (`shortcuts.rs`).
+        let chord = self.chord_key(name, code);
+        if self.copy_reader_key(chord) {
             return;
         }
         // Tab's default action moves the focus, from a canvas or a field too,
@@ -896,7 +899,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // The field's own keys: the caret and selection, editing the text it
         // shows (typed text kept against its bound value; LLP 1069.001 D4).
-        self.field_key(id, name, now_ms);
+        self.field_key(id, chord, now_ms);
     }
 
     /// Commit a field typed into since it took the focus: HTML's `change`,
