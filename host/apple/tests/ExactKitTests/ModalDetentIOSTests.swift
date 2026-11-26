@@ -464,9 +464,12 @@ final class ModalDetentIOSTests: XCTestCase {
             let reply = try? JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
             return (reply?["slots"] as? [String: Any])?["count"] as? Double
         }
-        // A short detent, so the sheet leaves Bump uncovered
+        // A short detent, so the sheet leaves Bump uncovered on any screen: 40 points clear of Bump's bottom
         let short = UISheetPresentationController.Detent.Identifier("authored-0")
-        update(["navigationDetent": "200 large", "navigationSelectedDetent": "200", "navigationUndimmedDetent": "200"])
+        let bumpBottom = bump.convert(bump.bounds, to: window).maxY
+        let height = Int(window.bounds.height - window.safeAreaInsets.bottom - bumpBottom - 40)
+        XCTAssertGreaterThan(height, 80, "room for a short sheet under Bump")
+        update(["navigationDetent": "\(height) large", "navigationSelectedDetent": "\(height)", "navigationUndimmedDetent": "\(height)"])
         XCTAssertEqual(controller.largestUndimmedDetentIdentifier, short)
         until("the sheet rests at its short detent") { controller.selectedDetentIdentifier == short && presented.transitionCoordinator == nil }
         XCTAssertFalse(modals.inertBehind(bump), "the screen under it is live")
