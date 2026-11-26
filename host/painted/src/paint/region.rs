@@ -649,7 +649,12 @@ impl Painter {
                 };
             }
         }
-        if let Some(bounds) = self.zoom_bounds(kernel, node) {
+        if let Some(mut bounds) = self.zoom_bounds(kernel, node) {
+            // A claimed zoomable scroller's range, its zoomed content's and its insets past its reached port (D14)
+            if let Some(c) = presented(node.id).scroll {
+                let (dx, dy) = c.range_change();
+                bounds.max = ((bounds.max.0 + dx).max(0.), (bounds.max.1 + dy).max(0.));
+            }
             return bounds;
         }
         if node.node_type == NodeType::TextInput {
