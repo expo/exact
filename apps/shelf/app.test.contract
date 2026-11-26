@@ -235,6 +235,26 @@ test "a photo's lines open the quote sheet, and leaving the book before they com
   expect state current.name == "library"
   expect tree missing "route-quote"
 
+// A book that takes another's place (a link to it while a book shows, as a row beside the list is) is a new visit,
+// so the other's read goes with the other's screen, even when the other is opened again
+test "a photo read for a book that another took the place of opens no sheet when that book comes back" on macos
+  tap "book-seed-2"
+  clock settle
+  tap "add-quote"
+  pick "quote-photo" "../../packages/text-detection/fixture/quote.png"
+  type "shelf" "/book/seed-1"
+  clock settle
+  expect state current.params.id == "seed-1"
+  type "shelf" "/book/seed-2"
+  clock settle
+  clock data
+  clock +1000
+  clock data
+  clock settle
+  expect state current.name == "book"
+  expect state current.params.id == "seed-2"
+  expect tree missing "route-quote"
+
 after "askRemoveAimed" "askRemoveAimed writes only none"
   writes none
 
@@ -244,3 +264,32 @@ always "draftStatus is one of 3 values"
 always "filter is one of 4 values"
   expect state filter in "all" "done" "reading" "want"
 
+test "beside the list, a book opened takes the shown one's place, the book shown keeps its visit opened again or at a share link's address, and removing a book closes only its own page" on web
+  size 1100x800
+  tap "book-seed-1"
+  clock settle
+  tap "book-seed-2"
+  clock settle
+  expect state current.params.id == "seed-2"
+  expect state current.id == state nav.tabs.0.stack.1.id
+  expect state current.id == 4
+  tap "book-seed-2"
+  clock settle
+  expect state current.id == 4
+  type "shelf" "/book/seed-2?ref=share"
+  clock settle
+  expect state current.id == 4
+  expect state current.url == "/book/seed-2?ref=share"
+  tap "book-seed-1" contextmenu
+  tap "menu-remove"
+  clock settle
+  tap "remove-confirm"
+  clock settle
+  clock data
+  expect text "library-count" == "2 of 2 books"
+  expect state current.name == "book"
+  expect state current.params.id == "seed-2"
+  tap "book-seed-2-delete"
+  clock data
+  clock settle
+  expect state current.name == "library"
