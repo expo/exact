@@ -16,7 +16,7 @@ import UIKit
 #endif
 
 enum Updates {
-    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "exact", category: "update")
+    fileprivate static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "exact", category: "update")
     /// A check's line, and its download facts when it staged fetched files.
     static var completed: ((String, [String: Any]?) -> Void)?
     private static let api = exact_delivery_api()
