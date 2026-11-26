@@ -141,6 +141,10 @@ fn a_batch_says_the_app_must_finish_until_the_storage_a_reply_started_lands() {
     )
     .unwrap();
     assert_eq!(said(&boot), Some(true), "the POST is out: {boot}");
+    assert_eq!(
+        host.agent(r#"{"op":"clockCounts"}"#),
+        r#"{"inflight":1,"background":0}"#
+    );
     let post = host.take_requests().pop().expect("the POST").ticket;
     let landed = host.fulfill_all(vec![(post, ok(), None)], 0.0);
     assert_eq!(
@@ -148,7 +152,19 @@ fn a_batch_says_the_app_must_finish_until_the_storage_a_reply_started_lands() {
         None,
         "its reply's storage follows it, so nothing changed: {landed}"
     );
+    assert_eq!(
+        host.agent(r#"{"op":"clockCounts"}"#),
+        r#"{"inflight":0,"background":1}"#
+    );
     let storage = host.take_requests().pop().expect("the storage").ticket;
+    assert_eq!(
+        host.agent(r#"{"op":"clockCounts"}"#),
+        r#"{"inflight":1,"background":1}"#
+    );
     let stored = host.fulfill_all(vec![(storage, Outcome::Storage(Vec::new()), None)], 0.0);
+    assert_eq!(
+        host.agent(r#"{"op":"clockCounts"}"#),
+        r#"{"inflight":0,"background":0}"#
+    );
     assert_eq!(said(&stored), Some(false), "{stored}");
 }

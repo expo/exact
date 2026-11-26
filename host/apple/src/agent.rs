@@ -66,6 +66,11 @@ impl<D: DataSource> Host<D> {
             ),
             Some("node") => self.node_reply(request),
             Some("state") => self.state_reply(request),
+            Some("clockCounts") => format!(
+                "{{\"inflight\":{},\"background\":{}}}",
+                self.runner.in_flight().len(),
+                self.runner.background_operations(),
+            ),
             _ => exact_runner::agent::handle(&self.runner, request),
         }
     }

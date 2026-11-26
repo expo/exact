@@ -1,15 +1,25 @@
-//! Reusable native capture storage. A canvas keeps one target and staging
-//! buffer; map completion is still synchronous, so no frame can overwrite it.
+//! An agent keeps the last presented picture on the GPU. A pixel read copies
+//! it into reusable staging storage and waits for the map before returning.
 use crate::*;
 
+#[derive(Clone)]
 pub(crate) struct Readback {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     rows: Option<Rows>,
+    /// Set while this texture holds the last presented picture.
+    sample_flags: Option<u32>,
+    staged: bool,
 }
 
 impl Readback {
-    fn new(gpu: &Gpu, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+    fn new(
+        gpu: &Gpu,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> Self {
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("canvas readback"),
             size: wgpu::Extent3d {
@@ -21,7 +31,7 @@ impl Readback {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: usage | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
@@ -29,19 +39,66 @@ impl Readback {
             texture,
             view,
             rows: None,
+            sample_flags: None,
+            staged: false,
         }
+    }
+    pub(crate) fn superseded(&mut self) {
+        self.sample_flags = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_no_staging(&self) -> bool {
+        self.rows.is_none()
+    }
+
+    fn matches(&self, width: u32, height: u32, format: wgpu::TextureFormat) -> bool {
+        (
+            self.texture.width(),
+            self.texture.height(),
+            self.texture.format(),
+        ) == (width, height, format)
+    }
+
+    pub(crate) fn drawable(
+        previous: Option<&Self>,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+    ) -> Self {
+        let (width, height, format) = (texture.width(), texture.height(), texture.format());
+        let usage = wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let target = previous
+            .filter(|r| r.matches(width, height, format) && r.texture.usage().contains(usage))
+            .cloned()
+            .unwrap_or_else(|| Self::new(gpu, width, height, format, usage));
+        encoder.copy_texture_to_texture(
+            texture.as_image_copy(),
+            target.texture.as_image_copy(),
+            texture.size(),
+        );
+        target
+    }
+
+    /// The compositor interprets these bytes using the configuration of this frame.
+    pub(crate) fn presented(&mut self, primaries: ColorSpace, opaque: bool) {
+        self.staged = false;
+        self.sample_flags = Some(
+            u32::from(self.texture.format() == wgpu::TextureFormat::Rgba16Float)
+                | (u32::from(primaries == ColorSpace::DisplayP3) << 1)
+                | (u32::from(opaque) << 2),
+        );
     }
 }
 
-/// A copy scheduled before presentation. Only a pixel read maps the buffer.
+/// A CPU-readable copy, allocated when pixels are requested.
 #[derive(Clone)]
-pub(crate) struct Rows {
+struct Rows {
     buffer: wgpu::Buffer,
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
     row: u32,
-    sample_flags: u32,
 }
 
 impl Rows {
@@ -67,7 +124,6 @@ impl Rows {
             format,
             buffer,
             row,
-            sample_flags: 0,
         }
     }
 
@@ -126,7 +182,7 @@ impl Rows {
         result
     }
 
-    pub(crate) fn capture(
+    fn capture(
         previous: Option<&Rows>,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
@@ -140,28 +196,44 @@ impl Rows {
         rows.copy(encoder, texture);
         rows
     }
-    /// The compositor interprets these bytes using the configuration of this frame.
-    pub(crate) fn presented(mut self, primaries: ColorSpace, opaque: bool) -> Self {
-        self.sample_flags = u32::from(self.format == wgpu::TextureFormat::Rgba16Float)
-            | (u32::from(primaries == ColorSpace::DisplayP3) << 1)
-            | (u32::from(opaque) << 2);
-        self
-    }
 }
 
 impl Module {
     pub(crate) fn sampled_frame(&mut self, id: u32) -> Option<([u32; 3], Vec<u8>)> {
         self.settle(id);
-        let inst = self.instances.get(&id)?;
+        let inst = self.instances.get_mut(&id)?;
         if inst.bound && inst.surface.is_empty() {
             return Some(([1, 1, 0], vec![0; 4]));
         }
-        let rows = inst.sampled.as_ref()?;
+        let target = inst
+            .readback
+            .as_mut()
+            .filter(|target| target.sample_flags.is_some())
+            .or(inst.sampled.as_mut())?;
+        let gpu = self.gpu.as_ref()?;
+        if !target.staged {
+            let mut recording = crate::frame::Recording::begin(&gpu.device);
+            let rows = Rows::capture(
+                target.rows.as_ref(),
+                gpu,
+                &mut recording.encoder,
+                &target.texture,
+            );
+            let commands = match recording.finish() {
+                Ok(commands) => commands,
+                Err(error) => return self.fail(error),
+            };
+            gpu.queue.submit([commands]);
+            target.rows = Some(rows);
+            target.staged = true;
+        }
+        let rows = target.rows.as_ref()?;
         let mut bytes =
             vec![0; (rows.width * Rows::stride(rows.format)) as usize * rows.height as usize];
-        let result = rows.read(self.gpu.as_ref()?, &mut bytes);
-        let size = [rows.width, rows.height, rows.sample_flags];
+        let result = rows.read(gpu, &mut bytes);
+        let size = [rows.width, rows.height, target.sample_flags?];
         if let Err(error) = result {
+            target.staged = false;
             return self.fail(error);
         }
         Some((size, bytes))
@@ -288,15 +360,40 @@ impl Module {
             }
         }
         inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
-        if inst.readback.as_ref().is_none_or(|r| {
-            r.texture.width() != width
-                || r.texture.height() != height
-                || r.texture.format() != format
-        }) {
-            inst.readback = Some(Readback::new(gpu, width, height, format));
+        if inst
+            .readback
+            .as_ref()
+            .is_none_or(|r| !r.matches(width, height, format))
+        {
+            if let Some(front) = inst.readback.take().filter(|r| r.sample_flags.is_some()) {
+                inst.sampled = Some(front);
+            }
+            // Queue uploads precede the encoder's commands. Only the private
+            // backup can be a copy destination, so a surface cannot overwrite
+            // its presented picture before the backup command runs.
+            inst.readback = Some(Readback::new(
+                gpu,
+                width,
+                height,
+                format,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            ));
         }
         let target = inst.readback.as_mut().unwrap();
         let mut recording = crate::frame::Recording::begin(&gpu.device);
+        // Keep the last presentable pixels before an incremental draw can
+        // overwrite them. Its backup and the draw share one submission.
+        let previous = target.sample_flags.map(|flags| {
+            let mut backup = Readback::drawable(
+                inst.sampled.as_ref(),
+                gpu,
+                &mut recording.encoder,
+                &target.texture,
+            );
+            backup.sample_flags = Some(flags);
+            backup.staged = false;
+            backup
+        });
         let wants = inst.surface.render(
             &frame,
             &gpu.device,
@@ -307,28 +404,14 @@ impl Module {
         );
         let failure = inst.surface.take_error();
         let ready = inst.surface.frame_presentable();
-        let sampled = if present {
-            (ready && failure.is_none()).then(|| {
-                Rows::capture(
-                    inst.sampled.as_ref(),
-                    gpu,
-                    &mut recording.encoder,
-                    &target.texture,
-                )
-                .presented(
-                    capture_target.space,
-                    capture_target.alpha == wgpu::CompositeAlphaMode::Opaque,
-                )
-            })
-        } else {
-            target.rows = Some(Rows::capture(
+        let capture = (!present).then(|| {
+            Rows::capture(
                 target.rows.as_ref(),
                 gpu,
                 &mut recording.encoder,
                 &target.texture,
-            ));
-            None
-        };
+            )
+        });
         let commands = match recording.finish() {
             Ok(commands) => commands,
             Err(e) => {
@@ -347,6 +430,13 @@ impl Module {
             crate::performance::time(inst.performance.enabled(), || gpu.queue.submit([commands]));
         if let Some(ms) = submit_ms {
             inst.performance.submitted(ms);
+        }
+        if let Some(rows) = capture {
+            target.rows = Some(rows);
+        }
+        if let Some(previous) = previous {
+            inst.sampled = Some(previous);
+            target.sample_flags = None;
         }
         inst.surface.submitted();
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
@@ -373,8 +463,11 @@ impl Module {
         }
         match result {
             Ok(()) => {
-                if let Some(sampled) = sampled {
-                    inst.sampled = Some(sampled);
+                if let Some(target) = inst.readback.as_mut().filter(|_| present && ready) {
+                    target.presented(
+                        capture_target.space,
+                        capture_target.alpha == wgpu::CompositeAlphaMode::Opaque,
+                    );
                 }
                 inst.input_dirty = inst.surface.input_pending();
                 inst.dirty = present && !ready;
@@ -445,7 +538,12 @@ pub fn sampled_frame(id: u32) -> Option<([u32; 3], Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct Solid(bool);
+    #[derive(Default)]
+    struct Solid {
+        posted: bool,
+        now: f64,
+        refused: bool,
+    }
     impl Surface for Solid {
         fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
             Ok(())
@@ -454,12 +552,37 @@ mod tests {
             &mut self,
             frame: &Frame,
             _: &wgpu::Device,
-            _: &wgpu::Queue,
+            queue: &wgpu::Queue,
             encoder: &mut wgpu::CommandEncoder,
             view: &wgpu::TextureView,
             _: wgpu::TextureFormat,
         ) -> bool {
-            self.0 = frame.now_ms > 31.;
+            self.now = frame.now_ms;
+            if self.now == 200.
+                && view
+                    .texture()
+                    .usage()
+                    .contains(wgpu::TextureUsages::COPY_DST)
+            {
+                let texture = view.texture();
+                let bytes =
+                    [200, 0, 255, 255].repeat((texture.width() * texture.height()) as usize);
+                queue.write_texture(
+                    texture.as_image_copy(),
+                    &bytes,
+                    wgpu::TexelCopyBufferLayout {
+                        bytes_per_row: Some(texture.width() * 4),
+                        ..Default::default()
+                    },
+                    texture.size(),
+                );
+                return false;
+            }
+
+            self.refused = self.now == 18.;
+            if self.now == 16. {
+                return true;
+            }
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -477,30 +600,52 @@ mod tests {
                 })],
                 ..Default::default()
             });
-            false
+            self.now == 100.
+        }
+        fn messages(&mut self) -> Vec<String> {
+            if std::mem::take(&mut self.posted) {
+                vec!["placed".into()]
+            } else {
+                Vec::new()
+            }
+        }
+        fn placement(&self, index: usize) -> Option<Placement> {
+            (index == 0).then_some(Placement {
+                hidden: false,
+                homography: [1., 0., self.now as f32, 0., 1., 0., 0., 0., 1.],
+                depth: 0.,
+                clip_depth: [[0.; 3]; 2],
+            })
+        }
+        fn is_empty(&self) -> bool {
+            self.now == 250.
         }
         fn frame_ready(&self) -> bool {
-            self.0
+            self.now > 31.
         }
         fn frame_presentable(&self) -> bool {
-            true
+            self.now != 17.
+        }
+        fn submitted(&mut self) {
+            self.refused = self.now == 19.;
+            self.posted = self.now == 100.;
+        }
+        fn take_error(&mut self) -> Option<SurfaceError> {
+            std::mem::take(&mut self.refused).then(|| SurfaceError("refused after submit".into()))
         }
     }
     static REGISTRY: Registry = Registry {
-        surfaces: &[("solid", 0, || Box::new(Solid(false)))],
+        surfaces: &[("solid", 0, || Box::new(Solid::default()))],
         shaders: &[],
     };
 
-    #[test]
-    fn reusable_capture_handles_unaligned_rows_resize_and_short_buffers() {
-        let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
-            return;
-        };
+    fn bound_surface() -> Option<(Module, u32, Frame)> {
+        let gpu = fixture::device_or_skip(fixture::device())?;
         let mut module = Module::new(&REGISTRY);
         module.set_gpu(gpu);
         let id = module.create_headless("solid").unwrap();
         module.bind(id, &[], None);
-        let mut frame = Frame {
+        let frame = Frame {
             width: 3.,
             height: 2.,
             scale: 1.,
@@ -510,6 +655,14 @@ mod tests {
             children_generation: 0,
             shader_generation: 0,
             headroom: 1.,
+        };
+        Some((module, id, frame))
+    }
+
+    #[test]
+    fn reusable_capture_handles_unaligned_rows_resize_and_short_buffers() {
+        let Some((mut module, id, mut frame)) = bound_surface() else {
+            return;
         };
         for (width, red) in [(3., 31.), (3., 95.), (65., 191.), (1., 255.)] {
             frame.width = width;
@@ -530,9 +683,92 @@ mod tests {
             assert!(module.readback_into(id, &frame, &mut short).is_none());
             assert!(short.iter().all(|&byte| byte == 77), "refusal is atomic");
         }
+
         module.lose_device();
         assert!(module.instances[&id].readback.is_none());
     }
+
+    #[test]
+    fn a_refused_pixel_sample_keeps_its_validation_error_at_the_read() {
+        let Some((mut module, id, frame)) = bound_surface() else {
+            return;
+        };
+        let gpu = module.gpu.as_ref().unwrap();
+        let mut limits = gpu.device.limits();
+        // Two aligned rows need 512 bytes. The frame itself fits this device.
+        limits.max_buffer_size = 256;
+        let (device, queue) = block_on(gpu.adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .unwrap();
+        module.set_gpu(Gpu {
+            instance: gpu.instance.clone(),
+            adapter: gpu.adapter.clone(),
+            device,
+            queue,
+        });
+        assert!(module.render_readback(id, &frame, None).is_some());
+        for _ in 0..2 {
+            assert!(module.sampled_frame(id).is_none());
+            assert!(module.error.contains("256"), "{}", module.error);
+            assert!(module.flush());
+        }
+    }
+
+    #[test]
+    fn capture_during_loading_keeps_the_last_offscreen_pixels() {
+        let Some((mut module, id, mut frame)) = bound_surface() else {
+            return;
+        };
+        frame.now_ms = 100.;
+        assert_eq!(module.render_readback(id, &frame, None), Some(true));
+        frame.now_ms = 16.;
+        let mut pixels = vec![0; 24];
+        assert_eq!(module.readback_into(id, &frame, &mut pixels), Some(true));
+        assert_eq!(&pixels[..4], &[100, 0, 255, 255]);
+        frame.now_ms = 100.;
+        assert_eq!(module.render_readback(id, &frame, None), Some(true));
+        frame.now_ms = 200.;
+        assert_eq!(module.readback_into(id, &frame, &mut pixels), Some(false));
+        assert_eq!(&pixels[..4], &[200, 0, 255, 255]);
+        let (size, last) = module.sampled_frame(id).unwrap();
+        assert_eq!(&size[..2], &[3, 2]);
+        assert_eq!(&last[..4], &[100, 0, 255, 255]);
+    }
+
+    #[test]
+    fn offscreen_steps_deliver_surface_outputs_and_sample_only_the_last_presentable_frame() {
+        let Some((mut module, id, mut frame)) = bound_surface() else {
+            return;
+        };
+        module.set_seekable(true);
+        frame.now_ms = 100.;
+        assert_eq!(module.render_readback(id, &frame, None), Some(true));
+        assert!(module.instances[&id]
+            .readback
+            .as_ref()
+            .unwrap()
+            .has_no_staging());
+        assert_eq!(module.take_messages(id), ["placed"]);
+        assert_eq!(module.placement(id, 0).unwrap().homography[2], 100.);
+        for (time, wants) in [
+            (17., Some(true)),
+            (18., None),
+            (19., None),
+            (200., Some(false)),
+        ] {
+            frame.now_ms = time;
+            assert_eq!(module.render_readback(id, &frame, None), wants);
+            let (_, bytes) = module.sampled_frame(id).unwrap();
+            let red = if time == 200. { 200 } else { 100 };
+            assert_eq!(&bytes[..4], &[red, 0, 255, 255]);
+        }
+        frame.now_ms = 250.;
+        assert_eq!(module.render_readback(id, &frame, None), Some(false));
+        assert_eq!(module.sampled_frame(id), Some(([1, 1, 0], vec![0; 4])));
+    }
+
     #[derive(Default)]
     struct Board {
         fill: wgpu::Color,

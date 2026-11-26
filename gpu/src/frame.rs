@@ -341,16 +341,17 @@ impl Module {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let sampled = (sampleable && ready && failure.is_none()).then(|| {
-            crate::readback::Rows::capture(
+            let mut picture = crate::readback::Readback::drawable(
                 inst.sampled.as_ref(),
                 gpu,
                 &mut recording.encoder,
                 &texture.texture,
-            )
-            .presented(
+            );
+            picture.presented(
                 crate::target::granted(inst.config.as_ref()),
                 alpha == wgpu::CompositeAlphaMode::Opaque,
-            )
+            );
+            picture
         });
         let commands = match recording.finish() {
             Ok(commands) => Some(commands),
@@ -360,8 +361,11 @@ impl Module {
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(rows) = sampled.filter(|_| commands.is_some()) {
-            inst.sampled = Some(rows);
+        if let Some(picture) = sampled.filter(|_| commands.is_some()) {
+            if let Some(offscreen) = &mut inst.readback {
+                offscreen.superseded();
+            }
+            inst.sampled = Some(picture);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(s) = inst.scratch.as_mut().filter(|_| retry) {
@@ -1151,6 +1155,7 @@ mod scene_tests {
         assert_eq!(m.take_error(), "");
         assert!(m.has_device(id));
         assert_eq!(m.render(id, &frame), Some(false));
+        assert!(m.instances[&id].sampled.as_ref().unwrap().has_no_staging());
         let (size, bytes) = m.sampled_frame(id).expect("the presented pixels");
         assert_eq!(&size[..2], [8, 8]);
         assert!(bytes.chunks_exact(4).all(|p| p == [0, 255, 0, 255]));
@@ -1162,6 +1167,7 @@ mod scene_tests {
         config.format = wgpu::TextureFormat::Rgba16Float;
         config.view_formats.clear();
         assert_eq!(m.render_readback(id, &frame, None), Some(false));
+        assert!(m.instances[&id].readback.as_ref().unwrap().has_no_staging());
         let (info, bytes) = m
             .sampled_frame(id)
             .expect("the offscreen extended-range frame");

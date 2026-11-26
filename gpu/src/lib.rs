@@ -667,7 +667,7 @@ struct Instance {
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<readback::Readback>,
     #[cfg(not(target_arch = "wasm32"))]
-    sampled: Option<readback::Rows>,
+    sampled: Option<readback::Readback>,
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
     layer: Option<usize>,
     outstanding: BTreeSet<String>,

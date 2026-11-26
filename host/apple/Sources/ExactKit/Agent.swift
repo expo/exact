@@ -1072,10 +1072,11 @@ public final class Agent {
                 #else
                 var out = reply(landed)
                 #endif
-                let inflight = pendingCount()
+                let counts = clockCounts()
+                let inflight = counts.inflight + pendingPictures
                 if inflight > 0 { out["inflight"] = inflight }
                 // The module's background storage still to land (LLP 1097 D9).
-                let background = backgroundCount()
+                let background = counts.background
                 if background > 0 { out["background"] = background }
                 return out
             }
@@ -1311,13 +1312,11 @@ public final class Agent {
         return ["clock": from, "settled": false, "reason": "requests"]
     }
 
-    /// The background's storage operations queued or in flight
-    /// (`state.background`, LLP 1097 D8).
-    func backgroundCount() -> Int {
-        guard let d = session.agent("{\"op\":\"state\"}").data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              let b = o["background"] as? [String: Any] else { return 0 }
-        return (b["queued"] as? Int ?? 0) + (b["inFlight"] as? Int ?? 0)
+    /// The two runner counts in a clock reply, from the same owner turn.
+    private func clockCounts() -> (inflight: Int, background: Int) {
+        let data = Data(session.agent("{\"op\":\"clockCounts\"}").utf8)
+        let counts = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (counts?["inflight"] as? Int ?? 0, counts?["background"] as? Int ?? 0)
     }
 
     /// Whether the launch left work for a later main-queue turn.
@@ -1341,14 +1340,15 @@ public final class Agent {
     }
 
     /// How many requests the runner and the presenter's pictures have in flight.
-    func pendingCount() -> Int {
+    func pendingCount() -> Int { clockCounts().inflight + pendingPictures }
+
+    private var pendingPictures: Int {
         #if os(iOS) || os(tvOS)
         let pictures = SvgLink.drawing?() ?? 0
         #else
         let pictures = 0
         #endif
-        // A reply the server holds is no I/O a clock waits on (LLP 1016.000 D9), nor is an answer's own timer (LLP 1027.000 D1).
-        return pendingRequests().filter { $0["held"] == nil && $0["timer"] == nil }.count + session.presenter.canvas2d.loadingCount + pictures
+        return session.presenter.canvas2d.loadingCount + pictures
     }
 
     /// `clock settle`'s bound on requests in flight: a network's worth.
