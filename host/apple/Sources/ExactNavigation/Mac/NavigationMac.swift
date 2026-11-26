@@ -44,6 +44,10 @@ final class NavigationHost {
     /// last batch, bottom to top, with what each sheet shows of its header
     /// (RouteSheetMac.swift), and why a route that is not one stays painted.
     private(set) var sheets: [(base: NodeView, route: NodeView, header: SheetHeader?)] = []
+    /// @ref LLP 1123 D7 — the popover route shown as an `NSPopover`, and its popover while AppKit shows it
+    /// (RoutePopoverMac.swift).
+    var poppedRoute: (base: NodeView, route: NodeView)?
+    var routePopover: RoutePopover?
     var keptSheets: [UInt32: String] = [:]
     /// A batch that can have changed a header came since the sheets last showed theirs.
     var sheetsRead = false
@@ -74,6 +78,8 @@ final class NavigationHost {
     func reset() {
         refused.removeAll(); panels.removeAll(); shown.removeAll(); selection = nil; barRoute = false; root = nil; routeless = false
         oneLocationAsked = nil; sheets = []; keptSheets.removeAll(); split.reset(); transitions.reset()
+        poppedRoute = nil
+        if let shown = routePopover { routePopover = nil; shown.closing = true; shown.popover.close(); shown.finish() }
         for ground in grounds.values { ground.removeFromSuperview() }
         grounds.removeAll()
     }
@@ -154,7 +160,9 @@ final class NavigationHost {
                     sheeted = sheetRoutes(routes, selected: selected, root: nav, concerned: concerned)
                     split.read(root: nav, routes: routes, selected: selected)
                 } else { split.readNone() }
-                sheets = sheeted
+                // The top presentation, a popover route with its anchor in the window, is an `NSPopover`, not a sheet
+                poppedRoute = popoverRoute(of: sheeted)
+                sheets = poppedRoute == nil ? sheeted : Array(sheeted.dropLast())
             }
             for routes in stacks { ground(routes, inPanel: nav === roots.first && presenter.root.window is RoutePanel, grounded: &grounded) }
             if nav === roots.first { root = (nav, tabs, tabs == nil ? nil : found); routeless = stacks.allSatisfy(\.isEmpty) }
@@ -207,9 +215,10 @@ final class NavigationHost {
                 }
             }
         }
-        if roots.isEmpty { sheets = []; split.readNone(); transitions.reset() }
+        if roots.isEmpty { sheets = []; poppedRoute = nil; split.readNone(); transitions.reset() }
         // A sheet arrives and leaves after the batch: AppKit turns the main queue while it does.
         if !sheets.isEmpty || presenter.dialogs.entries.contains(where: \.route) { presenter.afterBatch { [weak presenter] in presenter?.dialogs.syncRoutes() } }
+        if poppedRoute != nil || routePopover != nil { presenter.afterBatch { [weak self] in self?.syncPopover() } }
         for id in panels.subtracting(managed) {
             if let panel = presenter.views[id] { gate(panel, hidden: false, inert: false) }
         }
