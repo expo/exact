@@ -44,11 +44,20 @@ impl<D: DataSource> Presenter<D> {
             return false;
         };
         let claim = claim.map(|(reach, insets)| crate::safe_area::ScrollClaim { reach, insets });
+        // A follower at its end keeps it as the claim moves its range, as UIKit's writer keeps one (`ScrollInsetsIOS`)
+        let at_end = self.rests_at_end(view);
         let mut area = std::mem::take(&mut self.host.safe_area);
         let changed = area.set_scroll_claim(self.host.kernel(), key, claim);
         self.host.safe_area = area;
         if changed {
             self.dirty = true;
+            // Moved as a clamp moves it, the list's own move, so a list's pending position moves with it
+            if let Some(end) = at_end.then(|| self.end_of(view)).flatten() {
+                let before = self.scroll.get(&view).copied().unwrap_or_default();
+                let after = (before.0, end);
+                self.scroll.insert(view, after);
+                self.rebase_clamped_anchor(view, before, after);
+            }
             self.clamp_scroll();
             // The runner's geometry follows at once, back to the CSS offset when released, which it may hold as none
             let at = self.scroll.get(&view).copied().unwrap_or_default();
@@ -56,8 +65,29 @@ impl<D: DataSource> Presenter<D> {
             self.host
                 .runner_mut()
                 .scrolled(Some(view), f64::from(x), f64::from(y));
+            // A list's port, padding and range reach the runner at once, before any input reports them
+            self.queue_collections();
         }
         changed
+    }
+
+    /// Whether `view` follows its end (`scrollFollowEnd`) and rests there, within a point of its farthest offset down.
+    fn rests_at_end(&self, view: ViewId) -> bool {
+        let follows = self
+            .host
+            .kernel()
+            .node(view)
+            .is_some_and(|n| n.props.bool(exact_kernel::PropId::ScrollFollowEnd) == Some(true));
+        follows
+            && self
+                .end_of(view)
+                .is_some_and(|end| self.scroll.get(&view).map_or(0., |o| o.1) >= end - 1.)
+    }
+
+    /// The farthest `view` scrolls down, as it now stands.
+    fn end_of(&self, view: ViewId) -> Option<f32> {
+        self.scroller(view, &self.collection_scroll_limits())
+            .map(|s| s.max.1)
     }
 
     /// The scroll offsets the painter places content at: each claimed scroller's displacement of its CSS offset in
