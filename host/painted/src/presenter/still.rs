@@ -22,6 +22,8 @@ pub(crate) struct Still {
     controls: BTreeMap<ViewId, bool>,
     feedback: (Option<ViewId>, Option<ViewId>),
     held_press: Option<ViewId>,
+    /// The executors' safe-area state, which no epoch moves (LLP 1123 D13).
+    safe_area: u64,
 }
 
 impl Still {
@@ -76,6 +78,7 @@ impl<D: DataSource> Presenter<D> {
             controls: self.controls.clone(),
             feedback: self.brush.feedback,
             held_press: self.brush.held_press,
+            safe_area: self.host.safe_area.generation(),
         })
     }
 

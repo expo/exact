@@ -148,6 +148,7 @@ pub struct Host<D: DataSource> {
     preload_wake: exact_runner::PreloadWake,
     router_op: Option<exact_runner::RouterChange>,
     pub(crate) navigation: crate::navigation::Navigation,
+    pub(crate) safe_area: crate::safe_area::SafeArea,
     presence: presence::Presence,
     pub(crate) flights: flights::Flights,
     presses: BTreeMap<NodeKey, press::Feedback>,
@@ -381,6 +382,7 @@ impl<D: DataSource> Host<D> {
             preload_wake: Default::default(),
             router_op: None,
             navigation: Default::default(),
+            safe_area: Default::default(),
             presence: Default::default(),
             flights: Default::default(),
             presses: Default::default(),
@@ -745,6 +747,7 @@ impl<D: DataSource> Host<D> {
         }
         .or_else(|| self.paint.view_dark(node.key));
         shown.lowered = self.lowered_mask(node.key);
+        shown.reach = self.safe_area.reach(node.key);
         // @ref LLP 1061 D7, LLP 1121 D8 — the press and the looks that hold;
         // the painter samples the background and ink independently.
         let looks = self.looks_shown.on(id);
