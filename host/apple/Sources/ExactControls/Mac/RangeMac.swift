@@ -15,7 +15,7 @@ extension ControlHost {
         return slider
     }
 
-    func configureRange(_ slider: NSSlider, _ owner: NodeView) {
+    func configureRange(_ slider: NSSlider, _ owner: NodeView, accent: NSColor?) {
         let range = RangeSpec(owner.props)
         slider.minValue = range.min
         slider.maxValue = range.max
@@ -25,6 +25,7 @@ extension ControlHost {
             let shown = range.shown(owner.props)
             if slider.doubleValue != shown { slider.doubleValue = shown }
         }
+        if slider.trackFillColor != accent { slider.trackFillColor = accent }
         // A value set inside the knob's tracking draws only when asked to.
         slider.needsDisplay = true
         slider.setAccessibilityValue(RangeSpec.format(range.sanitize(slider.doubleValue)))
@@ -46,7 +47,9 @@ extension ControlHost {
         if !tracking {
             lastRange[id] = nil
             presenter.controlValue(id, value, input: false, change: true)
-            if let owner = presenter.views[id] { configureRange(slider, owner) }
+            if let owner = presenter.views[id] {
+                configureRange(slider, owner, accent: owner.channels("accent_color").map { TextEngine.color($0) })
+            }
         }
     }
 
@@ -57,7 +60,9 @@ extension ControlHost {
         let value = RangeSpec.format(RangeSpec(node.props).sanitize(n))
         slider.doubleValue = Double(value) ?? slider.doubleValue
         presenter.controlValue(node.id, value, input: true, change: true)
-        if let owner = presenter.views[node.id] { configureRange(slider, owner) }
+        if let owner = presenter.views[node.id] {
+            configureRange(slider, owner, accent: owner.channels("accent_color").map { TextEngine.color($0) })
+        }
         // What it shows, as the web's reply says.
         return ["typed": Int(node.id), "value": RangeSpec.format(RangeSpec(node.props).sanitize(slider.doubleValue)), "delivery": "host-activation", "native": "control"]
     }

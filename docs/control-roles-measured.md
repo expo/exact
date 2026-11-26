@@ -85,14 +85,14 @@ the table's `select` is the closed button, as a person first sees it.
 | radio:disabled | accent-color | terminal | none | - | - | none by construction |
 | radio:disabled | accent-color | android | best-effort | 14.2 | 27696 | measured |
 | range | accent-color | ios | exact | 0 | 10726 | measured |
-| range | accent-color | macos | none | (38.6) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
+| range | accent-color | macos | exact | 1.1 | 5277 | measured, key window via EXACT_AGENT_ACTIVATE |
 | range | accent-color | web | exact | 0 | 180 | measured |
 | range | accent-color | linux | exact | 0 | 180 | measured |
 | range | accent-color | windows | exact | - | - | inferred: same painter, not measured |
 | range | accent-color | terminal | none | - | - | none by construction |
 | range | accent-color | android | exact | 0 | 6371 | measured |
 | range:disabled | accent-color | ios | best-effort | 19.8 | 10748 | measured |
-| range:disabled | accent-color | macos | none | (39) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
+| range:disabled | accent-color | macos | none | (38.8) | 0 | measured, key window via EXACT_AGENT_ACTIVATE |
 | range:disabled | accent-color | web | best-effort | 20.2 | 216 | measured |
 | range:disabled | accent-color | linux | best-effort | 20.2 | 212 | measured |
 | range:disabled | accent-color | windows | best-effort | - | - | inferred: same painter, not measured |

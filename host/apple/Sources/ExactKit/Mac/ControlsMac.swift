@@ -174,6 +174,17 @@ package final class ControlHost: NSObject {
         family.syncProgress()
     }
 
+    /// Re-applies `owner`'s appearance- and tint-dependent properties without
+    /// overwriting a live toggle state.
+    func appearanceChanged(_ owner: NodeView) {
+        guard let control = controls[owner.id] else { return }
+        if let button = control as? NativeButtonMac {
+            configureNative(button, owner, accent: owner.channels("accent_color").map { TextEngine.color($0) })
+        } else {
+            family.configure(control, owner, checked: nil)
+        }
+    }
+
     /// Sizes measured and not yet reported.
     var owesSizes: Bool { !measured.isEmpty }
 

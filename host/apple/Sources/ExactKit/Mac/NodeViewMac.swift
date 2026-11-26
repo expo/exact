@@ -867,9 +867,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// @ref LLP 1034 D2
     package override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        if let controls = presenter?.controls, let button = controls.controls[id] as? NativeButtonMac {
-            controls.configureNative(button, self, accent: channels("accent_color").map { TextEngine.color($0) })
-        }
+        presenter?.controls.appearanceChanged(self)
         presenter?.tables.appearanceChanged(self); refreshGroupedSeparator(); presenter?.navigation.stackSplit.recolor(self)
         if let regions = presenter?.session?.regions, regions.owns(self) { regions.geometryChanged() }
         // An `svg`'s paints are resolved again; paint motion hears the appearance (LLP 1062 D4).
@@ -891,6 +889,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         paragraphOwner.invalidateText()
         paragraphOwner.needsDisplay = true
         applyStyle(style)
+        presenter?.controls.appearanceChanged(self)
         needsDisplay = true
     }
     package func number(_ key: String, _ fallback: CGFloat = 0) -> CGFloat {

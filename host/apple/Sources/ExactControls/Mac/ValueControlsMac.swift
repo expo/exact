@@ -18,7 +18,7 @@ extension ControlHost {
     }
 
     func configureValue(_ control: NSControl, _ owner: NodeView, accent: NSColor?) {
-        if let slider = control as? NSSlider { configureRange(slider, owner); return }
+        if let slider = control as? NSSlider { configureRange(slider, owner, accent: accent); return }
         if let picker = control as? NSDatePicker { configureDate(picker, owner, accent: accent); return }
         guard let popup = control as? NSPopUpButton else { return }
         (popup as? SelectField)?.owner = owner
