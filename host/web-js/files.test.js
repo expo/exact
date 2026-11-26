@@ -1,5 +1,6 @@
 import { test, expect, mock } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { loadOnce } from '../web/load-once.js';
 import { glueDeclarations, glueNode } from '../web/tests/glue-fixture.mjs';
 
 mock.module('./rt.js', () => ({
@@ -111,6 +112,255 @@ test('a share holds its files under the agent and refuses what the web cannot sh
     "share: refused: /etc/passwd is neither an app:/ file nor an element's #id",
     'share: refused: needs text=, url= or files=',
   ]);
+});
+
+test.each(['js', 'wasm'])('%s journals a file share once when its adapter loads or refuses', async target => {
+  const js = readFileSync(new URL('./files.js', import.meta.url), 'utf8');
+  const wasm = readFileSync(new URL('../web/wasm/commit.js', import.meta.url), 'utf8');
+  const assignment = glueNode(js, node => node.type === 'AssignmentExpression'
+    && node.left.object?.name === 'Hosts' && node.left.property?.name === 'share' && node);
+  const command = glueNode(wasm, node => node.type === 'IfStatement'
+    && node.test.type === 'BinaryExpression' && node.test.left.object?.name === 'op'
+    && node.test.left.property?.name === 'name' && node.test.right.value === 'share' && node.consequent);
+  const files = ['app:/data/a b/n.txt'];
+  for (const outcome of ['load failure', 'adapter failure', 'shared', 'dismissed']) {
+    const lines = [], calls = [], pending = new Set();
+    const load = () => outcome === 'load failure' ? Promise.reject(new TypeError('load failed')) : Promise.resolve({
+      share: async (details, paths) => {
+        calls.push({ details, paths });
+        if (outcome === 'adapter failure') throw Object.assign(new Error('refused'), { name: 'NotAllowedError' });
+        return `share: ${outcome}`;
+      },
+    });
+    const bindings = {
+      Hosts: {}, clock: { agent: false }, Element: class {}, navigator: { share() {} },
+      say: line => lines.push(line), log: line => lines.push(line),
+      coversPath, appGrantSet: () => GRANTS, glue: load, picker: load,
+      counted: p => { pending.add(p); p.then(() => pending.delete(p), () => pending.delete(p)); },
+      inflight: pending, agentMode: false, writeIn: value => value, readOut: value => value,
+      host: { wasm: { exact_command: () => JSON.stringify({ present: true, files: files.map(path => ({ path })) }) } },
+      op: { args: ['Title', 'Text', null, files] },
+    };
+    new Function(...Object.keys(bindings), target === 'js'
+      ? assignment + '; Hosts.share(...op.args);' : command)(...Object.values(bindings));
+    expect(pending.size, `${target}: ${outcome}`).toBe(1);
+    await Promise.allSettled([...pending]);
+    expect(lines, `${target}: ${outcome}`).toEqual([outcome === 'load failure'
+      ? 'share: refused: TypeError' : outcome === 'adapter failure' ? 'share: refused: NotAllowedError' : `share: ${outcome}`]);
+    expect(pending.size, `${target}: ${outcome}`).toBe(0);
+    expect(calls, `${target}: ${outcome}`).toEqual(outcome === 'load failure' ? [] : [{
+      details: { title: 'Title', text: 'Text', url: null }, paths: files.map(path => ({ path })),
+    }]);
+  }
+});
+
+test.each(['js', 'wasm'])('%s retries a refused picker load and shares with the cached adapter', async target => {
+  const js = readFileSync(new URL('./files.js', import.meta.url), 'utf8');
+  const wasm = readFileSync(new URL('../web/wasm/commit.js', import.meta.url), 'utf8');
+  const glueSource = readFileSync(new URL('../web/glue.js', import.meta.url), 'utf8');
+  const assignment = glueNode(js, node => node.type === 'AssignmentExpression'
+    && node.left.object?.name === 'Hosts' && node.left.property?.name === 'share' && node);
+  const command = glueNode(wasm, node => node.type === 'IfStatement'
+    && node.test.type === 'BinaryExpression' && node.test.left.object?.name === 'op'
+    && node.test.left.property?.name === 'name' && node.test.right.value === 'share' && node.consequent);
+  const lines = [], shared = [], pending = new Set(), files = ['app:/data/a b/n.txt'];
+  let attempts = 0, installs = 0;
+  const adapter = { at() { return this; }, share: async (details, paths) => { shared.push({ details, paths }); return 'share: shared'; } };
+  const install = () => { installs++; return adapter; };
+  const load = () => ++attempts === 1 ? Promise.reject(new TypeError('network failed')) : Promise.resolve(install);
+  const bindings = {
+    Hosts: {}, clock: { agent: false }, Element: class {}, navigator: { share() {} },
+    say: line => lines.push(line), log: line => lines.push(line),
+    coversPath, appGrantSet: () => GRANTS, loadAfterPaint: load,
+    loadOnce, loadPicker: load, x: () => ({ picker: install }), data: { appId: 'retry' },
+    counted: p => { pending.add(p); p.then(() => pending.delete(p), () => pending.delete(p)); },
+    inflight: pending, agentMode: false, writeIn: value => value, readOut: value => value,
+    host: { incarnation: 1, wasm: { exact_command: () => JSON.stringify({ present: true, files: files.map(path => ({ path })) }) } },
+    op: { args: ['Title', 'Text', null, files] },
+  };
+  const loader = target === 'js' ? glueDeclarations(js, ['loads', 'glue'])
+    .replace("import(new URL('./picker-glue.js', import.meta.url).href)", 'loadPicker()') : glueDeclarations(glueSource, ['picker']);
+  const run = new Function(...Object.keys(bindings), loader + (target === 'js'
+    ? assignment + '; return () => Hosts.share(...op.args);' : '; return () => {' + command + '};'))(...Object.values(bindings));
+  run(); run();
+  await Promise.allSettled([...pending]);
+  expect(lines).toEqual(['share: refused: TypeError', 'share: refused: TypeError']);
+  expect(attempts).toBe(1);
+  run();
+  await Promise.allSettled([...pending]);
+  run();
+  await Promise.allSettled([...pending]);
+  expect(lines).toEqual(['share: refused: TypeError', 'share: refused: TypeError', 'share: shared', 'share: shared']);
+  expect(attempts).toBe(2);
+  expect(installs).toBe(1);
+  expect(shared).toEqual(Array.from({ length: 2 }, () => ({
+    details: { title: 'Title', text: 'Text', url: null }, paths: files.map(path => ({ path })),
+  })));
+  expect(pending.size).toBe(0);
+});
+
+test.each(['js', 'wasm'])('%s retries document glue after a refused load or install', async target => {
+  const js = readFileSync(new URL('./files.js', import.meta.url), 'utf8');
+  const wasm = readFileSync(new URL('../web/glue.js', import.meta.url), 'utf8');
+  for (const failure of ['load', 'install']) {
+    let attempts = 0, installs = 0;
+    const refused = new TypeError('unavailable'), adapter = { at() { return this; } };
+    const documents = { keeping() {}, install() { if (++installs === 1 && failure === 'install') throw refused; return adapter; } };
+    const load = () => ++attempts === 1 && failure === 'load' ? Promise.reject(refused) : Promise.resolve(documents);
+    const bindings = { x: () => ({ documents }), data: { appId: 'retry' }, appGrantSet: () => GRANTS,
+      loadOnce, loadDocuments: load, loadAfterPaint: load, globalThis: { exact: { compat: { inputs: { app: 'retry' } } } },
+      host: { incarnation: 1 }, log() {}, say() {} };
+    const source = target === 'js' ? glueDeclarations(js, ['loads', 'docs'])
+      .replace("import(new URL('./documents-glue.js', import.meta.url).href)", 'loadDocuments()') : glueDeclarations(wasm, ['documentsGlue']);
+    const run = new Function(...Object.keys(bindings), source + '; return ' + (target === 'js' ? 'docs' : 'documentsGlue'))(...Object.values(bindings));
+    const first = run(), concurrent = run();
+    expect(await Promise.allSettled([first, concurrent])).toEqual([
+      { status: 'rejected', reason: refused }, { status: 'rejected', reason: refused },
+    ]);
+    expect(attempts).toBe(1);
+    expect(await run()).toBe(adapter);
+    expect(await run()).toBe(adapter);
+    expect(attempts).toBe(2);
+    expect(installs).toBe(failure === 'load' ? 1 : 2);
+  }
+});
+
+test('a memoized load shares its promise and forgets a synchronous or asynchronous refusal', async () => {
+  for (const failure of ['throw', 'reject']) {
+    const cache = {}, refused = new TypeError('network failed'), adapter = {};
+    let attempts = 0;
+    const load = () => { if (++attempts === 1) { if (failure === 'throw') throw refused; return Promise.reject(refused); } return adapter; };
+    const first = loadOnce(cache, 'module', load);
+    expect(loadOnce(cache, 'module', load)).toBe(first);
+    expect(await Promise.allSettled([first])).toEqual([{ status: 'rejected', reason: refused }]);
+    expect(cache.module).toBeNull();
+    const next = loadOnce(cache, 'module', load);
+    expect(await next).toBe(adapter);
+    expect(loadOnce(cache, 'module', load)).toBe(next);
+    expect(attempts).toBe(2);
+  }
+  const cache = {}, replacement = Promise.resolve('newer');
+  let reject;
+  const first = loadOnce(cache, 'module', () => new Promise((_, no) => { reject = no; }));
+  await Promise.resolve();
+  cache.module = replacement;
+  reject(new Error('old load'));
+  await Promise.allSettled([first]);
+  expect(cache.module).toBe(replacement);
+});
+
+test('a pieces editor retries its load and retains the installed module', async () => {
+  const source = readFileSync(new URL('./pieces.js', import.meta.url), 'utf8');
+  let attempts = 0, installed = 0;
+  const pending = [], lines = [], inflight = { n: 0 }, el = { isConnected: true };
+  const bindings = {
+    loadOnce: (...args) => { const p = loadOnce(...args); pending.push(p); return p; },
+    load: () => ++attempts === 1 ? Promise.reject(new TypeError('network')) : Promise.resolve(),
+    requestAnimationFrame() {}, globalThis: { exact: { installMarkupEditor: () => installed++ } },
+    Owner: null, onEnd() {}, inflight, Hosts: {}, say: line => lines.push(line), viewId: () => 1,
+  };
+  const mde = new Function(...Object.keys(bindings), glueDeclarations(source, [source.includes('const loads =') ? 'loads' : 'Editor', 'mde'])
+    .replace("import('./markup-editor.js')", 'load()') + '; return mde;')(...Object.values(bindings));
+  const settle = async () => { await Promise.allSettled(pending.splice(0)); for (let i = 0; inflight.n && i < 10; i++) await Promise.resolve(); expect(inflight.n).toBe(0); };
+  mde(el); mde(el); await settle();
+  expect(lines).toEqual(['markup editor: network', 'markup editor: network']);
+  expect(attempts).toBe(1);
+  const refused = bindings.Hosts.format(1, 'bold');
+  expect(refused).toBeInstanceOf(Promise);
+  await expect(refused).rejects.toThrow('markup editor: unavailable');
+  mde(el); await settle();
+  mde(el); await settle();
+  expect(attempts).toBe(2);
+  expect(installed).toBe(2);
+});
+
+test.each(['fs', 'sqlite', 'documents'])('storage retries a refused %s adapter in its owner checkpoint', async kind => {
+  const source = readFileSync(new URL('../web/storage.js', import.meta.url), 'utf8');
+  let attempts = 0, factories = 0;
+  const owner = {}, backend = { readFile: () => 'contents', open: () => ({ close: async () => {} }) };
+  const factory = () => { factories++; return backend; };
+  const documents = { keeping() {}, files: factory };
+  const bindings = { loadOnce, knownFolderPath: () => false, agentReads: [], directories: [],
+    loadModule: () => ++attempts === 1 ? Promise.reject(new TypeError('network')) : Promise.resolve({ createFileSystem: factory, createSqlite: factory }),
+    globalThis: { exact: { documents } }, window: {} };
+  const create = new Function(...Object.keys(bindings), glueDeclarations(source, ['fileFactory', 'sqliteFactory', 'toldAgent', 'createStorage'])
+    .replace("import('./storage-fs.js')", 'loadModule()').replace("import('./storage-sqlite.js')", 'loadModule()')
+    .replace("import('./documents-glue.js')", 'loadModule()') + '; return createStorage;')(...Object.values(bindings));
+  const store = create({ Error, Promise, structuredClone }, { appId: 'retry' }, () => owner, 'store-key');
+  const call = () => kind === 'sqlite' ? store.capability.sqlite.open('app:/data/db') : store.capability.fs.readFile(kind === 'documents' ? 'doc:/file' : 'app:/data/file');
+  for (let i = 0; i < 3; i++) {
+    const result = Promise.allSettled([call()]);
+    await store.deliver(owner);
+    const [outcome] = await result;
+    expect(outcome.status).toBe(i === 0 ? 'rejected' : 'fulfilled');
+    if (i === 0) expect(outcome.reason.message).toBe('network');
+    else if (kind === 'sqlite') expect(outcome.value.execute).toBeFunction();
+    else expect(outcome.value).toBe('contents');
+  }
+  expect(attempts).toBe(2);
+  expect(factories).toBe(1);
+});
+
+test('wasm GPU and geometry loads retry after a refusal', async () => {
+  const glue = readFileSync(new URL('../web/glue.js', import.meta.url), 'utf8');
+  const boot = readFileSync(new URL('../web/wasm/boot.js', import.meta.url), 'utf8');
+  for (const kind of ['gpu', 'geometry']) {
+    let attempts = 0, installed = 0;
+    const host = {}, lines = [];
+    const bindings = { loadOnce, host, root: {}, requestAnimationFrame: resolve => resolve(),
+      console: { error: (...args) => lines.push(args) },
+      globalThis: { exact: { pendingSurfaces: [{}] } },
+      loadAfterPaint: () => ++attempts === 1 ? Promise.reject(new TypeError('network')) : Promise.resolve(() => { installed++; return {}; }),
+    };
+    const run = new Function(...Object.keys(bindings), glueDeclarations(kind === 'gpu' ? glue : boot, [kind === 'gpu' ? 'loadGpuIfNeeded' : 'loadGeometry']) + '; return ' + (kind === 'gpu' ? 'loadGpuIfNeeded' : 'loadGeometry'))(...Object.values(bindings));
+    const key = kind === 'gpu' ? 'gpuLoading' : 'geometryLoading';
+    run(); run(); await host[key];
+    expect(lines.length).toBe(1);
+    expect(host[key]).toBeNull();
+    expect(attempts).toBe(1);
+    run(); await host[key];
+    run(); await host[key];
+    expect(attempts).toBe(2);
+    expect(installed).toBe(kind === 'gpu' ? 0 : 1);
+  }
+});
+
+test('a wasm textarea leaves pending after a rejected editor load and installs on retry', async () => {
+  const source = readFileSync(new URL('../web/wasm/views.js', import.meta.url), 'utf8');
+  class TextArea { isConnected = true; dataset = { view: '1' }; getAttribute(name) { return name === 'markup' ? 'markdown' : null; } hasAttribute() { return false; } }
+  const el = new TextArea(), host = {}, markupPending = new WeakSet(), pending = [], errors = [];
+  let attempts = 0, installed = 0;
+  const bindings = { loadOnce: (...args) => { const p = loadOnce(...args); pending.push(p); return p; },
+    host, moduleReady: Promise.resolve(), HTMLTextAreaElement: TextArea, markupPending, composing: new WeakSet(),
+    views: new Map([[1, el]]), retiredViews: new Set(), console: { error: (...args) => errors.push(args) },
+    loadAfterPaint: () => ++attempts === 1 ? Promise.reject(new TypeError('network')) : Promise.resolve(() => installed++),
+  };
+  const run = new Function(...Object.keys(bindings), glueDeclarations(source, ['syncMarkup']) + '; return syncMarkup;')(...Object.values(bindings));
+  run(el); run(el);
+  await Promise.allSettled(pending.splice(0)); await Promise.resolve();
+  expect(markupPending.has(el)).toBe(false);
+  expect(errors.length).toBe(1);
+  run(el);
+  await Promise.allSettled(pending.splice(0)); await Promise.resolve();
+  expect(installed).toBe(1);
+  expect(markupPending.has(el)).toBe(false);
+  expect(attempts).toBe(2);
+});
+
+test('a failed wasm module script leaves no element behind', async () => {
+  const source = readFileSync(new URL('../web/glue.js', import.meta.url), 'utf8');
+  const scripts = [], exact = {};
+  let attempts = 0;
+  const bindings = { URL, baseURL: 'https://exact.test/glue.js', globalThis: { exact },
+    document: { createElement: () => ({ remove() { scripts.splice(scripts.indexOf(this), 1); } }),
+      head: { append(script) { scripts.push(script); queueMicrotask(() => { if (++attempts === 1) script.onerror(); else { exact.picker = {}; script.onload(); } }); } } },
+  };
+  const load = new Function(...Object.keys(bindings), glueDeclarations(source, ['loadAfterPaint']).replaceAll('import.meta.url', 'baseURL') + '; return loadAfterPaint;')(...Object.values(bindings));
+  expect((await Promise.allSettled([load('./picker-glue.js', 'picker')]))[0].status).toBe('rejected');
+  expect(scripts.length).toBe(0);
+  expect(await load('./picker-glue.js', 'picker')).toBe(exact.picker);
+  expect(await load('./picker-glue.js', 'picker')).toBe(exact.picker);
+  expect(attempts).toBe(2);
 });
 
 // One malformed line refuses the whole declaration here as in the runner

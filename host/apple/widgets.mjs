@@ -472,15 +472,38 @@ export function widgetCompilation({ entries, platform, activities, alarm, source
   return { moduleName, sources, args };
 }
 
+/** Copy bundled font files from the app's `assets/` tree into the widget extension
+ * so custom fonts resolve via AssetResolver and UIAppFonts (LLP 1156.008.000 D6.8). */
+export function copyWidgetFonts(resources, extensionResources) {
+  const assetsRoot = resolve(resources, 'assets');
+  if (!existsSync(assetsRoot)) return [];
+  const fonts = [];
+  const walk = (dir, prefix) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const from = resolve(dir, entry.name), rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(from, rel);
+      else if (entry.isFile() && /\.(?:ttf|otf|ttc)$/i.test(entry.name)) {
+        const dest = resolve(extensionResources, 'assets', rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        copyFileSync(from, dest);
+        fonts.push(`assets/${rel}`);
+      }
+    }
+  };
+  walk(assetsRoot, '');
+  return fonts;
+}
+
 /** The widget extension's Info.plist, from the app's own (`appInfo`, as plutil's JSON): what packageWidgets writes,
  * and a repack writes again from the repacked app's Info.plist. */
-export function widgetExtensionInfo(app, appInfo, platform = 'ios') {
+export function widgetExtensionInfo(app, appInfo, platform = 'ios', fonts = []) {
   const mac = platform === 'macos';
   const capabilities = appInfo.UIRequiredDeviceCapabilities ? { UIRequiredDeviceCapabilities: appInfo.UIRequiredDeviceCapabilities } : {};
   const versions = Object.fromEntries(['CFBundleVersion', 'CFBundleShortVersionString', mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'].map(key => [key, appInfo[key]]));
   // The extension resolves the app's strings for the language the app's bundle localizations choose (SessionFacts.viewerLocale).
   const localizations = Object.fromEntries(['CFBundleDevelopmentRegion', 'CFBundleLocalizations'].filter(key => appInfo[key]).map(key => [key, appInfo[key]]));
-  return plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...localizations, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
+  const fontKeys = fonts.length ? (mac ? { ATSApplicationFontsPath: 'assets' } : { UIAppFonts: fonts }) : {};
+  return plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...localizations, ...fontKeys, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
     CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac || platform === 'watchos' ? widgetExtensionKeys(appInfo, platform) : {}), ...(appInfo.ExactWidgetGeneration ? { ExactWidgetGeneration: appInfo.ExactWidgetGeneration } : {}), ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } });
 }
@@ -526,9 +549,10 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   // An alarm's countdown beside them, from iOS 26 (LLP 1133.030 D8 item 2).
   const alarmMember = alarm && platform === 'ios' ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '';
   writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember, entities: app.manifest.intents?.entities, controls: controls.length ? controlWidgetsSource(app.id, controls) : null }));
+  const fonts = shared ? copyWidgetFonts(resources, extensionResources) : [];
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
-  writeFileSync(resolve(extensionContents, 'Info.plist'), widgetExtensionInfo(app, appInfo, platform));
+  writeFileSync(resolve(extensionContents, 'Info.plist'), widgetExtensionInfo(app, appInfo, platform, fonts));
   // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
   // Xcode's pass extracts from the module's constant values (`intents.mjs`).
   const configured = hasIntents(entries, platform) || controls.length > 0;

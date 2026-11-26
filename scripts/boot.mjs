@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const MODULES = {
   'host/web/glue.js': [
+    'host/web/load-once.js',
     'host/web/wasm/agent.js',
     'host/web/wasm/boot.js',
     'host/web/wasm/commit.js',

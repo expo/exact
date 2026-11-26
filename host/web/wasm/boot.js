@@ -6,6 +6,8 @@ import { WINDOW_STATE } from "../navigation/store.js";
 import { startClock } from "./flow.js";
 import { forgetList } from "./views.js";
 import { engagement } from "../engagement.js";
+import { loadOnce } from '../load-once.js';
+
 // A trap leaves the module as it stopped (a Rust borrow held, a batch half
 // applied), so every later call traps again. The first one stops the page's
 // calls: the clock ends, a later call throws `ModuleStopped` without entering
@@ -62,16 +64,22 @@ function stopModule(error) {
 }
 addEventListener("error", (e) => e.error instanceof ModuleStopped && e.preventDefault());
 addEventListener("unhandledrejection", (e) => e.reason instanceof ModuleStopped && e.preventDefault());
+export function loadGeometry() {
+  return loadOnce(host, 'geometryLoading', () => new Promise(resolve => requestAnimationFrame(resolve))
+    .then(() => loadAfterPaint('./geometry-glue.js', 'geometry'))
+    .then(create => { host.geometry = create(root); }), error => console.error('exact: geometry:', error));
+}
+function geometry() {
+  if (!host.geometry) loadGeometry();
+  return host.geometry;
+}
 export async function loadRust() {
   if (host.rustLoader) {
     return;
   }
-  host.rustLoading ??= loadAfterPaint("./rust-glue.js", "createRustRuntime").then((create) => {
+  loadOnce(host, "rustLoading", () => loadAfterPaint("./rust-glue.js", "createRustRuntime").then((create) => {
     host.rustLoader = create(() => host.memory);
-  }).catch((error) => {
-    host.rustLoading = null;
-    throw error;
-  });
+  }));
   await host.rustLoading;
 }
 // LLP 1019 D5: FontFace loading is part of host boot. The DOM remains empty until every local face loaded, or 100 ms elapsed. At the barrier, install
@@ -558,20 +566,20 @@ export async function main() {
         }
         return 1;
       },
-      read: (op, view, out) => host.geometry?.read(op, views.get(view), new Float64Array(host.memory.buffer, out, 4)) ?? 0,
+      read: (op, view, out) => geometry()?.read(op, views.get(view), new Float64Array(host.memory.buffer, out, 4)) ?? 0,
       scroll_metrics: (view, out) => {
-        const values = host.geometry?.scrollMetrics(views.get(view));
+        const values = geometry()?.scrollMetrics(views.get(view));
         if (!values) return 0;
         new Float64Array(host.memory.buffer, out, 6).set(values);
         return 1;
       },
-      range: (view, start, end, out) => host.geometry?.range(views.get(view), start, end, new Float64Array(host.memory.buffer, out, 4)) ?? 0,
+      range: (view, start, end, out) => geometry()?.range(views.get(view), start, end, new Float64Array(host.memory.buffer, out, 4)) ?? 0,
       point: (x, y) => {
-        const el = host.geometry?.point(x, y)?.closest("[data-view]"), id = el && root.contains(el) ? Number(el.dataset.view) : NaN;
+        const el = geometry()?.point(x, y)?.closest("[data-view]"), id = el && root.contains(el) ? Number(el.dataset.view) : NaN;
         return views.get(id) === el ? id + 1 : 0;
       },
       points: (x, y, out, cap) => {
-        const hits = (host.geometry?.points(x, y) ?? []).flatMap((hit) => {
+        const hits = (geometry()?.points(x, y) ?? []).flatMap((hit) => {
           const el = hit.closest("[data-view]"), id = el && root.contains(el) ? Number(el.dataset.view) : NaN;
           return views.get(id) === el ? [id + 1] : [];
         });
@@ -615,9 +623,7 @@ export async function main() {
   }
   host.memory = host.wasm.memory;
   if (WebAssembly.Module.imports(compiled).some((i) => i.module === "exact_geometry")) {
-    host.geometryLoading = new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./geometry-glue.js", "geometry")).then((create) => {
-      host.geometry = create(root);
-    });
+    loadGeometry();
   }
   // an artifact whose actions read geometry imports it (LLP 1051.000 D4)
   globalThis.exact.compat = JSON.parse(readOut(host.wasm.exact_compat()));

@@ -1073,6 +1073,26 @@ fn package_preferences_use_the_drive_key_and_lowercase_step_name() {
 }
 
 #[test]
+fn a_state_path_reads_every_index_after_a_dot() {
+    let file = parse(
+        "test \"t\"\n  expect state rows.1.0 == 3\n  expect state rows.0.1 == 2\n  clock until state grid.2.10.ready == true within 10\n",
+    )
+    .unwrap();
+    let paths: Vec<&str> = file.tests[0]
+        .steps
+        .iter()
+        .map(|step| match step {
+            contract_syntax::Step::ExpectState { name, .. } => name.as_str(),
+            contract_syntax::Step::Clock { arg, .. } => arg.split(' ').nth(2).unwrap(),
+            other => panic!("unexpected step {other:?}"),
+        })
+        .collect();
+    assert_eq!(paths, ["rows.1.0", "rows.0.1", "grid.2.10.ready"]);
+    // An exponent is no index: `rows.1e1` is refused, not read as `rows.10`.
+    assert!(parse("test \"t\"\n  expect state rows.1e1 == 2\n").is_err());
+}
+
+#[test]
 fn data_attribute_names_keep_digits_and_hyphens_after_the_first_letter() {
     for name in ["data-v-2", "data-v--2", "data-v-", "data-v--"] {
         let source =

@@ -6,7 +6,7 @@
 // receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
 // `drag.js`; the wasm target's glue loads it when a node first turns draggable.
 
-import { DRAG_FIELDS, downForDrag, lightDomDragPath, observeDragInput, pressedAt } from './drag-input.js';
+import { DRAG_FIELDS, downForDrag, dragPathFrom, observeDragInput, pressedAt } from './drag-input.js';
 
 /** Whether `el` is a drag's source by its own `draggable`, HTML's enumerated attribute, read in any case. Firefox ignores
  * it on an SVG element and begins the drag of the draggable node around it; Chromium and WebKit begin the drag at the
@@ -71,7 +71,7 @@ export function start(event, base = globalThis.document?.baseURI, owns = () => t
  * for a mouse's down a press, between the element and the node keeps the node's drag from starting, and leaves the
  * keeper's own drag (a link's, a field's text) to the browser. A detached source or a node that carries nothing
  * begins no drag. */
-function decide(event, owns, down, inPage) {
+function decide(event, owns, down, inPage, input) {
   // A script's `dragstart` is no drag, and a selection's begins at its text, not an element (Firefox). A shadow root's
   // content is its host's, as the document sees it.
   const target = event.isTrusted !== false && event.target?.nodeType === 1 ? event.target : null;
@@ -80,9 +80,10 @@ function decide(event, owns, down, inPage) {
   if (!target || (target.matches('[draggable="true" i]') && !declared(target))) return;
   const draggable = (el) => (off.has(el) && declared(el)) || explicit(el);
   const image = target.localName === 'img', keepers = down?.mouse !== false ? KEEPS_A_MOUSE : DRAG_FIELDS;
-  // An earlier capture listener can take the image out of the page. Its dispatch path still names its card.
+  // An earlier capture listener can take the image out of the page. The path recorded as the drag began still names its
+  // card.
   if (image && inPage && !inPage(target)) {
-    const ancestors = lightDomDragPath(event);
+    const ancestors = dragPathFrom(input, event);
     if (ancestors.length) {
       const node = ancestors.find(draggable);
       if (!node || !declared(node) || !owns(node)) return;
@@ -211,7 +212,7 @@ export function listen(root = globalThis.document, owns = () => true, { signal, 
   const given = new WeakMap();
   root.addEventListener('dragstart', (event) => {
     if (event.isTrusted === false) return;
-    const node = decide(event, owns, downForDrag(presses, event), inPage);
+    const node = decide(event, owns, downForDrag(presses, event), inPage, presses);
     const data = readPayload(event, node, root.baseURI ?? globalThis.document?.baseURI);
     give(event, node, data);
     if (data) given.set(event, { node, data });

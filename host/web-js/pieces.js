@@ -11,11 +11,14 @@ import { Views, Ids, viewId, Hooks } from './tree.js';
 import { OnHooks } from './events.js';
 import { start, replaceRowNode } from './mount.js';
 import { replaced } from './focus.js';
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 /** A canvas's surface (LLP 1009 D2): its inputs, evaluated as the runner
  * evaluates them (records as arrays), to the app's GPU module — the web
  * host's own `gpu-glue.js` over `gpu.js`, fetched after the first painted
  * frame, only when a canvas is on the page (a loaded capability). */
-let Gpu = null;
+
 function gpuBinding(e, name) {
   const id = viewId(e);
   e.exactSurfaceName = name;
@@ -42,7 +45,7 @@ function gpuBinding(e, name) {
       queued = pending.find(p => p.id === id);
     if (queued) queued.values = v;
     else pending.push({ id, name, values: v, generation: 0 });
-    if (!Gpu && typeof requestAnimationFrame === 'function' && !globalThis.__exactRender) {
+    if (!loads.Gpu && typeof requestAnimationFrame === 'function' && !globalThis.__exactRender) {
       x.views = Views;
       x.generation = 0;
       x.devAssets = null;
@@ -74,11 +77,9 @@ function gpuBinding(e, name) {
         el?.dispatchEvent(new CustomEvent('exact-native', { detail: { kind: 'message', value: text } }));
       if (clock.agent) x.now = () => clock.now;
       inflight.n++;
-      Gpu = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+      loadOnce(loads, "Gpu", () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
         .then(() => import(new URL(Object.keys(x.compat?.inputs?.gpuModules ?? {}).length ? 'gpu-modules.js' : 'gpu-glue.js', document.baseURI).href))
-        .then(() => x.gpu?.settled?.())
-        .catch(err => say(`gpu: ${err.message}`))
-        .finally(() => inflight.n--);
+        .then(() => x.gpu?.settled?.()), err => say(`gpu: ${err.message}`)).finally(() => inflight.n--);
     }
   };
 }
@@ -131,27 +132,25 @@ export function gsc(e, name, values, colors) {
  * module and replayed by the web host's own glue, both in `canvas2d.js`,
  * fetched two frames after the first 2D canvas mounts (a loaded
  * capability); `types` are the arguments' declared types where known. */
-let Canvas2d = null;
+
 const CanvasMounts = new Set();
-export const canvasCommitted = (surface, active = () => true, encoding = {}) => committedCanvas(surface, active, Finishes, () => Canvas2d, CanvasMounts, encoding);
+export const canvasCommitted = (surface, active = () => true, encoding = {}) => committedCanvas(surface, active, Finishes, () => loads.Canvas2d, CanvasMounts, encoding);
 export function c2(e, name, values, types, names) {
   const c = { e, name, types, names, mounted: clock.now, args: null };
   CanvasMounts.add(c);
-  onEnd(() => { CanvasMounts.delete(c); Canvas2d?.then(m => m?.gone(c)); });
+  onEnd(() => { CanvasMounts.delete(c); loads.Canvas2d?.then(m => m?.gone(c)); });
   effect(() => {
     c.args = values();
     if (typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
-    if (!Canvas2d) {
+    if (!loads.Canvas2d) {
       inflight.n++;
-      Canvas2d = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+      loadOnce(loads, "Canvas2d", () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
         .then(() => import('./canvas2d.js'))
-        .then(m => m.engine({ data, clock, inflight, journal, advance, After, views: Views, viewId, wall: Link.wall }))
-        .catch(err => say(`canvas2d: ${err.message}`))
-        .finally(() => inflight.n--);
+        .then(m => m.engine({ data, clock, inflight, journal, advance, After, views: Views, viewId, wall: Link.wall })), err => say(`canvas2d: ${err.message}`)).finally(() => inflight.n--);
     }
     // After the commit applied, as the runner publishes surface inputs, and before the canvas module's restyle
     // (`After`).
-    Canvas2d.then(m => m?.args(c));
+    loads.Canvas2d.then(m => m?.args(c));
   });
 }
 /** A canvas's computed `bitmap-width`, `bitmap-height`, `color-space` or `color-type` (LLP 1056 D6; LLP 1100 D12a), as
@@ -164,13 +163,12 @@ export function cb(e, name, f) {
       : Number.isInteger(v) && Math.abs(v) < 2 ** 63 ? String(Math.min(Math.max(v, 0), 4294967295)) : null;
     if (value === e.getAttribute(name)) return;
     if (value == null) e.removeAttribute(name); else e.setAttribute(name, value);
-    Canvas2d?.then(m => m?.resized(e));
+    loads.Canvas2d?.then(m => m?.resized(e));
   });
 }
 /** When native code may load (LLP 1024 D7): after the browser's first paint entry, or two frames and 250 ms where it
  * records none (glue.js `afterNativePaint`). */
-let Painted = null,
-  Native = null;
+let Painted = null;
 export const painted = () =>
   (Painted ??= new Promise(r => {
     let o;
@@ -200,16 +198,16 @@ export function nm(e) {
     });
   onEnd(() => {
     st.destroyed = true;
-    Native?.then(
+    loads.Native?.then(
       h => h.destroy(e),
       () => {},
     );
   });
   // In flight until the module is attached and its first events are in (`clock settle` waits for them).
   inflight.n++;
-  (Native ??= painted()
+  (loadOnce(loads, "Native", () => painted()
     .then(() => import('./native.js'))
-    .then(m => m.viewHost(say, () => data.appId)))
+    .then(m => m.viewHost(say, () => data.appId))))
     .then(
       h => h.attach(e),
       err => {
@@ -238,7 +236,7 @@ export let Pres = null,
  * operation, as glue.js's `agentSettled` waits for `pieces.pending()`). */
 export const pieces = () =>
   Promise.all(
-    [Motion, Inputs, Presence, Flow, Native, Media?.mediaPiece(), decorationPiece(), OnHooks.loading].filter(Boolean),
+    [Motion, loads.Inputs, Presence, loads.Flow, loads.Native, Media?.mediaPiece(), decorationPiece(), OnHooks.loading].filter(Boolean),
   ).then(
     () => {},
     () => {},
@@ -401,8 +399,7 @@ export function onPanRelease(e, f) {
  * is an exclusion the text around it flows past, laid out by the text flow
  * piece (flow.js over the web host's `textflow-glue.js`), fetched after
  * first paint by a plan with the row. */
-let Flow = null,
-  Fl = null;
+let Fl = null;
 const Wraps = new Set();
 export function wf(e, f) {
   Wraps.add(e);
@@ -410,9 +407,9 @@ export function wf(e, f) {
   effect(() => {
     e.$wrap = f();
   });
-  if (Flow || typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
+  if (loads.Flow || typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
   inflight.n++;
-  Flow = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+  loadOnce(loads, "Flow", () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     .then(() => import('./flow.js'))
     .then(m => m.flow({ views: Views, viewId, wraps: Wraps, clock, wall: () => performance.now() - start, say }))
     .then(m => {
@@ -421,26 +418,21 @@ export function wf(e, f) {
       After.push(() => Fl.after());
       (globalThis.exact ??= {}).flowSettle = () => Fl.settle();
       Fl.after();
-    })
-    .catch(err => say(`text flow: ${err.message}`))
-    .finally(() => inflight.n--);
+    }), err => say(`text flow: ${err.message}`)).finally(() => inflight.n--);
 }
 /** Page geometry (LLP 1051.000), fetched after first paint by `geo`; unavailable before loading.
  * Answers use the runner's Geometry: x, y, width, height, provisional, unavailable. */
-let Geo = null,
-  Geometry = null;
+let Geo = null;
 // its load once `geo` asked (else null): a first element size (observers.js) waits for it
-export const geoLoading = () => Geometry;
+export const geoLoading = () => loads.Geometry;
 export function geo() {
-  if (Geometry || typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
+  if (loads.Geometry || typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
   inflight.n++;
-  Geometry = new Promise(r => requestAnimationFrame(() => r()))
+  loadOnce(loads, "Geometry", () => new Promise(r => requestAnimationFrame(() => r()))
     .then(() => import('./geometry-glue.js'))
     .then(() => {
       Geo = globalThis.exact.geometry(document.getElementById('exact-root'));
-    })
-    .catch(err => say(`geometry: ${err.message}`))
-    .finally(() => inflight.n--);
+    }), err => say(`geometry: ${err.message}`)).finally(() => inflight.n--);
 }
 function geoRead(op, id) {
   const out = new Float64Array(4),
@@ -467,23 +459,24 @@ export const x_elementsFromPoint = (x, y) => Geo?.namedPoints(x, y) ?? [];
 /** A Markdown field (LLP 1045 D5): markup-editor.js over its wasm replaces
  * the textarea on demand. Runtime writes proxy to the editor; its events
  * forward to the detached textarea's handlers. */
-let Editor = null;
+
 export function mde(e) {
   if (typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
   const own = Owner;
   let cur = e, obs = null, dead = false;
   onEnd(() => {
     dead = true;
+    e._exactEditor = null;
     obs?.disconnect();
     obs = null;
     cur?.exactMarkup?.destroy();
   });
   inflight.n++;
-  if (!Editor) {
-    Editor = import('./markup-editor.js').then(() => globalThis.exact.installMarkupEditor);
-    Hosts.format = (id, name, arg) => Editor.then(() => liveById(id)?.exactMarkup?.format(name, arg ?? ''));
+  if (!loads.Editor) {
+    loadOnce(loads, "Editor", () => import('./markup-editor.js').then(() => globalThis.exact.installMarkupEditor));
+    Hosts.format = (id, name, arg) => (loads.Editor ?? Promise.reject(new Error('markup editor: unavailable'))).then(() => liveById(id)?.exactMarkup?.format(name, arg ?? ''));
   }
-  Editor.then(install => {
+  loads.Editor.then(install => {
     if (dead || own?.gone || !e.isConnected) return;
     const id = viewId(e);
     install(e, {
@@ -492,6 +485,7 @@ export function mde(e) {
         replaceRowNode(cur, n);
         replaced(cur, n);
         cur = n;
+        e._exactEditor = n;
         Ids.set(n, id);
         Views.set(id, n);
         e.$markup = n.exactMarkup;
@@ -535,6 +529,15 @@ export function mde(e) {
             // before the editor applies its own key default
             t === 'keydown',
           );
+        // Forward clipboard events with the original trusted ClipboardEvent so
+        // live clipboardData items/files survive and stopPropagation/preventDefault
+        // act on the real event (LLP 1156.008.000 D5.1).
+        for (const t of ['paste', 'copy', 'cut'])
+          n.addEventListener(t, ev => {
+            const handlers = e._exactClipboard?.[t];
+            if (!handlers?.length) return;
+            for (const h of handlers) h(ev);
+          });
         obs?.disconnect();
         obs = new MutationObserver(ms => {
           for (const m of ms) {
@@ -558,15 +561,14 @@ export function mde(e) {
  * the node's own `--exact-press` (css.rs). */
 export const pressFeedback = () => input();
 /** The web host's input piece (input-glue.js), after first paint: pans. */
-export let Input = null,
-  Inputs = null;
+export let Input = null;
 export function input() {
-  if (Inputs || typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return Inputs;
+  if (loads.Inputs || typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return loads.Inputs;
   inflight.n++;
   const x = (globalThis.exact ??= {});
   const to = (id, p, k) => Views.get(id)?.[k]?.(...p.split(',').map(Number));
   // after paint, or a second on where frames are held (a frame scrolled out of view)
-  return (Inputs = new Promise(r => {
+  return (loadOnce(loads, "Inputs", () => new Promise(r => {
     requestAnimationFrame(() => setTimeout(r));
     setTimeout(r, 1000);
   })
@@ -587,9 +589,7 @@ export function input() {
       });
       // the stack as it stands, for the focus to follow (LLP 1115.000 D4.2)
       Input.arrive();
-    })
-    .catch(err => say(`input: ${err.message}`))
-    .finally(() => inflight.n--));
+    }), err => say(`input: ${err.message}`)).finally(() => inflight.n--));
 }
 // A view leaving with its exit animation stays where it was until it ends
 // (presence-glue.js removes it): never moved, since moving cancels a CSS animation.

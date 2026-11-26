@@ -2148,6 +2148,42 @@
       "_comment": "@ref LLP 1123 D7, D16: `true` or `false`: whether AppKit's content runs under its chrome. On a popover route, `NSPopover.hasFullSizeContent` (default `false`); on the window's root route, the window's `.fullSizeContentView` (unsaid, the host's own choice)."
     },
     {
+      "id": 342,
+      "name": "navigationSplitItemAdjustsForOverlays",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `true` or `false` (the default) on a route: whether the Mac split item it projects, the page's or the detail's, adjusts its safe area for the sidebars and inspectors overlaid on it. `NSSplitViewItem.automaticallyAdjustsSafeAreaInsets` (macOS 26)."
+    },
+    {
+      "id": 343,
+      "name": "navigationSplitItemFullHeight",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `true` (the default) or `false` on the root tablist or a route's inspector `aside`: whether the sidebar or inspector it projects on the Mac runs the window's full height under full-size content. `NSSplitViewItem.allowsFullHeightLayout`."
+    },
+    {
+      "id": 344,
+      "name": "navigationSplitItemTopAccessory",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: on a route, the root tablist or a route's inspector `aside`, the `id` of the element the Mac split item it projects shows at its top, a content owner (D2). `NSSplitViewItem.topAlignedAccessoryViewControllers` (macOS 26)."
+    },
+    {
+      "id": 345,
+      "name": "navigationSplitItemBottomAccessory",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: as `navigationSplitItemTopAccessory`, at the item's bottom. `NSSplitViewItem.bottomAlignedAccessoryViewControllers` (macOS 26)."
+    },
+    {
+      "id": 346,
+      "name": "navigationAccessoryContentInsets",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `true` (the default) or `false` on an element a Mac split item shows as an accessory: whether AppKit applies its standard content insets to it. `NSSplitViewItemAccessoryViewController.automaticallyAppliesContentInsets` (macOS 26)."
+    },
+    {
+      "id": 347,
+      "name": "navigationAccessoryScrollEdgeEffect",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D15: `automatic` (the default), `soft` or `hard` on an element a Mac split item shows as an accessory: the edge effect content scrolling behind it takes. `NSSplitViewItemAccessoryViewController.preferredScrollEdgeEffectStyle` (macOS 26.1)."
+    },
+    {
       "id": 334,
       "name": "appleMagnification",
       "kind": "float",

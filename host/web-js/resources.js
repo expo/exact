@@ -115,7 +115,7 @@ function ask(source, args, name, mutation, forced, owner = mutation) {
   }
   // (a reaped build's lazy chunk fails here: the page loads again, generation-reload.js)
   return a && a.then
-    ? (a.then(undefined, e => globalThis.exact?.generationGone?.(e)), { promise: a, call: a.call })
+    ? (a.then(undefined, e => globalThis.exact?.generationGone?.(e)), { promise: a, call: a.call, madeBy: a.call })
     : a;
 }
 /** The reply to ticket `t` while its target `held()` it: a commit in which `f` takes the source's answer (a TypeScript

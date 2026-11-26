@@ -22,7 +22,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 import { createConnection } from 'node:net';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { pushDrops, readerReply } from './agent-android-requests.mjs';
+import { adbInstallError, pushDrops, readerReply, readerScreenshotReply } from './agent-android-requests.mjs';
 import { within } from './paths.mjs';
 import { packageDirectories } from './cargo-dep-info.mjs';
 import { parseColour, schemeColours } from './scheme-colours.mjs';
@@ -337,7 +337,7 @@ function readerDeploy(app, apk, env, reverse) {
   const dir = `/data/local/tmp/exact/${id}`, shot = `${dir}/reader-shot-${process.pid}.png`;
   const run = (args, what) => {
     const r = spawnSync(tool, ['-s', serial, ...args], { encoding: 'utf8' });
-    if (r.status !== 0 || /^Failure/m.test(r.stdout)) throw new Error(`adb ${what}: ${(r.stderr || r.stdout || r.error?.message || '').trim()}`);
+    if (r.status !== 0 || /^Failure/m.test(r.stdout)) throw new Error(adbInstallError(r.stderr || r.stdout || r.error?.message, `adb ${what}`));
   };
   // An APK the device already holds, byte for byte, is not installed again: an install is tens of seconds on an emulator.
   const local = createHash('sha256').update(readFileSync(apk)).digest('hex');
@@ -727,9 +727,7 @@ async function relay([serial, id, vars, encodedLease]) {
       if (req.film) return say(JSON.stringify({ error: 'the reader carrier films nothing: its picture is a screencap of the device' }));
       await new Promise((r) => setTimeout(r, SHOT_SETTLE_MS));
       const shot = sh('shell', `screencap -p ${quote(req.path)}`);
-      socket.write('{"op":"tags"}\n');
-      const tags = JSON.parse(await answer());
-      say(JSON.stringify(shot.status === 0 ? { screenshot: req.path, device: true, ...tags } : { error: `screencap: ${(shot.stderr || shot.stdout).trim()}` }));
+      say(JSON.stringify(await readerScreenshotReply(req.path, shot, (next) => { socket.write(next + '\n'); return answer(); })));
     };
     input = d => { const lines = (pending + d).split('\n'); pending = lines.pop(); for (const l of lines) if (l.trim()) turn = turn.then(() => one(l)); };
     input(buffered); buffered = '';
@@ -1354,7 +1352,7 @@ function installApk(app, apk, { run = false, url = null, built = 0, installed: o
   }
   const id = androidPackageId(app.manifest ?? { app }), started = Date.now();
   const installed = spawnSync(adb(), ['-s', serial, 'install', '-r', apk], { encoding: 'utf8' });
-  if (installed.status !== 0 || /^Failure/m.test(installed.stdout)) { console.error(`adb install: ${(installed.stderr || installed.stdout).trim()}`); return 1; }
+  if (installed.status !== 0 || /^Failure/m.test(installed.stdout)) { console.error(adbInstallError(installed.stderr || installed.stdout)); return 1; }
   console.error(`built in ${(built / 1000).toFixed(1)} s, installed on ${serial} as ${id} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
   onInstalled(serial);
   if (!run) return 0;

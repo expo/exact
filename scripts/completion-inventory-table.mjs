@@ -137,7 +137,7 @@ export const classifications = [
     ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
     ["painted:host/painted/src/presenter/accesskit.rs", "WindowTree::action"],
     ["painted:host/painted/src/presenter/accesskit/node.rs", "scroll_target"],
-    ["painted:host/painted/src/presenter/access.rs", "Presenter::access_act Presenter::access_menu_flag Presenter::access_pressable"],
+    ["painted:host/painted/src/presenter/access.rs", "Presenter::access_act Presenter::access_menu_flag"],
     ["painted:host/painted/src/presenter/access/actions.rs", "Presenter::access_custom_action"],
     ["painted:host/painted/src/presenter/access/scroll.rs", "Presenter::access_scroll_to"],
     ["painted:host/painted/src/presenter/addressed_tap.rs", "Presenter::presses_itself Presenter::tap Presenter::tap_at"],
@@ -158,7 +158,7 @@ export const classifications = [
       "Presenter::access_view"],
     ["painted:host/painted/src/text/field.rs", "FieldTextRun::character_metrics FieldTextRun::same_metrics"],
     ["painted:host/painted/src/presenter/drag_out.rs",
-      "Presenter::ask_drag Presenter::carried_values Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at " +
+      "Presenter::ask_drag Presenter::carried_values Presenter::drag_source_at Presenter::inside Presenter::lift_source_at " +
       "Presenter::mouse_lift Presenter::mouse_lift_of Presenter::mouse_lifts Presenter::set_lifter"],
     ["painted:host/painted/src/presenter/reader_selection.rs",
       "Presenter::reader_select Presenter::report_selection Presenter::selection_policy Presenter::selection_reports"],
@@ -180,8 +180,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/file_drop.rs",
       "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_dropped Presenter::drag_event Presenter::drag_flush " +
-      "Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_owner " +
-      "Presenter::drop_released Presenter::dropped Presenter::field_drop"],
+      "Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_landed_checked Presenter::drop_owner " +
+      "Presenter::drop_released Presenter::drop_released_behind Presenter::dropped Presenter::field_drop Presenter::landed"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
     ["painted:host/painted/src/presenter/replacement.rs", "Presenter::buttons_released Presenter::pointer_released Presenter::reader_touch Presenter::set_touching"],
@@ -433,7 +433,7 @@ export const classifications = [
     ["painted:host/painted/src/height_binding.rs", "Host::discover_height_handles Host::resolved_height_target"],
     ["painted:host/painted/src/holds.rs", "Host::retained_input_eligible"],
     ["painted:host/painted/src/host.rs",
-      "Host::agent Host::app_roots Host::carry Host::content_region Host::document_value Host::engine Host::executor Host::executor_with Host::grants Host::kernel Host::log " +
+      "Host::agent Host::app_files Host::app_roots Host::carry Host::content_region Host::document_value Host::engine Host::executor Host::executor_with Host::grants Host::kernel Host::log " +
       "Host::now Host::preorder Host::presented Host::project_navigation Host::roots Host::router_op Host::runner Host::size_new_symbols " +
       "Host::take_commands Host::take_surface_updates Host::viewport Host::wants_frames"],
     ["painted:host/painted/src/lower.rs", "Host::layer_tracks Host::lower_eligibility Host::spinner_tracks"],
@@ -1097,7 +1097,7 @@ export const classifications = [
   ]),
   group("picker results", ["one-shot"], "current picker/share request and its app file roots", "UI-owned",
     "host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
-    ["painted:host/painted/src/picker.rs", "agent cold_share copy_in dimensions file know_roots open open_known place publish resolve roots scripted set_roots xdg_base"],
+    ["painted:host/painted/src/picker.rs", "AppFiles::of AppFiles::open_path agent cold_share copy_in dimensions file know_roots open open_known open_path place publish resolve roots scripted set_roots xdg_base"],
   ]),
   group("presence storage", ["durable operation"], "app-scoped secret vault/backend and secret generation", "durable",
     "host/painted/src/presence_secrets.rs backend/on_keystore select the app vault; system_support.rs SecretSession seeds and remembers secret records. Stored secret state is separate from a session-owned presence check.", [
@@ -1219,8 +1219,8 @@ export const classifications = [
   group("UI input", ["one-shot"], "current mounted view, action binding or interaction", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied. contact.rs feedback_contains checks the live node's tracking shape for contact_press, pointer_moved feedback and pointer_lift activation.", [
     ["painted:host/painted/src/presenter/access.rs",
-      "Presenter::access_bar_info Presenter::access_bottom Presenter::access_control Presenter::access_emit Presenter::access_hint Presenter::access_inline_words " +
-      "Presenter::access_key Presenter::access_label Presenter::access_top Presenter::access_words"],
+      "Presenter::access_bar_info Presenter::access_bottom Presenter::access_control Presenter::access_emit " +
+      "Presenter::access_key Presenter::access_top"],
     ["painted:host/painted/src/presenter/access/menu.rs", "Presenter::access_choose Presenter::access_menu Presenter::access_menu_focus"],
     ["painted:host/painted/src/presenter/access/surface.rs", "Presenter::surface_menu_flags Presenter::surface_scroll_label"],
     ["painted:host/painted/src/presenter/access/actions.rs", "Presenter::action_available Presenter::action_targets"],

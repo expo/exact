@@ -328,10 +328,10 @@ export const entitlements = (app, team = null, debuggable = true, reach = null, 
   }
   const inbox = inboxGroup ?? (app.manifest.share_target && !app.widgetAppId && !app.widgetTV && !app.widgetHost && !app.clipParent ? widgetGroup(app) : null);
   if (inbox) dict['com.apple.security.application-groups'] = [inbox];
-  // @ref LLP 1038 D8 — `handle_links`' derived applinks, then the raw list; tvOS signs no link claim.
-  const domains = claimedDomains(app).filter((d) => !app.widgetTV || !d.startsWith('applinks:'));
+  // @ref LLP 1038 D8 — `handle_links`' derived applinks, then the raw list; tvOS and widget extensions sign no link claim (LLP 1156.008.000 D6.2).
+  const domains = app.widgetAppId ? [] : claimedDomains(app).filter((d) => !app.widgetTV || !d.startsWith('applinks:'));
   // @ref LLP 1069.006 D2 — a claimed https auth callback needs `webcredentials:` (the bake's derivation from the `auth.callback` grants, LLP 1069.008).
-  const linked = [...domains, ...associatedDomains(reach?.auth, debuggable)];
+  const linked = app.widgetAppId ? [] : [...domains, ...associatedDomains(reach?.auth, debuggable)];
   // An App Clip is invoked from its `appclips:` domains, which its parent's entitlements list too (Apple,
   // "Associating your App Clip with your website"): each concrete `applinks:` host, in the clip in place of the
   // `applinks:`; `appclips:` takes no wildcard.

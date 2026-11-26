@@ -77,23 +77,39 @@ fn structural_reads_mark_only_the_first_candidate_even_when_all_are_refused() {
 }
 
 fn open(r: &mut Runner<NoData>, names: &[&str]) {
-    let frames: Vec<_> = names
-        .iter()
-        .map(|name| {
-            let view = r
-                .kernel()
-                .arena()
-                .local_id(r.kernel().find_by_id(name)[0].index);
-            let rect = match *name {
-                "lower" => [0.0, 0.0, 200.0, 200.0],
-                "upper" => [100.0, 100.0, 200.0, 200.0],
-                "pop" => [0.0, 0.0, 50.0, 50.0],
-                _ => unreachable!(),
-            };
-            (view, rect, None)
-        })
-        .collect();
+    let mut frames = Vec::with_capacity(names.len());
+    let mut opened = std::collections::HashSet::new();
+    for name in names {
+        let view = r
+            .kernel()
+            .arena()
+            .local_id(r.kernel().find_by_id(name)[0].index);
+        let rect = match *name {
+            "lower" => [0.0, 0.0, 200.0, 200.0],
+            "upper" => [100.0, 100.0, 200.0, 200.0],
+            "pop" => [0.0, 0.0, 50.0, 50.0],
+            _ => unreachable!(),
+        };
+        opened.insert(view);
+        frames.push((view, rect, None));
+    }
+    measure_dialogs(r, &opened);
     r.top_layer_frames(&frames, None);
+}
+
+fn measure_dialogs(r: &mut Runner<NoData>, opened: &std::collections::HashSet<ViewId>) {
+    let mut changed = false;
+    for name in ["lower", "upper"] {
+        if let Some(view) = view_of(r.kernel(), name) {
+            changed |= r.kernel_mut().measure_dialog(view, opened.contains(&view));
+        }
+    }
+    if changed {
+        let root = r.kernel().roots()[0];
+        r.kernel_mut()
+            .compute_layout(root, Offer::definite(400.0, 800.0))
+            .unwrap();
+    }
 }
 
 fn read(r: &mut Runner<NoData>, x: f64, y: f64, point: &str, points: &[&str], matches: &[&str]) {
@@ -212,6 +228,7 @@ fn a_native_backdrop_can_name_a_later_route_in_the_front_presentation() {
     let lower = view_of(r.kernel(), "lower").unwrap();
     let upper = view_of(r.kernel(), "upper").unwrap();
     let pop = view_of(r.kernel(), "pop").unwrap();
+    measure_dialogs(&mut r, &[lower, upper].into_iter().collect());
     r.top_layer_frames(
         &[
             (lower, [0.0, 0.0, 200.0, 200.0], None),
@@ -231,6 +248,7 @@ fn a_native_backdrop_can_name_a_later_route_in_the_front_presentation() {
 fn a_native_backdrop_is_independent_of_content_clips_and_pointer_events() {
     let mut r = fixture("", "pointer-events=\"none\"");
     let upper = view_of(r.kernel(), "upper").unwrap();
+    measure_dialogs(&mut r, &[upper].into_iter().collect());
     r.top_layer_frames(
         &[(
             upper,
@@ -300,6 +318,7 @@ fn selectors_reach_modal_descendants_under_an_inert_ancestor() {
 #[test]
 fn a_top_layer_clip_bounds_reads_without_rescaling_descendants() {
     fn present(r: &mut Runner<NoData>, frames: &[TopLayerFrame], modal: Option<usize>) -> Scrolled {
+        measure_dialogs(r, &frames.iter().map(|(view, ..)| *view).collect());
         r.top_layer_frames(frames, modal);
         let mut scrolled = Scrolled::default();
         scrolled.top_layer_frames(r.kernel(), frames, modal);
@@ -424,6 +443,7 @@ fn a_lifted_popover_above_a_sheet_escapes_its_clip() {
     let mut r = fixture("", "");
     let upper = view_of(r.kernel(), "upper").unwrap();
     let pop = view_of(r.kernel(), "pop").unwrap();
+    measure_dialogs(&mut r, &[upper].into_iter().collect());
     r.top_layer_frames(
         &[
             (

@@ -4,6 +4,9 @@ import { Refusal, effect, After, journal, clock, commit, W, pressFeedback, fact,
 import { Counting } from "./held.js";
 import { projectRoots } from "./document.js";
 import { canonical, locationOf, fragmentOf, enc, dec, matchPattern } from "./route-pattern.js";
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 export { canonical, locationOf };
 const say = line => journal.push(`t=${clock.now} ${line}`);
 // A Router is [tab, tabs, next]; a Tab [name, stack]; an Entry
@@ -32,6 +35,8 @@ function rootFor(i) {
 }
 const segmentOf = v => { if (["", ".", ".."].includes(v)) throw new Refusal("a path parameter cannot be empty, `.` or `..`"); return enc(v, b => !/[A-Za-z0-9\-_.!~*'()]/.test(String.fromCharCode(b))); };
 const path = (r, values) => r.pattern.split("/").map(s => s[0] === ":" ? segmentOf(values.shift() ?? "") : s).join("/");
+const segments = p => p === "/" ? [] : p.replace(/^\//, "").split("/");
+const isStructuralPrefix = (a, b) => !!b && a.length <= b.length && a.every((s, j) => s[0] === ":" ? b[j][0] === ":" : s === b[j]);
 function chain(location) {
   const url = canonical(location), m = matchRoute(url);
   if (!m) return [];
@@ -40,10 +45,17 @@ function chain(location) {
   const idx = [index];
   if (!Routes[index].notfound) for (let p = Routes[index].parent; idx.at(-1) !== root && p != null && p >= 0; p = Routes[p].parent) { if (idx.includes(p)) return []; idx.push(p); }
   if (!idx.includes(root)) idx.push(root);
+  const leafPat = Routes[index].notfound ? null : segments(canonical(Routes[index].pattern)), parts = segments(url.split("?")[0]);
   return idx.reverse().map(i => {
-    const r = Routes[i], own = empty();
-    for (const n of names(r.pattern)) own[Names.indexOf(n)] = params[Names.indexOf(n)];
-    return { name: r.name, url: i === index ? url : canonical(path(r, names(r.pattern).map(n => params[Names.indexOf(n)]))), tab: Routes[root].name, params: own };
+    const r = Routes[i], own = empty(), pat = segments(canonical(r.pattern));
+    const positional = i !== index && isStructuralPrefix(pat, leafPat), values = [];
+    for (let j = 0; j < pat.length; j++) {
+      if (pat[j][0] !== ":") continue;
+      const n = pat[j].slice(1), v = positional ? dec(parts[j], false) : params[Names.indexOf(n)];
+      own[Names.indexOf(n)] = v;
+      values.push(v);
+    }
+    return { name: r.name, url: i === index ? url : canonical(path(r, values)), tab: Routes[root].name, params: own };
   });
 }
 const entry = (id, d, fragment = "") => [id, d.name, d.url, d.tab, d.params, fragment];
@@ -168,8 +180,8 @@ function hostGo(location) {
 // It counts only when a commit that lands writes that very value to the router (`assigned`), never for a value merely
 // computed. `Due` waits for the data; `Scheduled` waits for the module, and either is let go when its visit stops
 // showing that fragment or the app scrolls into view itself.
-let Navigations = [], Due = null, Scheduled = null, Fragments = null, Activations = 0;
-const fragments = () => Fragments ??= import("./fragment.js");
+let Navigations = [], Due = null, Scheduled = null, Activations = 0;
+const fragments = () => loadOnce(loads, "Fragments", () => import("./fragment.js"));
 const pageRoot = () => document.getElementById("exact-root");
 function navigating(f) {
   return (r, location) => {
@@ -263,7 +275,7 @@ export function router(slot, history) {
     const r = slot(); if (!r || !r[1].length) return;
     const op = r === Shown ? Early : mirror(r); Early = null;
     if (op?.scroll) wantScroll(op);
-    else if (op) { Due = Scheduled = null; Fragments?.then(f => f.cancel()); }
+    else if (op) { Due = Scheduled = null; loads.Fragments?.then(f => f.cancel()); }
   });
   // `effect` runs once synchronously. Its first apply follows
   // `projectRoots`' projection, so publish those initial visits now.

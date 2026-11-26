@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { copyStaticTreeIfPresent, syncStaticTree } from '../host/web/serve.mjs';
 
 test.each([
-  ['host/web-js/build.mjs', "copyStaticTreeIfPresent(resolve(appDir, 'assets')", '\nif (devReload)', '', ['assets', 'deck'], false],
+  ['host/web-js/build.mjs', "for (const tree of ['assets', 'deck']) copyStaticTreeIfPresent", '\nif (devReload)', '', ['assets', 'deck'], false],
   ['host/windows/build.mjs', "  for (const name of ['assets','deck'])", '\n  copyShaders', '', ['assets', 'deck'], true],
   ['host/apple/watch.mjs', '    for (const entry of entries) copyFileSync', '\n    const appInfo', '', ['assets', 'deck'], false],
   ['host/apple-painted/build.mjs', "  writeFileSync(resolve(bundle, 'Contents/Info.plist')", "\n  run('codesign'", 'Contents/Resources', ['assets'], true],

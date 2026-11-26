@@ -94,3 +94,51 @@ fn panrelease_takes_two_numeric_payload_parameters() {
     let untyped = "component App\n  state x = 0\n  action done(vx, vy)\n    x = vx + vy\n  view\n    box panrelease=done\n";
     contract::compile(untyped).unwrap();
 }
+
+#[test]
+fn pinch_and_pinchrelease_append_scale_and_viewport_point_after_curried_arguments() {
+    let source = r#"component App
+  state result = 0
+  action onPinch(base: number, scale, x, y)
+    result = base + scale * 100 + x + y
+  action onRelease(base: number, scale, x, y)
+    result = base + scale * 1000 + x + y
+  view
+    scroll testId="target" height=100 pinch=onPinch(10) pinchrelease=onRelease(20)
+"#;
+    let plan = contract::compile(source).unwrap();
+    let mut runner = Runner::boot(
+        plan,
+        boxed(Empty),
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let key = runner.kernel().find_by_test_id("target")[0];
+    let id = runner.kernel().node_by_key(key).unwrap().id;
+    assert_eq!(
+        runner.handlers_of(id),
+        vec![EventKind::Pinch, EventKind::Pinchrelease]
+    );
+    for (kind, want) in [(67, 224), (68, 2034)] {
+        runner
+            .dispatch(id, Event::of_host_kind(kind, "2,5,9").unwrap())
+            .unwrap();
+        let state = exact_runner::agent::state(&runner);
+        assert!(state.contains(&format!("\"result\":{want}")), "{state}");
+        for bad in [
+            "0,5,9", "-1,5,9", "inf,5,9", "NaN,5,9", "1,NaN,9", "2,3", "2,3,4,5",
+        ] {
+            assert!(Event::of_host_kind(kind, bad).is_err(), "{kind} {bad}");
+        }
+    }
+    for binding in ["pinch", "pinchrelease"] {
+        for bad in ["s, x", "s, x, y, z", "s: string, x: number, y: number"] {
+            let src = format!(
+                "component App\n  state heard = false\n  action report({bad})\n    heard = true\n  view\n    scroll height=100 {binding}=report\n"
+            );
+            assert!(contract::compile(&src).is_err(), "{binding} {bad}");
+        }
+    }
+}

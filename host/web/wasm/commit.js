@@ -4,6 +4,8 @@ import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValu
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
 import { attach } from "./input.js";
 import { flowBatch } from "./flow.js";
+import { loadOnce } from '../load-once.js';
+
 // The page's storage service for a Rust source's requests, made at the first one, for this incarnation's requests.
 async function storageService(requestIncarnation) {
   await moduleReady;
@@ -15,13 +17,7 @@ async function storageService(requestIncarnation) {
   }
   if (!host.storageRequests) {
     const app = globalThis.exact.compat.inputs.app;
-    const pending = loadAfterPaint("./storage-request.js", "createStorageRequests").then((create) => create(app, host.grantSet)).catch((error) => {
-      if (host.storageRequests === pending) {
-        host.storageRequests = null;
-      }
-      throw error;
-    });
-    host.storageRequests = pending;
+    loadOnce(host, 'storageRequests', () => loadAfterPaint('./storage-request.js', 'createStorageRequests').then(create => create(app, host.grantSet)));
   }
   const service = await host.storageRequests;
   if (requestIncarnation !== host.incarnation) {
@@ -170,7 +166,7 @@ function apply(batch) {
         // a plan with no strings table names no language: the page keeps the manifest's (LLP 1115.000 D4.6) // a plan with no strings table names no language: the page keeps the manifest's (LLP 1115.000 D4.6)
         case "head":
           pageTitle(op.title ?? null);
-          (host.headGlue ??= loadAfterPaint("./document-glue.js", "documentHead")).then((head) => head(op));
+          (loadOnce(host, "headGlue", () => loadAfterPaint("./document-glue.js", "documentHead"))).then((head) => head(op));
           break;
         // the title at once: the head's, else the route's (LLP 1115.000 D4.1)
         case "router":
@@ -178,7 +174,7 @@ function apply(batch) {
           navigation.apply(op);
           if (op.scroll) {
             op.since = navigation.personScrolls;
-            (host.fragmentGlue ??= loadAfterPaint("./fragment.js", "fragment")).then((f) => f.arm(root, op, navigation));
+            (loadOnce(host, "fragmentGlue", () => loadAfterPaint("./fragment.js", "fragment"))).then((f) => f.arm(root, op, navigation));
           } else host.fragmentGlue?.then((f) => f.cancel());
           break;
         // a scroll to the visit's fragment, made at the runner's `scrollToFragment` once its content has arrived, which a scroll by the person since cancels (LLP 1153 D5)
@@ -361,7 +357,7 @@ function apply(batch) {
             console.warn("exact:", host.unparsed);
           }
           if (host.grants.some((l) => grantWords(l)[0] === "auth.session")) {
-            host.authHost ??= afterNativePaint().then(() => loadAfterPaint("./auth-glue.js", "authHost")).then((h) => host.authHost = h);
+            loadOnce(host, "authHost", () => afterNativePaint().then(() => loadAfterPaint("./auth-glue.js", "authHost")).then((h) => host.authHost = h));
           }
           break;
         }
@@ -601,7 +597,7 @@ function apply(batch) {
           } else if (op.name === "scrollToFragment") {
             // LLP 1077 D14; LLP 1069.000 D3: the runner laid out at the size, the document's root takes it
             const turn = host.fragmentTurn, [visit, fragment = "", activation] = op.args ?? [];
-            (host.fragmentGlue ??= loadAfterPaint("./fragment.js", "fragment")).then((f) => {
+            (loadOnce(host, "fragmentGlue", () => loadAfterPaint("./fragment.js", "fragment"))).then((f) => {
               if (turn === host.fragmentTurn && f.shows(visit, fragment)) {
                 f.scroll(root, visit, fragment, log, activation);
               }
@@ -671,7 +667,7 @@ function apply(batch) {
             // the inverse of `message=`: text into the named surface, every one in order
             if (op.args?.[2] === "iframe") {
               const captured = frames.map((e) => [e, e.exactFrameChannel]);
-              (host.frameModule ??= loadAfterPaint("./frame-messages.js", "frameMessages")).then((m) => m.postFrameMessage(text, name, views, log, captured));
+              (loadOnce(host, "frameModule", () => loadAfterPaint("./frame-messages.js", "frameMessages"))).then((m) => m.postFrameMessage(text, name, views, log, captured));
               break;
             }
             postSurface(name, text, at);
@@ -838,7 +834,7 @@ function apply(batch) {
                 title,
                 text,
                 url
-              }, ruling.files)).then(log);
+              }, ruling.files)).then(log, e => log(`share: refused: ${e?.name ?? e}`));
               inflight.add(p);
               p.finally(() => inflight.delete(p));
             } else if (ruling.present) {
@@ -1122,11 +1118,11 @@ export function applyBatch(batch) {
                 host.soundOut.ops(op.ops);
                 break;
               }
-              (host.soundModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./sound-glue.js", "installSound")).then((install) => install({
+              (loadOnce(host, "soundModule", () => new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./sound-glue.js", "installSound")).then((install) => install({
                 files: op.files ?? [],
                 log,
                 origin: () => t0
-              }))).then((s) => {
+              })))).then((s) => {
                 host.soundOut = s;
                 if (op.files && op.files !== s.files) {
                   s.reset(op.files);
@@ -1140,7 +1136,7 @@ export function applyBatch(batch) {
                 host.midiOut.ops(op.ops, op.boot);
                 break;
               }
-              (host.midiModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./midi-glue.js", "installMidi")).then((install) => install({
+              (loadOnce(host, "midiModule", () => new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./midi-glue.js", "installMidi")).then((install) => install({
                 log,
                 origin: () => t0,
                 deliver: (m) => {
@@ -1148,7 +1144,7 @@ export function applyBatch(batch) {
                     applyBatch(JSON.parse(readOut(host.wasm.exact_midi(writeIn(JSON.stringify(m))))));
                   }
                 }
-              }))).then((m) => {
+              })))).then((m) => {
                 host.midiOut = m;
                 m.ops(op.ops, op.boot);
               }).catch(console.error);

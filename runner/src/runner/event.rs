@@ -355,6 +355,10 @@ pub enum Event {
     /// where it measures one (UIKit), `exact_motion::VelocityTracker`'s
     /// elsewhere; a cancelled contact releases at (0, 0) (LLP 1057 §10.6).
     PanRelease(f64, f64),
+    /// Cumulative touch scale and focal point in viewport coordinates.
+    Pinch(f64, f64, f64),
+    /// The final two-contact sample, with scale 1 on cancellation.
+    PinchRelease(f64, f64, f64),
     /// A standard media event. Numeric payloads are seconds.
     Media(EventKind, String),
     /// DOM's `copy`, `cut` or `paste` at the focused view (spreadsheet F4,
@@ -710,12 +714,22 @@ impl Event {
         (vx.is_finite() && vy.is_finite()).then_some(Self::PanRelease(vx, vy))
     }
 
-    fn invalid_payload(&self) -> Option<&'static str> {
+    pub(super) fn invalid_payload(&self) -> Option<&'static str> {
         match *self {
             Self::Media(kind @ (EventKind::Play | EventKind::Pause), ref how)
                 if !matches!(how.as_str(), "" | "remote") =>
             {
                 Some(kind.name())
+            }
+            Self::Pinch(scale, x, y)
+                if !(scale.is_finite() && scale > 0. && pixel(x) && pixel(y)) =>
+            {
+                Some("pinch")
+            }
+            Self::PinchRelease(scale, x, y)
+                if !(scale.is_finite() && scale > 0. && pixel(x) && pixel(y)) =>
+            {
+                Some("pinchrelease")
             }
             Self::Pan(x, y) if !pixel(x) || !pixel(y) => Some("pan"),
             Self::PanRelease(vx, vy) if !vx.is_finite() || !vy.is_finite() => Some("panrelease"),
@@ -774,39 +788,9 @@ impl Event {
         );
         valid_height_release(height, velocity).then_some(Self::HeightRelease { height, velocity })
     }
-
-    /// Decode the scroll event: `left,top,scrollWidth,scrollHeight,
-    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative,
-    /// then a zoomable container's zoom, above 0; a scroller that does not
-    /// zoom leaves it out.
-    pub fn scroll_payload(payload: &str) -> Option<Self> {
-        let (payload, zoom) = match payload.matches(',').count() {
-            6 => {
-                let (rest, zoom) = payload.rsplit_once(',')?;
-                (rest, exact_num::parse_f64(zoom).ok()?)
-            }
-            _ => (payload, 1.0),
-        };
-        let [left, top, width, height, client_width, client_height] = tuple::<6>(payload)?;
-        ([left, top].iter().all(|v| v.is_finite())
-            && [width, height, client_width, client_height]
-                .iter()
-                .all(|v| v.is_finite() && *v >= 0.0)
-            && zoom.is_finite()
-            && zoom > 0.0)
-            .then_some(Self::Scroll(ScrollEvent {
-                left,
-                top,
-                width,
-                height,
-                client_width,
-                client_height,
-                zoom,
-            }))
-    }
 }
 
-fn tuple<const N: usize>(payload: &str) -> Option<[f64; N]> {
+pub(super) fn tuple<const N: usize>(payload: &str) -> Option<[f64; N]> {
     let mut parts = payload.split(',');
     let mut values = [0.0; N];
     for value in &mut values {
@@ -1119,6 +1103,8 @@ impl<D: DataSource> Runner<D> {
             Event::Scroll(_) => "scroll",
             Event::Resize(_) => "resize",
             Event::Intersect { .. } => "intersect",
+            Event::Pinch(..) => "pinch",
+            Event::PinchRelease(..) => "pinchrelease",
             Event::Pan(_, _) => "pan",
             Event::PanRelease(_, _) => "panrelease",
             Event::Media(kind, _) | Event::Clipboard(kind, ..) => kind.name(),
@@ -1337,6 +1323,8 @@ impl<D: DataSource> Runner<D> {
             ),
             Event::Clipboard(kind, ..) => (*kind, None, kind.name()),
             Event::SelectionChange { .. } => (EventKind::Selectionchange, None, "selectionchange"),
+            Event::Pinch(..) => (EventKind::Pinch, None, "pinch"),
+            Event::PinchRelease(..) => (EventKind::Pinchrelease, None, "pinchrelease"),
             Event::Pan(_, _) => (EventKind::Pan, None, "pan"),
             Event::PanRelease(_, _) => (EventKind::Panrelease, None, "panrelease"),
             Event::HeightRelease { .. } => (EventKind::Heightrelease, None, "heightrelease"),
@@ -1433,6 +1421,9 @@ impl<D: DataSource> Runner<D> {
             | Event::Pan(left, top)
             | Event::PanRelease(left, top) => {
                 args.extend([Value::Number(left), Value::Number(top)])
+            }
+            Event::Pinch(s, x, y) | Event::PinchRelease(s, x, y) => {
+                args.extend([s, x, y].map(Value::Number))
             }
             Event::HeightRelease { height, velocity } => {
                 args.extend([Value::Number(height), Value::Number(velocity)]);

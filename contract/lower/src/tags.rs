@@ -553,6 +553,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "scrolldragstart" => AttrTarget::Handler("scrolldragstart"),
         "scrolldragend" => AttrTarget::Handler("scrolldragend"),
         "pan" => AttrTarget::Handler("pan"),
+        "pinch" => AttrTarget::Handler("pinch"),
+        "pinchrelease" => AttrTarget::Handler("pinchrelease"),
         "panrelease" => AttrTarget::Handler("panrelease"),
         "navigate" => AttrTarget::Handler("navigate"),
         // @ref LLP 1115.000 D5.5 — the history swipe the host tracks.
@@ -598,12 +600,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "playbackVisibilityThreshold" => AttrTarget::Prop(p("playbackVisibilityThreshold")),
         "preservesPitch" => AttrTarget::Prop(p("preservesPitch")),
         "allowsPictureInPicturePlayback" => AttrTarget::Prop(p("allowsPictureInPicturePlayback")),
-        "canStartPictureInPictureAutomaticallyFromInline" => {
-            AttrTarget::Prop(p("canStartPictureInPictureAutomaticallyFromInline"))
-        }
-        "entersFullScreenWhenPlaybackBegins" => {
-            AttrTarget::Prop(p("entersFullScreenWhenPlaybackBegins"))
-        }
+        "canStartPictureInPictureAutomaticallyFromInline" => AttrTarget::Prop(p(name)),
+        "entersFullScreenWhenPlaybackBegins" => AttrTarget::Prop(p(name)),
         "exitsFullScreenWhenPlaybackEnds" => AttrTarget::Prop(p("exitsFullScreenWhenPlaybackEnds")),
         "showsTimecodes" => AttrTarget::Prop(p("showsTimecodes")),
         "allowsVideoFrameAnalysis" => AttrTarget::Prop(p("allowsVideoFrameAnalysis")),
@@ -613,9 +611,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // @ref LLP 1042.000 D2, D3 — which rendition an HLS stream plays.
         "preferredMaximumResolution" => AttrTarget::Prop(p("preferredMaximumResolution")),
         "startsOnFirstEligibleVariant" => AttrTarget::Prop(p("startsOnFirstEligibleVariant")),
-        "automaticallyWaitsToMinimizeStalling" => {
-            AttrTarget::Prop(p("automaticallyWaitsToMinimizeStalling"))
-        }
+        "automaticallyWaitsToMinimizeStalling" => AttrTarget::Prop(p(name)),
         "audiovisualBackgroundPlaybackPolicy" | "preventsDisplaySleepDuringVideoPlayback" => {
             AttrTarget::Prop(p(name))
         }
@@ -640,7 +636,13 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "navigationPopoverAdaptation" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
         "navigationPopoverMargins" | "navigationExtendedLayout" => AttrTarget::Prop(p(name)),
         "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
-        "navigationFullSizeContent" => AttrTarget::Prop(p(name)),
+        "navigationFullSizeContent" | "navigationSplitItemFullHeight" => AttrTarget::Prop(p(name)),
+        // @ref LLP 1123 D15 — a Mac split item's controls, and its accessories' own.
+        "navigationSplitItemAdjustsForOverlays" => AttrTarget::Prop(p(name)),
+        "navigationSplitItemTopAccessory" => AttrTarget::Prop(p(name)),
+        "navigationSplitItemBottomAccessory" => AttrTarget::Prop(p(name)),
+        "navigationAccessoryContentInsets" => AttrTarget::Prop(p(name)),
+        "navigationAccessoryScrollEdgeEffect" => AttrTarget::Prop(p(name)),
         "navigationPresentation" | "navigationVerticalBar" => AttrTarget::Prop(p(name)),
         "navigationHistory" | "navigationDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
         "navigationBack" | "navigationBar" => AttrTarget::Prop(p(name)),
@@ -1051,9 +1053,7 @@ pub fn renamed(old: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-// A list's row-size estimate is the virtualized list's host policy (LLP 1010
-// §6.5); the fixed-height windowed list it once also named is deleted (LLP
-// 1070 stage 1), so a hint without `virtualized=true` says how to migrate.
+// A row estimate on the former fixed-height list needs a migration to `virtualized=true` (LLP 1010 §6.5, LLP 1070 stage 1).
 pub(crate) fn validate_list(
     tag: &str,
     expanded: &[contract_syntax::Attr],

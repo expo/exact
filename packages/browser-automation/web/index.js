@@ -37,7 +37,8 @@ async function settle(run, { sandbox, awaitPromise = true }) {
     else if (value && typeof value.then === 'function') value = {};
     const text = JSON.stringify(value === undefined ? null : value);
     if (text === undefined) return { result: null };
-    if (text.length > LIMIT) return { error: 'QuotaExceededError', message: `the result is ${text.length} bytes of JSON; at most ${LIMIT}` };
+    const bytes = new TextEncoder().encode(text).length;
+    if (bytes > LIMIT) return { error: 'QuotaExceededError', message: `the result is ${bytes} bytes of JSON; at most ${LIMIT}` };
     return { result: JSON.parse(text) };
   } catch (e) {
     return { error: typeof e?.name === 'string' && e.name ? e.name : 'Error', message: String(e?.message ?? e) };

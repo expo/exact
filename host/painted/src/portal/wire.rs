@@ -1,11 +1,12 @@
 //! The D-Bus wire format, as much as a portal call needs: little-endian
 //! messages whose bodies hold any complete type, read and written by
 //! signature (the [D-Bus Specification](https://dbus.freedesktop.org/doc/dbus-specification.html),
-//! "Type System" and "Message Protocol"). Unix file descriptors are never
-//! sent or taken.
+//! "Type System" and "Message Protocol"). A message may send Unix file
+//! descriptors, by their index in the message ([`Value::Fd`]); none are taken.
 
 /// A value of any D-Bus type. Integers other than `y` and `u` are read as
-/// [`Value::Num`] and never written.
+/// [`Value::Num`]; of them only a descriptor index, `h`, is written, as
+/// [`Value::Fd`].
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Value {
     Byte(u8),
@@ -22,6 +23,9 @@ pub(crate) enum Value {
     /// A dictionary entry, `{kv}`.
     Entry(Box<Value>, Box<Value>),
     Variant(Box<Value>),
+    /// A Unix file descriptor, `h`: its index among those the message sends.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Fd(u32),
 }
 
 impl Value {
@@ -74,6 +78,7 @@ impl Value {
             ),
             Value::Entry(k, v) => format!("{{{}{}}}", k.signature(), v.signature()),
             Value::Variant(_) => "v".into(),
+            Value::Fd(_) => "h".into(),
         }
     }
 }
@@ -110,7 +115,7 @@ pub(crate) fn write(buf: &mut Vec<u8>, v: &Value) {
             pad(buf, 4);
             buf.extend_from_slice(&u32::from(*b).to_le_bytes());
         }
-        Value::U32(n) => {
+        Value::U32(n) | Value::Fd(n) => {
             pad(buf, 4);
             buf.extend_from_slice(&n.to_le_bytes());
         }
@@ -292,6 +297,10 @@ impl Reader<'_> {
 }
 
 pub(crate) const METHOD_CALL: u8 = 1;
+/// A call's header flag: the caller wants no reply, and the service sends
+/// none.
+#[cfg(target_os = "linux")]
+pub(crate) const NO_REPLY_EXPECTED: u8 = 1;
 pub(crate) const METHOD_RETURN: u8 = 2;
 pub(crate) const ERROR: u8 = 3;
 pub(crate) const SIGNAL: u8 = 4;
@@ -304,6 +313,10 @@ const LARGEST: usize = 16 << 20;
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct Message {
     pub kind: u8,
+    /// Its header's flags, [`NO_REPLY_EXPECTED`] among them, which only
+    /// tests read.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub flags: u8,
     pub serial: u32,
     pub reply_serial: Option<u32>,
     pub path: String,
@@ -313,11 +326,26 @@ pub(crate) struct Message {
     pub destination: String,
     pub sender: String,
     pub signature: String,
+    /// How many Unix file descriptors it sends (`UNIX_FDS`), which only
+    /// tests read: no reply the portal gives sends one.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub unix_fds: u32,
     pub body: Vec<Value>,
 }
 
-/// A message of `kind` to `destination` (empty: none), with `body`.
+/// A message of `kind` to `destination` (empty: none), with `body`, sending
+/// `fds` Unix file descriptors beside it (its `UNIX_FDS` field), which
+/// `body`'s [`Value::Fd`]s index.
 #[allow(clippy::too_many_arguments)]
+/// `message`, a call built by [`message`], marked as wanting no reply: the
+/// flags are the header's third byte (the D-Bus specification's "Message
+/// Format").
+#[cfg(target_os = "linux")]
+pub(crate) fn without_reply(mut message: Vec<u8>) -> Vec<u8> {
+    message[2] |= NO_REPLY_EXPECTED;
+    message
+}
+
 pub(crate) fn message(
     kind: u8,
     serial: u32,
@@ -327,6 +355,7 @@ pub(crate) fn message(
     interface: &str,
     member: &str,
     body: &[Value],
+    fds: u32,
 ) -> Vec<u8> {
     let mut encoded = Vec::new();
     for v in body {
@@ -355,6 +384,9 @@ pub(crate) fn message(
             8,
             Value::Sig(body.iter().map(Value::signature).collect()),
         ));
+    }
+    if fds > 0 {
+        fields.push(field(9, Value::U32(fds)));
     }
     let mut m = Vec::new();
     for v in [
@@ -395,8 +427,10 @@ pub(crate) fn parse(buf: &[u8]) -> Option<Message> {
     };
     let header = r.values("yyyyuua(yv)")?;
     let mut m = Message::default();
-    if let (Value::Byte(kind), Value::U32(serial)) = (&header[1], &header[5]) {
-        (m.kind, m.serial) = (*kind, *serial);
+    if let (Value::Byte(kind), Value::Byte(flags), Value::U32(serial)) =
+        (&header[1], &header[2], &header[5])
+    {
+        (m.kind, m.flags, m.serial) = (*kind, *flags, *serial);
     }
     let Value::Array(_, fields) = &header[6] else {
         return None;
@@ -415,6 +449,7 @@ pub(crate) fn parse(buf: &[u8]) -> Option<Message> {
             (6, Value::Str(s)) => m.destination = s.clone(),
             (7, Value::Str(s)) => m.sender = s.clone(),
             (8, Value::Sig(s)) => m.signature = s.clone(),
+            (9, Value::U32(n)) => m.unix_fds = *n,
             _ => {}
         }
     }

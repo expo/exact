@@ -29,6 +29,35 @@ export function lightDomDragPath(event) {
 /** What `down` went down on, when `event` is at its point and `target`, where the browser began the drag, holds it. */
 export const pressedAt = (down, event, target) => atPoint(down, event) && target.contains(down.target) ? down.target : null;
 
+/** Record each image `dragstart`'s light-DOM path in `view` for `input` (`dragPathFrom`) when the host's window capture
+ * listener runs, until `signal` aborts. `composedPath()` keeps its order when a later listener moves a node, but not the
+ * parents a slot's detour is read through. One listener serves every observer of `input`, added with the first and
+ * removed with the last. It is kept on `input`, which the wasm wait hands to the listener when it loads, since each of
+ * the two bundles has its own copy of this module; the listener begins observing before the wait stops, so the
+ * recorder keeps its place across the handoff. The listeners the page adds after it run after it; one added before it
+ * runs first, and a node that one moves is read as it moved. */
+function recordDragPaths(input, view, signal) {
+  if (!view?.addEventListener || signal?.aborted) return;
+  let recorder = input.recorder;
+  if (!recorder) {
+    const stop = new AbortController(), paths = new WeakMap();
+    view.addEventListener('dragstart', (event) => {
+      if (event.isTrusted !== false && event.target?.localName === 'img') paths.set(event, lightDomDragPath(event));
+    }, { capture: true, signal: stop.signal });
+    recorder = input.recorder = { users: 0, stop, paths };
+  }
+  recorder.users++;
+  signal?.addEventListener('abort', () => {
+    if (--recorder.users) return;
+    if (input.recorder === recorder) input.recorder = null;
+    recorder.stop.abort();
+  }, { once: true });
+}
+
+/** The light-DOM elements an image drag passed through, as `input`'s recorder took them when the host's window capture
+ * listener ran, else as they are now. */
+export const dragPathFrom = (input, event) => input?.recorder?.paths.get(event) ?? lightDomDragPath(event);
+
 /** The most recent press still held where a drag at `target` began. */
 const heldAt = (input, event, target = elementOf(event.target)) =>
   target && [...input.held.values()].findLast((press) => pressedAt(press, event, target));
@@ -51,6 +80,7 @@ const matchesMouseEvent = (point, event, target) => point && ((target != null &&
  * each release of a field no longer the last down's. The wasm wait hands its `input` to the listener when it loads. */
 export function observeDragInput(root, signal, input = { held: new Map() }, changed = () => {}) {
   const { held } = input, compat = input.compat ??= new Set();
+  recordDragPaths(input, root.defaultView, signal);
   // A pen's or a finger's compatibility mouse events name no pointer, so pairing them with a press is a heuristic: by
   // point, or else by target, the earliest pending press first. A pair the browser delays or suppresses, or that
   // another script stops before the document, can shift the pairing of those after it. A finger's `mousedown` can

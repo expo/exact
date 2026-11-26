@@ -12,7 +12,7 @@ import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { glueNode } from '../host/web/tests/glue-fixture.mjs';
-import { engagement } from '../host/web/engagement.js';
+import { engagement, whenRendered } from '../host/web/engagement.js';
 import { agentParameters } from '../host/web/navigation/agent-parameters.js';
 import { BODY_LIMIT, CANVAS_COOKIE, ENTRY_SCRIPT, ENTRY_SCRIPT_HASH, CHECKPOINT_LIMIT, MINT_RATE, PLACEHOLDER, canonical, canvasGateway, needs, openRemoteCanvas, rewriter } from './forma-canvas.mjs';
 import { formaServer } from './forma-server.mjs';
@@ -876,12 +876,14 @@ test('a session evicted past the cap takes its streams with it; a client has at 
 test('the JS loop\'s page reloads afresh when its checkpoint is refused (a canvas below write), and its script still parses', () => {
   const s = readFileSync(new URL('../host/web-js/dev.mjs', import.meta.url), 'utf8');
   // (Its gallery page's options at their defaults: the app's own page.)
-  const head = "const client = (n, revision, { base = '/__dev', stream = '/__dev/page', page = null } = {}) => `";
-  const i = s.indexOf(head) + head.length - 1, j = s.indexOf('</script>`;', i) + '</script>`'.length;
+  const head = "const client = (n, revision, { base = '/__dev', stream = '/__dev/page', page = null, key = page, epoch = pageEpoch, numbered = true } = {}) => `";
+  const start = s.indexOf(head);
+  expect(start).toBeGreaterThan(-1);
+  const i = start + head.length - 1, j = s.indexOf('</script>`;', i) + '</script>`'.length;
   const names = [...new Set([...s.slice(i, j).matchAll(/\$\{([^}]*)\}/g)].flatMap(m => m[1].match(/\b[A-Z_]{3,}\b/g) ?? []))].filter(n => n !== 'JSON');
   // The client writes these functions' sources into the script (dev.mjs).
-  const written = { replacementBoundary: glueNode(s, n => n.type === 'FunctionDeclaration' && n.id.name === 'replacementBoundary' && n), engagement, agentParameters };
-  const html = new Function('n', 'revision', 'base', 'stream', 'page', ...Object.keys(written), ...names, `return ${s.slice(i, j)};`)(3, 'r', '/__dev', '/__dev/page', null, ...Object.values(written), ...names.map(() => []));
+  const written = { replacementBoundary: glueNode(s, n => n.type === 'FunctionDeclaration' && n.id.name === 'replacementBoundary' && n), engagement, whenRendered, agentParameters };
+  const html = new Function('n', 'revision', 'base', 'stream', 'page', 'key', 'epoch', 'numbered', ...Object.keys(written), ...names, `return ${s.slice(i, j)};`)(3, 'r', '/__dev', '/__dev/page', null, null, 'e', true, ...Object.values(written), ...names.map(() => []));
   const code = html.replace(/^<script>/, '').replace(/<\/script>$/, '');
   expect(() => new Function(code)).not.toThrow();
   // The 403 is checked before the failure that keeps the old page.

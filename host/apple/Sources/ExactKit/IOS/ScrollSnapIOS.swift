@@ -19,6 +19,11 @@ extension NodeView {
         }
         var start = dragStart(scrollView)
         #if os(iOS)
+        if PinchLift.consume(for: scrollView) {
+            targetContentOffset.pointee = scrollView.contentOffset
+            listVelocity = .zero
+            return
+        }
         if let list = (heightRecognizer as? SheetScrollGesture)?.listDrag(in: scrollView) {
             start.y = list.start
             if list.atStart {
@@ -88,10 +93,12 @@ extension NodeView {
         return
         #else
         guard scrollView === self.scrollView, scrollView.isPagingEnabled else { return }
-        let pan = scrollView.panGestureRecognizer.velocity(in: scrollView)
+        let suppressed = PinchLift.consume(for: scrollView)
+        if suppressed { scrollView.setContentOffset(scrollView.contentOffset, animated: false) }
+        let pan = suppressed ? .zero : scrollView.panGestureRecognizer.velocity(in: scrollView)
         let velocity = CGPoint(x: -pan.x / 1000, y: -pan.y / 1000), reach = 0.99 / (1 - 0.99), at = scrollView.contentOffset
-        let rest = snappedOffset(CGPoint(x: at.x + velocity.x * reach, y: at.y + velocity.y * reach), in: scrollView, release: at,
-                                 drag: (dragStart(scrollView), velocity))
+        let rest = suppressed ? at : snappedOffset(CGPoint(x: at.x + velocity.x * reach, y: at.y + velocity.y * reach), in: scrollView, release: at,
+                                  drag: (dragStart(scrollView), velocity))
         // The rule's rest is recorded either way, for a re-snap after layout (`resnap`).
         guard handlers.contains("scrolldragend") else { return }
         presenter?.scrollDrag(id, (velocity, CGPoint(x: rest.x + scrollLeftInset(scrollView), y: rest.y + scrollTopInset(scrollView))))

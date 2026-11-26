@@ -19,10 +19,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      # This runner is shut down partway through building the workspace's test
-      # binaries, as one out of disk or memory is. The dev profile's line tables
-      # are the part of that build the tests can do without.
+      # Bound linking and compile concurrency on the 16 GB hosted runner: GNU ld
+      # linking many large test binaries in parallel exhausts runner memory and
+      # kills the job (OOM exit 137 / lost communication). The two
+      # CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_* variables apply only to Linux
+      # host builds (leaving wasm32 script-test builds unaffected);
+      # CARGO_PROFILE_DEV_DEBUG and CARGO_BUILD_JOBS apply to every Cargo build
+      # in this job.
       CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "clang"
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +46,7 @@ jobs:
         timeout-minutes: 5
         run: |
           packages=(
-            pkg-config clang libudev-dev libinput-dev libdrm-dev libgbm-dev
+            pkg-config clang lld libudev-dev libinput-dev libdrm-dev libgbm-dev
             libxkbcommon-dev libfontconfig1-dev libfreetype-dev libwayland-dev
           )
           fetch() {

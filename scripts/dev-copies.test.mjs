@@ -115,7 +115,7 @@ async function copies(wasm) {
     // Three builds, one a copy, each said from the dev loop's origin (the app's own frame says its build too).
     expect(new Set(Object.values(first)).size).toBe(3);
     expect((await words()).every(w => w.origin === base)).toBe(true);
-    const listed = async () => (await call({ method: 'hello' })).ok.builds;
+    const listed = async () => (await call({ method: 'hello' })).ok?.builds ?? [];
     const ids = Object.values(first);
     const builds = await until(listed, bs => ids.every(id => bs.find(b => b.id === id)?.status?.location === '/'), 'each copy listed at /');
     expect(builds.filter(b => ids.includes(b.id)).every(b => b.capabilities.includes('navigate'))).toBe(true);

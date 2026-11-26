@@ -552,7 +552,7 @@ test.each([
       for (const dll of ['vcruntime140.dll', 'msvcp140.dll']) writeFileSync(resolve(crt, dll), arch);
       writeFileSync(resolve(crt, 'runtime.pdb'), 'symbols');
     }
-    const env = { process: { platform: 'win32', argv: [], env: { ...build.env, EXACT_UPDATE_TRUST: trust } }, guardFlags: () => args, resolveApp: () => app, prepareShaders() {},
+    const env = { process: { platform: 'win32', argv: [], env: { ...build.env, EXACT_UPDATE_TRUST: trust } }, guardFlags: () => args, resolveApp: () => app, noWindowsHost: () => null, prepareShaders() {},
       bakeTarget: () => 'x86_64-pc-windows-msvc', pickIcon: () => null, resolve, mkdirSync, developmentBuildEnv: () => build.env,
       copyFileSync, readFileSync, writeFileSync, createHash, windowsFile: (_app, path) => path.endsWith('.exe') ? 'fixture.exe' : basename(path), closeOpened() {}, syncStaticTree() {}, copyShaders() {},
       windowsRuntime: target => windowsRuntime(target, { VCToolsRedistDir: redist }), writePackagedReceipt, unclaimedNote: () => null, console: { log() {} },

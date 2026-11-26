@@ -227,19 +227,24 @@ extension NavigationHost: NavigationHosting {
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? {
         guard !ExactEnv.authoredChrome else { return nil }
         let testId = node.props["testId"]
-        for route in controllers.values {
-            guard let controller = route.navigationController, controller.topViewController === route, barShows(controller),
+        func match(_ items: [UIBarButtonItem]) -> UIBarButtonItem? {
+            items.first(where: { ($0.target as? BarPress)?.id == node.id })
+                ?? items.first(where: { $0.target == nil && testId != nil && $0.accessibilityIdentifier == testId })
+        }
+        // Check active dialog sheet bars first so a presented sheet wins over the covered route beneath (LLP 1156.008.000 D6.3).
+        for dialog in shownDialogBars {
+            guard let controller = dialog.controller, let nav = dialog.navigationController,
+                  controller.presentedViewController == nil, nav.presentedViewController == nil else { continue }
+            let items = (controller.navigationItem.leftBarButtonItems ?? []) + (controller.navigationItem.rightBarButtonItems ?? [])
+            if let item = match(items) { return (nav.navigationBar, item, controller.navigationItem) }
+        }
+        for key in controllers.keys.sorted() {
+            guard let route = controllers[key], let controller = route.navigationController,
+                  controller.topViewController === route, controller.presentedViewController == nil,
+                  route.presentedViewController == nil, barShows(controller),
                   route.viewIfLoaded?.window != nil else { continue }
             let items = (route.navigationItem.leftBarButtonItems ?? []) + (route.navigationItem.rightBarButtonItems ?? [])
-            guard let item = items.first(where: { ($0.target as? BarPress)?.id == node.id })
-                    ?? items.first(where: { $0.target == nil && testId != nil && $0.accessibilityIdentifier == testId }) else { continue }
-            return (shownBar(of: controller), item, route.navigationItem)
-        }
-        // A dialog's sheet bar (DialogBarIOS.swift).
-        for dialog in shownDialogBars {
-            guard let controller = dialog.controller, let nav = dialog.navigationController else { continue }
-            let items = (controller.navigationItem.leftBarButtonItems ?? []) + (controller.navigationItem.rightBarButtonItems ?? [])
-            if let item = items.first(where: { ($0.target as? BarPress)?.id == node.id }) { return (nav.navigationBar, item, controller.navigationItem) }
+            if let item = match(items) { return (shownBar(of: controller), item, route.navigationItem) }
         }
         return nil
     }

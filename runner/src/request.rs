@@ -655,25 +655,25 @@ impl Request {
         self
     }
 
-    /// Held: the server may keep the reply until something changes, and no
-    /// clock waits on it (see [`Request::held`]). On anything but a plain
-    /// HTTP request it changes nothing.
+    /// Held: the server or data source may keep the reply until something
+    /// changes, and no clock waits on it (see [`Request::held`]; LLP 1016.000
+    /// D9, amended by LLP 1156.008.000 D4). Applies to plain HTTP requests and
+    /// explicit continuations; on anything else it changes nothing.
     pub fn held(mut self) -> Self {
         self.held = true;
         self
     }
 
     /// Whether no clock waits on this request: [`Request::held`] on a plain
-    /// HTTP request (not a stream, storage, a continuation, a surface, a
-    /// native call or an auth request, nor an upload, whose file is read
-    /// before it is sent).
+    /// HTTP request or an explicit continuation (not a stream, storage, a
+    /// surface, a native call or an auth request, nor an upload, whose file is
+    /// read before it is sent).
     pub fn is_held(&self) -> bool {
         self.held
             && !self.stream
             && self.body_from.is_none()
             && self.body_to.is_none()
             && self.storage.is_none()
-            && self.continuation.is_none()
             && self.surface.is_none()
             && !self.is_native()
             && !self.is_auth()

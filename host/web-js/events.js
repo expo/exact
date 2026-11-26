@@ -478,26 +478,25 @@ export const onFileDrag = (e, kind, f, l) => {
 // autofocus; retired owners never dispatch teardown blur.
 export const onFocus = (e, kind, f, l) => {
   const own = Owner,
-    run = () => e.isConnected && !own?.gone && f();
+    run = () => (e.isConnected || !!e._exactEditor?.isConnected) && !own?.gone && f();
   return l(kind, () => (Flushing ? FocusQueue.push(run) : run()));
 };
 // the nearest handler hears the ClipboardEvent record, a paste's files minted `doc:` handles (files.js); the default (a
 // field's own paste) proceeds unless it calls preventDefault() (#125)
 export const onClipboard = (e, kind, f, l) => {
   if (kind === 'paste') OnHooks.pasteWarm?.();
-  return l(
-    kind,
-    atBody(e, kind, ev => {
-      ev.stopPropagation();
-      const outer = KeyEvent;
-      KeyEvent = ev;
-      try {
-        f([ev.clipboardData?.getData('text/plain') ?? '', kind === 'paste' ? (OnHooks.pasted?.(ev) ?? []) : []]);
-      } finally {
-        KeyEvent = outer;
-      }
-    }),
-  );
+  const handler = atBody(e, kind, ev => {
+    ev.stopPropagation();
+    const outer = KeyEvent;
+    KeyEvent = ev;
+    try {
+      f([ev.clipboardData?.getData('text/plain') ?? '', kind === 'paste' ? (OnHooks.pasted?.(ev) ?? []) : []]);
+    } finally {
+      KeyEvent = outer;
+    }
+  });
+  ((e._exactClipboard ??= {})[kind] ??= []).push(handler);
+  return l(kind, handler);
 };
 export const onToggle = (e, kind, f, l) => l(kind, ev => f([ev.oldState, ev.newState]));
 // a capture's `FrameCapture`, always the refusal (frame-navigation.js, LLP 1020.002 D7)

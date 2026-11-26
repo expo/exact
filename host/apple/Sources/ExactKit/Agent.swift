@@ -302,9 +302,9 @@ public final class Agent {
             }
             #else
             #if os(iOS)
-            emit(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --ios --widget-gallery"])
+            emit(["error": "widget gallery is unavailable; rebuild: bun exact.mjs ios --widget-gallery (or bun host/apple/build.mjs --ios --widget-gallery)"])
             #else
-            emit(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --widget-gallery"])
+            emit(["error": "widget gallery is unavailable; rebuild: bun exact.mjs mac --widget-gallery (or bun host/apple/build.mjs --widget-gallery)"])
             #endif
             return
             #endif

@@ -6,7 +6,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -527,14 +527,26 @@ test('no web build ships inspect: it lives in dev.js, which no build copies', as
   for (const [name, source] of Object.entries(shipped)) if (name.endsWith('.js')) expect([name, readFileSync(resolve(ROOT, source), 'utf8').includes('exact-inspect')]).toEqual([name, false]);
   expect(readFileSync(resolve(ROOT, 'host/web/dev.js'), 'utf8')).toContain('exact-inspect');
   // The JS target's half, and its table, are served by its dev loop
-  // (inspect-dev.js; `exact-web-js inspect-table` when first asked): no
-  // build makes or copies either.
+  // (inspect-dev.js; `exact-web-js inspect-table` when first asked): `cutSheet`
+  // reads `inspect-dev.js` only so CSS pruning keeps inspector selectors, and
+  // no built JS or HTML ships it or `dev-inspect`.
   const build = readFileSync(resolve(ROOT, 'host/web-js/build.mjs'), 'utf8');
-  expect(build).not.toContain('inspect-dev.js');
   expect(build).not.toContain('dev-inspect');
+  const out = mkdtempSync(join(tmpdir(), 'exact-no-inspect-'));
+  try {
+    const r = spawnSync(process.execPath, [resolve(ROOT, 'host/web-js/build.mjs'), 'theme-fixture', '--out', out], { cwd: ROOT, encoding: 'utf8', timeout: 120_000 });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]);
+    const files = walk(out);
+    expect(files.some(f => f.includes('inspect-dev') || f.includes('dev-inspect'))).toBe(false);
+    for (const file of files) if (/\.(js|mjs|html)$/.test(file)) {
+      const text = readFileSync(file, 'utf8');
+      expect([file, text.includes('exact-inspect'), text.includes('dev-inspect')]).toEqual([file, false, false]);
+    }
+  } finally { rmSync(out, { recursive: true, force: true }); }
   expect(readFileSync(resolve(ROOT, 'host/web-js/dev.mjs'), 'utf8')).toContain("url.pathname === '/dev-inspect.json'");
   expect(readFileSync(resolve(ROOT, 'host/web-js/inspect-dev.js'), 'utf8')).toContain('exact-inspect');
-});
+}, 120_000);
 
 // LLP 1122 T2b: inspect mode in the wasm host, on the theme fixture's page.
 test('inspect on the wasm page: no tap reaches the app, a click selects the node the hit test finds and reports its site, instance and rows, a refresh reports it again, and Escape leaves', async () => {
@@ -550,7 +562,7 @@ test('inspect on the wasm page: no tap reaches the app, a click selects the node
     const until = async (pass, ms = 30_000) => { const end = Date.now() + ms; for (;;) { const got = await pass(); if (got) return got; if (Date.now() > end) throw new Error('not seen'); await new Promise(ok => setTimeout(ok, 200)); } };
     const page = await browser.newPage({ viewport: { width: 420, height: 900 }, hasTouch: true });
     await page.goto(`${base}/`);
-    const build = await until(async () => (await post({ method: 'hello' })).ok.builds.find(b => b.host === 'web'));
+    const build = await until(async () => (await post({ method: 'hello' })).ok?.builds?.find(b => b.host === 'web'), 120_000);
     // The resident compiler's first plan, and its source map, are in.
     await until(() => said().includes('plan ready'), 300_000);
     expect(build.capabilities).toContain('inspect');

@@ -9,7 +9,7 @@
 //! blur(2px)` blurs what `a` made. A reference to nothing that is a
 //! `filter` makes the element not render, as Chrome does.
 
-use super::{cascade, Resolver, Viewport};
+use super::{budget, cascade, Resolver, Viewport};
 use crate::generated::{
     ColorInterpolationFilters, ColorScheme, NodeType, PropId, StyleId, StyleMask, StyleProps,
 };
@@ -32,6 +32,43 @@ fn numbers(text: Option<&str>) -> Vec<f32> {
             .filter(|v| v.is_finite())
             .collect()
     })
+}
+
+/// Like [`numbers`], retaining at most `limit` values and charging each skipped
+/// value against `budget` immediately, returning `None` as soon as the expansion
+/// limit is exhausted.
+fn numbers_capped(text: Option<&str>, limit: usize, budget: &budget::Budget) -> Option<Vec<f32>> {
+    let mut out = Vec::new();
+    let Some(t) = text else { return Some(out) };
+    for v in t
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| exact_num::parse_f64(p).ok().map(|v| v as f32))
+        .filter(|v| v.is_finite())
+    {
+        if out.len() < limit {
+            out.push(v);
+        } else if !budget.cost(1) {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// Charge all finite numbers in an attribute against `budget` without retaining them.
+fn charge_numbers(text: Option<&str>, budget: &budget::Budget) -> bool {
+    let Some(t) = text else { return true };
+    for _ in t
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| exact_num::parse_f64(p).ok().map(|v| v as f32))
+        .filter(|v| v.is_finite())
+    {
+        if !budget.cost(1) {
+            return false;
+        }
+    }
+    true
 }
 
 fn number(text: Option<&str>, default: f32) -> f32 {
@@ -387,17 +424,43 @@ impl Resolver<'_, '_> {
                 else {
                     return Some(nothing);
                 };
+                if chain.overflowed {
+                    // Continue charging referenced primitives and their numeric
+                    // payloads against the expansion budget even after the
+                    // per-chain wire cap stops emitting new primitives.
+                    if !self.charge_skipped_filter(&target, 0) {
+                        return Some(nothing);
+                    }
+                    continue;
+                }
                 let before = chain.primitives.len();
-                let region = self.filter_element(&target, bbox, vp, &mut chain);
+                let mut parsed_children = 0usize;
+                let region =
+                    self.filter_element(&target, bbox, vp, &mut chain, &mut parsed_children);
                 // A list can name one filter many times: each a copy.
                 let made = &chain.primitives[before..];
-                let Some(region) =
-                    region.filter(|_| !chain.overflowed && self.budget.primitives(made))
-                else {
+                if !self.budget.primitives(made) {
+                    return Some(nothing);
+                }
+                if chain.overflowed {
+                    // Charge the remaining primitives and their payloads in `target`
+                    // starting from the child cursor where emission stopped.
+                    if !self.charge_skipped_filter(&target, parsed_children) {
+                        return Some(nothing);
+                    }
+                    continue;
+                }
+                let Some(region) = region else {
                     return Some(nothing);
                 };
                 chain.region = Some(chain.region.map_or(region, |c| union(c, region)));
             } else {
+                if chain.overflowed {
+                    if !self.budget.cost(budget::ITEM) {
+                        return Some(nothing);
+                    }
+                    continue;
+                }
                 let before = chain.primitives.len();
                 function(
                     &mut chain,
@@ -406,10 +469,13 @@ impl Resolver<'_, '_> {
                     style.text_color.resolve(self.appearance(style)),
                     self.appearance(style),
                 );
-                if chain.overflowed || !self.budget.primitives(&chain.primitives[before..]) {
+                if !self.budget.primitives(&chain.primitives[before..]) {
                     return Some(nothing);
                 }
             }
+        }
+        if chain.overflowed {
+            return Some(nothing);
         }
         let region = chain.region.unwrap_or((0.0, 0.0, 0.0, 0.0));
         if !(region.2 > 0.0 && region.3 > 0.0) {
@@ -427,6 +493,59 @@ impl Resolver<'_, '_> {
         })
     }
 
+    /// Charge `SvgFe` children starting at `skip` (and any numeric payloads they
+    /// carry) against the expansion budget without building primitives.
+    fn charge_skipped_filter(&self, target: &NodeRef<'_>, skip: usize) -> bool {
+        for p in target
+            .children()
+            .into_iter()
+            .filter_map(|c| self.kernel.node(c))
+            .filter(|c| c.node_type == NodeType::SvgFe)
+            .skip(skip)
+        {
+            if !self.budget.cost(budget::ITEM) {
+                return false;
+            }
+            match p.props.str(PropId::Fe).unwrap_or("") {
+                "feComponentTransfer" => {
+                    for c in p.children().into_iter().filter_map(|c| self.kernel.node(c)) {
+                        if matches!(
+                            c.props.str(PropId::Fe),
+                            Some("feFuncR" | "feFuncG" | "feFuncB" | "feFuncA")
+                        ) && matches!(c.props.str(PropId::Type), Some("table" | "discrete"))
+                            && !charge_numbers(c.props.str(PropId::TableValues), &self.budget)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                "feConvolveMatrix" => {
+                    if !charge_numbers(p.props.str(PropId::KernelMatrix), &self.budget) {
+                        return false;
+                    }
+                }
+                "feColorMatrix" => {
+                    if !charge_numbers(p.props.str(PropId::Values), &self.budget) {
+                        return false;
+                    }
+                }
+                "feMerge" => {
+                    let count = p
+                        .children()
+                        .into_iter()
+                        .filter_map(|c| self.kernel.node(c))
+                        .filter(|c| c.props.str(PropId::Fe) == Some("feMergeNode"))
+                        .count();
+                    if count > 0 && !self.budget.cost(count as u64) {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
     /// A `filter` element's primitives, appended to `chain` with its
     /// `SourceGraphic` standing for the chain so far; its region, or
     /// `None` when it renders nothing.
@@ -436,6 +555,7 @@ impl Resolver<'_, '_> {
         bbox: Option<Rect>,
         vp: Viewport,
         chain: &mut Chain,
+        parsed_children: &mut usize,
     ) -> Option<Rect> {
         let obb = f.props.str(PropId::FilterUnits) != Some("userSpaceOnUse");
         let pobb = f.props.str(PropId::PrimitiveUnits) == Some("objectBoundingBox");
@@ -496,6 +616,7 @@ impl Resolver<'_, '_> {
                 chain.overflowed = true;
                 return None;
             }
+            *parsed_children += 1;
             let style = cascade(p, &fstyle);
             let kind = p.props.str(PropId::Fe).unwrap_or("");
             let prop = |id: PropId| p.props.str(id);
@@ -586,21 +707,32 @@ impl Resolver<'_, '_> {
                     Op::Composite(op, k)
                 }
                 "feMerge" => {
-                    let nodes: Vec<Input> = p
+                    let mut nodes = Vec::new();
+                    let mut extra = 0u64;
+                    for c in p
                         .children()
                         .into_iter()
                         .filter_map(|c| self.kernel.node(c))
                         .filter(|c| c.props.str(PropId::Fe) == Some("feMergeNode"))
-                        .take(MAX_TABLE_VALUES)
-                        .map(|c| resolve(c.props.str(PropId::In), chain))
-                        .collect();
-                    if chain.overflowed {
+                    {
+                        if nodes.len() < MAX_TABLE_VALUES {
+                            nodes.push(resolve(c.props.str(PropId::In), chain));
+                            if chain.overflowed {
+                                return None;
+                            }
+                        } else {
+                            extra += 1;
+                        }
+                    }
+                    if extra > 0 && !self.budget.cost(extra) {
                         return None;
                     }
                     Op::Merge(nodes)
                 }
                 "feColorMatrix" => {
-                    let v = numbers(prop(PropId::Values));
+                    // Retain up to 21 values so an overlong matrix still fails the
+                    // `v.len() == 20` check instead of truncating into a valid matrix.
+                    let v = numbers_capped(prop(PropId::Values), 21, &self.budget)?;
                     Op::ColorMatrix(match prop(PropId::Type).unwrap_or("matrix") {
                         "saturate" => saturate(v.first().copied().unwrap_or(1.0)),
                         "hueRotate" => hue_rotate(v.first().copied().unwrap_or(0.0)),
@@ -637,14 +769,17 @@ impl Resolver<'_, '_> {
                             _ => continue,
                         };
                         let q = |id: PropId| c.props.str(id);
-                        let table = || {
-                            let mut v = numbers(q(PropId::TableValues));
-                            v.truncate(MAX_TABLE_VALUES);
-                            v
-                        };
                         funcs[slot] = match q(PropId::Type).unwrap_or("identity") {
-                            "table" => Transfer::Table(table()),
-                            "discrete" => Transfer::Discrete(table()),
+                            "table" => Transfer::Table(numbers_capped(
+                                q(PropId::TableValues),
+                                MAX_TABLE_VALUES,
+                                &self.budget,
+                            )?),
+                            "discrete" => Transfer::Discrete(numbers_capped(
+                                q(PropId::TableValues),
+                                MAX_TABLE_VALUES,
+                                &self.budget,
+                            )?),
                             "linear" => Transfer::Linear(
                                 number(q(PropId::Slope), 1.0),
                                 number(q(PropId::Intercept), 0.0),
@@ -691,7 +826,6 @@ impl Resolver<'_, '_> {
                 }
                 "feConvolveMatrix" => {
                     let (ox_f, oy_f) = pair(prop(PropId::FeOrder), 3.0);
-                    let kernel = numbers(prop(PropId::KernelMatrix));
                     let valid_order = ox_f >= 1.0
                         && ox_f <= MAX_CONVOLVE_ORDER as f32
                         && oy_f >= 1.0
@@ -701,6 +835,15 @@ impl Resolver<'_, '_> {
                     } else {
                         (0, 0)
                     };
+                    let kernel_cap = if valid_order {
+                        (ox * oy) as usize
+                    } else {
+                        (MAX_CONVOLVE_ORDER * MAX_CONVOLVE_ORDER) as usize
+                    };
+                    // Retain up to `kernel_cap + 1` so an overlong kernel still fails
+                    // the exact-length check below instead of truncating into a valid matrix.
+                    let kernel =
+                        numbers_capped(prop(PropId::KernelMatrix), kernel_cap + 1, &self.budget)?;
                     let tx_f = number(prop(PropId::TargetX), (ox / 2) as f32);
                     let ty_f = number(prop(PropId::TargetY), (oy / 2) as f32);
                     let sum: f32 = kernel.iter().sum();

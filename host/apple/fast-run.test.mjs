@@ -111,5 +111,21 @@ test('tryFastSimulatorRun handles live reuse, checks moduleRefusal on TS edits, 
     });
     expect(standalone.handled).toBe(true);
     expect(launches[0]).toEqual({ SIMCTL_CHILD_EXACT_PLAN: '/sim-data/tmp/exact-plan/app.plan' });
+
+    // 4. Widget contract change bypasses fast reuse so PlugIns/ExactWidgets.appex/plans/*.plan refreshes (LLP 1156.008.000 D6.8).
+    const widgetApp = { ...app, manifest: { widgets: [{ kind: 'card', source: 'widget.contract' }] } };
+    const widgetChange = await tryFastSimulatorRun({
+      app: widgetApp, dev, args: ['--ios', '--run'],
+      launchEnv: {},
+      install: () => {}, installedCheck: () => true, bootSim: () => dev,
+      agentLaunchModule: fakeAgentLaunch,
+      agentBuildModule: {
+        nativeBuild: () => ({ built: builtBundle, receipt: receiptFile, changed: ['widget.contract'], missing: false }),
+        planSource: () => true,
+        buildRefusal: () => null,
+      },
+      log: () => {},
+    });
+    expect(widgetChange).toEqual({ handled: false, reason: 'widget contracts changed' });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

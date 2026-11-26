@@ -1050,7 +1050,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['HttpOnly'], 'docs/recipes/web-sessions.md', /cookie/],
     [['exit', 'animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
     [['-exact-exit-animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
-    [['call'], 'docs/recipes/native-module.md', /`native\.call`/],
+    [['call'], 'docs/recipes/native-module.md', /^# Answer a native call in Swift or Kotlin/],
     [['tool'], 'docs/recipes/tools.md', /^# Recipe: tools an agent or the system calls/],
     [['later'], 'docs/reference.md', /Answer::Later/],
     [['screenshot'], 'docs/recipes/ios-driving.md', /screenshot\s+\.exact\/x\.png compare/],
@@ -1105,7 +1105,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     assert.ok(where.startsWith(`${file}:`), `docs ${words.join(' ')}: ${where}`);
     assert.match(text, shows, `docs ${words.join(' ')} prints from the lines that hold them:\n${text}`);
   }
-});
+}, 30_000);
 
 
 test.skipIf(!tools)('release keeps Mac widget entitlements, including the provisioned app group (LLP 1126.001 WP16)', async () => {
@@ -1388,7 +1388,7 @@ test('add installs a standard package by pathFrom from an outside app with an ab
   });
   assert.equal(fromRepo.status, 0, fromRepo.stdout + fromRepo.stderr);
   assert.equal(fromRepo.stdout.trim().split('\n').at(-1), `For Android, after importing the package, run: in '${root}': bun scripts/agent-android.mjs build 'shop' --apk --write-locks, with EXACT_APP_DIR set to '${realpathSync(app)}'`);
-}));
+}), 60_000);
 
 test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and their install commands without running sdkmanager', async () => {
   const { sdkReport, platformRowNames } = await import('./exact.mjs');

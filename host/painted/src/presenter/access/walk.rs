@@ -268,6 +268,29 @@ impl<D: DataSource> Presenter<D> {
             };
             scope.parent = own;
             scope.inside = true;
+        } else if self.access_menu_flag(&node) != 0
+            && !matches!(
+                node.node_type,
+                NodeType::Text | NodeType::Image | NodeType::Svg
+            )
+        {
+            // @ref LLP 1156.008.000 D7.4 — a non-pressable box with a context
+            // menu is exposed with `ACTION_LONG_CLICK` so assistive services
+            // can open its menu.
+            let label = self.access_name(&node);
+            let named = !label.trim().is_empty();
+            let flags = self.access_menu_flag(&node);
+            let Some(own) =
+                self.access_emit(b, &scope, &node, role::GROUP, flags, [0.0; 3], || {
+                    Some((label, String::new()))
+                })
+            else {
+                return;
+            };
+            scope.parent = own;
+            if named {
+                scope.inside = true;
+            }
         } else if matches!(
             node.node_type,
             NodeType::Text | NodeType::Image | NodeType::Svg
@@ -315,7 +338,8 @@ impl<D: DataSource> Presenter<D> {
                 (true, false, _) => role::TEXT,
                 _ => role::IMAGE,
             };
-            if let Some(own) = self.access_emit(b, &scope, &node, role, 0, [0.0; 3], name) {
+            let flags = self.access_menu_flag(&node);
+            if let Some(own) = self.access_emit(b, &scope, &node, role, flags, [0.0; 3], name) {
                 scope.parent = own;
             }
             if text {

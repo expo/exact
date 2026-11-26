@@ -29,7 +29,7 @@ test('share builds on Exact Build only with EXACT_EXPERIMENTAL=1, and then with 
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its build number, and passes the IPA to AppDrop', async () => {
+test.skipIf(!Bun.which('npx') || !Bun.which('node'))('share signs in, builds on Exact Build with its build number, and passes the IPA to AppDrop', async () => {
   const scratch = mkdtempSync(resolve(tmpdir(), 'exact-build-share-'));
   const ipa = Buffer.from('PK\x03\x04 an IPA from the service');
   const builds = [], blobs = new Set(), seen = [], auths = new Set();
@@ -71,6 +71,8 @@ test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its b
     symlinkSync(process.execPath, resolve(bin, 'bun'));
     symlinkSync(Bun.which('git'), resolve(bin, 'git'));
     symlinkSync('/bin/sh', resolve(bin, 'sh'));
+    symlinkSync(Bun.which('npx'), resolve(bin, 'npx'));
+    symlinkSync(Bun.which('node'), resolve(bin, 'node'));
     // AppDrop's CLI, as a package npx runs from this directory (EXACT_APPDROP_CLI): it records the IPA's size.
     const appdrop = resolve(scratch, 'appdrop');
     mkdirSync(appdrop);

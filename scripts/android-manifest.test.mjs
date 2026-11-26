@@ -532,3 +532,9 @@ test('background transfers export only their imported Android implementation', (
     assert.match(fragment, /android.intent.action.MY_PACKAGE_REPLACED/);
   } finally { rmSync(app, { recursive: true, force: true }); }
 });
+
+test('NORMAL_PERMISSIONS admits MODIFY_AUDIO_SETTINGS', () => {
+  const impl = { extension: 'audio', className: 'exact.audio.Module', manifest: { permissions: ['android.permission.MODIFY_AUDIO_SETTINGS'] } };
+  expect(fragmentPermissions([impl])).toEqual(['android.permission.MODIFY_AUDIO_SETTINGS']);
+  expect(manifestFragment([impl])).toBe('');
+});

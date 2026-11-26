@@ -60,11 +60,13 @@ pub struct OwnerChrome {
     /// Whether the sidebar of the tab controller holding the owner is available
     /// (`UITabBarController.Sidebar.isAvailable`, iOS 27), which is not whether it shows.
     pub sidebar_available: Option<bool>,
-    /// The unobscured areas of the owner's screen beside its camera housing, top left and top
-    /// right (`NSScreen.auxiliaryTopLeftArea`, `auxiliaryTopRightArea`), x y width height in the
-    /// owner's space: an empty rectangle where the screen has none there, `None` where the host
-    /// has no such quantity.
+    /// The unobscured area of the owner's screen to the top left of its camera housing
+    /// (`NSScreen.auxiliaryTopLeftArea`), x y width height in the owner's space: an empty
+    /// rectangle where the screen has none there, `None` where the host has no such quantity.
     pub auxiliary_top_left: Option<[f32; 4]>,
+    /// The unobscured area of the owner's screen to the top right of its camera housing
+    /// (`NSScreen.auxiliaryTopRightArea`), x y width height in the owner's space: an empty
+    /// rectangle where the screen has none there, `None` where the host has no such quantity.
     pub auxiliary_top_right: Option<[f32; 4]>,
 }
 

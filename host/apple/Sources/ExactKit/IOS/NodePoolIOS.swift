@@ -351,7 +351,7 @@ final class NodePool {
             && v.overlay == nil && v.canvasInput == nil
             && idle(v)
             && v.swipeHold == nil && v.heightHold == nil && v.reorderHold == nil && v.transformHold == nil
-            && !v.pressed && !v.hasPressContact && (v.gestureRecognizers ?? []).allSatisfy({ ($0 as? PointerRecognizer)?.idle == true || contextual($0, of: v) || lookAtRest($0, of: v) })
+            && !v.pressed && !v.hasPressContact && (v.gestureRecognizers ?? []).allSatisfy({ ($0 as? PointerRecognizer)?.idle == true || reportingPinchIdle($0) || contextual($0, of: v) || lookAtRest($0, of: v) })
             && v.interactions.allSatisfy({ contextual($0, of: v) })
             && v.flowShapes.isEmpty && v.contextTransform.isIdentity
             && v.pendingScrollLeft == nil && v.pendingScrollTop == nil
@@ -361,6 +361,13 @@ final class NodePool {
             // with interactions or gestures left on it. Its props and the mark
             // stay until it is forgotten, after its own destroy op.
             && unhatched(v)
+    }
+    private func reportingPinchIdle(_ recognizer: UIGestureRecognizer) -> Bool {
+        #if os(iOS)
+        return (recognizer as? ReportingPinch)?.idle == true || (recognizer as? ReportingIndirectPinch)?.idle == true
+        #else
+        return false
+        #endif
     }
     /// A `:hover` look's recognizer with no pointer over it (LookHoverIOS.swift):
     /// it follows the style, which the next row's create ops set again
@@ -543,6 +550,11 @@ extension NodeView {
         cancelPressContact()
         pressContact = nil
         scrollEnd?.reset()
+        #if os(iOS)
+        extras?.reportingPinch?.resetForRecycle()
+        extras?.reportingIndirectPinch?.resetForRecycle()
+        if let scroll = scrollView { PinchLift.clear(for: scroll) }
+        #endif
         presenter?.forgetParagraph(self)
         cancelSurfaceControls()
         invalidateText()
@@ -613,6 +625,11 @@ extension NodeView {
         id = newID
         incarnation = NodePool.issue()
         scrollEnd?.reset()
+        #if os(iOS)
+        extras?.reportingPinch?.resetForRecycle()
+        extras?.reportingIndirectPinch?.resetForRecycle()
+        if let scroll = scrollView { PinchLift.clear(for: scroll) }
+        #endif
         focusedBySurfaceTouch = false
         if presenter?.pressHandoff?.control === self { presenter?.pressHandoff = nil } // another node's view now
         // UIKit's setters are not free, even to the same value.

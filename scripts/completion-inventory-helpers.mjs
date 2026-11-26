@@ -1,6 +1,10 @@
 // Synchronous runner APIs and their value helpers, plus the platform adapters that use them.
 export function helperClassifications(group) {
   return [
+  group("drag file transfers", ["subscription", "one-shot"], "the process's document-portal connections and probe, and one transfer key per receiver's request", "durable",
+    "host/painted/src/portal/transfer.rs keeps the process's session-bus connection that registers transfers, since a transfer key dies with its sender's connection, and another for probes and redemptions, so their failures end no key; it follows the portal's owner on the bus. Each key is registered for one request and redeemed once (autostop), and may be redeemed after the drag that gave it ends. No view holds either.", [
+    ["painted:host/painted/src/portal/transfer.rs", "Portal::available Portal::reprobe Portal::retrieve Portal::send Portal::session Portal::stop"],
+  ]),
   group("delivery", ["durable operation"], "installed app/update stream; session application is synchronous", "durable",
     "The named public runner-crate source is the delivery API or its value/admission helper. runner/src/runner/delivery.rs exposes the app delivery state; host delivery synchronization applies persisted stream facts to the current session.", [
     ["runner:runner/src/delivery.rs", "Delivery::field Delivery::with_compat production refuse_analysis"],
@@ -108,9 +112,10 @@ export function helperClassifications(group) {
   ]),
   group("UI input", ["one-shot"], "current mounted view, action binding or interaction", "UI-owned",
     "The named public runner-crate source is the UI input API or its value/admission helper. runner/src/runner/event.rs dispatches through a mounted view and its action binding; no independent operation identity is supplied.", [
+    ["runner:runner/src/runner/host_kinds.rs", "Event::scroll_payload"],
     ["runner:runner/src/runner/event.rs",
       "ActionBinding::retained_utf8_bytes Event::checked_payload Event::focus_payload Event::height_release_payload Event::key Event::pan_payload " +
-      "Event::pan_release_payload Event::press Event::pressed Event::record Event::scroll_payload Event::transform_geometry_payload Event::transform_release_payload " +
+      "Event::pan_release_payload Event::press Event::pressed Event::record Event::transform_geometry_payload Event::transform_release_payload " +
       "KeyModifiers::held KeyModifiers::split"],
     ["runner:runner/src/runner/event/frame_navigation.rs", "FrameNavigation::parse FrameNavigation::value other"],
     ["runner:runner/src/runner/event/keyboard.rs", "KeyboardEvent::chord KeyboardEvent::parse KeyboardEvent::value"],

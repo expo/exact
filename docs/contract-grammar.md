@@ -44,8 +44,9 @@ a `keyframes` or `font` block, and a component need at least one entry.
   digit follows (`12`, `12.5`), so `rows.0.steps` is a list index and then a
   field. An exponent is part of the number only when digits follow its `e` or
   `E` and optional sign (`1e300`, `2.5E-3`, `4e+2`), so `2em` is a number and a
-  unit; one past the largest double is refused. Numeric parsing rejects invalid
-  spellings. Negative values are unary minus applied to a number; as an
+  unit; one past the largest double is refused. A number right after `.` is a
+  list index, digits only, so `rows.1.0` is two indexes. Numeric parsing
+  rejects invalid spellings. Negative values are unary minus applied to a number; as an
   attribute's whole value (`min=-40`, `step=-0.5`, `margin-top=-8`,
   `min=-1e300`) it is the negative literal, the number it is, as `40` is, and
   a text field's `min`, `max` and `step` take a number of either sign as a
@@ -2273,6 +2274,7 @@ host.
 | One `MarkdownSelection` | `select` on the Markdown editor (`textarea markup="markdown"`) |
 | One `InputEvent` | `select` on a text field or any other `textarea` ([form controls](#form-controls-radio-inputevent-setselectionrange)) |
 | Two numbers | `pan`, `panrelease`, `heightrelease` |
+| Three numbers | `pinch`, `pinchrelease` (scale, viewport x, viewport y) |
 | A string, an `option<string>`, then optionally a `ReorderEvent` | `reorderdrop`, on a vertical `list virtualized=true` only: the dragged row's key, then the key it lands before (`none` at the end); an action taking one more parameter also hears `ReorderEvent { from, to }`, the two lists' `id`s (equal within one list; LLP 1094 D2) |
 | Four numbers | `transformgeometry` |
 | Six numbers | `transformrelease` |
@@ -2502,6 +2504,16 @@ web's history is the browser's, and the other hosts ignore it. Transform geometr
 bindings are required as a pair. See
 [`handler_arity`](../contract/analyze/src/lib.rs) and the corresponding corpus/tests.
 
+Any node, including a `list` or `scroll`, can bind `pinch=action` and
+`pinchrelease=action` independently. Each appends `(scale, x, y)` after any
+bound arguments. Scale is positive and relative to the initial span (1). The focal point
+uses `PointerEvent.clientX` and `clientY` coordinates. Movement reports
+`pinch`. The first lift ends the pair with one `pinchrelease` carrying the scale and focal point
+from the last moment both fingers were down. Cancellation releases at scale 1. Both
+bindings observe alongside one-finger scrolling and pointer events. On iOS and iPadOS,
+UIKit delivers both bindings; other hosts accept them and stay silent
+([reporting a pinch](reference.md#reporting-a-pinch)).
+
 ### Pointer
 
 `pointerdown`, `pointerup`, `pointercancel` and `pointermove` are DOM's, on every host. A
@@ -2635,10 +2647,13 @@ declares `drop`, and gives a file to the `drop` above it. Android's apps
 send a link as text, so Android alone makes `url` from text: while a drop
 has no `url` yet, a text item whose whole last line is an `http://` or
 `https://` link gives that link as `url`, and its lines before it, such as
-the title Chrome sends, as `text`. Linux's Wayland window takes a drag from another app as a
-copy: its files and folders in place, its text, and its link from the URI list or the titled
-link a browser sends; its fields take no drag, and Wayland tells it no keys, so a drop's
-modifiers are those the window holds. tvOS and the terminal take no drop. The driver's
+the title Chrome sends, as `text`. Linux's Wayland window takes a drag from another app, or
+from its own window, as a copy: its files and folders in place, its text, and its link from
+the URI list or the titled link a browser sends; its fields take no drag, and Wayland tells it
+no keys, so a drop's modifiers are those the window holds. In a Flatpak sandbox it takes a
+drag's files from the document portal's file transfer key, else only those the sandbox shares
+with the host. A drop
+waits for a source still copying its files until the source ends or another drop is taken. tvOS and the terminal take no drop. The driver's
 `tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
 folders (not on iOS or Android), text and a link, at least one of them, as a test's
 `tap "zone" drop …` step does.
@@ -2697,9 +2712,16 @@ and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
 carries ([recipe](recipes/drag-out.md)). On iOS, iPadOS and Android a press
 held on the node lifts it into another app, and on the Mac and the web a mouse
 drags it. In Linux's Wayland window a mouse drags its `text` (UTF-8, as
-`text/plain;charset=utf-8` and `UTF8_STRING`) and its `url` (as
-`text/uri-list` and `text/x-moz-url`), as a copy; a node carrying files
-alone does not lift there.
+`text/plain;charset=utf-8` and `UTF8_STRING`), its `url` (as
+`text/uri-list` and `text/x-moz-url`) and its files, into another app or
+back into this one. Each file goes as a copy made when a receiver first
+asks, never as the app's own file, in `text/uri-list` and, while the
+document portal answers, as its file transfer key, which a Flatpak receiver
+reads. The copies are temporaries the receiver may keep: in the system's
+folder for large temporary files (as `systemd-path temporary-large` names
+it), aged as the system's configuration ages that folder, or in a Flatpak
+app's own cache, which the app empties of copies unused for 30 days as it
+starts and as each drag makes its folder.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).

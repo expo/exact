@@ -497,6 +497,7 @@
     :where(:root:dir(rtl)) :where(#exact-root [popover]:is(:not([role="alertdialog"]), [data-exact-chooser])) { margin-left: 16px; margin-right: 0; }
     :where(#exact-root [popover][style*="--exact-context-x"]) { margin: 0; position-area: none; left: var(--exact-context-x); top: var(--exact-context-y); position-try-fallbacks: --exact-context-start, --exact-context-up, --exact-context-up-start; }
     :where(#exact-root [popover][style*="--exact-inset-x"]) { margin-inline: 0; position-area: none; position-try-fallbacks: --exact-inset-start, --exact-inset-up, --exact-inset-up-start; }
+    :where(#exact-root [popover][data-exact-inset-author]:is(:not([role="alertdialog"]), [data-exact-chooser])) { margin: 0; position-area: none; position-try-fallbacks: none; }
   }
   #exact-root [data-exact-chooser]:not([popover="manual" i]) > button:not([data-exact-on~="press"]) { display: none !important; }
   :where(#exact-root [data-exact-chooser][aria-label])::before { content: attr(aria-label) / ""; display: block; padding: .25em .625em; color: var(--exact-secondary-label); font-size: smaller; }

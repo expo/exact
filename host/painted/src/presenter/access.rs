@@ -541,6 +541,7 @@ impl<D: DataSource> Presenter<D> {
             Some("radio" | "menuitemradio") => (role::RADIO, check),
             Some("tab") => (role::TAB, 0),
             Some("link") => (role::LINK, 0),
+            Some("article" | "group") => (role::GROUP, 0),
             None | Some("button") if matches!(pressed, Some("true" | "false" | "mixed")) => {
                 let on = if pressed == Some("true") {
                     flag::CHECKED

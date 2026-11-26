@@ -129,6 +129,7 @@ export const NORMAL_PERMISSIONS = new Set([
   'android.permission.DETECT_SCREEN_CAPTURE',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+  'android.permission.MODIFY_AUDIO_SETTINGS',
   'android.permission.RUN_USER_INITIATED_JOBS',
 ]);
 

@@ -55,3 +55,21 @@ export async function readerReply(request, ask, wait = Bun.sleep, sh) {
   }
   return reply;
 }
+
+/** Format an `adb install` failure, adding the MIUI/HyperOS USB-install hint when the device rejects install. */
+export function adbInstallError(output, what = 'adb install') {
+  const detail = (output || '').trim();
+  const hint = /INSTALL_FAILED_USER_RESTRICTED/.test(detail)
+    ? '\nHint: enable Developer Options -> "Install via USB" (MIUI/HyperOS) and accept the on-device install prompt.'
+    : '';
+  return `${what}: ${detail}${hint}`;
+}
+
+/** Build the APK reader's screenshot reply with logical viewport `w`/`h` in dp/points so `sample` and `compareBox` scale accurately. */
+export async function readerScreenshotReply(path, shot, ask) {
+  const tags = JSON.parse(await ask('{"op":"tags"}'));
+  if (shot.status !== 0) return { error: `screencap: ${(shot.stderr || shot.stdout || '').trim()}` };
+  const layout = JSON.parse(await ask('{"op":"layout"}'));
+  const w = layout?.viewport?.w, h = layout?.viewport?.h;
+  return { screenshot: path, device: true, ...(w > 0 && h > 0 ? { w, h } : {}), ...tags };
+}

@@ -273,7 +273,7 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
       ['--archive <out.ipa>', 'with --device: an .ipa to distribute (EXACT_IDENTITY, EXACT_PROFILE), no phone; production trust, so with an update store EXACT_UPDATE_RECEIPT or EXACT_UPDATE_GENESIS=1'],
       ['--unsigned', 'with --device: ad-hoc signed .app, no phone, profile, identity or install; no --run; --archive writes an .ipa for re-signing'],
       ['--development', 'with --archive --unsigned: the development build --run installs, as an .ipa (development trust, host-dev; no update store receipt)'],
-      ['--extensions <kinds>', 'which app extensions to package: all (the default), none, or a list of widgets,activities,controls,intents,alarms,notifications,watch,share (controls need intents); the bake still compiles every entry, and app code that reaches a missing one is refused, not crashed'],
+      ['--extensions <kinds> · --widget-gallery', 'which app extensions to package (all, none, or a list of widgets,activities,controls,intents,alarms,notifications,watch,share) · build with the development widget gallery (for `agent ios widget`)'],
       ['--tvos', 'an Apple TV simulator instead (with --device, an Apple TV)'],
       ['--url <url> · --no-live · --rebuild', 'connect to that dev server for live reload (else auto-connects a running dev loop on --run) · launch standalone without attaching to a running dev loop · force a full native rebuild instead of fast reuse'],
       OPTIMIZE,

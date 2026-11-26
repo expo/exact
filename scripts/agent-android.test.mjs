@@ -1431,7 +1431,8 @@ test('Android compilers and GPU bakes use the requested x86_64 ABI', async () =>
   expect(androidAbis()).toEqual(['arm64-v8a']);
   expect(androidAbis('arm64-v8a,x86_64,x86_64')).toEqual(['arm64-v8a', 'x86_64']);
   expect(() => androidAbis('armeabi-v7a')).toThrow('--abis');
-  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR: '/host' }, '/arm64', 'x86_64-linux-android')).toBeNull();
+  const noCargo = resolve(tmpdir(), 'exact-no-hermes-cargo');
+  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR: '/host', CARGO_HOME: noCargo }, '/arm64', 'x86_64-linux-android')).toBeNull();
   expect(androidHermesDir({ HERMES_LEAN_SYS_DIR_x86_64_linux_android: '/intel' }, '/arm64', 'x86_64-linux-android')).toBe('/intel');
   const { guardFlags } = await import('./help.mjs');
   expect(guardFlags('android', ['--abis', 'arm64-v8a,x86_64'])).toEqual(['--abis', 'arm64-v8a,x86_64']);

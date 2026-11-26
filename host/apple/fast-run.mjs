@@ -84,6 +84,10 @@ export async function tryFastSimulatorRun({
 
   const liveUrl = launchEnv.EXACT_DEV_PLAN ?? null;
   const fresh = state.changed.length === 0;
+  const hasWidgetEntries = Boolean(app.manifest?.widgets?.length || app.manifest?.activities?.length);
+  if (hasWidgetEntries && state.changed.some((path) => /\.contract$/.test(path))) {
+    return { handled: false, reason: 'widget contracts changed' };
+  }
   const planOnly = !fresh && state.changed.every((path) => agentBuild.planSource(path, app));
   if (!fresh && !planOnly) return { handled: false, reason: 'native sources changed' };
 

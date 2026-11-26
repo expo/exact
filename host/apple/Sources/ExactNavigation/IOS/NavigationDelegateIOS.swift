@@ -21,7 +21,7 @@ final class NavigationDelegateProxy: ForwardingDelegate, UINavigationControllerD
         // The bar as the route coming into view wants it, alongside UIKit's
         // transition: a cancelled pop calls this again for the source (§9.10).
         host?.showBar(nav, for: controller as? RouteController, animated: animated)
-        host?.followFloatingBar(nav, for: controller, animated: animated)
+        host?.followTabBarWish(nav, for: controller, animated: animated)
         host?.navigationController(nav, willShow: controller, animated: animated)
         app?.navigationController?(nav, willShow: controller, animated: animated)
     }
@@ -45,7 +45,7 @@ final class NavigationDelegateProxy: ForwardingDelegate, UINavigationControllerD
             nav.view.layoutIfNeeded()
             if touches, !bar.isUserInteractionEnabled { bar.isUserInteractionEnabled = true }
         }
-        host?.followFloatingBar(nav, for: controller, animated: false) // (where it settled: a cancelled pop's source included)
+        host?.followTabBarWish(nav, for: controller, animated: false) // (where it settled: a cancelled pop's source included)
         host?.navigationController(nav, didShow: controller, animated: animated)
         app?.navigationController?(nav, didShow: controller, animated: animated)
     }

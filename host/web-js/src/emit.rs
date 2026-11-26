@@ -1307,6 +1307,9 @@ impl Em<'_> {
                 );
                 continue;
             }
+            if matches!(h.event, EventKind::Pinch | EventKind::Pinchrelease) {
+                continue;
+            }
             let mut args = Vec::new();
             for (k, a) in h.args.iter().enumerate() {
                 let f = code::expression(
@@ -1401,8 +1404,7 @@ impl Em<'_> {
                 | EventKind::Capture // and the runtime refusing a capture (`onFrameCapture`)
                 | EventKind::Userpromptopened // @ref LLP 1020.002 D9: the browser's own dialogs
                 | EventKind::Historyswipe // @ref LLP 1115.000 D5.5: the browser shows its own arrow
-                | EventKind::Swipe // @ref LLP 1057.001 §8.1: the web has no swipe of the platform's
-                | EventKind::Select => {}
+                | EventKind::Swipe | EventKind::Select => {} // @ref LLP 1057.001 §8.1 (swipe)
                 // The motion piece's: the swipe's holds, a pan's velocity.
                 EventKind::Swiperight
                 | EventKind::Swipeleft
@@ -1433,9 +1435,7 @@ impl Em<'_> {
             if self.row_actions.contains(&(h.action.0 as usize)) {
                 args.insert(0, scope.rows.clone().unwrap_or_else(|| "{}".into()));
             }
-            // Its arguments are evaluated in the action's commit (`.t`): one
-            // that traps refuses it, as the runner's handler evaluation does
-            // (LLP 1090 D1).
+            // Evaluated in the action's commit (`.t`) so a trap refuses it (LLP 1090 D1).
             let action = scope.operand(format!("a_{}", h.action.0));
             let handler = if args.is_empty() {
                 action

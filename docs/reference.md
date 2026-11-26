@@ -6445,7 +6445,7 @@ column dragenter=entered dragleave=left drop=took
 | tvOS | none | empty: tvOS has no pasteboard |
 | Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
 | Android | yes: files, text and links from another app or this one, each file a copy of a `content:` item, no folders and no `file:` paths. Another app's files are copied under the read permission Android grants for the drop; without one, that drop brings its text and link alone. While a drop has no `url`, a text item whose whole last line is an `http://` or `https://` link gives that link as the `url`, and its lines before it, such as the title Chrome sends, as the `text`; a field keeps text, links and text files, as Android's text views do, unless it declares `drop`, and gives a file to the `drop` above it | empty (text only) |
-| Linux | yes, in the Wayland window, from another app, taken as a copy: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`); image data is not taken, so a browser's picture arrives as the link or file it offers beside the data, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop`; Wayland tells the window no keys, so the modifiers are those it holds | empty (text only) |
+| Linux | yes, in the Wayland window, from another app or this one, taken as a copy: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`); image data is not taken, so a browser's picture arrives as the link or file it offers beside the data, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop`; Wayland tells the window no keys, so the modifiers are those it holds; in a Flatpak sandbox the files come from the document portal's file transfer key, else only those the sandbox shares with the host | empty (text only) |
 | terminal | none | empty (text only) |
 
 The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,
@@ -7815,6 +7815,17 @@ the shared native sampler after resize settlement and presented scrolling.
 Native inline runs, moving presentation geometry, rotated roots and SVG clip references remain unqualified;
 percentage margins follow Chrome (LLP 1001). See LLP 1005's intersection
 visibility deviation; other native hosts remain unqualified.
+
+### Reporting a pinch
+
+| Host | Input delivered to `pinch` and `pinchrelease` |
+| --- | --- |
+| iOS and iPadOS | UIKit's simultaneous pinch recognizer. A drifting pair scrolls the list as it pinches. Lifting the pair leaves the list at its release offset; a surviving or later finger that moves again can still fling. An iPad trackpad pinch reaches this recognizer (unverified on hardware). |
+| Android, Web JS, Web wasm, macOS, painted Linux and Windows, terminal | Both bindings compile and stay silent. Android and touch-web recognizers are queued on `fable/pinch-report-1804`. |
+
+Use `wheel` with `ctrlKey` for trackpad magnification on macOS and the web.
+On other desktops the same handler can consume a Control-held wheel where
+the host delivers one. [Grid example](contract-for-agents.md#changing-a-grids-columns)
 
 ### Scroll drags and swipes
 

@@ -373,7 +373,7 @@ fn check_tasks(c: &Component) -> Vec<AnalyzeError> {
 
 /// The handler attributes (the web's events, LLP 1005 §3): `press`,
 /// `change`, `input`, `hover`, `focus`, `blur`, `key`, `submit`, `load`, `message`.
-pub const HANDLERS: [&str; 89] = [
+pub const HANDLERS: [&str; 91] = [
     "press",
     "change",
     "input",
@@ -454,6 +454,8 @@ pub const HANDLERS: [&str; 89] = [
     "pan",
     // A pan that began ended (LLP 1057 §10.6 phase 2): release velocity.
     "panrelease",
+    "pinch",
+    "pinchrelease",
     "loadedmetadata",
     "durationchange",
     "fullscreenchange",
@@ -555,6 +557,7 @@ pub fn handler_arity(attr: &str, given: usize) -> Option<std::ops::RangeInclusiv
         return (given == 0).then_some(0..=1);
     }
     let payload = match attr {
+        "pinch" | "pinchrelease" => 3,
         "transformgeometry" => 4,
         "transformrelease" => 6,
         "scroll" | "pan" | "panrelease" | "heightrelease" | "reorderdrop" | "resize" => 2,
@@ -735,7 +738,13 @@ fn check_handler(
         }
         if matches!(
             attr,
-            "pan" | "panrelease" | "heightrelease" | "transformgeometry" | "transformrelease"
+            "pan"
+                | "panrelease"
+                | "pinch"
+                | "pinchrelease"
+                | "heightrelease"
+                | "transformgeometry"
+                | "transformrelease"
         ) && params[given..].iter().any(|ty| *ty != Ty::Number)
         {
             return err(

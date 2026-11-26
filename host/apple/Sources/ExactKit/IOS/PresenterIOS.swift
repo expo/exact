@@ -785,7 +785,7 @@ package final class Presenter {
     var regionMeasures = PositionArea.MeasureCache()
     /// Paragraphs whose text or style the batch invalidated (`paintChangedText`).
     var changedText: Set<UInt32> = []
-    private func send(_ id: UInt32, _ f: @escaping () -> Void) {
+    func send(_ id: UInt32, _ f: @escaping () -> Void) {
         guard textHost(id) != nil else { return }
         if applying { waiting.append((id, f)) } else { navigation.finishBootOwner(); f() }
     }

@@ -21,6 +21,10 @@ import { failureCode, failureReason, Shaped } from './shape.js';
 // What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
 import { knownFolderPath } from './grant-admission.js';
+import { loadOnce } from '../web/load-once.js';
+
+const moduleLoads = {};
+
 useFetch(sourceFetch);
 // The app's id is app.json's, which the build writes here; app.ts need not export one.
 const appId = source.appId;
@@ -221,7 +225,7 @@ const conv = (v, t, target) => { const a = arrays(v, t, answered.get(target)); a
 // re-asks the resources whose current answers watch the topic when the
 // module announces it (LLP 1016.002): an answer's topics are its call's
 // `watches`, which rt.js keeps on the resource it asked for.
-let watching = null, page = null, load = null;
+let watching = null, load = null;
 const announce = (topic, why) => rt.commit(() => { const m = moduleWatched.get(topic); for (const r of rt.Resources) if (r.watches?.has(topic) || m?.has(r.source)) rt.sourceChanged(r, topic); }, `${why} ${topic}`);
 const watch = topic => answering.call.watches.add(topic);
 // Another tab's durable write (LLP 1030.004 D2): its topics cross between the app's tabs on a channel of the app's,
@@ -279,10 +283,10 @@ export const watchState = () => [...new Set(rt.Resources.flatMap(r => r.gone ? [
   const m = /^doc-watch(-recursive)?:(.*)$/.exec(t);
   return m ? [{ path: m[2], recursive: !!m[1] }] : [];
 });
-const pageModule = () => page ??= load().then(m => m.pageModule({
+const pageModule = () => loadOnce(moduleLoads, "page", () => load().then(m => m.pageModule({
   agent: rt.clock.agent, now: () => rt.clock.now,
   changed: topic => announce(topic, 'native'),
-}));
+})));
 const native = Object.freeze({
   get available() { return true; },
   call() { if (overlaying.on) throw inOverlay('native.call()'); throw new Error('native.call: the web has no synchronous module call; use native.later'); },
@@ -463,9 +467,11 @@ function renderStorage(owner) {
 // adapters, the SQLite handles and the topics a write tells the app's other tabs.
 const STORAGE_GRANTED = true;
 function storageOf(grants) {
+  const storageLoads = {};
+
   const ordinary = start => answering.ordinary(start, true);
   const admitted = STORAGE_GRANTED && ['fs-read', 'fs-write', 'sqlite-open'].some(kind => hasGrant(grants, kind));
-  let fs, sqlite;
+
   const key = () => import('./storage-environment.js').then(({ storageKey, agentStorageRefusal }) => {
     const k = appId ? storageKey(appId) : null;
     if (k == null) throw Object.assign(new Error(agentStorageRefusal), { kind: 'Unavailable', code: 'agent' });
@@ -479,13 +485,13 @@ function storageOf(grants) {
   const refused = e => (e?.code === 'agent' ? tell() : Promise.resolve()).then(() => coded(e));
   // A refused read answers as an empty store would (storage-environment.js `emptyRead`).
   const orEmpty = (m, path) => e => e?.code === 'agent' ? tell().then(env => { if (!env.agentReads.includes(m)) throw e; return env.emptyRead(m, path); }) : Promise.reject(e);
-  const files = () => fs ??= key().then(k => import(new URL('./storage-fs.js', import.meta.url).href).then(m => m.createFileSystem(k, grants)));
+  const files = () => loadOnce(storageLoads, "fs", () => key().then(k => import(new URL('./storage-fs.js', import.meta.url).href).then(m => m.createFileSystem(k, grants))));
   // A document the person chose (`doc:/`, LLP 1069.010 D1) is the page's
   // handle, not app storage: no store key, so a drive without a scratch
   // store reaches it too, as a Rust source's storage request does.
-  let docs;
+
   // What the app keeps across launches is read back first (LLP 1069.010.000 D4).
-  const documents = () => docs ??= ((globalThis.exact ??= {}), import(new URL('./documents-glue.js', import.meta.url).href)).then(() => globalThis.exact.documents.keeping(appId, grants)).then(() => globalThis.exact.documents.files(grants));
+  const documents = () => loadOnce(storageLoads, "docs", () => ((globalThis.exact ??= {}), import(new URL('./documents-glue.js', import.meta.url).href)).then(() => globalThis.exact.documents.keeping(appId, grants)).then(() => globalThis.exact.documents.files(grants)));
   // In the storage queue, as every storage call is (an overlay refuses it).
   const keptDocuments = (what, f) => ordinary(() => queued(what, () => documents().then(() => f(globalThis.exact.documents))).catch(refused));
   let listWatched = false;
@@ -496,7 +502,7 @@ function storageOf(grants) {
     throw Object.assign(new Error(`denied: ${op}`), { kind: 'Unavailable', code: 'denied' });
   });
   // The page's SQLite worker, and the module's handles over it (ts-sqlite.js), loaded at the first open.
-  const databases = () => sqlite ??= key().then(k => Promise.all([import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)), import('./ts-sqlite.js')]));
+  const databases = () => loadOnce(storageLoads, "sqlite", () => key().then(k => Promise.all([import(new URL('./storage-sqlite.js', import.meta.url).href).then(m => m.createSqlite(k, grants)), import('./ts-sqlite.js')])));
   // `compressImage` (LLP 1069.002 A1) and `transformImage` (LLP 1133.019 D14): their options are checked before either
   // is queued (`imageOptions`); app files only.
   const image = (method, from, to, options, limits) => {
@@ -545,7 +551,7 @@ function storageOf(grants) {
         if (!FILE_WRITES.test(m)) { shared.watch(topics); return done; }
         return done.then(v => { shared.relay(topics); return v; });
       })])) }),
-    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(([d]) => d.open(path))).then(d => sqlite.then(([, m]) => m.database(d, path, call, queued, openDatabases, shared))) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
+    sqlite: Object.freeze({ open: path => ordinary(() => { const call = answering.call; return (admitted ? queued(`open ${path}`, () => databases().then(([d]) => d.open(path))).then(d => storageLoads.sqlite.then(([, m]) => m.database(d, path, call, queued, openDatabases, shared))) : denied(`sqlite.open ${path}: no grant covers it; grant \`sqlite.open ${path}\`, or \`sqlite.open ${String(path).slice(0, String(path).lastIndexOf('/'))}\` for every file there (a grant covers its path and what is below it, by whole names)`)).catch(refused); }) }),
     work: promise => Promise.resolve(promise),
   });
 }
@@ -557,6 +563,8 @@ const opener = (stream, conv, name) => (deliver, controller) => {
     .catch(e => ({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
 };
 export function install(data, rustSources = null, modules = null) {
+  const keyLoads = {};
+
   // What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
   // outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
   answering.page = { clock: rt.clock, journal: rt.journal, drive: rt.drive, time: rt.time };
@@ -589,7 +597,7 @@ export function install(data, rustSources = null, modules = null) {
   // paint (rt.js `painted`), whether or not anything asks `later`.
   load = modules && (() => rt.painted().then(modules));
   if (modules && typeof requestAnimationFrame === 'function') pageModule().catch(e => rt.journal.push(`t=${rt.clock.now} native: ${e.message}`));
-  let keys = null, asking = '', thrown = null, threwRead = false, threwWatches = null;
+  let asking = '', thrown = null, threwRead = false, threwWatches = null;
   // The answer an async function was called under, put back around each of
   // its steps by the bundle's async helper (js/bake/src/typescript.mjs
   // `asyncContextHelper`, LLP 1133.002 D14), as Hermes's prelude does with
@@ -605,8 +613,8 @@ export function install(data, rustSources = null, modules = null) {
       return before;
     },
   });
-  const kept = () => keys ??= import('./storage-environment.js').then(({ keyStore, storageKey }) =>
-    keyStore(typeof location === 'object' && appId ? storageKey(appId) : null, globalThis.indexedDB));
+  const kept = () => loadOnce(keyLoads, "keys", () => import('./storage-environment.js').then(({ keyStore, storageKey }) =>
+    keyStore(typeof location === 'object' && appId ? storageKey(appId) : null, globalThis.indexedDB)));
   __AUTH_INSTALL__
   // A module's `kept(source, args, value)` is given the answers its page was
   // rendered with, once, before it is first asked: they are its own answers,

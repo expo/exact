@@ -288,6 +288,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Lists and scrolling
 
+- Bind both `pinchrelease` and `wheel` on a grid that changes columns, and keep
+  column buttons for hosts where `pinchrelease` is silent (Android, Web, desktop).
+  iOS and iPadOS deliver `pinchrelease`; a Mac or browser trackpad delivers a
+  Control-held `wheel`.
+
 - **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
   order.** A whole document in one `text` (an article, a long Markdown note) is
   one string to Core Text, and Core Text does not shape a string longer than a

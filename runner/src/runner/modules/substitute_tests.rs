@@ -1063,6 +1063,15 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
     use crate::{Dispatch, Reply, Request, Work};
     use serde_json::{json, Value as Json};
     use std::sync::{Arc, Mutex};
+    struct Granted(&'static str);
+    impl DataSource for Granted {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!("the fixture answers nothing")
+        }
+        fn grants(&self) -> &str {
+            self.0
+        }
+    }
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let string = b.primitive(TypeKind::String);
     for (name, send) in [("devices", false), ("capture", true)] {
@@ -1079,7 +1088,15 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
         );
     }
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
-    let mut r = boot(b.finish().unwrap());
+    let app_grants = "net.fetch https://source.test\nstorage.read";
+    let mut r = Runner::boot(
+        b.finish().unwrap(),
+        Granted(app_grants),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
     let heard: Arc<Mutex<Vec<Json>>> = Default::default();
     let seen = heard.clone();
     r.native_slot()
@@ -1093,6 +1110,7 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
     let scope = "net.fetch https://source.test";
     for (verb, name, grants) in [
         ("send", "capture", Some(scope)),
+        ("send", "capture", Some("net.fetch https://ungranted.test")),
         ("send", "capture", None),
         ("source", "devices", Some(scope)),
     ] {
@@ -1109,8 +1127,9 @@ fn a_data_send_carries_the_grants_it_was_admitted_under() {
     }
     let heard = heard.lock().unwrap();
     assert_eq!(heard[0]["authority"], scope);
-    assert_eq!(heard[1]["authority"], json!(r.data.grants()));
-    assert_eq!(heard[2].get("authority"), None, "a read starts no work");
+    assert_eq!(heard[1]["authority"], "");
+    assert_eq!(heard[2]["authority"], json!(r.data.grants()));
+    assert_eq!(heard[3].get("authority"), None, "a read starts no work");
 }
 
 /// HTML's transient activation, on the session's clock: a call the app makes

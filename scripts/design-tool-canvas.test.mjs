@@ -1,7 +1,7 @@
 // The design tool's canvas on a real dev loop: the frame, builds and pins (T2) (split from design-tool.test.mjs, so a
 // lane runs it beside the others; inspect from the tool, T2b, is design-tool-inspect.test.mjs).
 import { expect, onTestFinished, test } from 'bun:test';
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -52,7 +52,11 @@ async function polledBuild(base, id) {
 
 test('T2: the canvas frames the dev loop\'s page, sandboxed, at the size chosen; builds are listed with their effective facts, a pin on one moves only it, a reloaded build gets it back, and the tool gone hands it back', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-canvas-'));
-  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  for (const f of ['app.contract', 'app.forma']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  // This standalone temp copy does not copy the workspace Rust data crate; theme-fixture's contract uses no data sources.
+  const manifest = JSON.parse(readFileSync(resolve(ROOT, 'apps/theme-fixture/app.json'), 'utf8'));
+  delete manifest.rust;
+  writeFileSync(join(app, 'app.json'), JSON.stringify(manifest, null, 2));
   const listener = (await import('node:http')).createServer();
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;

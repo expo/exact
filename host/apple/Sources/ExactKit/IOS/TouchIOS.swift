@@ -149,11 +149,17 @@ enum TouchLog {
                                         "at": [InspectionValue.r2(p.x), InspectionValue.r2(p.y)], "type": touch.type == .direct ? "direct" : "\(touch.type.rawValue)"]
             // A touch a system recognizer takes (iOS 26's tab bar selects with
             // one on the window) has no view: where the window's hit test put it.
-            for (key, value) in landing(touch.view ?? window.hitTest(p, with: nil)) { entry[key] = value }
+            let hitView = touch.view ?? window.hitTest(p, with: nil)
+            for (key, value) in landing(hitView) { entry[key] = value }
             if gone.contains(touch) { entry["viewGone"] = true }
             // When the window had a touch down. One it had only after the finger lifted comes with its lift, which a
             // list cell's `UISwitch` takes as no tap
-            if phase == "began" { entry["dispatched"] = dispatched }
+            if phase == "began" {
+                entry["dispatched"] = dispatched
+                PartLanding.view = hitView
+                PartLanding.point = p
+                PartLanding.delivered = true
+            }
             entries.append(entry)
             if entries.count > capacity { entries.removeFirst(); dropped += 1 }
         }

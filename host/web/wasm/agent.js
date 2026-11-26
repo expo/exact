@@ -2,6 +2,8 @@ import { views, ask, shownValue, host, INHERITED_CSS, now, root, iframeLoading, 
 import { inertAncestor, routeFlags, navigation, environment, preferFold, FOLD_EVENT, preferDisplayMode, foldEnv, typedControl, settleValue } from "../navigation.js";
 import { applyBatch, sendBatch } from "./commit.js";
 import { replacements } from "./boot.js";
+import { loadOnce } from '../load-once.js';
+
 function nodeDetail(id, plan = false) {
   const el = views.get(id);
   if (!el || !el.isConnected) {
@@ -245,11 +247,11 @@ export function agentInputReady() {
   if (host.viewBox) {
     return Promise.resolve();
   }
-  return host.agentInputLoading ??= loadAfterPaint("./agent-input.js", "agentInput").then((helpers) => {
+  return loadOnce(host, "agentInputLoading", () => loadAfterPaint("./agent-input.js", "agentInput").then((helpers) => {
     ({guestOutline: host.guestOutline, guestTap: host.guestTap, guestType: host.guestType, reveal: host.reveal, backButton: host.backButton, viewBox: host.viewBox, textBaseline: host.textBaseline, layoutBoxes: host.layoutBoxes, scrollRange: host.scrollRange, selectAll: host.selectAll, typeControl: host.typeControl, glidesSettled: host.glidesSettled, scrollsSeen: host.scrollsSeen} = helpers);
     helpers.watchGlides?.();
     // a scroller gliding on its own holds `clock settle` (agent-input.js)
-  });
+  }));
 }
 // Synchronous once inspection and the agent's input helpers are ready (LLP 1043.000 D7/D8).
 export function agent(request) {

@@ -109,26 +109,37 @@ function insetAt(p, open) {
     if (p.style.getPropertyValue(`--exact-inset-${axis}`) !== v) {
       v ? p.style.setProperty(`--exact-inset-${axis}`, v) : p.style.removeProperty(`--exact-inset-${axis}`);
     }
-  }, has = (v) => !!v && v !== "auto", area = p.style.getPropertyValue("position-area");
+  }, has = (v) => !!v && v !== "auto", area = p.style.getPropertyValue("position-area"), hasArea = !!area && area !== "none";
   /* open, an anchored box's computed insets are where it was placed, so its author's are read from its own style; closed, the computed ones are what was written, the sheet's `inset: auto` among them */
   if (open) {
-    if (!p.exactInsetOn) {
+    if (!p.exactInsetOn && !p.exactInsetAuthor) {
       return;
     }
-    const { left, top, right, bottom } = p.style, on = !has(right) && !has(bottom) && (has(left) || has(top)) && !(area && area !== "none");
+    const { left, top, right, bottom } = p.style;
+    const edge = !hasArea && (has(right) || has(bottom) || (p.exactInsetAuthor && !p.exactInsetInline));
+    const on = !edge && !hasArea && (has(left) || has(top));
     set("x", on ? left || "auto" : "");
     set("y", on ? top || "auto" : "");
+    p.toggleAttribute("data-exact-inset-author", edge);
     return;
   }
   const { left, top, right, bottom } = getComputedStyle(p);
-  p.exactInsetOn = !(right !== "auto" || bottom !== "auto" || left === "auto" && top === "auto" || area && area !== "none");
+  const uaZero = left === "0px" && top === "0px" && right === "0px" && bottom === "0px"
+    && !has(p.style.left) && !has(p.style.top) && !has(p.style.right) && !has(p.style.bottom);
+  p.exactInsetAuthor = !uaZero && (right !== "auto" || bottom !== "auto") && !hasArea;
+  p.exactInsetInline = has(p.style.right) || has(p.style.bottom);
+  p.exactInsetOn = !p.exactInsetAuthor && !(left === "auto" && top === "auto") && !hasArea;
   set("x", p.exactInsetOn ? left : "");
   set("y", p.exactInsetOn ? top : "");
+  p.toggleAttribute("data-exact-inset-author", p.exactInsetAuthor);
   p.exactInset ??= (p.addEventListener("toggle", (t) => {
     if (t.newState === "closed") {
       p.exactInsetOn = false;
+      p.exactInsetAuthor = false;
+      p.exactInsetInline = false;
       set("x", "");
       set("y", "");
+      p.removeAttribute("data-exact-inset-author");
     }
   }), new MutationObserver(() => {
     if (p.matches(":popover-open")) {

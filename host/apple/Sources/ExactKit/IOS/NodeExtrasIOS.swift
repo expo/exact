@@ -130,6 +130,10 @@ final class NodeExtras {
     var swipeHold: SwipeHold?
     /// Its `swipe`'s recognizer (`DiscreteSwipeIOS.swift`).
     var discreteSwipe: UISwipeGestureRecognizer?
+    #if os(iOS)
+    var reportingPinch: ReportingPinch?
+    var reportingIndirectPinch: ReportingIndirectPinch?
+    #endif
     var heightRecognizer: UIPanGestureRecognizer?
     var heightHold: DragInput?
     var contextTransform = CGAffineTransform.identity

@@ -20,7 +20,7 @@ use exact_plan::BindingsRow;
 /// `host/web-js`'s row tests check the names their Rust writers emit; the
 /// markers the JS glue writes (`agent.js`, `modes.js`, `gpu-refusal.js`)
 /// and the render host's `audio-session` are kept here by hand.
-const HOST_WORDS: [&str; 146] = [
+const HOST_WORDS: [&str; 148] = [
     "accept",
     "accessibilitybusy",
     "accessibilitydisabled",
@@ -39,6 +39,7 @@ const HOST_WORDS: [&str; 146] = [
     "atoms",
     "atomstyles",
     "audio-session",
+    "audiovisualbackgroundplaybackpolicy",
     "autofocus",
     "bitmapheight",
     "bitmapwidth",
@@ -107,6 +108,7 @@ const HOST_WORDS: [&str; 146] = [
     "navigationedgeattachedincompactheight",
     "navigationextendedlayout",
     "navigationextendsunderopaquebars",
+    "navigationfullsizecontent",
     "navigationgrabber",
     "navigationhistory",
     "navigationinitialdetent",

@@ -38,7 +38,10 @@ const ready = looked => [looked.pause(4000, 0), 'clock +1', 'clock data', 'clock
  * copy can't run there: the natives' half is the clone's gate.) */
 async function kindsOnTheJsLoop() {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-kinds-'));
-  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  for (const f of ['app.contract', 'app.forma']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  const manifest = JSON.parse(readFileSync(resolve(ROOT, 'apps/theme-fixture/app.json'), 'utf8'));
+  delete manifest.rust;
+  writeFileSync(join(app, 'app.json'), JSON.stringify(manifest, null, 2));
   const contract = readFileSync(join(app, 'app.contract'), 'utf8');
   const card = contract
     .replace('transition="background-color 400ms" padding=12', 'transition="background-color duration.card" padding="space.card"')
@@ -114,8 +117,9 @@ async function kindsOnTheJsLoop() {
     drive.stderr.on('data', d => { driveSaid = (driveSaid + d).slice(-4000); });
     const out = lines(drive);
     // Looked at each `tree` op: before the scrub, during it, after Keep; each look done, the drive goes on.
+    const isTree = l => { if (!l.startsWith('{')) return false; try { return Array.isArray(JSON.parse(l).nodes); } catch { return false; } };
     for (const n of [1, 2, 3]) {
-      await out.until(() => out.seen.filter(l => l.startsWith('{"nodes"')).length >= n, 600_000).catch(e => { throw new Error(`${e.message}\n${driveSaid}`); });
+      await out.until(() => out.seen.filter(isTree).length >= n, 600_000).catch(e => { throw new Error(`${e.message}\n${driveSaid}`); });
       await look();
       looked.fire(n);
     }

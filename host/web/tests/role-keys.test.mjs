@@ -31,14 +31,15 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
   addEventListener('keydown', e => { window.consumed = e.defaultPrevented; });
   // A case's node as the hosts write one: its tag, \`role\`, literal attributes and \`direction\`. \`hidden\` is
   // \`display: none\` (the cases' \`_about\`), and a boolean attribute is present when true. A leaf's text is its id.
-  const build = ({ id, tag = 'div', role, attrs = {}, direction, visibility, children = [] }) => {
+  const build = ({ id, tag = 'div', contract, role, attrs = {}, direction, visibility, children = [] }) => {
     const el = document.createElement(tag);
     el.id = id;
     if (role) el.setAttribute('role', role);
     for (const [name, value] of Object.entries(attrs)) {
       if (name === 'hidden') { if (value) el.style.display = 'none'; }
       else if (name === 'disabled' || name === 'inert') el.toggleAttribute(name, value === true);
-      else el.setAttribute(name, String(value));
+      // Contract renders an empty destination as an anchor without href.
+      else if (!(contract && name === 'href' && value === '')) el.setAttribute(name, String(value));
     }
     if (direction) el.style.direction = direction;
     if (visibility) el.style.visibility = visibility;

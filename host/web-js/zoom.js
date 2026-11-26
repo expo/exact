@@ -52,6 +52,7 @@ export function zoom(e) {
   }
   e.$zoomLayers = { sizer, extent, layer };
   e.$zoom = 1;
+  e.$zoomApplied = 1;
   Zoomed.add(e);
   return layer;
 }
@@ -93,16 +94,27 @@ function range(e) {
 function measure(e) {
   const { layer } = e.$zoomLayers,
     child = layer.firstElementChild;
-  if (!(child instanceof HTMLElement)) return null;
+  if (!(child instanceof Element)) return null;
   const s = getComputedStyle(e),
     c = getComputedStyle(child),
     px = v => parseFloat(v) || 0;
+  let frame;
+  if (child instanceof HTMLElement) {
+    frame = [child.offsetLeft, child.offsetTop, child.offsetWidth, child.offsetHeight];
+  } else {
+    // Non-HTMLElement children (such as <svg>) lack offset*; derive the
+    // untransformed frame from rects divided by the scale currently painted.
+    const z = e.$zoomApplied || 1,
+      lb = layer.getBoundingClientRect(),
+      cb = child.getBoundingClientRect();
+    frame = [(cb.left - lb.left) / z, (cb.top - lb.top) / z, cb.width / z, cb.height / z];
+  }
   return {
     child,
     port: [e.clientWidth, e.clientHeight],
     lead: [px(s.paddingLeft), px(s.paddingTop)],
     end: [px(s.paddingRight), px(s.paddingBottom)],
-    frame: [child.offsetLeft, child.offsetTop, child.offsetWidth, child.offsetHeight],
+    frame,
     margin: [px(c.marginRight), px(c.marginBottom)],
   };
 }
@@ -166,6 +178,7 @@ function draw(e, z) {
   const tx = m.lead[0] + p.shift[0] + m.frame[0] * (1 - z),
     ty = m.lead[1] + p.shift[1] + m.frame[1] * (1 - z);
   ls.transform = `translate(${tx}px, ${ty}px) scale(${z})`;
+  e.$zoomApplied = z;
   return { m, p };
 }
 

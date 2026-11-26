@@ -1273,19 +1273,19 @@ function sections(text) {
 const TOPICS = {
   log: 'The driver\'s operations', sheet: 'Recipe: a navigation stack', push: 'Recipe: a navigation stack',
   'tab bar': 'Recipe: tabs', 'back button': 'Recipe: a navigation stack', share: 'Host commands',
-  'dark mode': 'Recipe: theme: colours, light and dark, icons',
+  'dark mode': 'Recipe: theme: colours, light and dark, icons', colour: 'Recipe: theme: colours, light and dark, icons',
   // An icon's `svg` file; a drawing in a row (the waveform recipe) is `docs waveform`.
   svg: 'Recipe: theme: colours, light and dark, icons',
   'safe area': 'Declarations',
   // A module's `func call`; the tools recipe's title says "calls" of tool lines, which `docs tool` finds.
-  call: 'Recipe: a native module in Swift',
+  call: 'Answer a native call in Swift or Kotlin',
   // Said densely in passing elsewhere: the declared sources' bullets, a native module's `later(…)`.
   optimistic: 'Optimistic writes: the overlay', later: 'Rust data sources',
   font: 'Recipe: app.json, assets and modules', image: 'Recipe: app.json, assets and modules',
   deploy: 'Recipe: porting an app, a release build, splitting the work',
   accessibility: 'Native views: accessibility', strings: 'Recipe: app.json, assets and modules',
-  list: 'Recipe: list rows: search, swipe, filter and long-press', midi: 'MIDI: `exactMIDI`, `sendMIDI`, `midimessage`',
-  'sign-in provider': 'Sign-in providers (`@exact/oauth`)', transition: 'Recipe: motion', storage: 'Recipe: files, SQLite and grants',
+  list: 'Recipe: list rows: search, swipe, filter and long-press', swipe: 'Recipe: list rows: search, swipe, filter and long-press', midi: 'MIDI: `exactMIDI`, `sendMIDI`, `midimessage`',
+  'sign-in provider': 'Sign-in providers (`@exact/oauth`)', transition: 'Recipe: motion', storage: 'Recipe: files, SQLite and grants', 'text overflow': 'Porting a React Native app',
 };
 
 const STOP = new Set(['a', 'an', 'and', 'by', 'for', 'in', 'it', 'its', 'of', 'on', 'or', 'the', 'to', 'you']);

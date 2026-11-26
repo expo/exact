@@ -114,6 +114,7 @@ extension ExactApp {
         case .loop(.failed(let message)): "Dev loop failed to start: \(message)"
         case .stale: "Rebuild this app: its native code changed"
         case .refused(let message): "Edit not applied: \(message)"
+        case .disconnected(let message): "Dev server unreachable: \(message)"
         case nil: nil
         }
         Self.devStatusText = text

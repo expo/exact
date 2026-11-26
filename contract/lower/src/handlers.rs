@@ -180,7 +180,13 @@ impl Lowerer<'_> {
         }
         if matches!(
             event,
-            "pan" | "panrelease" | "heightrelease" | "transformgeometry" | "transformrelease"
+            "pan"
+                | "panrelease"
+                | "pinch"
+                | "pinchrelease"
+                | "heightrelease"
+                | "transformgeometry"
+                | "transformrelease"
         ) && self.types.components[0].actions[ai][args.len()..]
             .iter()
             .any(|ty| *ty != Ty::Number)

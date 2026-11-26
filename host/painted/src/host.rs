@@ -867,6 +867,15 @@ impl<D: DataSource> Host<D> {
             .map(|(roots, _)| roots)
     }
 
+    /// This session's own files as a drag reads them: its app's roots as
+    /// storage pinned them, and its grants (LLP 1094.000 D3); `None` before
+    /// its storage opened them.
+    #[cfg(target_os = "linux")]
+    pub fn app_files(&mut self) -> Option<crate::picker::AppFiles> {
+        let roots = self.app_roots()?;
+        crate::picker::AppFiles::of(&roots, &self.grants())
+    }
+
     /// The requests the runner handed out since the last take (LLP 1016 D2).
     pub fn take_requests(&mut self) -> Vec<RequestOut> {
         self.runner.take_requests()

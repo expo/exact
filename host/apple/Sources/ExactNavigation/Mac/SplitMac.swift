@@ -94,6 +94,11 @@ final class SplitHost {
     }
     private(set) var shown: Shown?
     private var inspector: RouteInspector?
+    /// The selected stack's first route, which projects the page's split item (LLP 1123 D15); nil
+    /// while that route is a sheet or there is no stack.
+    private(set) weak var pageRoute: NodeView?
+    /// The pane's first route, which projects the detail's split item; nil while nothing splits.
+    var detailBase: NodeView? { shown.flatMap { $0.routes.indices.contains($0.base - 1) ? $0.routes[$0.base - 1] : nil } }
     var hasInspector: Bool { controller?.inspectorNode != nil && capable }
     /// Whether a window shows the split: the stack splits, and the window's
     /// owner composed a controller that holds this session's view.
@@ -221,6 +226,7 @@ final class SplitHost {
     /// runner knows no block.
     func reset() {
         inspector = nil
+        pageRoute = nil
         controller?.showInspector(nil, node: nil)
         for entry in held.values { entry.route.removeFromSuperview() }
         placeholder?.removeFromSuperview()
@@ -246,6 +252,7 @@ final class SplitHost {
     /// `routes` is that stack and `selected` the route its root shows.
     func read(root: NodeView, routes: [NodeView], selected: Int) {
         defer { schedule() }
+        pageRoute = routes.first.flatMap { Self.sheet($0) ? nil : $0 }
         let page = routes.prefix(max(0, selected + 1)).prefix(while: { !Self.sheet($0) }).last
         inspector = painted ? nil : page.flatMap { presenter.routeInspectors[$0.id] }
         if inspector != nil { wantController() }
@@ -290,6 +297,7 @@ final class SplitHost {
     /// No navigation root, or no stack its key names: nothing splits.
     func readNone() {
         inspector = nil
+        pageRoute = nil
         shown = nil
         schedule()
     }
@@ -311,6 +319,7 @@ final class SplitHost {
         let before = paneState
         let aside = capable ? inspector.flatMap { presenter.views[$0.view] } : nil
         controller?.showInspector(inspector, node: aside)
+        defer { controller?.applyItemControls() }
         // A painted popover goes where its invoker now is: the pane or the page.
         defer {
             presenter.menus.layout()

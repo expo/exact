@@ -1050,7 +1050,7 @@ test "a host refuses an unsupported page fact"
     expect(r.results.map(t => t.end?.error)).toEqual(Array(12).fill(undefined));
     expect(r.results.map(t => t.failures.length)).toEqual([0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1]);
     for (const [index, line, name, value] of [[2, 27, 'prefers-color-scheme', 'banana'], [3, 31, 'unknown', 'dark'], [4, 36, 'prefers-color-scheme', 'banana']]) {
-      const hint = name === 'unknown' ? 'did you mean `prefer prefers-color-scheme dark`? ' : '';
+      const hint = name === 'unknown' ? 'did you mean `prefer screen-reader unknown` or `prefer prefers-color-scheme dark`? ' : '';
       expect(r.results[index].failures[0]).toContain(`line ${line}: prefer: ${name} ${value}: ${hint}expected`);
     }
     expect(r.results[9].failures[0]).toContain('prefer: root-font-size 0: expected');

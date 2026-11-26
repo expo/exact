@@ -136,7 +136,8 @@ extension NavigationHost {
             // builds the rows a More list on screen gains.
             container.registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) { [weak self] (tabs: UITabBarController, previous: UITraitCollection) in
                 let now = tabs.traitCollection
-                if previous.horizontalSizeClass != now.horizontalSizeClass { self?.refollowFloatingBar() }
+                // (Only an iPad's bar changes with the width, between floating and not)
+                if previous.horizontalSizeClass != now.horizontalSizeClass, now.userInterfaceIdiom == .pad { self?.refollowTabBarWish() }
                 // Skip the change UIKit reports as the container enters or leaves a window, from or to unspecified
                 let known = [previous.horizontalSizeClass, previous.verticalSizeClass, now.horizontalSizeClass, now.verticalSizeClass].allSatisfy { $0 != .unspecified }
                 if known { self?.syncNextTurn() }
@@ -401,7 +402,9 @@ extension NavigationHost {
             tablistOwed = nil
             tablistHidBar = false
             if let container = tabController, tabOwner === container, !ExactEnv.authoredChrome {
+                // (Also where a route on the shown stack hides the bar by UIKit's flag, as the state follows it, iOS 18)
                 let hidden = authored || tabs.tablist.style["display"]?.string == "none"
+                    || selectedTabStack(container).flatMap { stackHidesTabBar($0) } == true
                 if #available(iOS 18.0, tvOS 18.0, *) { setTabBarHidden(hidden, in: container, animated: false) }
                 else {
                     container.tabBar.isHidden = hidden
@@ -451,7 +454,7 @@ extension NavigationHost {
             selectionPressed = nil
             if let container = tabController, container.selectedViewController !== navs[p.at], navs[p.at] !== tapping {
                 selectInUIKit(p.at, in: container)
-                refollowFloatingBar() // (no push or pop: the stack it shows keeps its wish on an iPad)
+                refollowTabBarWish() // (no push or pop: the stack it shows keeps its wish)
             }
             if tabController == nil { presenter.session?.natives.tabsHatch(nil, event: 2, index: p.at) }
         }
@@ -749,9 +752,9 @@ extension NavigationHost {
             if pendingSync {
                 tapping = nil
                 resync()
-                return refollowFloatingBar()
+                return refollowTabBarWish()
             }
-            refollowFloatingBar()
+            refollowTabBarWish()
             tabs.view.layoutIfNeeded()
             tapping = nil
             return reportCovers()
@@ -763,13 +766,13 @@ extension NavigationHost {
             if let more, tabs.selectedViewController === more { reportCovers() }
             return
         }
-        if index == routerTab, screen == nil, !popped { return refollowFloatingBar() }
+        if index == routerTab, screen == nil, !popped { return refollowTabBarWish() }
         guard let tab = authoredTab(index) else { return }
         let again = index == routerTab
         pressTab(tab, scrolling: screen)
         // Leave the router's own tab, tapped again, to its press; another tab's press can leave the router elsewhere
         if again { return }
-        guard routerTab != index, tabStack(routerTab) != nil else { return refollowFloatingBar() }
+        guard routerTab != index, tabStack(routerTab) != nil else { return refollowTabBarWish() }
         showRouterTab(declining: index)
     }
 

@@ -60,6 +60,33 @@ test('a channel is refused by name before page code runs', async () => {
   })).toEqual(['news', 1, true, 'undefined']);
 }, 60_000);
 
+test('frame script results are bounded by their serialized UTF-8 bytes', async () => {
+  const rows = await inFrame(async () => {
+    const api = (await import('/binding.js')).implementation();
+    const rows = [];
+    for (const unit of ['x', 'é', '中', '😀', '\n', '\ud800']) {
+      const width = new TextEncoder().encode(JSON.stringify(unit)).length - 2;
+      const count = Math.floor((65536 - 2) / width);
+      const fit = unit.repeat(count) + 'x'.repeat(65536 - 2 - count * width);
+      for (const method of ['evaluate', 'callFunction']) {
+        for (const value of [fit, fit + 'x']) {
+          const reply = method === 'evaluate'
+            ? await api.evaluate({ id: 'tab', expression: JSON.stringify(value) })
+            : await api.callFunction({ id: 'tab', functionDeclaration: 'x => Promise.resolve(x)', arguments: [value] });
+          rows.push({ unit, method, bytes: new TextEncoder().encode(JSON.stringify(value)).length,
+            same: reply.result === value, error: reply.error, message: reply.message });
+        }
+      }
+    }
+    return rows;
+  });
+  for (const row of rows) {
+    if (row.bytes === 65536) expect(row).toMatchObject({ same: true, error: undefined });
+    else expect(row).toMatchObject({ bytes: 65537, same: false, error: 'QuotaExceededError',
+      message: 'the result is 65537 bytes of JSON; at most 65536' });
+  }
+}, 60_000);
+
 test.skipIf(process.platform !== 'darwin')('a post during the overflow report keeps the last 32 posts', async () => {
   const root = resolve(import.meta.dir, '../../..');
   const out = await mkdtemp(join(tmpdir(), 'exact-player-queue-'));

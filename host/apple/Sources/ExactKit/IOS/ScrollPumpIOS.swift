@@ -251,6 +251,11 @@ package final class ScrollPump: NSObject, UIScrollViewDelegate {
         presenter?.elementScrolls.userScrolled(scrollView)
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
     }
+    #if os(iOS)
+    package func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        if PinchLift.consume(for: scrollView) { targetContentOffset.pointee = scrollView.contentOffset }
+    }
+    #endif
     package func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) } }
     package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { presenter?.session?.frameHealth.endScroll(scrollView) }
     package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { presenter?.elementScrolls.revealEnded(scrollView) }

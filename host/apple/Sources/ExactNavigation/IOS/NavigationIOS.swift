@@ -129,9 +129,14 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Where the authored tablist was when its covers were last measured.
     var measuredTablist: CGRect?
     /// The root whose tablist last decided the bar, and whether Exact hid the
-    /// bar for a root's hidden tablist (LLP 1075.003 §3.7, amended).
+    /// bar: for a root's hidden tablist, or as a route that hides it by UIKit's
+    /// flag came on top (iOS 18); Exact shows only a bar it hid (LLP 1075.003
+    /// §3.7, amended).
     weak var tablistRoot: RouteController?
     var tablistHidBar = false
+    /// The route whose wish the bar's kept hidden state last took (`followTabBarWish`). The same route shown again, as
+    /// UIKit shows it after moving its tab between the bar and More, writes nothing, so a hatch's own write stands.
+    weak var tabBarWishRoute: UIViewController?
     /// The transitions whose end runs what they held (`runHeld(after:)`), held weakly so that one gone without completing
     /// leaves the table
     let heldTransitions = NSHashTable<AnyObject>.weakObjects()

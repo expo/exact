@@ -181,6 +181,12 @@ public final class ExactModuleContext: @unchecked Sendable {
     public func wrote(_ path: String = "app:/data") {
         changed(path.hasPrefix("app:/") ? path : "app:/" + path)
     }
+
+    /// Resolve an `app:/` path (`app:/data/...`, `app:/cache/...`, `app:/tmp/...`)
+    /// inside this session's directories, rejecting traversal and symlinks (LLP 1156.008.000 D6.6).
+    public func file(_ path: String) -> URL? {
+        ExactExtensions.file(path, self)
+    }
 }
 
 /// One frame of a `frames` ticket: the session clock's time in milliseconds,

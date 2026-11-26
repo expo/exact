@@ -2122,6 +2122,12 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   target to `min-height`. Only a drag that moved the sheet sends
   `heightrelease`, once, with its displayed height and velocity. A scroll-only
   release and its deceleration belong to the scroller (LLP 1041 §8.5).
+  **Expanded (panel, 2026-11-25):** BA2 (3–1, expo/exact#1804 part A;
+  LLP 1057.001 §4.1) admits `pinch` and `pinchrelease` on any node.
+  Pocket Lab's scrolling photo grid hears the cumulative scale and viewport
+  focal point on iOS and iPadOS while scrolling and pointer delivery keep their
+  contacts. Android and touch-web recognizers stay queued on
+  `fable/pinch-report-1804`; both hosts accept the bindings silently meanwhile.
   **Expanded (Charlie, 2026-09-28: approved `panrelease`, with Spark as the
   consumer LLP 1057 asked for):** `panrelease=action`, fired once when a `pan`
   that began ends, with its release velocity (vx, vy) in pan's units per
