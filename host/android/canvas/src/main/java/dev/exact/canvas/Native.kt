@@ -49,6 +49,9 @@ object Native {
      * horizontal 2) and its start and end on that axis in window pixels. Before [start], from any thread, so the host boots laid out in it, and on
      * the host's thread again whenever any of it changes. The reader pads nothing: [chrome] says where the page is. */
     @JvmStatic external fun window(width: Int, height: Int, scale: Float, insets: IntArray)
+    /** The software keyboard's bottom inset in pixels as its inset animation shows it, each frame while one runs, and
+     * -1 once it ends (LLP 1123 D7): what an owner's update reports of the keyboard as it moves. */
+    @JvmStatic external fun keyboardProgress(depth: Int)
     /** What the reader draws around the page, when that is not what this last returned (else null): where the page is
      * in the window (x, y, width, height, in pixels), the colour behind it and in the edges it keeps out of (ARGB),
      * and 1 when its scheme is dark (the bars' icons are then light). */

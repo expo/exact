@@ -361,3 +361,22 @@ fn id_of(p: &Presenter<Nothing>, test_id: &str) -> ViewId {
         .unwrap()
         .id
 }
+
+/// While the keyboard's inset animation runs, a route's keyboard is its depth now, not the window's inset, which gives
+/// only its ends; once it ends, the window's again.
+#[test]
+fn a_routes_keyboard_follows_the_keyboards_animation() {
+    let (mut p, _) = barred(APP);
+    let mut window = *p.window().unwrap();
+    window.keyboard = [0., 0., 300., 0.];
+    assert_eq!(p.set_window(window), None);
+    let depth = |p: &Presenter<Nothing>| match update(p, "route-home").keyboard {
+        KeyboardReport::Shown(k) => k.frame[3],
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(depth(&p), 300.);
+    p.set_keyboard_progress(Some(120.));
+    assert_eq!(depth(&p), 120., "halfway up");
+    p.set_keyboard_progress(None);
+    assert_eq!(depth(&p), 300., "the window's once it ends");
+}

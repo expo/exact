@@ -84,6 +84,9 @@ pub(super) struct State {
     frame: Option<[f32; 4]>,
     /// The keyboard's overlap with the frame the page would have without it.
     pub(super) keyboard: f32,
+    /// The software keyboard's depth at the window's bottom as its inset animation shows it now, points, while one runs
+    /// (`Presenter::set_keyboard_progress`): what an owner's update reports (LLP 1123 D7); layout keeps the window's.
+    pub(super) keyboard_progress: Option<f32>,
     /// The field to keep in view once the page has been painted in the
     /// viewport a keyboard left it ([`Presenter::reveal_owed`]).
     reveal: Option<ViewId>,
@@ -94,6 +97,13 @@ pub(super) struct State {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// The software keyboard's depth at the window's bottom as its inset animation shows it, points, while one runs, or
+    /// `None` once it ends (LLP 1123 D7): each owner's update follows the keyboard as it moves, which the window's inset
+    /// tells only at its ends; the page's layout keeps the window's until activation.
+    pub fn set_keyboard_progress(&mut self, depth: Option<f32>) {
+        self.window.keyboard_progress = depth.filter(|d| d.is_finite() && *d >= 0.0);
+    }
+
     /// The activity tells the feature and window together. After a real
     /// hinge is seen, the cover display also gets its fold from the device.
     #[cfg(any(target_os = "android", test))]

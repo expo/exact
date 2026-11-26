@@ -86,7 +86,9 @@ impl<D: DataSource> Presenter<D> {
         let Some(window) = self.window() else {
             return KeyboardReport::Unreported;
         };
-        let (width, height, depth) = (window.size.0, window.size.1, window.keyboard[2]);
+        // As its inset animation shows it while one runs, else as the window's inset says
+        let depth = self.window.keyboard_progress.unwrap_or(window.keyboard[2]);
+        let (width, height) = window.size;
         match depth > 0.0 {
             true => KeyboardReport::Shown(Keyboard {
                 frame: [-ox, height - depth - oy, width, depth],
