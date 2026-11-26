@@ -206,12 +206,28 @@ export function androidBakeBlobs(dir) {
   return blobs;
 }
 
-/** The digest of the bake's linked files, or null for incomplete output. */
+const ENTRY_TREE_PREFIX = /^(?:plans|typescript|activities)\//;
+
+/** Entry-tree files (`plans/`, `typescript/`, `activities/`) recorded in a bake's compat.json. */
+export function bakedEntryAssets(compat) {
+  return (compat?.embedded?.assets ?? []).filter(card => typeof card?.name === 'string' && ENTRY_TREE_PREFIX.test(card.name));
+}
+
+/** The digest of the bake's linked files and entry-tree assets, or null for incomplete output. */
 function pairOf(dir, android) {
   try {
     const files = android ? androidBakeBlobs(dir) : ['app.plan', 'compat.json'];
     const hash = createHash('sha256');
     for (const file of files) hash.update(readFileSync(resolve(dir, file)));
+    if (!android) {
+      const compat = JSON.parse(readFileSync(resolve(dir, 'compat.json'), 'utf8'));
+      for (const card of bakedEntryAssets(compat)) {
+        if (card.name.startsWith('/') || card.name.split('/').includes('..')) return null;
+        const bytes = readFileSync(resolve(dir, card.name));
+        if (bytes.length !== card.bytes || createHash('sha256').update(bytes).digest('hex') !== card.sha256) return null;
+        hash.update(card.name).update('\0').update(bytes);
+      }
+    }
     return hash.digest('hex');
   } catch { return null; }
 }

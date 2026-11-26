@@ -42,9 +42,9 @@ import { modulePlist } from './plist.mjs';
 import { awaitBuildOutput, bakedBackendOrigin, bakeOutput, bakeWatchEnv, developmentBuildEnv, appleExecutableName, gpuModules, HOST_DEV, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { HOST_MACOS, withHostDeployment } from '../../scripts/filesystem.mjs';
 import { prepareRustBundle, nativeSource } from '../../scripts/rust.mjs';
-import { bakeOutside, linkedInputs } from '../../scripts/linked-plan.mjs';
+import { bakeOutside, bakedEntryAssets, linkedInputs } from '../../scripts/linked-plan.mjs';
 import { bakedSettings } from '../../js/bake/src/__exact_env.mjs';
-import { hasEntries, platformWidgetEntries, widgetExtensionInfo, widgetId, widgetsDigest } from './widgets.mjs';
+import { copyWidgetFonts, hasEntries, platformWidgetEntries, widgetExtensionInfo, widgetId, widgetsDigest } from './widgets.mjs';
 import { EXTENSION_KINDS, extensionKinds, notificationService, withoutExtensions } from './extensions.mjs';
 import { appleAssetsKey, bakedAssetInputs, frameworkInfo, frameworkVersions, iosAssets, plistFile } from './assets.mjs';
 import { buildInfo } from './buildinfo.mjs';
@@ -52,6 +52,7 @@ import { fitLinkedSections, occurrencesOutsideLinked, readLinkedSections } from 
 import { nativeExtras } from './native-extras.mjs';
 import { renameZipPrefix } from './zip-rename.mjs';
 import { listAssets } from '../web/serve.mjs';
+import { thinTextures } from '../../scripts/texture-families.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const TARGET = 'aarch64-apple-ios', SDK_NAME = 'iphoneos';
@@ -78,6 +79,21 @@ const REBUILT = (name) => ['Info.plist', 'receipt.json', '_CodeSignature', 'asse
 /** The first of a base bundle's entries that repack neither keeps (its executable, `kept`) nor writes again, or null. */
 export const unrebuiltEntry = (entries, executable, kept) =>
   entries.find(entry => entry !== executable && !kept.has(entry) && !REBUILT(entry) && !ENTRY_TREES.includes(entry)) ?? null;
+/** Copy the bake's entry trees (`plans/`, `typescript/`, `activities/`) directly from the validated `baked` directory,
+ * guided by `compat.embedded.assets`, so cached bakes never depend on a separate `.entries` side directory. */
+export function copyBakedEntryTrees(baked, compat, destination) {
+  for (const tree of ENTRY_TREES) rmSync(resolve(destination, tree), { recursive: true, force: true });
+  for (const card of bakedEntryAssets(compat)) {
+    if (card.name.startsWith('/') || card.name.split('/').includes('..')) throw new Error(`unsafe baked entry path: ${card.name}`);
+    const bytes = readFileSync(resolve(baked, card.name));
+    if (bytes.length !== card.bytes || createHash('sha256').update(bytes).digest('hex') !== card.sha256) {
+      throw new Error(`baked entry differs from compat.json: ${card.name}`);
+    }
+    const target = resolve(destination, card.name);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, bytes);
+  }
+}
 /** compat.json's parts the binary acts on: what it was built to provide (`inputs`, but for the app's identity and
  * grants), its target and trust. A plan-only change leaves all of them as they were. */
 const BINDING = ['inputs', 'target', 'embedded'];
@@ -262,9 +278,11 @@ export async function repack(args) {
     writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, true, { development: null, distributed: false, reach: appleReach, tv: false }));
     mark('plist1');
     copyAppleStaticTrees(app.dir, bundle, [['assets', 'assets'], ['deck', 'deck']]);
-    // The bake's entry trees, as build.mjs captures them into every app's bundle (B1), and the widgets' own copies of the
-    // plans and TypeScript in the extension, as packageWidgets copies them (the base's are the old bake's).
-    copyAppleStaticTrees(resolve(env.EXACT_BAKE_OUTPUT, `ios-${TARGET}.entries`), bundle, ENTRY_TREES.map(tree => [tree, tree]));
+    thinTextures(bundle, compat.inputs.textureFamily);
+    // The bake's entry trees, copied directly from the validated `baked` directory (B1: plans/, typescript/, activities/),
+    // and the widgets' own copies of the plans and TypeScript in the extension, as packageWidgets copies them
+    // (the base's are the old bake's).
+    copyBakedEntryTrees(baked, compat, bundle);
     if (widgets) {
       const extension = resolve(bundle, WIDGET_EXTENSION);
       for (const tree of ['plans', 'typescript']) {
@@ -318,10 +336,12 @@ export async function repack(args) {
       if (inherited(appInfo) !== inherited(baseApp)) refuse('the app\'s minimum OS or device capabilities changed, which ExactCore\'s Info.plist carries');
       const coreInfo = resolve(bundle, 'Frameworks/ExactCore.framework/Info.plist');
       writeFileSync(coreInfo, plistFile({ ...json(coreInfo), CFBundleVersion: appInfo.CFBundleVersion, CFBundleShortVersionString: appInfo.CFBundleShortVersionString }));
-      // The extension's Info.plist, from this app's, then its signature with its own entitlements, as packageWidgets
-      // signs it for an unsigned device archive.
+      // Refresh the extension's fonts and Info.plist from this app's, then sign it with its own entitlements, as
+      // packageWidgets does for an unsigned device archive.
       const extension = resolve(bundle, WIDGET_EXTENSION);
-      writeFileSync(resolve(extension, 'Info.plist'), widgetExtensionInfo(app, appInfo, 'ios'));
+      rmSync(resolve(extension, 'assets'), { recursive: true, force: true });
+      const widgetFonts = copyWidgetFonts(bundle, extension);
+      writeFileSync(resolve(extension, 'Info.plist'), widgetExtensionInfo(app, appInfo, 'ios', widgetFonts));
       const extensionEnt = resolve(work, 'widget-entitlements.plist');
       writeFileSync(extensionEnt, entitlements({ ...app, id: widgetId(app), widgetAppId: app.id }, undefined, false, null, { simulator: false, prefix: undefined }));
       tool('codesign', ['--force', '--sign', '-', '--timestamp=none', '--entitlements', extensionEnt, extension], { stdio: 'ignore' });

@@ -239,6 +239,26 @@ impl Batch {
             quote(url, &mut s);
             s.push(']');
         }
+        s.push_str("],\"roots\":[");
+        for (i, id) in change.roots.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            id.push_to(&mut s);
+        }
+        s.push_str("],\"tab\":");
+        quote(&change.tab, &mut s);
+        s.push_str(",\"chain\":[");
+        for (i, exact_route::Destination { url, tab, .. }) in change.chain.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push('[');
+            quote(url, &mut s);
+            s.push(',');
+            quote(tab, &mut s);
+            s.push(']');
+        }
         s.push_str("]}");
         self.ops.push(s);
     }

@@ -210,7 +210,7 @@ function wantScroll(op) {
   Due = { visit: op.top, fragment: op.fragment, activation: op.activation }; Scheduled = null;
   fragments().then(f => f.arm(pageRoot(), op, History)); queueMicrotask(fragmentDue);
 }
-const changeOf = (r, top, scroll, removed = []) => ({ top: top[0], url: top[5] ? `${top[2]}#${top[5]}` : top[2], fragment: top[5], scroll, removed, visits: r[1].flatMap(t => t[1].map(e => [e[0], e[2]])) });
+const changeOf = (r, top, scroll, removed = []) => ({ top: top[0], url: top[5] ? `${top[2]}#${top[5]}` : top[2], fragment: top[5], scroll, removed, visits: r[1].flatMap(t => t[1].map(e => [e[0], e[2]])), roots: r[1].flatMap(t => t[1].slice(0, 1).map(e => e[0])), tab: r[0], chain: chain(top[2]).map(d => [d.url, d.tab]) });
 /** After a commit's tree update: a navigation to the fragment the top already shows changes no value, and scrolls
  * again, a change of its own to the history as the runner's (a Back or Forward to it restores its place, fragment.js).
  * The check waits a microtask, for the commit's requests to go out and its commands to run. */
