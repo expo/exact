@@ -84,9 +84,21 @@ final class PressFeedbackIOSTests: XCTestCase {
         XCTAssertEqual(v.press.to, 1)
     }
 
+    /// LLP 1061 D7 "Timing" item 2: the platform's timing is UIKit's default
+    /// spring, as `UIView.animate` with no timing arguments adds it. This
+    /// pins what UIKit adds on the runtime it runs on.
+    @MainActor func testThePlatformsChangeIsUIKitsDefaultSpring() throws {
+        let spring = try XCTUnwrap(PlatformChange.animation() as? CASpringAnimation, "UIKit's default is a spring")
+        XCTAssertEqual(spring.perceptualDuration, 0.5, accuracy: 0.01)
+        XCTAssertEqual(spring.bounce, 0, accuracy: 0.01)
+        XCTAssertNil(spring.delegate, "no UIKit completion rides on a copy")
+        XCTAssertTrue(spring.isRemovedOnCompletion)
+    }
+
     /// LLP 1115: a node that declares no feedback gets the platform's, a dim
-    /// (UIKit's custom button), never a scale; the dim is an additive
-    /// animation, so the model's alpha stays the engine's.
+    /// (UIKit's custom button), never a scale; the dim is additive, so the
+    /// model's alpha stays the engine's. It moves both ways on UIKit's
+    /// default spring, from wherever it shows.
     func testANodeWithoutTheRowDimsAsUIKitDoes() throws {
         let (_, v) = try fixture(style: [:])
         v.pressed = true
@@ -95,34 +107,71 @@ final class PressFeedbackIOSTests: XCTestCase {
         XCTAssertEqual(v.alpha, 1, "the model is untouched")
         let hold = try XCTUnwrap(v.layer.animation(forKey: "pressDim") as? CABasicAnimation)
         XCTAssertTrue(hold.isAdditive)
-        XCTAssertEqual(hold.keyPath, "opacity")
-        XCTAssertEqual(try XCTUnwrap(hold.fromValue as? Float), NodeView.dimmedOpacity - 1, accuracy: 1e-6)
         XCTAssertEqual(try XCTUnwrap(hold.toValue as? Float), NodeView.dimmedOpacity - 1, accuracy: 1e-6)
+        let press = try XCTUnwrap(edges(v, "in").first as? CASpringAnimation, "the press moves on UIKit's spring")
+        XCTAssertTrue(press.isAdditive)
+        XCTAssertEqual(try XCTUnwrap(press.fromValue as? Float), 1 - NodeView.dimmedOpacity, accuracy: 1e-6)
         CATransaction.flush()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.03))
-        XCTAssertEqual(try XCTUnwrap(v.layer.presentation()).opacity, NodeView.dimmedOpacity, accuracy: 0.01, "dimmed on screen at once")
-        // Released: it fades back, after the shortest flash.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        let moving = try XCTUnwrap(v.layer.presentation()).opacity
+        XCTAssertLessThan(moving, 1, "on its way down")
+        XCTAssertGreaterThan(moving, NodeView.dimmedOpacity + 0.05, "not landed at once")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: press.duration))
+        XCTAssertEqual(try XCTUnwrap(v.layer.presentation()).opacity, NodeView.dimmedOpacity, accuracy: 0.01, "dimmed")
+        // Released: the hold goes and an edge of its own lifts it.
         v.pressed = false
-        let back = try XCTUnwrap(v.layer.animation(forKey: "pressDim") as? CABasicAnimation)
-        XCTAssertEqual(back.duration, NodeView.dimFade)
-        XCTAssertEqual(try XCTUnwrap(back.toValue as? Float), 0)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: NodeView.dimHold + NodeView.dimFade + 0.1))
+        XCTAssertNil(v.layer.animation(forKey: "pressDim"))
+        let release = try XCTUnwrap(edges(v, "out").first as? CASpringAnimation)
+        XCTAssertEqual(try XCTUnwrap(release.fromValue as? Float), NodeView.dimmedOpacity - 1, accuracy: 1e-6)
+        XCTAssertEqual(try XCTUnwrap(release.toValue as? Float), 0)
         CATransaction.flush()
-        XCTAssertEqual(try XCTUnwrap(v.layer.presentation()).opacity, 1, accuracy: 1e-6, "faded back")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        let lifting = try XCTUnwrap(v.layer.presentation()).opacity
+        XCTAssertGreaterThan(lifting, NodeView.dimmedOpacity + 0.01, "on its way back")
+        XCTAssertLessThan(lifting, 0.99, "not lifted at once")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: release.duration + 0.05))
+        XCTAssertEqual(try XCTUnwrap(v.layer.presentation()).opacity, 1, accuracy: 1e-3, "lifted")
     }
 
-    /// A quick tap in a scroll view arrives with its down and up in one turn
-    /// (`delaysContentTouches`): the dim still flashes.
-    func testAQuickTapStillFlashesTheDim() throws {
+    /// A release mid-press moves back from where the dim shows, with no jump:
+    /// the press's edge keeps running under the release's, as UIKit's
+    /// additive animations do.
+    func testAReleaseMidPressLiftsFromWhereTheDimShows() throws {
+        let (_, v) = try fixture(style: [:])
+        v.pressed = true
+        CATransaction.flush()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.08))
+        let before = try XCTUnwrap(v.layer.presentation()).opacity
+        v.pressed = false
+        CATransaction.flush()
+        let after = try XCTUnwrap(v.layer.presentation()).opacity
+        XCTAssertEqual(after, before, accuracy: 0.03, "no jump at the release")
+        XCTAssertEqual(edges(v, "in").count, 1, "the press's edge still runs")
+        XCTAssertEqual(edges(v, "out").count, 1)
+    }
+
+    /// LLP 1061 D7 "Timing" item 3: a quick tap in a scroll view arrives
+    /// with its down and up in one turn (`delaysContentTouches`): it lands
+    /// dimmed, and the release starts a frame later; a press again before
+    /// that drops the deferred release.
+    func testAQuickTapLandsDimmedAndLiftsAFrameLater() throws {
         let (_, v) = try fixture(style: [:])
         v.pressed = true
         v.pressed = false
-        let back = try XCTUnwrap(v.layer.animation(forKey: "pressDim") as? CABasicAnimation)
-        XCTAssertEqual(back.fillMode, .backwards, "held dimmed until it begins")
-        XCTAssertGreaterThan(back.beginTime, v.layer.convertTime(CACurrentMediaTime(), from: nil) + NodeView.dimHold / 2)
+        XCTAssertTrue(edges(v, "in").isEmpty, "landed, not eased in")
+        let release = try XCTUnwrap(edges(v, "out").first)
+        XCTAssertEqual(release.fillMode, .backwards, "dimmed until it begins")
+        XCTAssertGreaterThan(release.beginTime, v.layer.convertTime(CACurrentMediaTime(), from: nil))
         CATransaction.flush()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.03))
         XCTAssertEqual(try XCTUnwrap(v.layer.presentation()).opacity, NodeView.dimmedOpacity, accuracy: 0.01)
+        v.pressed = true
+        XCTAssertTrue(edges(v, "out").isEmpty, "the deferred release is dropped")
+        XCTAssertTrue(edges(v, "in").isEmpty, "and the press shows already")
+        XCTAssertNotNil(v.layer.animation(forKey: "pressDim"))
+    }
+
+    private func edges(_ v: NodeView, _ way: String) -> [CABasicAnimation] {
+        (v.layer.animationKeys() ?? []).filter { $0.hasPrefix("pressDim.\(way).") }.compactMap { v.layer.animation(forKey: $0) as? CABasicAnimation }
     }
 
     /// The finger leaving the box lifts the dim, re-entering dims again; a

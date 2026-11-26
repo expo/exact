@@ -450,25 +450,26 @@ extension NodeView {
 /// shows none" for iOS): a pressable node that is not a native control and
 /// declares no feedback of its own dims while held, as a hand-built UIKit
 /// screen's custom button (`UIButton` `.custom` dims its content) or a
-/// SwiftUI plain-style button over a card does. Down is immediate and up
-/// fades back, as `UIButton`'s highlight. It rides on `pressed`, so it keeps
-/// UIKit's delayed touches: in a scroll view a touch that becomes a pan
-/// never presses (`delaysContentTouches`), and a pan that takes one already
-/// down cancels it, which fades back. A quick tap that arrives with its
-/// down and up in one turn still flashes (`dimHold`). The dim is an additive
-/// Core Animation on `opacity`, never the model's alpha, so it composes with
-/// every engine write and never stays behind. Being a dissolve, not motion,
-/// it is what Reduce Motion keeps (HIG, Motion). The Mac shows AppKit's own
-/// pressed effect, which is no dim (LLP 1115.000 D6, Mac/PressLookMac.swift);
-/// tvOS nothing: its focus is the feedback.
+/// SwiftUI plain-style button over a card does. It moves both ways as UIKit
+/// animates a property change it is not told how to time (LLP 1061 D7
+/// "Timing" item 2, `PlatformChange`), each edge from wherever the dim shows.
+/// It rides on `pressed`, so it keeps UIKit's delayed touches: in a scroll
+/// view a touch that becomes a pan never presses (`delaysContentTouches`),
+/// and a pan that takes one already down cancels it, which lifts it. A quick
+/// tap whose release comes before its press was presented lands dimmed and
+/// lifts a frame later (item 3). The dim is additive Core Animation on
+/// `opacity`, never the model's alpha, so it composes with every engine write
+/// and never stays behind: a constant hold of the dim's depth while pressed
+/// (`pressDim`), and per edge UIKit's animation from the step to nothing
+/// (`pressDim.in.…`, `pressDim.out.…`), which sum as UIKit's own additive
+/// animations do. Being a dissolve, not motion, it is what Reduce Motion
+/// keeps (HIG, Motion). The Mac shows AppKit's own pressed effect, which is
+/// no dim (LLP 1115.000 D6, Mac/PressLookMac.swift); tvOS nothing: its focus
+/// is the feedback.
 extension NodeView {
     /// The opacity a dimmed node shows, as a fraction of its own: UIKit's
     /// custom-button dim and SwiftUI's plain-style press sit near here.
     static let dimmedOpacity: Float = 0.65
-    /// How long a dim fades back.
-    static let dimFade: CFTimeInterval = 0.2
-    /// How long a dim shows at least, so a quick tap still flashes.
-    static let dimHold: CFTimeInterval = 0.1
 
     /// Whether a press shows the platform's dim: a node the host presses
     /// (a `press` handler, a link's `href` or a custom invoker's visual contact),
@@ -493,50 +494,106 @@ extension NodeView {
         -(pressPaint.lookOpacity ?? ownOpacity) * filterOpacityFactor * (1 - Self.dimmedOpacity)
     }
 
+    /// The node's opacity changed under a dim: the hold and every edge take
+    /// the new depth, on their own clocks.
     func refreshDimOpacity() {
-        guard let fade = layer.animation(forKey: "pressDim")?.copy() as? CABasicAnimation else { return }
-        fade.fromValue = dimOpacityDepth
-        if press.dimmedAt != nil { fade.toValue = fade.fromValue }
-        layer.add(fade, forKey: "pressDim")
+        let depth = dimOpacityDepth
+        for (key, animation) in dimAnimations() {
+            guard let copy = animation.copy() as? CABasicAnimation else { continue }
+            copy.fromValue = key == "pressDim" || key.hasPrefix("pressDim.out.") ? depth : -depth
+            if key == "pressDim" { copy.toValue = depth }
+            layer.add(copy, forKey: key)
+        }
     }
 
-    /// Dim (`down`) or fade back. `instantly` drops it without the fade.
+    /// Dim (`down`) or lift it. `instantly` drops it without moving.
     package func dimPress(_ down: Bool, instantly: Bool = false) {
-        let key = "pressDim"
         let now = CACurrentMediaTime()
+        let depth = dimOpacityDepth
         if down {
             guard press.dimmedAt == nil else { return }
             press.dimmedAt = now
-            let delta = dimOpacityDepth
+            // A release deferred a frame (item 3) is dropped: the dim shows still.
+            let deferred = dimAnimations().filter { $0.key.hasPrefix("pressDim.out.") && $0.animation.beginTime > layer.convertTime(now, from: nil) }
+            for (key, _) in deferred { layer.removeAnimation(forKey: key) }
             let hold = CABasicAnimation(keyPath: "opacity")
             hold.isAdditive = true
-            hold.fromValue = delta
-            hold.toValue = delta
+            hold.fromValue = depth
+            hold.toValue = depth
             hold.duration = .greatestFiniteMagnitude
             hold.isRemovedOnCompletion = false
             hold.fillMode = .both
-            layer.add(hold, forKey: key)
+            layer.add(hold, forKey: "pressDim")
+            // Under the agent's clock (LLP 1012) the press lands, as UIKit's animations are skipped.
+            if deferred.isEmpty, !ExactEnv.agentFreezes { addDimEdge("pressDim.in.\(now)", from: -depth, at: now) }
             return
         }
-        let at = press.dimmedAt
+        guard let at = press.dimmedAt else {
+            if instantly { for (key, _) in dimAnimations() { layer.removeAnimation(forKey: key) } }
+            return
+        }
         press.dimmedAt = nil
-        // Under the agent's clock (LLP 1012) the release lands, as UIKit's
-        // animations are skipped; a view taken for another node or flying
-        // drops a fade still running too.
+        // A view taken for another node or flying, and the agent's clock, drop the dim at once (items 4, 5).
         if instantly || ExactEnv.agentFreezes {
-            if layer.animation(forKey: key) != nil { layer.removeAnimation(forKey: key) }
+            for (key, _) in dimAnimations() { layer.removeAnimation(forKey: key) }
             return
         }
-        guard let at, let hold = layer.animation(forKey: key) as? CABasicAnimation, hold.duration == .greatestFiniteMagnitude else { return }
-        let back = CABasicAnimation(keyPath: "opacity")
-        back.isAdditive = true
-        back.fromValue = hold.fromValue
-        back.toValue = 0
-        back.duration = Self.dimFade
-        back.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        back.beginTime = layer.convertTime(max(now, at + Self.dimHold), from: nil)
-        back.fillMode = .backwards
-        layer.add(back, forKey: key)
+        layer.removeAnimation(forKey: "pressDim")
+        // Released before the press was presented: it lands dimmed and lifts a frame later.
+        var begin = now
+        if now - at < PressFeedback.unseen {
+            layer.removeAnimation(forKey: "pressDim.in.\(at)")
+            begin = now + PressFeedback.unseen
+        }
+        addDimEdge("pressDim.out.\(now)", from: depth, at: begin)
+    }
+
+    /// One edge of the dim: UIKit's animation from `from` to nothing, added
+    /// to what shows. Without one (UIKit animates nothing) the edge lands.
+    private func addDimEdge(_ key: String, from: Float, at begin: CFTimeInterval) {
+        guard let edge = PlatformChange.animation() else { return }
+        edge.keyPath = "opacity"
+        edge.isAdditive = true
+        edge.fromValue = from
+        edge.toValue = 0
+        edge.beginTime = layer.convertTime(begin, from: nil)
+        edge.fillMode = .backwards
+        layer.add(edge, forKey: key)
+    }
+
+    /// The dim's hold and edges on the layer, by key.
+    private func dimAnimations() -> [(key: String, animation: CABasicAnimation)] {
+        (layer.animationKeys() ?? []).compactMap { key in
+            guard key.hasPrefix("pressDim"), let animation = layer.animation(forKey: key) as? CABasicAnimation else { return nil }
+            return (key, animation)
+        }
+    }
+}
+
+/// UIKit's animation for a property change it is not told how to time (LLP
+/// 1061 D7 "Timing" item 2): what `UIView.animate` with every timing argument
+/// at its default adds for a detached view's `alpha`, read once and copied
+/// for each use. It follows the SDK the host is built with. While UIKit adds
+/// none (animations are off) the read is not kept, and callers land at once.
+@MainActor
+enum PlatformChange {
+    private static var read: CABasicAnimation?
+
+    static func animation() -> CABasicAnimation? {
+        if read == nil {
+            let probe = UIView()
+            UIView.animate(animations: { probe.alpha = 0 })
+            read = (probe.layer.animationKeys() ?? []).lazy
+                .compactMap { probe.layer.animation(forKey: $0) as? CABasicAnimation }
+                .first { $0.keyPath == "opacity" }
+            probe.layer.removeAllAnimations()
+        }
+        guard let copy = read?.copy() as? CABasicAnimation else { return nil }
+        copy.delegate = nil
+        copy.isRemovedOnCompletion = true
+        copy.byValue = nil
+        copy.timeOffset = 0
+        return copy
     }
 }
 #endif

@@ -170,10 +170,14 @@ final class BoxOpacityIOSTests: XCTestCase {
             XCTAssertEqual(try delta(box, "pressDim"), -0.8 * Float(factor) * (1 - NodeView.dimmedOpacity), accuracy: 1e-6)
         }
         box.dimPress(false)
-        let release = try XCTUnwrap(box.layer.animation(forKey: "pressDim") as? CABasicAnimation)
+        func release() throws -> CABasicAnimation {
+            let key = try XCTUnwrap(box.layer.animationKeys()?.first { $0.hasPrefix("pressDim.out.") })
+            return try XCTUnwrap(box.layer.animation(forKey: key) as? CABasicAnimation)
+        }
+        let before = try release()
         update(0.25)
-        let changed = try XCTUnwrap(box.layer.animation(forKey: "pressDim") as? CABasicAnimation)
-        XCTAssertEqual(changed.beginTime, release.beginTime, "a new factor keeps the release's clock")
+        let changed = try release()
+        XCTAssertEqual(changed.beginTime, before.beginTime, "a new factor keeps the release's clock")
         XCTAssertEqual(try XCTUnwrap(changed.fromValue as? Float), -0.2 * (1 - NodeView.dimmedOpacity), accuracy: 1e-6)
         box.dimPress(false, instantly: true)
         update(0.5, share: 0.5)
