@@ -6,7 +6,11 @@ impl Painter {
     pub(super) fn warp_extent(&self) -> crate::placement::RasterExtent {
         self.backend.raster_extent().unwrap_or_else(|| {
             let pixels = |points: f32| (points * self.scale).round() as u32;
-            ((0., 0.), (pixels(self.viewport.0), pixels(self.viewport.1)))
+            // A locally recorded row sees the viewport in its own coordinates.
+            (
+                self.row_viewport_origin(),
+                (pixels(self.viewport.0), pixels(self.viewport.1)),
+            )
         })
     }
 

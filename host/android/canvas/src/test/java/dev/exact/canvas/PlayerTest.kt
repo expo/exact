@@ -16,6 +16,11 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 
+internal fun rowDraw(id: Int, x: Double, y: Double): IntArray {
+    val xb = x.toBits(); val yb = y.toBits()
+    return intArrayOf(17, id, xb.toInt(), (xb ushr 32).toInt(), yb.toInt(), (yb ushr 32).toInt())
+}
+
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -60,7 +65,7 @@ class PlayerTest {
             // A definition and a row id both contain 21, the GROUP_END opcode.
             val body = intArrayOf(2, 21, 0, 0, f(200), f(80)) + IntArray(8) + intArrayOf(16)
             words.addAll((intArrayOf(15, 21 + row, 0, 200, 80, body.size) + body).toList())
-            words.addAll(listOf(17, 21 + row, 0, f(row * 80)))
+            words.addAll(rowDraw(21 + row, 0.0, row * 80.0).toList())
         }
         words.addAll(listOf(21, 6))
         for (backdrop in backdrops) words.addAll((identity + backdrop).toList())
@@ -130,7 +135,7 @@ class PlayerTest {
             override fun drawRenderNode(node: RenderNode) { drawn.add(node) }
         }
         fun clip(x: Int, y: Int, w: Int, h: Int) = intArrayOf(4, f(x), f(y), f(w), f(h)) + IntArray(8)
-        val rows = intArrayOf(20, 7, 17, 1, f(10), f(100), 21)
+        val rows = intArrayOf(20, 7) + rowDraw(1, 10.0, 100.0) + intArrayOf(21)
         fun draw(clips: List<IntArray>, expected: List<Int>, transform: IntArray = identity) {
             val ops = transform + clips.fold(intArrayOf()) { a, b -> a + b } + rows + IntArray(clips.size) { 6 }
             player.replay(outer, IntBuffer.wrap(ops), 0, ops.size)
@@ -181,6 +186,24 @@ class PlayerTest {
     private fun bitmap(page: RenderNode): Bitmap =
         HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap", RenderNode::class.java,
             Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(null, page, page.width, page.height) as Bitmap
+
+    @Test fun aDistantRowKeepsItsPixelRelativeToTheReplayOrigin() {
+        val shift = 1 shl 24
+        val stripe = RenderNode("row").apply {
+            setPosition(0, 0, 1, 1)
+            beginRecording().drawColor(Color.BLUE)
+            endRecording()
+        }
+        val page = RenderNode("page").apply { setPosition(0, 0, 4, 4) }
+        val player = Player(emptyMap()).apply { row = { stripe } }
+        val ops = rowDraw(1, shift + 1.0, -shift + 1.0)
+        player.replayAt(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size, shift.toFloat(), -shift.toFloat())
+        page.endRecording()
+        pixels(page) {
+            assertEquals(Color.BLUE, it.getPixel(1, 1))
+            assertEquals(Color.TRANSPARENT, it.getPixel(0, 1))
+        }
+    }
 
     private fun pixels(page: RenderNode, check: (Bitmap) -> Unit) {
         val hardware = bitmap(page)

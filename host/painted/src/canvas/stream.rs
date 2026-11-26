@@ -98,7 +98,7 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
         NATIVE => i + 16 + words(at(15)?),
         40 => i + 27, // SHADOW
         ROW_BEGIN => i + 6 + at(5)?,
-        ROW_DRAW => i + 4,
+        ROW_DRAW => i + 6,
         ROW_DRAW_THROUGH => i + 8,
         RING => i + 26,
         SLOT_SET | LAYER_SET | TRACKS => i + 3 + at(2)?,
@@ -1263,10 +1263,10 @@ component App
         let row = [ROW_BEGIN, 7, 0, 0, 0, 2, RESTORE, ROW_END];
         let mut with = vec![MATRIX, 0, 0, 0, 0, 0, 0];
         with.extend(row);
-        with.extend([ROW_DRAW, 7, 0, 0, TRACKS, 3, 1, 9]);
+        with.extend([ROW_DRAW, 7, 0, 0, 0, 0, TRACKS, 3, 1, 9]);
         let (d, defs) = drawing(&with).expect("known");
         assert!(defs);
-        assert_eq!(d, vec![MATRIX, 0, 0, 0, 0, 0, 0, ROW_DRAW, 7, 0, 0]);
+        assert_eq!(d, vec![MATRIX, 0, 0, 0, 0, 0, 0, ROW_DRAW, 7, 0, 0, 0, 0]);
         let (again, defs) = drawing(&d).expect("known");
         assert!(!defs);
         assert_eq!(again, d);
@@ -1321,7 +1321,7 @@ component App
             .into_iter()
             .chain(definitions.iter().copied())
             .collect();
-        let drawing = vec![ROW_DRAW, 4, 20, 20, LAYER_REF, 6];
+        let drawing = vec![ROW_DRAW, 4, 0, 0, 0, 0, LAYER_REF, 6];
         let mut latest = drawing.clone();
         assert!(carry_definitions(&older, &mut latest));
         definitions.extend(drawing);
@@ -1339,12 +1339,12 @@ component App
         ];
         for set in &sets {
             for boundary in [
-                vec![ROW_DRAW, 7, 0, 0],
+                vec![ROW_DRAW, 7, 0, 0, 0, 0],
                 vec![MATRIX, 1, 0, 0, 1, 0, 0],
                 vec![GROUP_END],
             ] {
                 let older = [row.as_slice(), &sets[0], &boundary, set, &[ROW_FREE, 7]].concat();
-                let mut latest = vec![ROW_DRAW, 10, 0, 0];
+                let mut latest = vec![ROW_DRAW, 10, 0, 0, 0, 0];
                 let before = latest.clone();
                 assert!(!carry_definitions(&older, &mut latest));
                 assert_eq!(latest, before, "a rejected carry is atomic");
@@ -1359,18 +1359,22 @@ component App
         // A shown row cannot defer its following sets.
         let mut shown = row;
         shown[2] = 1 << 31;
-        let older = [shown.as_slice(), &[ROW_DRAW, 7, 0, 0]].concat();
+        let older = [shown.as_slice(), &[ROW_DRAW, 7, 0, 0, 0, 0]].concat();
         assert!(carry_definitions(&older, &mut sets[0].clone()));
         // A retained non-set ends the first row's scope, but the next unshown row opens one.
         let older = [
             row.as_slice(),
             &[FONT, 1, 0, 400, 0],
             row.as_slice(),
-            &[ROW_DRAW, 7, 0, 0],
+            &[ROW_DRAW, 7, 0, 0, 0, 0],
         ]
         .concat();
         assert!(!carry_definitions(&older, &mut Vec::new()));
-        let older = [row.as_slice(), &[FONT, 1, 0, 400, 0, ROW_DRAW, 7, 0, 0]].concat();
+        let older = [
+            row.as_slice(),
+            &[FONT, 1, 0, 400, 0, ROW_DRAW, 7, 0, 0, 0, 0],
+        ]
+        .concat();
         assert!(carry_definitions(&older, &mut sets[0].clone()));
     }
 
@@ -1381,7 +1385,7 @@ component App
             vec![IMAGE_DEF, 1, 10, 10, 99],
             vec![IMAGE_DEF, 1, 10, 10, GLYPHS, 1, 0, 0, 0, 5],
         ] {
-            let mut latest = vec![ROW_DRAW, 2, 0, 0];
+            let mut latest = vec![ROW_DRAW, 2, 0, 0, 0, 0];
             let before = latest.clone();
             assert!(!carry_definitions(&older, &mut latest));
             assert_eq!(latest, before);
@@ -1406,11 +1410,11 @@ component App
 
         recorder.ops = matrix.to_vec();
         recorder.finish_stream().unwrap();
-        recorder.ops = vec![ROW_DRAW, 2, 0, 0];
+        recorder.ops = vec![ROW_DRAW, 2, 0, 0, 0, 0];
         recorder.finish_stream().unwrap();
         assert_eq!(
             FINISHED.with(|f| f.borrow_mut().take()),
-            Some(vec![ROW_DRAW, 2, 0, 0])
+            Some(vec![ROW_DRAW, 2, 0, 0, 0, 0])
         );
 
         recorder.ops = vec![IMAGE_DEF, 1, 10, 10];
@@ -1433,7 +1437,7 @@ component App
         ] {
             recorder.ops = older.clone();
             recorder.finish_stream().unwrap();
-            let latest = vec![ROW_DRAW, 2, 0, 0];
+            let latest = vec![ROW_DRAW, 2, 0, 0, 0, 0];
             recorder.ops = latest.clone();
             recorder.finish_stream().unwrap();
             assert!(waiting());
@@ -1444,7 +1448,7 @@ component App
         }
 
         let deferred = vec![
-            ROW_BEGIN, 7, 0, 10, 10, 1, ROW_END, SLOT_SET, 8, 2, SLOT, 1, ROW_DRAW, 7, 0, 0,
+            ROW_BEGIN, 7, 0, 10, 10, 1, ROW_END, SLOT_SET, 8, 2, SLOT, 1, ROW_DRAW, 7, 0, 0, 0, 0,
             SLOT_SET, 9, 2, SLOT, 2,
         ];
         recorder.ops = deferred.clone();

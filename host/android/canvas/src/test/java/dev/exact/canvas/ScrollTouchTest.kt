@@ -54,7 +54,8 @@ class ScrollTouchTest {
         /** What exact2 was told of the touch itself: down, then lifted. */
         val touching = ArrayList<Boolean>()
         @Implementation fun touching(on: Boolean) { touching.add(on) }
-        @Implementation fun scroll(dy: Float, seq: Int) {}
+        @JvmName("scroll")
+        @Implementation internal fun scroll(dy: Float, seq: Int) = Owner.DriverStep(dy, seq)
         @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
             logicalY = (logicalY + dy / scale).coerceIn(0f, 500f)
@@ -157,7 +158,7 @@ class ScrollTouchTest {
             field("feed").setInt(view, 7)
             field("feedCount").setInt(view, 1)
             (field("feedIds").get(view) as IntArray)[0] = 21
-            (field("feedTops").get(view) as FloatArray)[0] = 1220f
+            (field("feedTops").get(view) as DoubleArray)[0] = 1220.0
             val scrolling = field("scrolling").get(view) as Scrolling
             scrolling.told(intArrayOf(1f.toBits(), 7, 14, 0, 0, 0, 0, 0, 0, 800f.toBits()))
             natives.lazy = true
@@ -371,7 +372,7 @@ class ScrollTouchTest {
         view.scrollBy(-1f)
         assertEquals("pending placement", 2f, group.translationY, 0f)
         view.scrollBy(0.02f)
-        assertEquals("coalesced placement", 1f, group.translationY, 0f)
+        assertEquals("second pending placement", 1f, group.translationY, 0f)
 
         queue.add(Owner.Pub(1L, shift, true, 1, 1, statement(start - 1f / scale), null, null, null))
         view.publish()

@@ -1184,14 +1184,16 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 16 -> i += 1
                 17 -> {
                     row(b.get(i + 1))?.let { r ->
+                        val x = (rowPixel(b, i + 2) - shiftX).toFloat()
+                        val y = (rowPixel(b, i + 4) - shiftY).toFloat()
                         c.save()
-                        matrix.setTranslate(f(b, i + 2) - shiftX, f(b, i + 3) - shiftY)
+                        matrix.setTranslate(x, y)
                         c.setMatrix(matrix)
-                        placed(r, f(b, i + 2) - shiftX, f(b, i + 3) - shiftY, saves = 1)
+                        placed(r, x, y, saves = 1)
                         c.drawRenderNode(r)
                         c.restore()
                     }
-                    i += 4
+                    i += 6
                 }
                 55 -> {
                     // A kept row drawn through a matrix: a kept drawing scaled or turned. It takes no touch.

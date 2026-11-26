@@ -349,7 +349,7 @@ class SharedElementsTest {
         t.shared.finish()
         val slot = t.shared.node(1)
         assertTrue(slot.hasDisplayList())
-        t.shared.begin(IntBuffer.wrap(intArrayOf(17, 7, f(0f), f(60f))))
+        t.shared.begin(IntBuffer.wrap(rowDraw(7, 0.0, 60.0)))
         t.shared.placeRow(7, 0f, 60f)
         t.shared.finish()
         assertSame(slot, t.shared.node(1))

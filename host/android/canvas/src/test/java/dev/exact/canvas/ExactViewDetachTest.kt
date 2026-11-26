@@ -171,12 +171,12 @@ class ExactViewDetachTest {
      * replaces another, made on the worker. */
     @Test fun aWaitingRowMadeBetweenStreamsIsDrawnByItsGroup() {
         val f = { v: Float -> v.toRawBits() }
-        for ((top, previous) in listOf(-1f to 0, 10_000f to 5)) {
+        for ((top, previous) in listOf(-1.0 to 0, 10_000.0 to 5)) {
             val view = view()
             val worker = view.get<ExecutorService>("worker")
             try {
                 // The feed's group 7 places row 21, which the stream left waiting: it was out of view.
-                field("ops").set(view, IntBuffer.wrap(intArrayOf(20, 7, 17, 21, 0, f(top), 21)))
+                field("ops").set(view, IntBuffer.wrap(intArrayOf(20, 7) + rowDraw(21, 0.0, top) + intArrayOf(21)))
                 view.get<HashMap<Int, RenderNode>>("groups")[7] = RenderNode("group")
                 val row = intArrayOf(15, 21, previous, f(200f), f(80f), 1, 16)
                 val wait = Structure.Later(IntBuffer.wrap(row), 0, row.size).also { it.top = top }

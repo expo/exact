@@ -218,23 +218,21 @@ impl Painter {
     }
 
     pub(super) fn row_origin(&self, frame: Frame, offset: PaintOffset, ts: Transform) -> RowOrigin {
-        let ((x, y), pixels) = if let Some(scale) = self.grid() {
-            let k = f64::from(scale);
-            let x = device_pixel(frame.x, scale) - offset.0 * k;
-            let y = device_pixel(frame.y, scale) - offset.1 * k;
-            (
-                ((x / k) as f32, (y / k) as f32),
-                Some((
-                    x * f64::from(ts.sx) + f64::from(ts.tx) * k,
-                    y * f64::from(ts.sy) + f64::from(ts.ty) * k,
-                )),
-            )
-        } else {
-            (paint_origin((frame.x, frame.y), offset), None)
+        let Some(scale) = self.grid() else {
+            let (x, y) = paint_origin((frame.x, frame.y), offset);
+            return RowOrigin {
+                points: (ts.sx * x + ts.tx, ts.sy * y + ts.ty),
+                pixels: None,
+            };
         };
+        let k = f64::from(scale);
+        let x = device_pixel(frame.x, scale) - offset.0 * k;
+        let y = device_pixel(frame.y, scale) - offset.1 * k;
+        let px = round_device_pixel(x * f64::from(ts.sx) + f64::from(ts.tx) * k);
+        let py = round_device_pixel(y * f64::from(ts.sy) + f64::from(ts.ty) * k);
         RowOrigin {
-            points: (ts.sx * x + ts.tx, ts.sy * y + ts.ty),
-            pixels,
+            points: ((px / k) as f32, (py / k) as f32),
+            pixels: Some((px, py)),
         }
     }
 
@@ -253,7 +251,7 @@ impl Painter {
 
     pub(super) fn pixel_phase(&self, frame: Frame) -> Option<(f64, f64)> {
         let scale = self.grid()?;
-        let phase = |v: f32| f64::from(v * scale) - device_pixel(v, scale);
+        let phase = |v: f32| f64::from(v) * f64::from(scale) - device_pixel(v, scale);
         Some((phase(frame.x), phase(frame.y)))
     }
 

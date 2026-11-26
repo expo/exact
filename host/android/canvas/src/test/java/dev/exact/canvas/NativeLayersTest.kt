@@ -117,7 +117,7 @@ class NativeLayersTest {
     private val ref = intArrayOf(29, 7)
     private fun layer(id: Int, ops: IntArray) = (header + ops).let { intArrayOf(30, id, it.size) + it }
     private fun row(id: Int, ops: IntArray = ref) = intArrayOf(15, id, 0, f(64f), f(64f), ops.size + 1) + ops + intArrayOf(16)
-    private fun draw(id: Int) = intArrayOf(17, id, 0, 0)
+    private fun draw(id: Int) = rowDraw(id, 0.0, 0.0)
 
     @Test fun replacingALayersContentsReleasesItsNativeViewWhileTheRowRemains() {
         with(Fixture()) {

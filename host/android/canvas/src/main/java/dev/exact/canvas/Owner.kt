@@ -201,7 +201,9 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     // Driver travel and gesture samples the exact thread has not taken.
     private val lock = Any()
-    private var owedDy = 0f
+    /** The same batch the reader predicts and the owner drains. Only the reader adds to it before the drain. */
+    class DriverStep(var dy: Float, var seq: Int)
+    private var owedDriver: DriverStep? = null
     private var owedSeq = 0
     private var stepPosted = false
     private class Moved(val id: Int, val dx: Float, val dy: Float, val rev: Int)
@@ -272,7 +274,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
                 // What was published or scrolled for the reader before this one is not this one's.
                 queue.clear(); made.clear(); seq = 0
                 accessAgain = true
-                synchronized(lock) { owedDy = 0f; owedSeq = 0 }
+                synchronized(lock) { owedDriver = null; owedSeq = 0 }
                 if (!watching) {
                     watching = true
                     // A reply, a picture, or a request exact2 queued with no frame to follow it; or an acquired image.
@@ -390,7 +392,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     }
 
     /** A scroll of [dy] px, the main thread's [seq]th. */
-    fun scroll(dy: Float, seq: Int) {
+    fun scroll(dy: Float, seq: Int): DriverStep {
         val now = System.nanoTime()
         val dt = (now - lastScrollAt) / 1e9f
         lastScrollAt = now
@@ -402,11 +404,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             velocity = if (on) Math.signum(measured) * LEAD_PX else 0f
         }
         synchronized(lock) {
-            owedDy += dy; owedSeq = seq
-            if (stepPosted) return
-            stepPosted = true
+            val batch = owedDriver ?: DriverStep(0f, seq).also { owedDriver = it }
+            batch.dy += dy; batch.seq = seq; owedSeq = seq
+            if (!stepPosted) { stepPosted = true; handler.post(step) }
+            return batch
         }
-        handler.post(step)
     }
 
     /** The reader moved scroller [id] by ([dx], [dy]) px, knowing revision [rev] of it ([Scrolling]); the main
@@ -434,21 +436,22 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     }
 
     private val step = Runnable {
-        val dy: Float; val s: Int
+        val driver: DriverStep?; val s: Int
         val moves: List<Moved>
         synchronized(lock) {
-            dy = owedDy; s = owedSeq; owedDy = 0f; stepPosted = false
+            driver = owedDriver; s = owedSeq; owedDriver = null; stepPosted = false
             moves = owedMoves
             owedMoves = ArrayList()
         }
         android.os.Trace.beginSection("exact scroll")
         for (m in moves) Native.scrolled(m.id, m.dx, m.dy, m.rev)
-        if (moves.isEmpty() || dy != 0f) Native.scroll(dy)
+        driver?.let { Native.scroll(it.dy) }
         android.os.Trace.endSection()
         seq = s
         // A step of the reader's own moves whose frame would only move what it moved itself makes none, unless an
         // accessibility service is on (each frame tells it the scrollers' offsets). What follows a frame still runs.
-        if (running && !accessible && moves.isNotEmpty() && dy == 0f && Native.moved()) produced() else produce()
+        if (running && !accessible && moves.isNotEmpty() && driver == null && Native.moved()) produced()
+        else produce(ackDriver = driver != null)
         // Every third step: the window's lead mounts, off the main thread.
         if (prefetch && ++steps % 3 == 0) { handler.removeCallbacks(refiner); handler.post(refiner) }
         if (led) { handler.removeCallbacks(settle); handler.postDelayed(settle, SETTLE_MS) }
@@ -585,7 +588,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     fun <T> ask(f: () -> T): T = sync(publish = false, f = f)
 
     /** exact2's next stream, if it has one: copied, queued, and the main thread told. */
-    private fun produce(vsync: Boolean = false) {
+    private fun produce(vsync: Boolean = false, ackDriver: Boolean = false) {
         // This frame does what a queued `again` was for.
         handler.removeCallbacks(again)
         if (!running) { schedule(); return }
@@ -604,7 +607,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         // The bindings ask again first, so a frame's colours read the new answers; every turn, as a token only
         // native code reads moves no paint (one inputs call per binding).
         Formas.turned()
-        if (fresh == null && (told != null || fields != null || bars != null || access != null)) {
+        if (fresh == null && (ackDriver || told != null || fields != null || bars != null || access != null)) {
             queue.add(Pub(timerReports.publish(), null, true, seq, 0, told, fields, bars, access))
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }

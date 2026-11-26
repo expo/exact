@@ -202,6 +202,7 @@ impl RowPin {
 #[derive(Default)]
 struct Capture {
     clip: Option<Rect4>,
+    viewport_origin: (f32, f32),
     refused: bool,
     split_sections: bool,
     may_have_hit_slop: bool,
@@ -989,6 +990,13 @@ impl Painter {
         }
     }
 
+    pub(super) fn row_viewport_origin(&self) -> (f32, f32) {
+        self.rows
+            .recording
+            .as_ref()
+            .map_or((0., 0.), |row| row.viewport_origin)
+    }
+
     /// Whether a kept row draws what it would record now; `pictures`: its
     /// pictures included.
     fn row_valid(
@@ -1003,6 +1011,7 @@ impl Painter {
         let drawn = self.drawn(node);
         let layout_origin = (node.frame.x, node.frame.y);
         let old_origin = row.layout_origin;
+        let on_grid = row.phase.is_some();
         !row.stale
             && row.scale == scale
             && row.size == (drawn.width, drawn.height)
@@ -1029,7 +1038,7 @@ impl Painter {
                     kernel.node_by_key(saved.node).is_some_and(|n| {
                         let (g, f) = (n.frame, saved.frame);
                         let same = |a: f32, b: f32| {
-                            if row.phase.is_some() {
+                            if on_grid {
                                 a == b
                             } else {
                                 (a - b).abs() < 0.5
@@ -1044,6 +1053,13 @@ impl Painter {
                                 grid::relative_pixel_box(g, layout_origin, scale)
                                     == grid::relative_pixel_box(f, old_origin, scale)
                             })
+                            && (!on_grid
+                                || (saved.grid.is_some() && n.node_type != NodeType::Text)
+                                || grid::paint_origin((g.x, g.y), self.drawn_offset(layout_origin))
+                                    == grid::paint_origin(
+                                        (f.x, f.y),
+                                        self.drawn_offset(old_origin),
+                                    ))
                             && kernel.resolved_padding(saved.node).unwrap_or_default()
                                 == saved.padding
                     })
@@ -1206,10 +1222,10 @@ impl Painter {
         self.rows.next += 1;
         let start = walk.boxes.len();
         let unsupported = std::mem::replace(&mut self.damage.unsupported, false);
-        // Keep untransformed rows' hits in recording coordinates so replay
-        // preserves fractional edges. Transformed rows walk in viewport
-        // coordinates, where software warps clip.
-        let local = self.backend.row_local() && ts == Transform::identity();
+        // Grid translations belong to placement, so scroll never enters the recording.
+        let local = self.backend.row_local()
+            && (ts == Transform::identity()
+                || (placement.pixels.is_some() && !grid::changes_axes(ts)));
         let (walk_offset, walk_ts, content) = if local {
             (
                 self.drawn_offset((node.frame.x, node.frame.y)),
@@ -1222,6 +1238,10 @@ impl Painter {
         self.backend.row_begin(self.rows.next, content, previous);
         self.rows.recording = Some(Capture {
             clip: clip_rect,
+            viewport_origin: placement
+                .pixels
+                .filter(|_| local)
+                .map_or((0., 0.), |(x, y)| (-x as f32, -y as f32)),
             split_sections,
             ..Capture::default()
         });

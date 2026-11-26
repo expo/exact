@@ -609,15 +609,41 @@ component App
         assert!(!hold.quick() && !hold.take_request_skip() && hold.owed());
     }
 
+    fn row_top(ops: &[u32], at: usize) -> f64 {
+        f64::from_bits(u64::from(ops[at + 4]) | (u64::from(ops[at + 5]) << 32))
+    }
+
+    fn row_ink_y(ops: &[u32], mut at: usize, end: usize, op: u32) -> Option<f32> {
+        use super::super::{stream, GLYPHS, MATRIX};
+
+        let (mut sy, mut ty) = (1., 0.);
+        while at < end {
+            let float = |word| f32::from_bits(ops[at + word]);
+            match ops[at] {
+                MATRIX => (sy, ty) = (float(4), float(6)),
+                draw if draw == op => {
+                    return Some(if draw == GLYPHS {
+                        ty
+                    } else {
+                        float(3) * sy + ty
+                    })
+                }
+                _ => {}
+            }
+            at = stream::end(ops, at).unwrap();
+        }
+        None
+    }
+
     #[cfg(not(windows))]
-    fn recorded_row_top() -> f32 {
+    fn recorded_row_top() -> f64 {
         use super::super::{stream, FINISHED, ROW_DRAW};
         let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
         let mut at = 0;
         while ops[at] != ROW_DRAW {
             at = stream::end(&ops, at).unwrap();
         }
-        f32::from_bits(ops[at + 3])
+        row_top(&ops, at)
     }
 
     #[cfg(not(windows))]
@@ -700,42 +726,81 @@ component App
         assert_eq!(recorded_row_top() - top, -9.);
     }
 
-    #[test]
-    fn a_distant_row_paints_the_same_pixel_shift_as_a_move_only_frame() {
-        use super::super::{stream, Recorder, FINISHED, ROW_DRAW, SHIFT};
+    fn check_distant_row_shifts(scale: f32, translation: &str, start: f32, shifts: &[f32]) {
+        use super::super::{
+            stream, Recorder, FINISHED, ROW_BEGIN, ROW_DRAW, ROW_PAD, RRECT, SHIFT,
+        };
 
-        let scale = 2.625;
         let mut p = boot_at(
-            r#"component App
+            &format!(
+                r#"component App
   view
-    scroll width=200 height=100 scrollTop=4999997.5 testId="port"
+    scroll width=200 height=100 scrollTop={start} testId="port"{translation}
       column
         box height=30
-        box height=5000100 background-color="red" testId="row"
-"#,
+        box height=6400200 background-color="red" testId="row"
+"#
+            ),
             scale,
         );
         let key = p.host().kernel().find_by_test_id("row")[0];
         let port = id(&p, "port");
-        let row_top = |p: &Presenter<()>| {
-            let row = p.brush.retained_row_id(key).unwrap();
+        let row = |p: &Presenter<()>| {
+            let id = p.brush.retained_row_id(key).unwrap();
             let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
-            let mut at = 0;
-            while ops[at] != ROW_DRAW || ops[at + 1] != row {
-                at = stream::end(&ops, at).unwrap();
+            let (mut at, mut ink) = (0, None);
+            while at < ops.len() {
+                let end = stream::end(&ops, at).unwrap();
+                if ops[at] == ROW_BEGIN && ops[at + 1] == id {
+                    ink = row_ink_y(&ops, at + 6, end, RRECT);
+                }
+                if ops[at] == ROW_DRAW && ops[at + 1] == id {
+                    // Undo the recording's pad to recover the snapped row origin.
+                    return (row_top(&ops, at) + f64::from(ROW_PAD * scale), ink.unwrap());
+                }
+                at = end;
             }
-            f32::from_bits(ops[at + 3])
+            panic!("row {id} was not drawn");
         };
-        let top = row_top(&p);
-        let painted = Painted::capture(&p).unwrap();
-        let target = (0., 4_999_998.5);
-        assert_eq!(p.scroll_to(port, target), Some(target));
-        let shift = painted.shift(&mut p, None, scale, false).unwrap();
-        assert_eq!(shift, [SHIFT, 1, port, 0, (-3_f32).to_bits()]);
+        let (mut top, mut ink) = row(&p);
+        for (i, &delta) in shifts.iter().enumerate() {
+            let painted = Painted::capture(&p).unwrap();
+            let target = (0., start + (i + 1) as f32);
+            assert_eq!(p.scroll_to(port, target), Some(target));
+            let shift = painted.shift(&mut p, None, scale, false).unwrap();
+            assert_eq!(shift, [SHIFT, 1, port, 0, delta.to_bits()]);
+            p.reader_replaced(Box::new(Recorder::new()));
+            p.frame();
+            let (fresh_top, fresh_ink) = row(&p);
+            assert_eq!(
+                fresh_top.fract(),
+                0.,
+                "{scale}× {translation} at {target:?}"
+            );
+            assert_eq!(
+                fresh_top - top,
+                f64::from(delta),
+                "{scale}× {translation} at {target:?}"
+            );
+            assert_eq!(fresh_ink, ink, "{scale}× {translation} at {target:?}");
+            (top, ink) = (fresh_top, fresh_ink);
+        }
+    }
 
-        p.reader_replaced(Box::new(Recorder::new()));
-        p.frame();
-        assert_eq!(row_top(&p) - top, -3.);
+    #[test]
+    fn a_distant_row_paints_the_same_pixel_shift_as_a_move_only_frame() {
+        check_distant_row_shifts(2.625, "", 6_400_000., &[-2.]);
+        check_distant_row_shifts(2.59375, "", 4_999_996.5, &[-3., -2.]);
+        check_distant_row_shifts(2.65625, "", 4_000_000., &[-3.]);
+        check_distant_row_shifts(3., "", 6_400_000., &[-4.]);
+    }
+
+    #[test]
+    fn a_translated_distant_row_paints_the_same_pixel_shift_as_a_move_only_frame() {
+        for translation in [r#" translate="0px 4px""#, r#" translate="0px 0.25px""#] {
+            check_distant_row_shifts(2.625, translation, 4_999_996.5, &[-2., -3., -3.]);
+            check_distant_row_shifts(3., translation, 4_999_996.5, &[-2., -4., -2.]);
+        }
     }
 
     #[test]
@@ -824,8 +889,8 @@ component App
                     stream::end(&ops, at).unwrap()
                 }
                 ROW_DRAW => {
-                    tops.push(f32::from_bits(ops[at + 3]));
-                    at + 4
+                    tops.push(row_top(&ops, at));
+                    at + 6
                 }
                 _ => stream::end(&ops, at).unwrap(),
             };
@@ -835,7 +900,11 @@ component App
             "{tops:?} {heights:?}"
         );
         for i in 1..tops.len() {
-            assert_eq!(tops[i] - tops[i - 1], heights[i - 1], "row {i}: {tops:?}");
+            assert_eq!(
+                tops[i] - tops[i - 1],
+                f64::from(heights[i - 1]),
+                "row {i}: {tops:?}"
+            );
         }
     }
 
@@ -1032,6 +1101,73 @@ component App
     }
 
     #[test]
+    fn moving_a_distant_row_records_its_unsnapped_descendants_again() {
+        use super::super::{stream, FINISHED, GLYPHS, ROW_BEGIN, RRECT};
+
+        for (scale, from, to, shift) in [
+            (2.625, 4_999_996., 5_000_004., 1.),
+            (2.625, 4_000_000., 4_000_003.25, -0.46875),
+            (2.625, 8_000_000., 8_000_006.5, -0.9375),
+            (2.625, 16_000_000., 16_000_013., -1.875),
+            (3., 4_000_000., 4_000_000.5, -0.5),
+            (3., 8_000_000., 8_000_001., -1.),
+        ] {
+            for (child, op) in [
+                (r#"text width=40 height=16 "A""#, GLYPHS),
+                (
+                    r#"box width=40 height=8 scale=2 transform-origin="0 0" background-color="red""#,
+                    RRECT,
+                ),
+            ] {
+                let mut p = boot_at(
+                    &format!(
+                        r#"component App
+  state lead = {from}
+  action move
+    lead = {to}
+  view
+    column
+      scroll width=200 height=100 scrollTop={from}
+        column
+          box height=lead
+          column width=200 height=16 testId="row"
+            {child}
+          box height=200
+      button width=20 height=20 press=move testId="move"
+"#
+                    ),
+                    scale,
+                );
+                let key = p.host().kernel().find_by_test_id("row")[0];
+                let ink_origin = |p: &Presenter<()>| {
+                    let row = p.brush.retained_row_id(key).unwrap();
+                    let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+                    let mut at = 0;
+                    while at < ops.len() {
+                        let end = stream::end(&ops, at).unwrap();
+                        if ops[at] == ROW_BEGIN && ops[at + 1] == row {
+                            return row_ink_y(&ops, at + 6, end, op);
+                        }
+                        at = end;
+                    }
+                    None
+                };
+                let before = ink_origin(&p).unwrap();
+                let button = id(&p, "move");
+                p.host_mut()
+                    .dispatch_at(button, exact_runner::Event::Press, 0.);
+                assert_eq!(p.after_commit(), None);
+                p.frame();
+                let after = ink_origin(&p);
+                assert!(
+                    after.is_some_and(|after| (after - before - shift).abs() < 0.0001),
+                    "{scale}× {from} -> {to}: {child}, {before} -> {after:?}, expected {shift} px"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_scaled_sticky_header_stays_on_its_stick_line() {
         use super::super::{stream, FINISHED, MATRIX, ROW_BEGIN, ROW_DRAW, RRECT};
 
@@ -1068,7 +1204,7 @@ component App
                     }
                     ROW_DRAW => {
                         if let Some(top) = rows.get(&ops[at + 1]) {
-                            return Some(top + float(3));
+                            return Some(top + row_top(ops, at) as f32);
                         }
                     }
                     _ => {}
@@ -1128,7 +1264,7 @@ component App
         let mut replayed = false;
         while at < second.len() {
             if second[at] == ROW_DRAW && second[at + 1] == recorded[1] {
-                assert_eq!(f32::from_bits(second[at + 3]) + ROW_PAD * 2.625, 3.);
+                assert_eq!(row_top(&second, at) + f64::from(ROW_PAD * 2.625), 3.);
                 replayed = true;
             }
             at = stream::end(&second, at).unwrap();
@@ -1167,7 +1303,7 @@ component App
             let mut tops = Vec::new();
             while at < ops.len() {
                 if ops[at] == ROW_DRAW {
-                    tops.push(f32::from_bits(ops[at + 3]) + ROW_PAD * scale);
+                    tops.push((row_top(&ops, at) + f64::from(ROW_PAD * scale)) as f32);
                 }
                 at = stream::end(&ops, at).unwrap();
             }
@@ -1240,8 +1376,8 @@ component App
                     stream::end(&ops, at).unwrap()
                 }
                 ROW_DRAW => {
-                    tops.push(f32::from_bits(ops[at + 3]) + ROW_PAD * 2.625);
-                    at + 4
+                    tops.push(row_top(&ops, at) + f64::from(ROW_PAD * 2.625));
+                    at + 6
                 }
                 _ => stream::end(&ops, at).unwrap(),
             };

@@ -116,7 +116,7 @@ const ROW_BEGIN: u32 = 15;
 /// left of or above its origin ([`ROW_PAD`]).
 const UNCLIPPED: u32 = 1 << 30;
 const ROW_END: u32 = 16;
-/// Draw a kept row: id, x, y (device pixels).
+/// Draw a kept row: id, x and y in device pixels (two words per f64, low first).
 const ROW_DRAW: u32 = 17;
 /// Draw a kept row through a matrix: id, then a b c d e f as `MATRIX`'s,
 /// mapping the row's node into the device. A kept drawing scaled or turned.
@@ -1027,25 +1027,27 @@ impl Backend for Recorder {
 
     fn row_draw(&mut self, id: u32, origin: (f32, f32), bounds: Rect4) {
         let s = self.scale;
-        let pixels = (f64::from(origin.0 * s), f64::from(origin.1 * s));
-        self.row_draw_pixels(id, origin, pixels, bounds);
+        let pixels = |v| {
+            let v = f64::from(v * s);
+            let r = v.round();
+            if (v - r).abs() < 1.0 / 64.0 {
+                r
+            } else {
+                v
+            }
+        };
+        self.row_draw_pixels(id, origin, (pixels(origin.0), pixels(origin.1)), bounds);
     }
 
     fn row_draw_pixels(&mut self, id: u32, _: (f32, f32), pixels: (f64, f64), bounds: Rect4) {
         self.row_shown(id, bounds);
         self.ops.extend([ROW_DRAW, id]);
-        // The row's origin on a whole pixel, where its frame and the scroll
-        // have it but for a float's last bits: the reader draws a kept row
-        // there, and its text again from Skia's cache only a whole number of
-        // pixels from where it was drawn. One a transform put between pixels
-        // (a centred dialog, a route in flight) stays there with its box.
-        let whole = |v: f64| match v.round() {
-            r if (v - r).abs() < 1.0 / 64.0 => r,
-            _ => v,
-        };
+        // The recording pad can be a fraction of a device pixel even when the row is snapped.
         let pad = f64::from(ROW_PAD * self.scale);
-        self.f((whole(pixels.0) - pad) as f32);
-        self.f((whole(pixels.1) - pad) as f32);
+        for v in [pixels.0 - pad, pixels.1 - pad] {
+            let bits = v.to_bits();
+            self.ops.extend([bits as u32, (bits >> 32) as u32]);
+        }
     }
 
     fn row_draw_through(&mut self, id: u32, ts: Transform, bounds: Rect4) {

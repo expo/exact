@@ -109,9 +109,9 @@ internal class Bounds {
                 16 -> i += 1
                 17 -> {
                     val node = row(b.get(i + 1)) ?: return false
-                    val x = f(b, i + 2); val y = f(b, i + 3)
-                    add(out, x, y, x + node.width, y + node.height, absolute = true)
-                    i += 4
+                    val x = rowPixel(b, i + 2); val y = rowPixel(b, i + 4)
+                    add(out, x.toFloat(), y.toFloat(), (x + node.width).toFloat(), (y + node.height).toFloat(), absolute = true)
+                    i += 6
                 }
                 55 -> {
                     val node = row(b.get(i + 1)) ?: return false

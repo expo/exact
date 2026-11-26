@@ -655,7 +655,7 @@ internal class Scrolling(private val view: ExactView) {
         }
     }
 
-    private fun predictedPixel(s: Scroller, sideways: Boolean): Float {
+    private fun predictedPoints(s: Scroller, sideways: Boolean): Float {
         var points = if (sideways) s.pointsX else s.pointsY
         val max = if (sideways) s.maxPointsX else s.maxPointsY
         // Apply each pending sample in the same order as CanvasHost.scrolled and reader_sample_at.
@@ -665,8 +665,10 @@ internal class Scrolling(private val view: ExactView) {
                 points = (points + delta / scale).coerceIn(0f, max)
             }
         }
-        return paintedOffset(points * scale)
+        return points
     }
+
+    private fun predictedPixel(s: Scroller, sideways: Boolean): Float = paintedOffset(predictedPoints(s, sideways) * scale)
 
     // Match the painter's 1/64-pixel quantization and half-up rounding (paint/grid.rs).
     private fun paintedOffset(pixels: Float): Float {
@@ -682,10 +684,22 @@ internal class Scrolling(private val view: ExactView) {
     private data class DriverFeed(val id: Int, val points: Float, val drawn: Float, val max: Float)
     private var driverFeed: DriverFeed? = null
 
-    /** The owner's driver combines pending deltas in pixels before applying them in points. */
-    fun driverShift(id: Int, pending: Float): Float? = driverFeed?.takeIf { it.id == id }?.let {
-        val points = (it.points + pending / scale).coerceIn(0f, it.max)
-        it.drawn - paintedOffset(points * scale)
+    /** Touch movement precedes a driver's takeover. The owner adds and clamps once per driver step. */
+    fun driverShift(id: Int, pending: Iterable<Owner.DriverStep>): Float? {
+        val touch = scrollers[id]?.takeIf { it.node && it.told }
+        var points: Float
+        val drawn: Float
+        val max: Float
+        if (touch != null) {
+            points = predictedPoints(touch, false)
+            drawn = touch.drawnY; max = touch.maxPointsY
+        } else {
+            val base = driverFeed?.takeIf { it.id == id } ?: return null
+            points = base.points
+            drawn = base.drawn; max = base.max
+        }
+        for (step in pending) points = (points + step.dy / scale).coerceIn(0f, max)
+        return drawn - paintedOffset(points * scale)
     }
 
     /** A stream that includes the reader's moves up to number [seq] was taken. */

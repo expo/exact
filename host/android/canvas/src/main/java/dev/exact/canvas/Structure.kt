@@ -4,6 +4,10 @@ import android.graphics.fonts.Font
 import java.io.File
 import java.nio.IntBuffer
 
+/** ROW_DRAW stores two device-pixel doubles, low word first. */
+internal fun rowPixel(b: IntBuffer, at: Int): Double =
+    Double.fromBits((b.get(at + 1).toLong() shl 32) or (b.get(at).toLong() and 0xffff_ffffL))
+
 /** Where FONT_AXES (41: key index weight n (tag value)×n len path) at [i] ends. */
 internal fun fontAxesEnd(b: IntBuffer, i: Int): Int { val p = i + 5 + 2 * b.get(i + 4); return p + 1 + (b.get(p) + 3) / 4 }
 
@@ -48,7 +52,7 @@ internal class Structure {
         var end = sets
         var made = false
         /** Its top where the last stream drew it, in the feed's group (NaN: no stream drew it yet). */
-        var top = Float.NaN
+        var top = Double.NaN
         /** Tracks and clocks (ops 31, 33) that came for its layers while it waited, in order. */
         val after = ArrayList<IntArray>(0)
     }
@@ -92,7 +96,7 @@ internal class Structure {
     fun end(b: IntBuffer, i: Int): Int = when (b.get(i)) {
         1 -> i + 7; 2 -> i + 14; 3 -> skipPath(b, i + 3); 4 -> i + 13; 5 -> skipPath(b, i + 2); 6 -> i + 1; 7 -> i + 2
         8 -> i + 6; 9 -> i + 6 + 3 * b.get(i + 5); 10 -> i + 5 + (b.get(i + 4) + 3) / 4; 11 -> i + 4; 12 -> i + 2
-        13 -> skipPath(b, i + 6); 14 -> i + 18; 15 -> i + 6 + b.get(i + 5); 16 -> i + 1; 17 -> i + 4; 18 -> i + 2
+        13 -> skipPath(b, i + 6); 14 -> i + 18; 15 -> i + 6 + b.get(i + 5); 16 -> i + 1; 17 -> i + 6; 18 -> i + 2
         19 -> i + 26; 20 -> i + 2; 21 -> i + 1; 23 -> i + 2; 24, 30, 31 -> i + 3 + b.get(i + 2); 25 -> i + 3 + b.get(i + 2); 43 -> i + 2 + b.get(i + 1); 44 -> i + 2
         26 -> i + 3 + (b.get(i + 2) + 3) / 4; 27 -> i + 14; 42 -> i + 14 + 2 * b.get(i + 1); 28 -> i + 16 + (b.get(i + 15) + 3) / 4; 29 -> i + 2
         32 -> i + 2; 33 -> i + 3; 40 -> i + 27; 41 -> fontAxesEnd(b, i)
@@ -135,7 +139,7 @@ internal class Structure {
             when (op) {
                 // Definitions: the reader's kept things, not this drawing.
                 10, 11, 12, 15, 18, 24, 26, 30, 31, 32, 33, 41 -> {}
-                17 -> { put(17); put(token(b.get(i + 1))); put(b.get(i + 2)); put(b.get(i + 3)) }
+                17 -> { put(17); put(token(b.get(i + 1))); copy(b, i + 2, j) }
                 20 -> {
                     put(20); put(b.get(i + 1))
                     group = b.get(i + 1); groupFrom = j; outer = size

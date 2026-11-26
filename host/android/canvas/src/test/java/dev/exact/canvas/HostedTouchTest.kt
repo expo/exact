@@ -412,7 +412,7 @@ class HostedTouchTest {
         player.replay(canvas, java.nio.IntBuffer.wrap(intArrayOf(29, 11)), 0, 2, into = row)
         fun paint(x: Float, y: Float) {
             val port = intArrayOf(4, 0, 0, 300f.toBits(), 550f.toBits()) + IntArray(8)
-            val ops = port + intArrayOf(20, 9, 17, 22, x.toBits(), y.toBits(), 21, 6)
+            val ops = port + intArrayOf(20, 9) + rowDraw(22, x.toDouble(), y.toDouble()) + intArrayOf(21, 6)
             player.replay(canvas, java.nio.IntBuffer.wrap(ops), 0, ops.size)
         }
         paint(0f, 0f)
@@ -446,7 +446,7 @@ class HostedTouchTest {
             intArrayOf(28, 7, 2, 10f.toBits(), 20f.toBits(), 200f.toBits(), 300f.toBits()) + IntArray(9)
         player.replayAt(canvas, java.nio.IntBuffer.wrap(native), 0, native.size, 5f, 6f, layer)
         player.replay(canvas, java.nio.IntBuffer.wrap(intArrayOf(29, 11)), 0, 2, into = row)
-        val rows = intArrayOf(17, 22, 7f.toBits(), 8f.toBits())
+        val rows = rowDraw(22, 7.0, 8.0)
         player.replay(canvas, java.nio.IntBuffer.wrap(rows), 0, rows.size)
         // Content is at (5,14) within the layer, which sits at (5,6) within the doubled row.
         fun screen(x: Float, y: Float): Pair<Float, Float> = if (rotation)
