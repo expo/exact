@@ -77,16 +77,9 @@ struct RetainedList {
 struct Refusal {
     style: exact_kernel::StyleProps,
     allocation: Rect4,
-    reading: Reading,
-    columns: Vec<f32>,
-}
-
-/// What a trial is judged by beside the root's style and allocation, read before it is made and kept apart from the
-/// `Split` it applies, which a shown split compares to know whether to lay out again: the viewport the root's viewport
-/// lengths resolve against, which the split's own layout cannot move.
-#[derive(Clone, PartialEq)]
-struct Reading {
+    /// The viewport the root's viewport lengths resolve against, which the split's own layout cannot move
     viewport: (f32, f32),
+    columns: Vec<f32>,
 }
 
 #[derive(Default)]
@@ -239,7 +232,9 @@ impl<D: DataSource> Presenter<D> {
         );
     }
 
-    fn read_split(&mut self) -> Option<(Split, Reading)> {
+    /// The split the stack asks for, and the viewport its trial is judged against beside it, outside the `Split` a
+    /// shown split compares to know whether to lay out again.
+    fn read_split(&mut self) -> Option<(Split, (f32, f32))> {
         self.validate_split_rows();
         let stack = self.host.shown_stack()?.to_vec();
         let root = *stack.first()?;
@@ -292,16 +287,14 @@ impl<D: DataSource> Presenter<D> {
             .min(rect.2 - DIVIDER - MIN_DETAIL);
         // Read the page's environment, not the root's local one, since viewport lengths resolve against the page's
         let env = kernel.arena().env();
-        let reading = Reading {
-            // The basis `vw` and `vh` resolve against (`ViewportUnit::basis`): the window's, where the host sets it
-            viewport: env
-                .screen
-                .unwrap_or((env.viewport_width, env.viewport_height)),
-        };
+        // The basis `vw` and `vh` resolve against (`ViewportUnit::basis`): the window's, where the host sets it
+        let viewport = env
+            .screen
+            .unwrap_or((env.viewport_width, env.viewport_height));
         if (self.host.navigation.split.refused.get(&key)).is_some_and(|r| {
             kernel.node(root).is_some_and(|n| r.style == *n.style)
                 && r.allocation == rect
-                && r.reading == reading
+                && r.viewport == viewport
                 && r.columns.contains(&list_width)
         }) {
             return None;
@@ -383,7 +376,7 @@ impl<D: DataSource> Presenter<D> {
                 routes,
                 chevrons,
             },
-            reading,
+            viewport,
         ))
     }
 
@@ -471,14 +464,14 @@ impl<D: DataSource> Presenter<D> {
     }
 
     fn apply_split(&mut self) -> Result<(), String> {
-        let (next, reading) = self.read_split().unzip();
-        self.apply_split_to(next, reading)
+        let (next, viewport) = self.read_split().unzip();
+        self.apply_split_to(next, viewport)
     }
 
     fn apply_split_to(
         &mut self,
         next: Option<Split>,
-        reading: Option<Reading>,
+        viewport: Option<(f32, f32)>,
     ) -> Result<(), String> {
         let old = self.host.navigation.split.active.clone();
         let mut changed = old != next;
@@ -619,15 +612,15 @@ impl<D: DataSource> Presenter<D> {
             };
             let content = root.frame.x + root.frame.width - cover - s.rect.0;
             if (content - s.list_width).abs() > 0.5 {
-                // Kept against the root's style as the trial's layout left it, and what it read before it
+                // Kept against the root's style as the trial's layout left it, and the viewport read before it
                 let (key, style) = (root.key, root.style.clone());
                 let refused = &mut self.host.navigation.split.refused;
-                if let Some(reading) = reading {
+                if let Some(viewport) = viewport {
                     match refused.get_mut(&key) {
                         Some(r)
                             if r.style == style
                                 && r.allocation == s.rect
-                                && r.reading == reading =>
+                                && r.viewport == viewport =>
                         {
                             if !r.columns.contains(&s.list_width) {
                                 r.columns.push(s.list_width);
@@ -640,7 +633,7 @@ impl<D: DataSource> Presenter<D> {
                                 Refusal {
                                     style,
                                     allocation: s.rect,
-                                    reading,
+                                    viewport,
                                     columns,
                                 },
                             );
