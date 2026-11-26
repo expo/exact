@@ -92,6 +92,14 @@ extension NavigationHost {
             coversChanged()
             presenter.owners.publish()
         }
+        split.columnsWillChange = { [weak self] in self?.focusAcrossColumns = self?.presenter.focusedNode }
+        split.columnsDidChange = { [weak self] in
+            guard let self, let node = focusAcrossColumns else { return }
+            focusAcrossColumns = nil
+            guard presenter.views[node.id] === node, presenter.focusedNode !== node,
+                  !isInactiveRoute(containing: node) else { return }
+            presenter.focusNode(node)
+        }
         split.willPush = { [weak self] route, beneath in self?.prepareRoutePush(route, beneath: beneath) }
         split.baseChanged = { [weak self, weak split] base in
             guard let self, let split else { return }
@@ -140,6 +148,7 @@ extension NavigationHost {
         let relocated = location != nil && split.topLocation != nil && location != split.topLocation && stack.last === split.detailRoutes.last
         guard split.show(stack, animated: animated, relocated: relocated) else { return split.moving }
         split.topLocation = location
+        else if !split.controller.isCollapsed, !split.moving { split.left = nil }
         if changingRoutes { lastTransition = "idle" }
         // A press that opened a detail may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS)
         if let arrived = split.detailRoutes.last, arrived !== top { presenter.pressShows(arrived.node) }
@@ -232,6 +241,13 @@ extension NavigationHost {
             projectionHeld = true
         }
         runHeldSync()
+    }
+
+    /// The selected visit the expanded split gave to its inspector.
+    var inspectorKey: String? {
+        guard let split, !split.controller.isCollapsed, let route = split.inspecting,
+              route.key == selectedKey else { return nil }
+        return route.key
     }
 
     /// The sheet an expanded split can show in its inspector column.

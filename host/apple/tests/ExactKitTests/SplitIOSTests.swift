@@ -1320,5 +1320,37 @@ extension SplitIOSTests {
         XCTAssertTrue(split.controller.isShowing(.inspector), "the column shows again")
         XCTAssertEqual(reported, 0, "the superseded close is no person's")
     }
+
+    func testTheAgentsBackUnderTheInspectorEndsWhereUIKitsBackDoes() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit animates a pop only in a window a scene holds") }
+        let (session, agent, split) = try inspectedNotes()
+        let book = try XCTUnwrap(split.detail.viewControllers.first)
+        XCTAssertNil(agent.back()["error"])
+        until("the inspector and notes close") { split.detail.topViewController === book && split.inspecting == nil }
+    }
+
+    /// The expanded split at the Duo's open width: the book in the detail,
+    /// its notes over it, and the notes' info in the inspector's column.
+    @available(iOS 26.0, *)
+    private func inspectedNotes() throws -> (ExactSession, Agent, SplitIOS) {
+        let session = try boot(size: CGSize(width: 951, height: 669))
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("a split") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        split.controller.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is in the detail") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "notes-a").id)])["error"])
+        until("the notes are pushed") { split.shown.count == 3 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "notes-info-a").id)])["error"])
+        until("the notes' info is in the inspector's column") { split.inspecting != nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight() }
+        return (session, agent, split)
+    }
+
+    /// The inspector's column starts to slide away while the detail's pop is
+    /// still under way, not after it.
+    @available(iOS 26.0, *)
 }
 #endif

@@ -139,6 +139,8 @@ component App
             text "Notes on the book"
             button press=swap testId=`swap-${e.params.id}`
               text "Swap"
+            button press=openInfo(e.params.id) testId=`notes-info-${e.params.id}`
+              text "Info"
             button id="back" press=back testId=`back-notes-${e.params.id}`
               text "Back"
         if e.name == "info"
