@@ -61,7 +61,8 @@ impl Em<'_> {
                         };
                         // Logical text has its own item and match bindings outside the DOM mount.
                         let f = self.binding_value(i, "{}", &b, scope, false)?;
-                        let value = code::called_expression(self.status_read(i, "{}", &b, f));
+                        let value =
+                            code::called_expression(self.status_read(i, "{}", &b, scope, f));
                         props.push(format!("{name}:{value}"));
                     }
                     let children = self.logical_children(self.sites.of_node(i), scope)?;
@@ -76,24 +77,59 @@ impl Em<'_> {
                         &mut self.uses,
                     )?;
                     let depth = scope.frames.len();
+                    let arm_depth = self.mount_templates.scope_depth + 1;
+                    let (item_decl, index_decl, bound_decl) = if scope.capture {
+                        (
+                            code::binder_decl(arm_depth, "i", ""),
+                            code::binder_decl(arm_depth, "x", ""),
+                            code::binder_decl(arm_depth, "b", ""),
+                        )
+                    } else {
+                        (
+                            format!("i{depth}"),
+                            format!("x{depth}"),
+                            format!("b{depth}"),
+                        )
+                    };
                     let arms: Vec<_> = row.arms.iter().map(|a| a.0).collect();
                     let mut bodies = Vec::new();
                     for (k, arm) in arms.iter().enumerate() {
                         let mut inner = scope.clone();
                         inner.frames.push(match row.kind {
                             RegionKind::Each => Frame {
-                                item: Some(format!("i{depth}")),
-                                index: Some(format!("x{depth}")),
+                                item: Some(if scope.capture {
+                                    "i".into()
+                                } else {
+                                    item_decl.clone()
+                                }),
+                                index: Some(if scope.capture {
+                                    "x".into()
+                                } else {
+                                    index_decl.clone()
+                                }),
                                 bound: None,
+                                depth: if scope.capture { arm_depth } else { 0 },
                             },
                             RegionKind::Match if k == 0 => Frame {
-                                bound: Some(format!("b{depth}")),
+                                bound: Some(if scope.capture {
+                                    "b".into()
+                                } else {
+                                    bound_decl.clone()
+                                }),
+                                depth: if scope.capture { arm_depth } else { 0 },
                                 ..Frame::default()
                             },
                             _ => Frame::default(),
                         });
                         let decl = self.owned(*arm, &format!("$t{arm}"), &mut inner, None)?;
-                        let children = self.logical_children(self.sites.of_arm(*arm), &inner)?;
+                        let children = if scope.capture {
+                            self.mount_templates.scope_depth += 1;
+                            let res = self.logical_children(self.sites.of_arm(*arm), &inner);
+                            self.mount_templates.scope_depth -= 1;
+                            res?
+                        } else {
+                            self.logical_children(self.sites.of_arm(*arm), &inner)?
+                        };
                         bodies.push(format!("{decl}return {children};"));
                     }
                     let other = || bodies.get(1).cloned().unwrap_or("return [];".into());
@@ -103,7 +139,7 @@ impl Em<'_> {
                         RegionKind::Each => format!(
                             "({subject}).flatMap(($i,$x)=>{{{}}})",
                             mark(&format!(
-                                "const i{depth}=()=>$i,x{depth}=()=>$x;{}",
+                                "const {item_decl}=()=>$i,{index_decl}=()=>$x;{}",
                                 bodies[0]
                             ))
                         ),
@@ -114,7 +150,7 @@ impl Em<'_> {
                         RegionKind::Match => format!(
                             "(($b)=>{{{}}})({subject})",
                             mark(&format!(
-                                "if($b!==null){{const b{depth}=()=>$b;{}}}{} ",
+                                "if($b!==null){{const {bound_decl}=()=>$b;{}}}{} ",
                                 bodies[0],
                                 other()
                             ))
