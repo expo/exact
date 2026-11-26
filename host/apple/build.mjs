@@ -979,6 +979,7 @@ async function main(args, lockHeld = false) {
   // @ref LLP 1098 D8 — the lock screen and Control Center show only a non-mixable playback session's media, and the audio
   // stops at the lock without the background mode: an app that claims the media session states both.
   const iosModes = app.manifest.host?.ios?.backgroundModes ?? [];
+  if (ios && !tv && buildReceipt.graph.backgroundVideo && !(['playback', 'playback-mix'].includes(app.manifest.audio_session) && iosModes.includes('audio'))) throw new Error('host/apple: audiovisualBackgroundPlaybackPolicy="continuesIfPossible" needs `audio_session` set to "playback" or "playback-mix" and "audio" in `host.ios.backgroundModes` in app.json on iOS');
   if (ios && !tv && buildReceipt.graph.mediaSession && !(app.manifest.audio_session === 'playback' && iosModes.includes('audio'))) throw new Error('host/apple: a media session needs `audio_session: "playback"` and `"audio"` in `host.ios.backgroundModes` in app.json on iOS: the lock screen shows only a playback session\'s media');
   const reaches = buildReceipt.graph.loads;
   const settled = production && level === '0' && Array.isArray(reaches);

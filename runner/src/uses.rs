@@ -1002,6 +1002,50 @@ pub(super) fn decoration_rows(
     )
 }
 
+/// Whether an iOS bake must allow audible video to continue after Home (LLP 1042.001 D8).
+pub fn uses_background_video(plan: &Plan) -> bool {
+    plan.bindings.iter().any(|b| {
+        b.kind == BindingKind::Prop
+            && b.id == PropId::AudiovisualBackgroundPlaybackPolicy as u16
+            && may_continue(plan, plan.code(b.expr))
+    })
+}
+
+// Follow the result of a bound choice back to its producing instructions.
+// A runtime string can opt in. A choice between two pausing literals cannot.
+fn may_continue(plan: &Plan, code: &[u8]) -> bool {
+    let body = plan.read_code(code).0;
+    if let Some(policy) = constant_str(plan, code) {
+        return policy == "continuesIfPossible";
+    }
+    let mut results = std::collections::BTreeSet::new();
+    let mut next = body.len();
+    let instructions: Vec<_> = crate::vm::instructions(body).flatten().collect();
+    for i in instructions.iter().rev() {
+        match i.op {
+            Opcode::Return => {
+                results.insert(i.pc);
+            }
+            Opcode::Jump if results.contains(&(i.args[0] as usize)) => {
+                results.insert(i.pc);
+            }
+            Opcode::Jump => {}
+            Opcode::DropLocal if results.contains(&next) => {
+                results.insert(i.pc);
+            }
+            Opcode::Str if results.contains(&next) => {
+                if plan.str(StrId(i.args[0] as u32)) == "continuesIfPossible" {
+                    return true;
+                }
+            }
+            _ if results.contains(&next) => return true,
+            _ => {}
+        }
+        next = i.pc;
+    }
+    false
+}
+
 pub(crate) fn constant_str<'a>(plan: &'a Plan, code: &[u8]) -> Option<&'a str> {
     match plan.read_code(code).0 {
         [op, a, b, c, d, ret] if *op == Opcode::Str as u8 && *ret == Opcode::Return as u8 => {

@@ -616,8 +616,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "automaticallyWaitsToMinimizeStalling" => {
             AttrTarget::Prop(p("automaticallyWaitsToMinimizeStalling"))
         }
-        "preventsDisplaySleepDuringVideoPlayback" => {
-            AttrTarget::Prop(p("preventsDisplaySleepDuringVideoPlayback"))
+        "audiovisualBackgroundPlaybackPolicy" | "preventsDisplaySleepDuringVideoPlayback" => {
+            AttrTarget::Prop(p(name))
         }
         // `head`'s fields (LLP 1048.003 D1); they belong to `head` alone.
         "title" => AttrTarget::Prop(p("headTitle")),

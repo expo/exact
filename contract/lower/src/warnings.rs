@@ -175,6 +175,18 @@ pub(crate) fn with_text_styles(
             out.extend(roles::keys(attrs, visit, span, &controlled).filter(|_| fresh));
             if fresh {
                 line_height::multiplier(attrs, &mut out);
+                if tag == "video" && !has(attrs, "metadata") {
+                    if let Some(policy) = attrs.iter().find(|a| {
+                        a.name == "audiovisualBackgroundPlaybackPolicy"
+                            && crate::media::may_continue(&a.value)
+                    }) {
+                        out.push(LowerError {
+                            id: "lower-video-background-metadata",
+                            message: "Give this video `metadata=` for background playback. Its Android notification otherwise uses the app name.".into(),
+                            span: policy.span,
+                        });
+                    }
+                }
             }
             let keyed = has(attrs, "navigationKey");
             // @ref LLP 1116.010 D5 — a name or a key that meets nothing.

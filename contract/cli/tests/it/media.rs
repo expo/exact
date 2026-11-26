@@ -102,3 +102,45 @@ fn a_resolution_is_width_x_height_on_a_video() {
     let error = contract::compile(&audio).unwrap_err().to_string();
     assert!(error.contains("lower-attr-tag"), "{error}");
 }
+
+#[test]
+fn only_a_video_that_may_continue_requires_background_audio() {
+    let plan = |tag: &str, props: &str| {
+        contract::compile(&format!(
+            "component App\n  state policy = \"pauses\"\n  view\n    {tag} \"assets/clip.mp4\" {props}\n"
+        ))
+    };
+    for (props, required) in [
+        ("", false),
+        ("audiovisualBackgroundPlaybackPolicy=\"automatic\"", false),
+        ("audiovisualBackgroundPlaybackPolicy=\"pauses\"", false),
+        (
+            "audiovisualBackgroundPlaybackPolicy=\"continuesIfPossible\"",
+            true,
+        ),
+        ("audiovisualBackgroundPlaybackPolicy=policy", true),
+        (
+            r#"audiovisualBackgroundPlaybackPolicy=(policy == "continuesIfPossible" ? "automatic" : "pauses")"#,
+            false,
+        ),
+        (
+            r#"audiovisualBackgroundPlaybackPolicy=(policy == "pauses" ? policy : "pauses")"#,
+            true,
+        ),
+    ] {
+        let plan = plan("video", props).unwrap();
+        assert_eq!(
+            exact_runner::uses::uses_background_video(&plan),
+            required,
+            "{props}"
+        );
+    }
+    for (tag, value, diagnostic) in [
+        ("audio", "\"pauses\"", "lower-attr-tag"),
+        ("video", "\"continue\"", "lower-attr-value"),
+        ("video", "true", "lower-attr-type"),
+    ] {
+        let error = plan(tag, &format!("audiovisualBackgroundPlaybackPolicy={value}")).unwrap_err();
+        assert!(error.to_string().contains(diagnostic), "{error}");
+    }
+}

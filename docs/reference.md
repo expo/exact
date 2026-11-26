@@ -5019,6 +5019,31 @@ A call keeps its category, mode and options when a sound or player ends, and
 leaves activation to the system until its last claim ends and the system
 deactivates it. Either playback value can continue in the background with
 `"audio"` in `host.ios.backgroundModes`.
+
+A `video` pauses on Home on iOS and Android by default.
+Set `audiovisualBackgroundPlaybackPolicy="continuesIfPossible"` to keep its
+sound playing while the app is in the background. The player must already
+be playing, with `muted=false` and volume above zero. On iOS it requires
+either playback session and the audio background mode. A player with
+`metadata=` requires `"playback"` for Now Playing. On Android it requires
+`"playback"`. The media notification uses the player's metadata, or the
+app name when the video has none. Returning to the app reattaches the picture.
+
+The other values, `"automatic"` and `"pauses"`, pause on Home. Bind the
+policy to a player's settings to change it while playing. In the background,
+turning continuation off or muting the player pauses it. Turning continuation
+on leaves a paused player paused. On the web, a page that wants to pause other
+videos when the tab is hidden handles visibility itself. Other hosts accept
+the attribute and ignore it.
+
+On iOS 27.2 the simulator logged `BackgroundTransition` for the default
+player. The 26.5 simulator kept rendering with AVPlayer’s pause policy alone.
+There the host pauses on Home and CoreMedia reports `ClientInitiated`.
+Both simulators continued the opted-in clip at Now Playing rate 1. Android
+API 35 and 36 kept the same load and advanced its position across Home.
+A physical phone, the Lock Screen and Control Center UI, and real process
+suspension have not been tested.
+
 Before a GPU module makes a surface, the host sets a session that nothing
 holds to ambient, without activating it: a module's output that opens before
 its `exact:audio` request is handled mixes and obeys the switch until the

@@ -921,7 +921,7 @@ fn artifact_graph(
         }
     }
     Ok(
-        json!({"version":1,"appleIcons":icons,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch::launch_background(plan),"launchGround":launch::launch_ground(plan),"artifacts":artifacts}),
+        json!({"version":1,"appleIcons":icons,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"backgroundVideo":exact_runner::uses::uses_background_video(plan),"launchBackground":launch::launch_background(plan),"launchGround":launch::launch_ground(plan),"artifacts":artifacts}),
     )
 }
 

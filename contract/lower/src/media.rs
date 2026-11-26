@@ -5,9 +5,23 @@ use contract_types::{Scope, Ty};
 use exact_kernel::PropId;
 use exact_plan::{asm::Asm, BindingsRow};
 
+pub(crate) fn may_continue(value: &Expr) -> bool {
+    match value {
+        Expr::Str(s, _) => s == "continuesIfPossible",
+        Expr::Ternary(_, a, b, _)
+        | Expr::Match {
+            some: a, none: b, ..
+        } => may_continue(a) || may_continue(b),
+        _ => true,
+    }
+}
+
 pub(crate) fn check(name: &str, value: &Expr, span: Span) -> Result<(), LowerError> {
     if let Expr::Str(text, _) = value {
         let allowed: Option<&[&str]> = match name {
+            "audiovisualBackgroundPlaybackPolicy" => {
+                Some(&["automatic", "pauses", "continuesIfPossible"])
+            }
             "preload" => Some(&["", "none", "metadata", "auto"]),
             "crossorigin" => Some(&["", "anonymous", "use-credentials"]),
             _ => None,
@@ -187,6 +201,16 @@ const METADATA: [(&str, PropId); 4] = [
 /// element: `metadata=` only on `audio` and `video`, and an action or an
 /// offset only on one that claims the session with it.
 pub(crate) fn check_session(tag: &str, attrs: &[Attr]) -> Result<(), LowerError> {
+    if let Some(a) = attrs
+        .iter()
+        .find(|a| a.name == "audiovisualBackgroundPlaybackPolicy" && tag != "video")
+    {
+        return err(
+            "lower-attr-tag",
+            format!("`{}` belongs to a `video`", a.name),
+            a.span,
+        );
+    }
     let media = matches!(tag, "audio" | "video");
     let claims = attrs.iter().any(|a| a.name == "metadata");
     if let Some(a) = attrs

@@ -249,6 +249,9 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
                 DispatchQueue.main.async { [weak self] in self?.advanced() }
             }
         ]
+        #if os(iOS)
+        NotificationCenter.default.addObserver(self, selector: #selector(backgrounded), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        #endif
         NowPlaying.shared.joined(self)
     }
     /// The periodic observer serves `timeupdate` handlers and inline audio
@@ -272,11 +275,50 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             player.removeTimeObserver(tick); self.tick = nil
         }
     }
+    #if os(iOS)
+    private static let canContinueVideo = {
+        let info = Bundle.main.infoDictionary
+        let session = info?["ExactAudioSession"] as? String ?? ""
+        return ["playback", "playback-mix"].contains(session) && (info?["UIBackgroundModes"] as? [String])?.contains("audio") == true
+    }()
+
+    private var continuesVideo: Bool {
+        props["audiovisualBackgroundPlaybackPolicy"] == "continuesIfPossible"
+            && Self.canContinueVideo && !player.isMuted && player.volume > 0
+    }
+
+    private var mayContinueAfterHome = false
+
+    @objc private func backgrounded() {
+        guard !invalidated, props["semanticTag"] != "audio" else { return }
+        mayContinueAfterHome = continuesVideo && player.timeControlStatus == .playing
+        guard !mayContinueAfterHome else { return }
+        wantsPlay = false
+        // On iOS 26.5 an AVQueuePlayer can keep rendering past Home with .pauses.
+        // iOS 27 delivers AVFoundation's BackgroundTransition for the same player.
+        if #unavailable(iOS 27) { player.pause() }
+    }
+
+    private func backgroundPolicy() {
+        guard props["semanticTag"] != "audio" else { return }
+        let background = UIApplication.shared.applicationState == .background
+        if background && mayContinueAfterHome && !continuesVideo {
+            mayContinueAfterHome = false
+            sessionPause()
+        }
+        let allow = continuesVideo && (!background || mayContinueAfterHome)
+        set(\.audiovisualBackgroundPlaybackPolicy, allow ? .continuesIfPossible : .pauses)
+    }
+    #endif
+
     func volumeChanged() {
         guard Thread.isMainThread else { DispatchQueue.main.async { [weak self] in self?.volumeChanged() }; return }
         let now = (player.volume, player.isMuted)
         guard !invalidated, now != reportedVolume else { return }
         reportedVolume = now
+        #if os(iOS)
+        backgroundPolicy()
+        #endif
         emit("volumechange")
     }
     func rateChanged() {
@@ -525,6 +567,9 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         if changed("exactSeek"), let request = props["exactSeek"]?.split(separator: " ").last.flatMap({ Double($0) }) {
             if request.isFinite, request >= 0 { seek(request) } else { fail("invalid-value", "Invalid fastSeek") }
         }
+        #if os(iOS)
+        backgroundPolicy()
+        #endif
         configureItem()
         queueLoop()
         if let error = props["sourceError"], error != old["sourceError"] { fail("src-not-supported", error) }
@@ -769,6 +814,12 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         player.insert(copy, after: current)
     }
     func play() {
+        #if os(iOS)
+        if props["semanticTag"] != "audio", UIApplication.shared.applicationState == .background, !(continuesVideo && mayContinueAfterHome) {
+            sessionPause()
+            return
+        }
+        #endif
         player.defaultRate = rate
         if atEnd { atEnd = false; seek(0) }
         player.play()

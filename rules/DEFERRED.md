@@ -1369,6 +1369,10 @@ reading. Nothing that isn't HTML is added by it.
   hearing it on an Android device remains unqualified under this waiver, so
   the change lands as `Part of #356`. Linux and Windows output, Android MIDI output,
   timed haptics and background sound playback stay out.
+- **Video background playback (panel, 2026-11-25, BA1, #1803).** LLP 1042.001 D8 admits
+  `audiovisualBackgroundPlaybackPolicy` for Pocket Lab's per-player switch. A playing,
+  audible video may continue under the app's playback session on iOS and Android.
+  The Android service publishes the element's metadata. Other videos pause on Home.
 - **Expanded (LLP 1098; admitted by the orchestrator under Charlie's
   2026-10-04 delegation, "make decisions without me"):** the media session,
   by the Media Session API's names, on HTML's media element:

@@ -2,6 +2,7 @@ package dev.exact.video
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.MutableContextWrapper
 import android.content.pm.PackageManager
 import android.graphics.Matrix
 import android.net.Uri
@@ -18,6 +19,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -47,11 +49,13 @@ import kotlin.math.roundToLong
  */
 @OptIn(UnstableApi::class)
 class MediaPlayer(
-    private val context: Context,
+    initialContext: Context,
     private val claimPlayback: ((Player) -> AutoCloseable?)?,
 ) : VideoPlayer {
     constructor(context: Context) : this(context, null)
 
+    private val context = MutableContextWrapper(initialContext)
+    private var detached = false
     private val selector = DefaultTrackSelector(context)
     private val exo: ExoPlayer = ExoPlayer.Builder(context)
         .setTrackSelector(selector)
@@ -74,6 +78,7 @@ class MediaPlayer(
     /** The props last applied, as the painter sent them (D1). */
     private var applied: JSONObject? = null
     private var src = ""
+    private var hasPlayed = false
     private var prepared = false
     private var generation = 0
     private var fit = ""
@@ -117,7 +122,7 @@ class MediaPlayer(
     override val view: View get() = frame
     override val lendable: Boolean get() = controls == null
     override val engaged: Boolean get() = !projection.paused && !eligible()
-    override val backgroundPlayback: Boolean get() = playback != null
+    override val backgroundPlayback: Boolean get() = playback != null && exo.playWhenReady && !projection.ended
     override val controller: View? get() = controls
 
     init {
@@ -156,7 +161,7 @@ class MediaPlayer(
         generation = props.optInt("generation")
         // Full screen holds the player on the controller it was entered with.
         if (full.on && ((controls != null) != props.optBoolean("controls") || props.optBoolean("audio"))) full.leave()
-        presenter(props.optBoolean("controls"), props.optBoolean("audio"))
+        if (!detached) presenter(props.optBoolean("controls"), props.optBoolean("audio"))
         fit = props.getString("fit")
         objectRect = props.optJSONArray("objectRect")?.takeIf { it.length() == 4 }?.let { rect ->
             FloatArray(4) { rect.optDouble(it).toFloat() }
@@ -191,6 +196,11 @@ class MediaPlayer(
             load(props, source, props.optString("uri"), from.takeIf { restoring })
             if (!restoring) since = null
         } else if (changed(before!!, props, "volume") || changed(before, props, "muted")) projection.event("volumechange")
+        val item = exo.currentMediaItem
+        if (item != null && !audio) {
+            val metadata = mediaMetadata(props)
+            if (item.mediaMetadata != metadata) exo.replaceMediaItem(exo.currentMediaItemIndex, item.buildUpon().setMediaMetadata(metadata).build())
+        }
         assigned(since, props)
         // `fastSeek` seeks exactly, as on every host (LLP 1042 §3).
         val fast = props.optString("seek")
@@ -211,6 +221,7 @@ class MediaPlayer(
     private fun load(props: JSONObject, source: String, uri: String, from: MediaRecord.Resume?) {
         src = source
         val restoring = from != null && from.src == source
+        hasPlayed = false
         prepared = false; rendered = false; error = null; unavailable = null; pendingSeek = null; seekLanded = false
         videoW = 0; videoH = 0
         // A node that had played or moved comes back without its poster.
@@ -290,6 +301,7 @@ class MediaPlayer(
 
     private fun pause(author: Boolean) {
         if (author) { overridden = true; resumes = false }
+        hasPlayed = false
         projection.pause()
         exo.playWhenReady = false
         releaseFocus()
@@ -302,6 +314,25 @@ class MediaPlayer(
         if (projection.readyState < 1) { pendingSeek = seconds; return }
         projection.seek(seconds)
         exo.seekTo((seconds * 1000).roundToLong().coerceAtLeast(0))
+    }
+
+    override fun backgroundSurface(reader: Context?) {
+        if (reader == null) {
+            full.leave()
+            if (controls != null) controls?.player = null else exo.clearVideoTextureView(texture)
+            detached = true
+            context.baseContext = context.applicationContext
+        } else {
+            context.baseContext = reader
+            detached = false
+            controls?.let { it.player = exo } ?: exo.setVideoTextureView(texture)
+        }
+    }
+
+    private fun mediaMetadata(props: JSONObject): MediaMetadata {
+        fun field(key: String) = props.optString(key).takeUnless { props.isNull(key) || it.isEmpty() }
+        return MediaMetadata.Builder().setTitle(field("mediaTitle")).setArtist(field("mediaArtist"))
+            .setAlbumTitle(field("mediaAlbum")).setArtworkUri(field("mediaArtwork")?.let(Uri::parse)).build()
     }
 
     override fun hidden() = full.leave()
@@ -390,7 +421,7 @@ class MediaPlayer(
 
     /** Full screen (D9): the player goes to a full-screen controller, and comes back when it is left ([left]). */
     private fun fullscreen() {
-        if (full.on || audio) return
+        if (full.on || audio || detached) return
         val from = controls
         if (from == null) exo.clearVideoTextureView(texture)
         full.enter(from, fit)
@@ -506,6 +537,7 @@ class MediaPlayer(
                     pendingSeek?.let { pendingSeek = null; seek(it) }
                 }
                 Player.STATE_ENDED -> if (exo.repeatMode == Player.REPEAT_MODE_OFF) {
+                    hasPlayed = false
                     projection.end()
                     exo.playWhenReady = false
                     releaseFocus()
@@ -514,6 +546,7 @@ class MediaPlayer(
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) hasPlayed = true
             projection.playing(isPlaying)
             frame.keepScreenOn = keepAwake && isPlaying
             tick(isPlaying)
@@ -648,7 +681,8 @@ class MediaPlayer(
 
     private fun syncPlayback() {
         val running = exo.playbackState == Player.STATE_BUFFERING || exo.playbackState == Player.STATE_READY
-        if (claimPlayback == null || sink == null || !audio || muted || volume <= 0f || !exo.playWhenReady || !running) {
+        val eligible = audio || hasPlayed && applied?.optString("audiovisualBackgroundPlaybackPolicy") == "continuesIfPossible"
+        if (claimPlayback == null || sink == null || !eligible || muted || volume <= 0f || !exo.playWhenReady || !running) {
             closePlayback()
             return
         }

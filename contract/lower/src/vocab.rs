@@ -142,6 +142,7 @@ pub fn compile_attr(name: &str) -> Option<&'static CompileAttr> {
 /// Attributes restricted by tag or collection shape; the `head` fields
 /// are [`tags::HEAD_FIELDS`].
 pub const CONTEXTUAL: &[(&str, &str)] = &[
+    ("audiovisualBackgroundPlaybackPolicy", "`video`: automatic, pauses or continuesIfPossible"),
     ("datetime", "`time`"),
     ("format", "`time`"),
     ("start", "`progress` with `end`"),
