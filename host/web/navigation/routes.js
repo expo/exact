@@ -1,10 +1,10 @@
-import { viewChildren, unwrapListItem, viewParent } from "./lists.js";
+import { viewChildren, viewParent } from "./lists.js";
 import { placeTabBar, inFlow } from "./tab-bar.js";
 import { fold, foldColumns, launched, onFold, launchLocation, launchVisits } from "./environment.js";
 import { agentParameters } from "./agent-parameters.js";
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
-import { sheetGone, sheetsLeft, stackSheets } from "./sheet-stack.js";
+import { sheetsLeft, slideAway, slidesEnd, stackSheets } from "./sheet-stack.js";
 import { misplaced, placeOf, replaces } from "./history-replace.js";
 // @ref LLP 1038 D6/D7/D11 — host projection and the last committed URL.
 const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
@@ -62,7 +62,7 @@ export const liveById = (id, root = document) => {
   return !el ? null : live(el) && root.contains(el) ? el : [...root.querySelectorAll("[id]")].find((n) => n.id === id && live(n)) ?? null;
 };
 // a command by id means the live element: one leaving keeps its ids for its own references
-const leavingSheets = new Set(), shownRoutes = new WeakMap();
+const shownRoutes = new WeakMap();
 // @ref LLP 1013.001 D2, D6 — while a route transition plays (shared.js), the route beneath a pushed route stays shown
 // and the pushed route inert; the projection keeps both so until the transition ends.
 const heldRoutes = new Set(), arrivingRoutes = new Set();
@@ -79,45 +79,7 @@ export function holdRoutes(beneath, arriving) {
     navigation.project(root, log);
   };
 }
-export function sheetLeaves(el) {
-  if (!SHEETS || typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || el.getAttribute("navigationPresentation") !== "modal" || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    return false;
-  }
-  if (el.parentElement?.hasAttribute("data-exact-list-item")) {
-    unwrapListItem(el.parentElement);
-  }
-  if (el.contains(document.activeElement)) {
-    document.activeElement.blur();
-  }
-  // It leaves from where it stands, though the stack under it changes (neutral.css lowers a sheet over another).
-  const top = getComputedStyle(el).top;
-  el.setAttribute("navigationKey", "");
-  el.setAttribute("data-exiting", "");
-  el.setAttribute("aria-hidden", "true");
-  el.inert = true;
-  const now = getComputedStyle(el), from = now.translate === "none" ? "0 0" : now.translate;
-  Object.assign(el.style, {
-    transition: "none",
-    pointerEvents: "none"
-  });
-  el.style.setProperty("top", top, "important");
-  // Only `translate`, so the compositor runs it; the scrim fades on its own box as the projection turns it off.
-  const slide = el.animate([{
-    translate: from
-  }, {
-    translate: "0 100vh"
-  }], {
-    duration: 400,
-    easing: "cubic-bezier(.32, .72, 0, 1)"
-  }), done = () => {
-    leavingSheets.delete(slide);
-    el.remove();
-    sheetGone(el);
-  };
-  leavingSheets.add(slide);
-  slide.finished.then(done, done);
-  return true;
-}
+export const sheetLeaves = (el) => SHEETS && slideAway(el);
 // @ref LLP 1115.000 D4.8 — a sheet the look draws (fixed to the window) slides back down as it closes, as it slid up (neutral.css), unless the person asks for less motion. A runtime asks this before it removes a modal route (glue.js's `destroy`; rt.js's `clear`, `each` and presence's `Leave`); a sheet that leaves stays whole until it is off the window, from where it stands, out of input, accessibility and the routes as presence-glue.js's leaving views are (LLP 1063), the focus leaving it as a removed one's would (input-glue.js's `arrive` takes one a blur does not reach). One holding media or a field whose decorations the browser paints closes at once, as its runtime empties those with the commit, and so does one holding an open dialog or popover, which the top layer would leave frozen on the window; a native view slides, showing what its module left in it. It keeps its ids for what it draws, though a command by id passes over it (`liveById`), and its stack's projection ends it on showing a sheet that was not beneath it, which may share them (compared as elements: a replace keeps its key).
 // @ref LLP 1075.003 §3.7 — tabs name their kept panels with aria-controls; each panel holds a route stack.
 // Attribute and parent walks also work in the server renderer's DOM, which has no selector engine.
@@ -1338,12 +1300,7 @@ export const navigation = {
           shownRoutes.set(nav, showing);
           shown.set(nav, showing.map((route) => route.getAttribute("navigationKey")));
           if (SHEETS && sheet(routes[selected]) && !before.includes(routes[selected])) {
-            for (const slide of leavingSheets) {
-              if (viewParent(slide.effect.target) === viewParent(routes[selected])) {
-                slide.finish();
-                slide.effect.target.remove();
-              }
-            }
+            slidesEnd(viewParent(routes[selected]));
           }
         }
         const modal = over[presented], beneath = routes.findLastIndex((r, i) => i < presented && !over[i]);
