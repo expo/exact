@@ -2215,12 +2215,14 @@ A failed request reports its reason through `pictureinpictureerror`.
 
 | Host | Command and verification |
 | --- | --- |
-| Web JS | Reads `document.pictureInPictureEnabled`. Headed Chromium ran the Contract button, the element events, repeat entry, exit and removal with a bundled MP4. |
+| Web JS | Reads `document.pictureInPictureEnabled`. Headed Chromium ran the Contract button, the element events, repeat entry, exit and removal with a bundled MP4. Its own controls delivered one enter and one leave. A request from a task without user activation received `NotAllowedError`. |
 | Web wasm | Reads false and reports a request error. |
-| Android reader | An enabled APK reads the device’s picture-in-picture feature. On API 35 and 36 emulators the button pinned the player. Expansion, system close, command exit and removal each delivered one leave. Rotation kept the activity pinned. |
+| Android reader | An enabled APK reads the device’s picture-in-picture feature. On API 35 and 36 emulators the button pinned the player. Expansion, system close, command exit and removal each delivered one leave. Rotation kept the activity pinned. A request followed immediately by exit delivered one enter and one leave. |
 | iOS | Reads false and reports that the command is unavailable on iOS. AVKit’s control reports enter, leave and failure. Delegate callbacks passed on iOS 27.2 and 26.5 simulators. The iOS events have not been run on a physical iPhone. |
-| tvOS, macOS | Read false and report a platform-specific request error. The Mac’s ordinary video uses AVPlayerView’s built-in control. |
-| Painted Linux and Windows, terminal | Read false and report a request error. |
+| macOS | The fixture received the named command refusal. The Mac’s ordinary video uses AVPlayerView. |
+| tvOS | The host declares the command unavailable. No tvOS drive was run. |
+| Painted Linux host, terminal | Both delivered the element error when driven headless on macOS. |
+| Windows | Uses the painted refusal. No Windows drive was run. |
 
 Android supplies its system controls for expanding and closing the pinned
 activity. The existing player and its media session continue. Exact adds no
