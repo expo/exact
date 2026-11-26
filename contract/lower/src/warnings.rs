@@ -1325,7 +1325,7 @@ mod tests {
         let checking = Checking::new(&checked);
         let element = checking.expanded().structure().roots().next().unwrap();
         let guard = Expr::Str(String::new(), Span::default());
-        let context = (true, Some("back"), vec![&guard]);
+        let context = (true, Some("back"), vec![&guard], vec![]);
         assert_eq!(warning_regions(element, &context), [Some(context), None]);
     }
 
