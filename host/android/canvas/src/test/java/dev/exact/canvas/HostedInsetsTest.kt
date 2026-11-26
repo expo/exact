@@ -27,6 +27,9 @@ class HostedInsetsTest {
         // Across the top: the status bar's whole band, none of the navigation bar's
         val top = HostedInsets.of(window, Rect(0, 0, 1080, 600), 1080, 2400)
         assertEquals(Insets.of(0, 120, 0, 0), top.getInsets(bars))
+        // Each bar its own: the navigation bar has no part of the status bar's top
+        assertEquals(Insets.of(0, 120, 0, 0), top.getInsets(WindowInsets.Type.statusBars()))
+        assertEquals(Insets.NONE, top.getInsets(WindowInsets.Type.navigationBars()))
         // 50 pixels down: 70 of the status bar's 120
         assertEquals(Insets.of(0, 70, 0, 0), HostedInsets.of(window, Rect(0, 50, 1080, 650), 1080, 2400).getInsets(bars))
         // In the middle: none of either bar, and 200 of the keyboard where it reaches 1800 to the window's 1600 from the top

@@ -14,9 +14,12 @@ import android.view.WindowInsets
  * the window moves; tests call it until then.
  */
 internal object HostedInsets {
+    // Each type alone: the builder gives every type of a combined mask the same insets, which would tell the
+    // navigation bar the status bar's top. `systemBars()` is then their union, as Android composes it.
     private val types = intArrayOf(
-        WindowInsets.Type.systemBars(), WindowInsets.Type.displayCutout(), WindowInsets.Type.ime(),
-        WindowInsets.Type.systemGestures(), WindowInsets.Type.mandatorySystemGestures(), WindowInsets.Type.tappableElement(),
+        WindowInsets.Type.statusBars(), WindowInsets.Type.navigationBars(), WindowInsets.Type.captionBar(),
+        WindowInsets.Type.displayCutout(), WindowInsets.Type.ime(), WindowInsets.Type.systemGestures(),
+        WindowInsets.Type.mandatorySystemGestures(), WindowInsets.Type.tappableElement(),
     )
 
     /** `insets`, the window's, as a view whose rectangle in the window is `frame`, in a window `width` by `height`
