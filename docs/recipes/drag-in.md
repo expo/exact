@@ -57,9 +57,9 @@ const sources: Sources = {
   keepDropped: async ([files], _store, storage) => {
     const list = await listed(storage);
     for (const file of files) {
-      if ((await storage.fs.stat(file)).isDirectory) continue; // folders are skipped
+      if ((await storage.fs.stat(file)).isDirectory) continue;
       const name = file.split('/').pop()!;
-      const id = String(list.length);
+      const id = String(+(list.at(-1)?.id ?? -1) + 1);
       await storage.fs.mkdir(`${DIR}/${id}`);
       const path = `${DIR}/${id}/${name}`;
       list.push({ id, name });
