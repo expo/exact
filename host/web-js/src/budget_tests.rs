@@ -91,7 +91,7 @@ fn each_reset_point_is_its_own_evaluation() {
         2,
         "{press}"
     );
-    let owned = js.split("const $r").nth(1).expect("the row's slots");
+    let owned = js.split("const $a0={}").nth(1).expect("the row's slots");
     let owned = owned.split("};const").next().unwrap();
     assert_eq!(owned.matches("let $s=0").count(), 2, "{owned}");
 }

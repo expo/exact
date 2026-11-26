@@ -97,6 +97,30 @@ class ScrollingTest {
         }
     }
 
+    /** LLP 1123 D14: a claimed scroller's statement carries its claim's record. At 2 pixels a point, 100 points down
+     * under a top reach of 40 and inset of 100, its content is painted 60 short of its offset, at 80 pixels, which is
+     * where the reader places its rows, so they do not move as it takes them; its reached port is the record's; and the
+     * scroller stated after it is read past the record. */
+    @Test fun aClaimedScrollersRecordPlacesItsRowsAndPort() {
+        val f = Fixture(2)
+        val claimed = 2 or 4 or Scrolling.CLAIMED_FLAG
+        f.scrolling.told(intArrayOf(2f.toBits(),
+            1, claimed, 0, 0, 100f.toBits(), 0, 80f.toBits(), 0, 900f.toBits(), 0, (-60f).toBits(), 0, 0, 400f.toBits(), 800f.toBits(),
+            2, 2, 0, 0, 30f.toBits(), 0, 60f.toBits(), 0, 500f.toBits()))
+        val s = f.scroller()
+        s.own = true
+        assertEquals(0f, f.scrolling.shift(1)!!, 0f)
+        assertEquals(-60f, s.claimY, 0f)
+        assertEquals(android.graphics.RectF(0f, 0f, 400f, 800f), s.port)
+        val other = (f.scrollers.get(f.scrolling) as Map<*, *>)[2] as Scrolling.Scroller
+        assertEquals(30f, other.pointsY, 0f)
+        assertEquals(0f, other.claimY, 0f)
+        // Stated again without its claim, it is placed at its offset
+        f.scrolling.told(intArrayOf(2f.toBits(), 1, 2 or 4, 0, 0, 100f.toBits(), 0, 200f.toBits(), 0, 900f.toBits()))
+        assertEquals(0f, f.scrolling.shift(1)!!, 0f)
+        assertEquals(0f, s.claimY, 0f)
+    }
+
     @Test fun aLayoutSnapAndItsRecordingArriveInTheSameStatement() {
         val f = Fixture(1)
         f.told(1)
