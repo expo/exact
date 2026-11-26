@@ -77,6 +77,10 @@ extension Presenter {
                     routes[ObjectIdentifier(route)] = r
                     sides = sideReach(of: v, in: route.node)
                 } else { found = pageBands(of: v, sv, margins: m, area: area, judge); own = found.band }
+            } else if v.scrollView != nil, v.window != nil,
+                      let route = ViewPresentation.controllers(for: v, layout: true).lazy.compactMap({ $0 as? any RouteSurface }).first(where: { $0.hosting === navigation && v.isDescendant(of: $0.node) }) {
+                // A row that scrolls sideways inside the route's scroller runs under the sides that scroller reaches
+                sides = nestedSideReach(of: v, in: route.node)
             }
             if v.pageBand != found.band || v.bandInset != own { v.setPageBand(found.band, inset: own) }
             v.setSideReach(sides)

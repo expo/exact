@@ -47,6 +47,44 @@ extension Presenter {
         return Self.climb(from: v, to: route, passes) && passes(route, route) ? reach : .zero
         #endif
     }
+
+    /// How far `v`, a row that scrolls only sideways inside a route's vertical scroller, reaches past its left and right
+    /// edges: as far as that scroller reaches (`sideReach`) on each side the row's edge meets the scroller's, so its
+    /// items scroll under the side and its first and last rest clear of it, as a collection view nested in a vertical
+    /// scroll view does (LLP 1123 C33). Its scroll view takes the reach as its content inset (`setSideReach`), as the
+    /// vertical scroller does, since the vertical one's inset leaves it none of UIKit's safe area there. Nothing between
+    /// the two may turn, mask, border or clip that strip off.
+    func nestedSideReach(of v: NodeView, in route: NodeView) -> UIEdgeInsets {
+        #if os(tvOS)
+        return .zero
+        #else
+        guard let scroll = v.scroll, scroll.scrollsX, !scroll.scrollsY, v.zoomRange == nil,
+              let outer = sequence(first: v.superview, next: { $0?.superview }).lazy.compactMap({ $0 as? NodeView }).first(where: { $0.scroll != nil }),
+              outer !== route, outer.isDescendant(of: route) else { return .zero }
+        let around = sideReach(of: outer, in: route)
+        guard around != .zero, !v.cornerSizes(in: v.bounds).contains(where: { $0.width > 0 }) else { return .zero }
+        let box = v.convert(v.bounds, to: route), port = outer.convert(outer.bounds, to: route)
+        var reach = UIEdgeInsets(top: 0, left: abs(box.minX - port.minX) < 0.5 && v.mayReach(.left) ? around.left : 0,
+                                 bottom: 0, right: abs(box.maxX - port.maxX) < 0.5 && v.mayReach(.right) ? around.right : 0)
+        func passes(_ c: UIView, _ node: NodeView?) -> Bool {
+            guard c.transform.isIdentity, c.layer.boxMask == nil, node?.clipPath == nil, node?.boxFilter == nil,
+                  node?.materialView == nil else { return false }
+            let border = { (side: String) in node.map { $0.number("border_width_" + side, $0.number("border_width")) > 0 } ?? false }
+            if border("left") { reach.left = 0 }
+            if border("right") { reach.right = 0 }
+            guard c !== v, c !== outer else { return true }
+            if c is UIScrollView && c !== outer.scroll || c.next is UIViewController { return false }
+            // The scroller's own scroll view clips at the reach just found, whichever of the two this pass reaches first
+            if c.clipsToBounds, c !== outer.scroll {
+                let clip = c.convert(c.bounds, to: route)
+                if clip.minX > box.minX - reach.left + 0.5 { reach.left = 0 }
+                if clip.maxX < box.maxX + reach.right - 0.5 { reach.right = 0 }
+            }
+            return true
+        }
+        return reach != .zero && Self.climb(from: v, to: outer, passes) ? reach : .zero
+        #endif
+    }
 }
 
 extension NodeView {

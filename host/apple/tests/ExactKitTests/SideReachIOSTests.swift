@@ -160,6 +160,25 @@ final class SideReachIOSTests: XCTestCase {
         XCTAssertEqual(node.reach, UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 0), "and is the host's no more")
     }
 
+    /// A row in the scroller that scrolls only sideways reaches as far as the scroller does (`nestedSideReach`), as a
+    /// collection view nested in a vertical scroll view does (LLP 1123 C33): its cards scroll under the side, its first
+    /// and last rest clear of it, and its CSS `scrollLeft` at rest is 0, written back or not.
+    func testARowThatScrollsSidewaysReachesAsFarAsItsScroller() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a route's side clearance is a scene window's safe area") }
+        let (band, route) = try booted(scene)
+        let strip = try node("strip"), scroll = try XCTUnwrap(strip.scroll)
+        func frame(_ v: UIView) -> CGRect { v.convert(v.bounds, to: route) }
+        waitFor("the row reaches") { frame(scroll).minX <= 0.5 && frame(scroll).maxX >= route.bounds.width - 0.5 }
+        XCTAssertEqual(scroll.contentOffset.x + strip.scrollLeftInset(scroll), 0, accuracy: 0.5, "CSS scrollLeft")
+        XCTAssertEqual(frame(try node("card-0")).minX, band.left + 16, accuracy: 0.5, "the first card rests clear")
+        strip.pendingScrollLeft = 0
+        strip.applyPendingScroll(instant: true)
+        XCTAssertEqual(frame(try node("card-0")).minX, band.left + 16, accuracy: 0.5, "a scrollLeft of 0 written back")
+        scroll.setContentOffset(CGPoint(x: scroll.contentSize.width + scroll.adjustedContentInset.right - scroll.bounds.width, y: 0), animated: false)
+        XCTAssertEqual(frame(try node("card-7")).maxX, route.bounds.width - band.right - 16, accuracy: 0.5, "the last card rests clear")
+        XCTAssertTrue(scroll.alwaysBounceHorizontal, "a row bounces sideways whatever its content's width")
+    }
+
     func testTheReachGoesWithItsScrollView() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "a route's side clearance is a scene window's safe area") }
         _ = try booted(scene)
