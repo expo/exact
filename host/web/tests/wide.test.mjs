@@ -225,6 +225,9 @@ check('a projection with nothing to change writes nothing', () => inChrome(page(
   // A split showing the detail a row's press pushed, then a bound style that does not place the bar; then a sheet
   // over it, the tab bar inert beneath.
   await evaluate(`select('1'); { const row = document.getElementById('r1-bo'); row.addEventListener('click', () => push('2', '/people/bo'), {once:true}); row.click(); }`);
+  // The tab bar's resize observer hears once when it starts watching, in the next rendering update, and rechecks its
+  // placement then; that recheck is no projection's, so the test watches only once two frames have passed
+  await evaluate(`new Promise((settled) => requestAnimationFrame(() => requestAnimationFrame(settled)))`);
   expect(await evaluate(`writes(() => { select(2); document.getElementById('bar').style.backgroundColor = 'red'; select(2); }).then(seen => [document.getElementById('nav').hasAttribute('data-exact-sidebar'), document.getElementById('r1-bo').hasAttribute('data-exact-split-row'), seen])`)).toEqual([true, true, []]);
   await evaluate(`select(3)`);
   expect(await evaluate(`writes(() => { select(3); select(3); }).then(seen => [document.getElementById('bar').inert, seen])`)).toEqual([true, []]);
