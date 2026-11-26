@@ -74,8 +74,10 @@ final class KeyboardSheetIOSTests: XCTestCase {
         field.becomeFirstResponder()
         wait(for: [shown], timeout: 10)
         until("the keyboard's overlap is told") { p.keyboardInset > 100 }
-        let top = try XCTUnwrap(p.keyboardTop)
-        until("the toolbar sits on the keys") { abs(bar.convert(bar.bounds, to: nil).maxY - top) < 1 }
+        let top = try XCTUnwrap(p.keyboardTop), sheet = try XCTUnwrap(p.modalHost.coordinateView)
+        // On the keys, or at the sheet's own bottom where UIKit floats it above them, as a form sheet in a regular width
+        let rest = { min(top, sheet.convert(sheet.bounds, to: nil).maxY - sheet.safeAreaInsets.bottom) }
+        until("the toolbar sits on the keys, or on the sheet's bottom above them") { abs(bar.convert(bar.bounds, to: nil).maxY - rest()) < 1 }
         XCTAssertEqual(bar.keyboardLift, 0, "the sheet's layout ends at the keys: nothing to lift")
         until("the app reads the overlap the agent reports") {
             (try? self.viewport()["keyboardHeight"] as? Double).map { abs($0 - Double(p.keyboardInset)) < 0.5 } ?? false
@@ -84,7 +86,6 @@ final class KeyboardSheetIOSTests: XCTestCase {
         field.resignFirstResponder()
         wait(for: [hidden], timeout: 10)
         until("the overlap is 0 again") { (try? self.viewport()["keyboardHeight"] as? Double) == 0 }
-        let sheet = try XCTUnwrap(p.modalHost.coordinateView)
         until("the toolbar is back at the sheet's bottom") {
             abs(bar.convert(bar.bounds, to: nil).maxY - sheet.convert(sheet.bounds, to: nil).maxY + sheet.safeAreaInsets.bottom) < 1
         }

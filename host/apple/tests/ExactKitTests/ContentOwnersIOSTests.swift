@@ -1069,7 +1069,7 @@ final class ContentOwnersIOSTests: XCTestCase {
     /// area, and nothing above it clips there, so its content shows through
     /// the inset down to the edge. A hand-built scroll view in a floating 45%
     /// sheet on iOS 27 has the same: the sheet's bottom safe area is 34 points
-    /// in its own space, though it floats clear of the home indicator.
+    /// in its own space, though it floats clear of the home indicator. A form sheet floating in a regular width, as an iPad's, has none.
     func testASheetsEdgeScrollerReachesTheSheetsBottom() throws {
         guard let scene = UIApplication.shared.connectedScenes.first(where: { $0 is UIWindowScene }) as? UIWindowScene else {
             throw missing("scene", "a sheet is presented, with its safe area, only in a scene's window")
@@ -1109,11 +1109,13 @@ final class ContentOwnersIOSTests: XCTestCase {
         let form = try node(session, scroller), sv = try XCTUnwrap(form.scroll, file: file, line: line)
         XCTAssertTrue(controller.edgeScroll === form, "the scroller ends the route", file: file, line: line)
         let bottom = { form.convert(form.bounds, to: sheetView).maxY }
+        // A form sheet floating in a regular width has no bottom band, which any other sheet has; the window's width decides, a form sheet's own traits being compact-width
+        let floats = try XCTUnwrap(host?.presentedViewController, file: file, line: line).modalPresentationStyle == .formSheet && host?.traitCollection.horizontalSizeClass == .regular
         until("the scroller reaches the sheet's bottom edge, inset by the sheet's bottom safe area") {
-            sheetView.safeAreaInsets.bottom > 0 && abs(bottom() - sheetView.bounds.maxY) < 0.5
+            (floats || sheetView.safeAreaInsets.bottom > 0) && abs(bottom() - sheetView.bounds.maxY) < 0.5
                 && abs(sv.adjustedContentInset.bottom - sheetView.safeAreaInsets.bottom) < 0.5
         }
-        XCTAssertGreaterThan(sheetView.safeAreaInsets.bottom, 0, "the sheet has a bottom safe area", file: file, line: line)
+        XCTAssertEqual(sheetView.safeAreaInsets.bottom > 0, !floats, floats ? "a floating sheet has no bottom safe area" : "the sheet has a bottom safe area", file: file, line: line)
         XCTAssertEqual(bottom(), sheetView.bounds.maxY, accuracy: 0.5, "the scroller ends at the sheet's bottom edge", file: file, line: line)
         XCTAssertEqual(sv.adjustedContentInset.bottom, sheetView.safeAreaInsets.bottom, accuracy: 0.5, "UIKit's inset alone", file: file, line: line)
         var view: UIView? = sv

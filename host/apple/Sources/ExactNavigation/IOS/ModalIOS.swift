@@ -46,17 +46,17 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         }
         #endif
     }
-    /// A sheet route's presentation, its `navigationSizing` as it is presented (LLP 1123 D7): a page sheet unsaid, as
-    /// the LLP keeps it, `form` UIKit's form sheet and `automatic` UIKit's own choice, which resolves a form sheet
-    /// on iOS 18 and later and a page sheet before. tvOS presents a route over the full screen (§"Host matrix").
+    /// A sheet route's presentation, its `navigationSizing` as it is presented (LLP 1123 D7): UIKit's own choice
+    /// unsaid or `automatic`, which resolves a form sheet on iOS 18 and later and a page sheet before, as UIKit
+    /// presents a controller that names no style; `page` its page sheet and `form` its form sheet. tvOS presents a route over the full screen (§"Host matrix").
     static func sheetStyle(_ sizing: String?) -> UIModalPresentationStyle {
         #if os(tvOS)
         .overFullScreen
         #else
         switch sizing {
+        case "page": .pageSheet
         case "form": .formSheet
-        case "automatic": .automatic
-        default: .pageSheet
+        default: .automatic
         }
         #endif
     }

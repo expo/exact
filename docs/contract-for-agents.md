@@ -5210,6 +5210,13 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   (UIKit's compact height) and on a touch screen while a text field in it has the
   focus, as UIKit raises one over the keyboard; a wider window draws the card. macOS
   and Linux ignore the detent (LLP 1075.003 §9.11, LLP 1115.000 D4.8).
+- A sheet's width on an iPad is its route's `navigationSizing`: `automatic`, the
+  default, the platform's own sheet (UIKit's `.automatic`, SwiftUI's
+  `.presentationSizing(.automatic)`), a form sheet centred at a standard size on
+  iPadOS 18 and later and a page sheet before; `page`, the window's full width, for
+  content that needs the room (a camera, an editor); `form`, a form sheet on every
+  version. On an iPhone the three are the same full-width sheet; macOS, the web,
+  Android and Linux ignore it. It is read as the sheet is presented.
 - A sheet opens at its first height, the shortest, as UIKit opens one, unless the
   route says `navigationInitialDetent`, one of its `navigationDetent` words:
   `navigationDetent="medium large" navigationInitialDetent="large"` opens tall with a

@@ -393,7 +393,9 @@ final class ModalDetentIOSTests: XCTestCase {
         until("the menu is presented as a sheet") { sheet()?.sheetPresentationController != nil }
         let presented = try XCTUnwrap(sheet())
         let controller = try XCTUnwrap(presented.sheetPresentationController)
-        XCTAssertEqual(presented.modalPresentationStyle, .pageSheet, "unsaid, a page sheet")
+        let unsaid = UIViewController()
+        unsaid.modalPresentationStyle = .automatic
+        XCTAssertEqual(presented.modalPresentationStyle, unsaid.modalPresentationStyle, "unsaid, the platform's sheet")
         let route = try node(session, "route-menu")
         func update(_ props: [String: String?]) {
             for (name, value) in props { route.props[name] = value }
@@ -427,7 +429,7 @@ final class ModalDetentIOSTests: XCTestCase {
         XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge)
         // UIKit reads a style back as it resolves it (`automatic` as a form sheet on iOS 18 and later, a page sheet
         // before), so the sheet is made as a plain controller given the same style is
-        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .pageSheet)] {
+        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .automatic)] {
             XCTAssertEqual(ModalController.sheetStyle(sizing), style, sizing ?? "unsaid")
             route.props["navigationSizing"] = sizing
             let made = ModalController(host: session.presenter.modalHost, route: route, kind: "modal", detent: nil, grabber: nil)

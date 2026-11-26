@@ -1504,6 +1504,15 @@ the window below the status bar, `medium` half that; `fit-content` rests at
 (`host/android/README.md`). macOS and desktop Linux ignore the detent
 (LLP 1075.003 §9.11, LLP 1115.000 D4.8).
 
+A sheet's width on an iPad is its route's `navigationSizing`. `automatic`, the
+default, is the platform's own sheet, as UIKit and SwiftUI present one: a form
+sheet, centred at a standard size, on iPadOS 18 and later, and a page sheet
+before. `page` is a page sheet, the window's full width, for a sheet whose
+content needs the room, as a camera's or an editor's does; `form` is a form
+sheet on every version. On an iPhone and a closed iPhone Duo the three are the
+same full-width sheet, and the other hosts' sheets have one size. It is read as
+the sheet is presented.
+
 A route pushed while a sheet is on top is shown inside that sheet, which keeps the
 detents of the route that opened it, and Back returns to the route before it in
 the sheet. iOS and macOS show it in the sheet's own navigation stack, the web and
