@@ -518,3 +518,45 @@ fn releasing_a_claim_gives_the_runner_back_the_css_offset() {
     assert!(p.set_scroll_claim(port, None));
     assert_eq!(p.host.runner().scroll_offset(Some(port)), (0., 0.));
 }
+
+/// A claimed scroller that follows its end keeps it as the claim comes and goes, as UIKit's writer keeps a follower's
+/// (LLP 1123 D14): 500 over 100 at its end, 400, a claim with a bottom inset of 60 gives it 460 and it follows there;
+/// released, it is at 400 again. One short of its end keeps its offset.
+#[test]
+fn a_claimed_scroller_that_follows_its_end_keeps_it() {
+    let source = r#"component App
+  view
+    scroll testId="port" scrollFollowEnd=true width=200 height=100
+      box width=200 height=500
+"#;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.frame();
+    let port = id(&p, "port");
+    p.scroll_to(port, (0., 400.));
+    p.frame();
+    assert_eq!(p.scroll_of(port), (0., 400.));
+    assert!(p.set_scroll_claim(port, Some(([0.; 4], [0., 0., 60., 0.]))));
+    p.frame();
+    assert_eq!(p.scroll_of(port), (0., 460.), "followed to the claim's end");
+    assert!(p.set_scroll_claim(port, None));
+    p.frame();
+    assert_eq!(p.scroll_of(port), (0., 400.), "clamped back to its end");
+    p.scroll_to(port, (0., 300.));
+    p.frame();
+    assert!(p.set_scroll_claim(port, Some(([0.; 4], [0., 0., 60., 0.]))));
+    p.frame();
+    assert_eq!(
+        p.scroll_of(port),
+        (0., 300.),
+        "short of its end, where it was"
+    );
+}
