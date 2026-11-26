@@ -332,7 +332,7 @@ export const sheetsLeft = sweep;
 
 const leavingSheets = new Set();
 export function slideAway(el) {
-  if (typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || !["modal", "popover"].includes(el.getAttribute("navigationPresentation")) || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  if (typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || !["modal", "popover"].includes(el.getAttribute("navigationPresentation")) || el.hasAttribute("data-exact-route-popover") || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
     return false;
   }
   if (el.parentElement?.hasAttribute("data-exact-list-item")) {

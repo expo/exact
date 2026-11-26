@@ -1,7 +1,7 @@
 // @ref LLP 1123 D7 — a popover route keeps `navigationPresentation="popover"` on the page, its anchor and arrows as
-// `data-` attributes, and is the web's sheet: drawn, made modal and dismissed by Escape as a `modal` route is. The same
-// app is compiled twice, its presented route a sheet and then a popover, launched at that route, and the two are held
-// equal in Chromium, WebKit and Firefox. Build exact-web-js once before running this test (docs/testing.md).
+// `data-` attributes, and where it has no anchor to stand beside is the web's sheet: drawn, made modal and dismissed by
+// Escape as a `modal` route is. The same app is compiled twice, its presented route a sheet and then a popover whose
+// anchor is not there, launched at that route, and the two are held equal in Chromium, WebKit and Firefox. Build exact-web-js once before running this test (docs/testing.md).
 import { test, expect } from 'bun:test';
 import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
@@ -62,7 +62,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a popover route is
   const root = resolve(import.meta.dir, '../..'), target = resolve(root, 'target');
   mkdirSync(target, { recursive: true });
   const dirs = { modal: mkdtempSync(resolve(target, 'popover-sheet-')), popover: mkdtempSync(resolve(target, 'popover-sheet-')) };
-  const said = { modal: 'navigationPresentation="modal"', popover: 'navigationPresentation="popover" navigationPopoverAnchor="pick" navigationPopoverArrows="up"' };
+  const said = { modal: 'navigationPresentation="modal"', popover: 'navigationPresentation="popover" navigationPopoverAnchor="missing" navigationPopoverArrows="up"' };
   const browser = await suiteBrowser(engine);
   try {
     const seen = {};
@@ -73,7 +73,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a popover route is
       seen[kind] = await presented(dir, browser, engine);
     }
     expect(seen.modal).toMatchObject({ presentation: 'modal', anchor: null, role: 'dialog', modal: 'true', homeInert: true, open: false, dismissed: true });
-    expect(seen.popover).toEqual({ ...seen.modal, presentation: 'popover', anchor: 'pick' });
+    expect(seen.popover).toEqual({ ...seen.modal, presentation: 'popover', anchor: 'missing' });
   } finally {
     await browser.close();
     for (const dir of Object.values(dirs)) rmSync(dir, { recursive: true, force: true });

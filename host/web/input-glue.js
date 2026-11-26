@@ -1145,7 +1145,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   const lands = el => !!el?.isConnected && !inertAncestor(el) && el.getClientRects().length > 0 && !el.matches(":disabled");
   const titleOf = route => viewChildren(route).find(c => c.localName === "header")?.querySelector("h1, h2, h3, h4, h5, h6, [role=heading]");
   // @ref LLP 1115.000 D4.5 — a modal route (a sheet) is a dialog to assistive technology: `role="dialog"` and
-  // `aria-modal`, named by its header's heading, and the focus moves into it and returns on close as it does for any
+  // `aria-modal` (none on a popover route the browser presents, which is nonmodal), named by its header's heading, and the focus moves into it and returns on close as it does for any
   // route (`arrive`). The host's marks (`data-exact-dialog`: "named" when the name is its own too) are not the app's:
   // a role or a label the author wrote is left as written, and the agent's tree leaves the marks out (agent.js).
   const dialog = route => {
@@ -1154,7 +1154,10 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const title = titleOf(route), names = !!title && !route.hasAttribute("aria-label") && (!!mark || !route.hasAttribute("aria-labelledby"));
     if (names) { title.id ||= `exact-title-${route.getAttribute("navigationKey")}`; if (route.getAttribute("aria-labelledby") !== title.id) route.setAttribute("aria-labelledby", title.id); }
     else if (mark) route.removeAttribute("aria-labelledby");
-    if (mark !== (names ? "named" : "")) { route.setAttribute("data-exact-dialog", names ? "named" : ""); route.setAttribute("role", "dialog"); route.setAttribute("aria-modal", "true"); }
+    if (mark !== (names ? "named" : "")) { route.setAttribute("data-exact-dialog", names ? "named" : ""); route.setAttribute("role", "dialog"); }
+    // A popover route the browser presents is nonmodal (LLP 1123 D7, route-popovers.js): the page under it stays live
+    const nonmodal = route.hasAttribute("data-exact-route-popover");
+    if (route.hasAttribute("aria-modal") === nonmodal) nonmodal ? route.removeAttribute("aria-modal") : route.setAttribute("aria-modal", "true");
   };
   const arrive = () => {
     const navs = root.querySelectorAll("[navigationBack]");

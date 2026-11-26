@@ -160,9 +160,10 @@ export function install(exact, { passive = false } = {}) {
     // A checkbox's or radio's model value, as the runner's tree gives its `checked` row.
     if (el.$checked !== undefined) props.checked = el.$checked;
     // The runner's props that element.rs writes as attributes, by its names. A sheet's `role="dialog"` and `aria-modal`
-    // are the host's presentation of a modal route, not props (input-glue.js marks them; LLP 1115.000 D4.5).
+    // are the host's presentation of a modal route, not props (input-glue.js marks them; LLP 1115.000 D4.5), as is the
+    // `popover` of a popover route the browser presents (route-popovers.js).
     const sheet = el.hasAttribute('data-exact-dialog');
-    for (const [attr, prop, num] of PROPS) if (el.hasAttribute(attr) && !(hostRole && attr === 'role')) props[prop] = num ? Number(el.getAttribute(attr)) : el.getAttribute(attr);
+    for (const [attr, prop, num] of PROPS) if (el.hasAttribute(attr) && !(hostRole && attr === 'role') && !(attr === 'popover' && el.hasAttribute('data-exact-route-popover'))) props[prop] = num ? Number(el.getAttribute(attr)) : el.getAttribute(attr);
     if (el.exactDraggable != null) props.draggable = el.exactDraggable;
     // The intent `tree --ax` reads (LLP 1080.002 D7), as the runner names it.
     if (el.hasAttribute('inert')) props.inert = true;

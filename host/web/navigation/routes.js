@@ -5,6 +5,7 @@ import { agentParameters } from "./agent-parameters.js";
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
 import { sheetsLeft, slideAway, slidesEnd, stackSheets } from "./sheet-stack.js";
+import { routePopover } from "./route-popovers.js";
 import { misplaced, placeOf, replaces } from "./history-replace.js";
 // @ref LLP 1038 D6/D7/D11 — host projection and the last committed URL.
 const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
@@ -861,6 +862,8 @@ function appBack(route) {
   // without its fragment, which would scroll it again (LLP 1153 D5)
 }
 const closedNone = (route) => sheet(route) && route.getAttribute("closedby") === "none";
+// A sheet's Back, as Escape asks it: its named control, else the app bar's way, as iOS's swipe down (`goBack`)
+const sheetBack = (nav, route) => backControl(nav) || closedNone(route) ? pressBack(nav) : appBack(route);
 /** Press the Back control wherever it is, shown or not, as UIKit's Back presses it (NavigationBack.swift `control`),
 * unless it is disabled, or inert (the web's choice: iOS's Back reads no inert); else why it was not pressed. */
 function pressBack(nav) {
@@ -1167,11 +1170,7 @@ export const navigation = {
             continue;
           }
           event.preventDefault();
-          if (backControl(nav) || closedNone(route)) {
-            pressBack(nav);
-          } else {
-            appBack(route);
-          }
+          sheetBack(nav, route);
           return;
         }
       });
@@ -1306,12 +1305,14 @@ export const navigation = {
           }
         }
         const modal = over[presented], beneath = routes.findLastIndex((r, i) => i < presented && !over[i]);
+        // a popover route the browser presents is nonmodal: the page under it stays live, with no scrim
+        const popover = SHEETS && stack === at && routePopover(nav, routes, presented, selected, { back: (route) => sheetBack(nav, route), project: () => navigation.project(root, log), find: liveById });
         if (SHEETS) {
-          setScrim(panels[stack] ?? nav, shownAs(routes[presented]) === "modal");
+          setScrim(panels[stack] ?? nav, shownAs(routes[presented]) === "modal" && !popover);
         }
         detailRows(routes, found);
         if (stack === at && list) {
-          setInert(list, sheet(routes[presented]) || !!list.authoredInert);
+          setInert(list, sheet(routes[presented]) && !popover || !!list.authoredInert);
         }
         // a sheet is modal: the root's tab bar is inert beneath it, as the route it covers is (LLP 1115.000 D4.5)
         // The sheet each route shows in, and the sheets something shown is in.
@@ -1322,8 +1323,8 @@ export const navigation = {
           const covered = modal && (index >= beneath && index < presented || split > 0 && index === 0);
           // a sheet shows what it sits over: the page (in the strip above a narrow sheet) and any sheets between, which only the top one dims
           route.style.visibility = active || covered || heldRoutes.has(route) ? "" : "hidden";
-          route.toggleAttribute("data-exact-covered", covered);
-          setInert(route, !active || arrivingRoutes.has(route) || !!route.authoredInert);
+          route.toggleAttribute("data-exact-covered", covered && !popover);
+          setInert(route, !active && !(popover && covered) || arrivingRoutes.has(route) || !!route.authoredInert);
           const column = !split ? null : index === 0 ? "list" : sheet(route) || shownIn[index] >= 0 ? null : "detail";
           if (route.getAttribute("data-exact-split") !== column) {
             column ? route.setAttribute("data-exact-split", column) : route.removeAttribute("data-exact-split");

@@ -40,6 +40,7 @@ const MODULES = {
     'host/web/navigation/network.js',
     'host/web/navigation/popover.js',
     'host/web/navigation/requests.js',
+    'host/web/navigation/route-popovers.js',
     'host/web/navigation/routes.js',
     'host/web/navigation/scroll.js',
     'host/web/navigation/selection.js',
