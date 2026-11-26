@@ -387,15 +387,16 @@ export const pickedPaths = (value) => { const text = String(value); return text.
 /** A native carrier's held contact: one that went down with `mouse` (a drag's, review A1) says `mouse` on each phase
  * until it lifts, is cancelled, or its down fails, an error reply or a thrown request alike. `send(button)` asks. */
 export function mouseContact() {
-  let held = false;
+  let contact;
   return {
-    get held() { return held; },
+    get held() { return !!contact?.mouse; },
     async ask(kind, opts, send) {
-      if (kind === 'down') held = !!opts.mouse;
+      if (kind === 'down') contact = { mouse: !!opts.mouse };
+      const pressed = contact;
       let r;
-      try { r = await send(held ? { mouse: true } : {}); }
-      catch (error) { if (kind === 'down') held = false; throw error; }
-      if (kind === 'up' || kind === 'cancel' || (kind === 'down' && r?.error)) held = false;
+      try { r = await send(pressed?.mouse ? { mouse: true } : {}); }
+      catch (error) { if (kind === 'down' && pressed === contact) contact = null; throw error; }
+      if (pressed === contact && (kind === 'up' || kind === 'cancel' || (kind === 'down' && r?.error))) contact = null;
       return r;
     },
   };

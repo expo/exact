@@ -39,7 +39,7 @@ export const AWAY = 'the app left the foreground (a share extension or another a
  * A line the app pushes unasked (`{"pushed":"background"|"foreground"}`, LLP 1143 D1) answers nothing: leaving fails the
  * pending requests at once and every later one until the app is back, and the replies they were owed are dropped when
  * they come. */
-export function jsonLines(readable, writable, hostLines) {
+export function jsonLines(readable, writable, hostLines, beforeSend) {
   const waiting = [], scene = new EventTarget();
   let failure = null, away = false, owed = 0;
   // A large reply (a `state` carrying a 16 MiB surface record) arrives in
@@ -87,6 +87,7 @@ export function jsonLines(readable, writable, hostLines) {
       } finally { if (changed) scene.removeEventListener('change', changed); }
     },
     ask: (req) => {
+      beforeSend?.();
       if (away && !failure) return Promise.reject(new Error(AWAY));
       const p = next(); if (!failure) writable.write(JSON.stringify(req) + '\n'); return p.then(MalformedOperation.reply);
     },

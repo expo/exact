@@ -85,7 +85,7 @@ component App
       column height=200 width=200 testId="area" touch-action="none" pointerdown=down pointermove=move pointerup=up
         if moves >= 1
           text "Moved" testId="preview"
-      column width=100 height=100 testId="knob" touch-action="none" pointerdown=down
+        column width=40 height=40 testId="knob" touch-action="none" pointerdown=down
 `);
     writeFileSync(file, `test "equal literals"
   expect state shown == "hint"

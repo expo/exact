@@ -1697,6 +1697,7 @@ sits on that list carries the trade it would take.
 - On macOS under concurrent browser drives, the existing `a web contact reports browser cancellation` test sometimes exceeds 30 seconds waiting for Chromium. Reproduced on `0e408dcdc` with `bun test ./scripts/agent-drag.test.mjs -t "a web contact reports browser cancellation"`.
 - In Chromium, pause a checkpoint’s layout read, release the mouse with a second CDP input client, then resume the read. The checkpoint can see the width set by pointerup (#1766).
 - On iOS, stall a plain read until its ten-second deadline, disconnect the touch runner and delay the read for another second. The timeout can follow transport shutdown without evidence of lift in the app’s dispatch log (#1766).
+- On the #1766 parent, manually cancel a Chromium mouse move after its first sample. The release can use the press coordinate even when the last delivered sample has moved.
 - On the #1766 parent, pause a move inside the carrier, cancel manually, press again, then resume the move. The old move and lift can reach the second contact. A blocked library read on the painted host also leaves the first contact down when its callback times out.
 - On the AR6 parent `0e408dcdc`, run `cargo test -p contract --test it -- auth::`. Five Android callback and logout tests fail while checking callback ownership and which request to present.
 - Check how `expect no failures` accounts for a direct `expect refusal` inside a `perf` block. The runner collects arranged refusals at the top level and at drag checkpoints.

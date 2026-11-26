@@ -355,7 +355,7 @@ async function openWebUnlocked({
     partial = '';
   });
   const stdioClosed = new Promise(r => child.on('close', r)); // after 'exit', once stderr is drained
-  const cdp = new Cdp(child.stdio[3], child.stdio[4]);
+  const cdp = new Cdp(child.stdio[3], child.stdio[4], checkDragDeadline);
   const exited = new Promise(r => {
     child.on('exit', (code, signal) => {
       cdp.fail(`Chrome exited (${code ?? signal})`);
@@ -399,9 +399,9 @@ async function openWebUnlocked({
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
     const heldKeys = new Map();
     let documentLoader = null;
-    const call = async (method, params, timeoutMs) => {
-      checkDragDeadline();
+    const call = async (method, params, timeoutMs, received) => {
       const reply = await cdp.send(method, withHeldModifiers(method, params, heldKeys), sessionId, timeoutMs);
+      received?.();
       checkDragDeadline();
       if (method === 'Input.dispatchKeyEvent') {
         if (params.type === 'keyUp') heldKeys.delete(params.code);
@@ -820,7 +820,7 @@ async function openWebUnlocked({
           // the page's `(pointer)` to coarse and `(hover)` to none for the rest of the drive: a
           // simulated finger does not change the device (Charlie, 2026-10-07; a real touch device,
           // `--touch platform` or iOS, stays coarse).
-          const button = (type, at, t, buttons) =>
+          const button = (type, at, t, buttons, received) =>
             call('Input.dispatchMouseEvent', {
               type,
               x: at.x,
@@ -830,7 +830,7 @@ async function openWebUnlocked({
               clickCount: type === 'mouseMoved' ? 0 : 1,
               timestamp: t,
               modifiers: held,
-            });
+            }, undefined, received);
           const finger = (type, touchPoints, timestamp) =>
             call('Input.dispatchTouchEvent', { type, touchPoints, timestamp, modifiers: held });
           if (kind === 'down') {
@@ -841,12 +841,12 @@ async function openWebUnlocked({
             // runner's clock makes the DOM event's timeStamp that clock,
             // independent of how long the carrier took between operations.
             const origin = await evaluate('performance.timeOrigin'), t = (origin + (await ask({ op: 'tags' })).clock) / 1000;
-            if (!mouse) await evaluate(`(${pageContact})('start', ${JSON.stringify({ x: px, y: py })})`);
-            if (mouse) {
-              await button('mouseMoved', { x: px, y: py }, t, 0);
-              await button('mousePressed', { x: px, y: py }, t, 1);
-            } else await finger('touchStart', [{ x: px, y: py }], t);
+            await evaluate(`(${pageContact})('start', ${JSON.stringify({ x: px, y: py, mouse })})`);
+            if (mouse) await button('mouseMoved', { x: px, y: py }, t, 0);
+            checkDragDeadline();
             contact = { x: px, y: py, t, origin, mouse, modifiers: held };
+            if (mouse) await button('mousePressed', contact, t, 1);
+            else await finger('touchStart', [{ x: px, y: py }], t);
             await frame();
             return {
               contact: id,
@@ -861,7 +861,7 @@ async function openWebUnlocked({
           // velocity read from them sees the pause; the move's own time ends at the clock's.
           const caught = async (ms) => { contact.t = Math.max(contact.t, (contact.origin + (await ask({ op: 'tags' })).clock - ms) / 1000); };
           if (kind === 'move') {
-            const from = { x: contact.x, y: contact.y };
+            const pressed = contact, from = { x: pressed.x, y: pressed.y };
             const to = { x: opts.x ?? contact.x + (opts.dx ?? 0), y: opts.y ?? contact.y + (opts.dy ?? 0) };
             const ms = Math.max(0, opts.ms ?? 0);
             await caught(ms);
@@ -871,10 +871,14 @@ async function openWebUnlocked({
               const t = i / steps;
               contact.t += (ms || 16) / steps / 1000;
               const at = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
-              // CDP delivers commands in order. A release submitted while this move awaits its reply uses this sample.
-              Object.assign(contact, at);
-              if (mouse) await button('mouseMoved', at, contact.t, 1);
-              else await finger('touchMove', [at], contact.t);
+              if (mouse) {
+                pressed.moving = true;
+                try { await button('mouseMoved', at, pressed.t, 1, () => Object.assign(pressed, at)); }
+                finally { pressed.moving = false; }
+              } else {
+                await finger('touchMove', [at], pressed.t);
+                Object.assign(pressed, at);
+              }
               if (ms) await sleep(ms / steps);
             }
             checkDragDeadline();
@@ -890,14 +894,17 @@ async function openWebUnlocked({
             }
             return { phase: 'hold', at: [contact.x, contact.y], delivery: 'platform' };
           }
+          const pressed = contact;
           await caught(0);
+          // A cancelled move may have reached the page while its CDP reply is still outstanding.
+          const observed = mouse && pressed.moving ? await evaluate(`(${pageContact})('position')`) : null;
+          const at = observed ?? [pressed.x, pressed.y];
           // A mouse has no cancel: its button comes up where it is.
-          if (mouse) await button('mouseReleased', contact, contact.t + 0.008, 0);
+          if (mouse) await button('mouseReleased', { x: at[0], y: at[1] }, pressed.t + 0.008, 0);
           else await finger(kind === 'up' ? 'touchEnd' : 'touchCancel', [], contact.t + 0.008);
-          const at = [contact.x, contact.y];
-          contact = null;
+          if (contact === pressed) contact = null;
           await frame();
-          const note = mouse ? null : await evaluate(`(${pageContact})('finish')`);
+          const note = await evaluate(`(${pageContact})('finish')`);
           return { phase: kind, at, delivery: 'platform', ...(note ? { note } : {}) };
         }
         if (kind === 'pinch') {

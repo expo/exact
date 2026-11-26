@@ -338,7 +338,7 @@ test.each(['library', 'plain', 'expect', 'landing', 'move'])('one drag deadline 
       events.push('late read');
     };
     const first = kind === 'library'
-      ? s.tap('area', { drag: { ...drag, during: [Object.assign(() => old.promise, { checkpoint: 9 })] } })
+      ? s.tap('area', { drag: { ...drag, during: [Object.assign((finish) => { finish?.(); return old.promise; }, { checkpoint: 9 })] } })
       : authoredDrag(s, { ...drag, during: kind === 'plain' ? ['state'] : [{ op: 'expect-layout' }] },
         read, () => events.push('late comparison'), why => events.push(why));
     try {
@@ -1202,7 +1202,7 @@ test('manual cancel releases a stalled final hold and its late landing cannot li
   const first = drag({ during: [() => 'first'], hold: 10 }).catch(error => error.message);
   try {
     await holding.promise;
-    expect((await s.pointer('cancel')).delivery).toBe('presenter');
+    expect(await s.pointer('cancel')).toMatchObject({ phase: 'cancel', carrier: 'linux', mode: 'platform', delivery: 'presenter' });
     expect(s.contact).toBeNull();
     expect(await first).toContain('cancelled');
     const second = drag({ during: [() => { reading.resolve(); return finish.promise; }] });

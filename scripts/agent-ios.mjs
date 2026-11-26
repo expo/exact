@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { openTouches, iosTouchInput, springboard, withAccessibilityLock, withAccessibilityRuntime } from '../host/apple/touches.mjs';
+import { checkDragDeadline, openTouches, iosTouchInput, springboard, withAccessibilityLock, withAccessibilityRuntime } from '../host/apple/touches.mjs';
 import { coreDeviceAvailable, coreDeviceTurn, foldTaken, hasSimulatorHinge, hingeHelper, partialFoldDisplay, rotateSimulator, simulatorTurns } from './duo/hinge.mjs';
 import { nativeKey } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
@@ -212,7 +212,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
     throw e;
   }
   socket.on('error', () => {});
-  const lines = jsonLines(socket, socket, hostLines);
+  const lines = jsonLines(socket, socket, hostLines, checkDragDeadline);
   const exited = new Promise(r =>
     socket.on('close', async () => {
       const exit = closing ? null : await waitAtMost(launch.exited, 1000);
@@ -272,6 +272,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
         lines.ask(session ? { ...req, session } : req),
         req.op === 'perf' && req.live > 0 ? req.live + REPLY_MS : REPLY_MS,
         () => {
+          checkDragDeadline();
           const why = hangup({ what: `${req.op} did not answer within ${REPLY_MS / 1000} s`, pid, hostLines });
           lines.fail(why);
           throw new Error(why);

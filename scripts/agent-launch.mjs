@@ -1302,7 +1302,8 @@ function finishCdpFailure(error, snapshot, category, input) {
 
 /** The DevTools protocol over Chrome's --remote-debugging-pipe (fd 3 in, fd 4 out; NUL-delimited JSON). A closed pipe or a dead Chrome fails every pending call; every call has a deadline. */
 export class Cdp {
-  constructor(input, output) {
+  constructor(input, output, beforeSend) {
+    this.beforeSend = beforeSend;
     this.input = input;
     this.next = 1;
     this.pending = new Map();
@@ -1336,6 +1337,7 @@ export class Cdp {
     this.closeListeners.clear();
   }
   send(method, params = {}, sessionId, timeoutMs = 15000) {
+    this.beforeSend?.();
     if (this.closed) return Promise.reject(finishCdpFailure(new Error(`${this.closed} (${method})`),
       captureCdpRequest(method, params, sessionId, null, timeoutMs), 'closed', this.input));
     const id = this.next++;
@@ -1354,7 +1356,6 @@ export class Cdp {
     });
   }
 }
-
 /** The tab closed as a person closes it (studio diary R17), the Chrome carrier's `tap {close:true}`: `Page.close` runs
  * the page's `beforeunload`; a handler that prevented it opens Chrome's "Leave site?" (given the page's sticky
  * activation, as for a person), answered "Stay". Either the dialog or the target's detach comes; after the second the

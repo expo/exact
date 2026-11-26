@@ -12,7 +12,7 @@ import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from 
 import { linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, shown, bakedSettingChanges, watchedNewer } from './agent-launch.mjs';
 import { androidBinary, androidDeploy, apkRecord } from './agent-android.mjs';
-import { iosTouchInput, openTouches } from '../host/apple/touches.mjs';
+import { checkDragDeadline, iosTouchInput, openTouches } from '../host/apple/touches.mjs';
 import { nativeKey, mouseContact } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
 import { platformWheel } from './agent-wheel.mjs';
@@ -195,7 +195,7 @@ export async function openStdio({ host, plan, world, size, app, appServerUrl, en
     for (const line of parts) if (/^Android (?:before launch|focused activity):/.test(line)) console.error(line);
   });
   if (device) child.stdout.on('data', (d) => { for (const l of String(d).split('\n')) if (l) hostLines.push('app: ' + l); });
-  let lines = device ? null : jsonLines(child.stdout, child.stdin, hostLines);
+  let lines = device ? null : jsonLines(child.stdout, child.stdin, hostLines, checkDragDeadline);
   const fail = (why) => { lines?.fail(why); bridge?.fail(new Error(why)); };
   const closed = new Promise(resolve => {
     child.once('close', resolve);
@@ -221,7 +221,7 @@ export async function openStdio({ host, plan, world, size, app, appServerUrl, en
   let readyTimeout;
   try {
     const readyLine = device ? bridge.ready.then(({ socket, announcement }) => {
-      lines = jsonLines(socket, socket, hostLines);
+      lines = jsonLines(socket, socket, hostLines, checkDragDeadline);
       socket.on('close', () => lines.fail('the phone agent connection closed; ' + hostLines.slice(-20).join('\n')));
       socket.resume();
       return announcement;
@@ -242,6 +242,7 @@ export async function openStdio({ host, plan, world, size, app, appServerUrl, en
     const ask = (req, session = state.session, optionalMs) => {
       const limit = optionalMs ?? (replyMs + (req.op === 'perf' && req.live > 0 ? req.live : 0));
       return waitAtMost(lines.ask(session ? { ...req, session } : req), limit, () => {
+        checkDragDeadline();
         if (optionalMs != null) return null;
         const why = device ? `phone ${req.op} did not answer within 45 s; check app health, foreground state and network\n` + hostLines.slice(-20).join('\n')
           : hangup({ what: `${req.op} did not answer within ${REPLY_MS / 1000} s`, pid: child.pid, hostLines });
