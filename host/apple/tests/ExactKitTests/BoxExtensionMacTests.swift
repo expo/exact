@@ -145,12 +145,14 @@ final class BoxExtensionMacTests: XCTestCase {
     /// A box that reaches farther than it extends paints its own fill where its reach goes past the extension, once.
     func testReachPastTheExtensionIsTheBoxsOwnPaint() throws {
         guard #available(macOS 26.0, *) else { throw XCTSkip("AppKit's extension view is macOS 26's") }
-        let (p, box, _) = try presenter()
+        let (p, box, _) = try presenter(fill: [255, 0, 0, 128])
         let inside = try pixel(at: NSPoint(x: 150, y: 250))
         p.setReach(2, NSEdgeInsets(top: 0, left: 20, bottom: 0, right: 0))
         box.setExtension(NSEdgeInsets(top: 40, left: 0, bottom: 0, right: 0))
         let strip = try XCTUnwrap(box.boxExtension?.reachStrip, "a strip past the extension")
         XCTAssertEqual(try pixel(at: NSPoint(x: 15, y: 200)), inside, "the reach's strip in the box's fill")
+        // Above the box is the extension's, which the box's own strip leaves to its mirror (a capture draws no mirror)
+        XCTAssertEqual(try pixel(at: NSPoint(x: 150, y: 80)), [255, 255, 255], "no strip of the box's above it")
         box.setExtension(NSEdgeInsetsZero)
         XCTAssertNil(strip.superlayer, "gone with the extension")
     }

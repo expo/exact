@@ -38,8 +38,11 @@ export function overlap(r, band, width, height) {
  * depth `keyboard` (the browser's unless given). Returns how many rounds ran and the readers that had not settled at the
  * bound. A reader out of the document, or with no box, takes `initial`. */
 export function observe(readers, band = documentBand(), keyboard = keyboardInset()) {
+  if (!readers.length) return { rounds: 0, unsettled: [] };
   const names = FAMILIES.flatMap((f) => EDGES.map((e) => `--exact-${f}-${e}`));
   const root = document.documentElement, before = new Map(readers.map((el) => [el, names.map((n) => el.style.getPropertyValue(n))]));
+  // The page's own style changes first, so what they start transitions as it would: the rule then holds only the rounds'
+  root.getBoundingClientRect();
   root.classList.add("exact-rounds");
   ensureRoundsRule();
   try {
@@ -56,13 +59,15 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   }
 }
 
-/** The rule under which a round's values start no transition. */
+/** The rule under which a round's values start no transition: important in the page's first cascade layer, which wins
+ * over every important declaration of the page's own sheets, layered after it or unlayered (CSS Cascade 5, "Cascade
+ * Layers"). */
 function ensureRoundsRule() {
   if (document.getElementById("exact-rounds")) return;
   const style = document.createElement("style");
   style.id = "exact-rounds";
-  style.textContent = ".exact-rounds, .exact-rounds * { transition-duration: 0s !important; transition-delay: 0s !important }";
-  document.head.appendChild(style);
+  style.textContent = "@layer exact-rounds; @layer exact-rounds { .exact-rounds, .exact-rounds * { transition-duration: 0s !important; transition-delay: 0s !important } }";
+  document.head.prepend(style);
 }
 
 /** Each of a reader's inputs, its safe area's, then its keyboard's twice, or `initial` for a reader with no box. */
@@ -72,29 +77,73 @@ function write(el, inputs) {
   }));
 }
 
-/** D9's rounds over `readers`, returning the inputs each settled on, how many rounds ran and the readers still moving. */
+/** D9's rounds over `readers`, returning the inputs each settled on, how many rounds ran and the readers still moving.
+ * Each round reads every reader's box in one pass and writes every input it moves in one batch. A reader's next input is
+ * D9's secant step on its residuals, the measured less the input, of this round and the last (`step`), within half a
+ * device pixel of settled; its box is read as laid out, with every scroll offset at zero. */
 function rounds(readers, band, keyboard) {
-  const written = new Map();
+  const written = new Map(), samples = readers.map(() => []);
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
-  const keys = [0, 0, keyboard, 0];
-  const read = () => readers.map((el) => {
+  const keys = [0, 0, keyboard, 0], caps = [...band, ...keys, ...keys];
+  const tolerance = 0.5 / (globalThis.devicePixelRatio || 1), shifts = readers.map(unscrolled);
+  const read = () => readers.map((el, i) => {
     if (!el.isConnected || !el.getClientRects().length) return null;
-    const r = el.getBoundingClientRect(), k = overlap(r, keys, width, height);
+    const b = el.getBoundingClientRect(), [dx, dy] = shifts[i];
+    const r = { top: b.top + dy, right: b.right + dx, bottom: b.bottom + dy, left: b.left + dx };
+    const k = overlap(r, keys, width, height);
     return [...overlap(r, band, width, height), ...k, ...k];
   });
+  let measured = read();
   for (let round = 0; round < ROUNDS; round++) {
-    // One read pass, each reader's box as the last batch laid it out, then one write batch of the inputs that changed
-    const next = read();
-    if (readers.every((el, i) => written.has(el) && same(written.get(el), next[i]))) return { written, rounds: round, unsettled: [] };
+    let moved = false;
     readers.forEach((el, i) => {
-      if (written.has(el) && same(written.get(el), next[i])) return;
-      written.set(el, next[i]);
-      write(el, next[i]);
+      const input = written.get(el), m = measured[i];
+      if (written.has(el) && settled(input, m, tolerance)) return;
+      const next = input == null || m == null ? m : step(input, m, samples[i], caps, tolerance);
+      written.set(el, next);
+      write(el, next);
+      moved = true;
     });
+    if (!moved) return { written, rounds: round, unsettled: [] };
+    measured = read();
   }
-  // The bound: whoever the last batch still moves is unsettled
-  const last = read();
-  return { written, rounds: ROUNDS, unsettled: readers.filter((el, i) => !same(written.get(el), last[i])) };
+  // The bound: whoever the last batch leaves short of its measurement is unsettled
+  return { written, rounds: ROUNDS, unsettled: readers.filter((el, i) => !settled(written.get(el), measured[i], tolerance)) };
+}
+
+/** Whether each of `input` is within `tolerance` of `measured`, a reader with no box matching only another. */
+const settled = (input, measured, tolerance) =>
+  input === measured || (input != null && measured != null && input.every((v, i) => Math.abs(v - measured[i]) <= tolerance));
+
+/** D9's step on each input, as the kernel's solve takes it: where the residual `measured - input` is within `tolerance`
+ * the input holds; with the last round's sample on that input, the secant through both, clamped to 0 and the input's
+ * most `caps`, or that range's end where the line's root lies behind the input or the residual repeats while the input
+ * moved; else the measurement. `last` keeps each input's sample for the next round. */
+function step(input, measured, last, caps, tolerance) {
+  return input.map((x, e) => {
+    const m = measured[e], r = m - x, prior = last[e];
+    last[e] = [x, r];
+    if (Math.abs(r) <= tolerance) return x;
+    if (!prior || prior[0] === x) return m;
+    const [x0, r0] = prior;
+    if (r === r0) return r > 0 ? caps[e] : 0;
+    const candidate = x - (r * (x - x0)) / (r - r0);
+    if (!Number.isFinite(candidate)) return m;
+    const ahead = r > 0 ? candidate > x : candidate < x;
+    return ahead ? Math.min(Math.max(candidate, 0), caps[e]) : r > 0 ? caps[e] : 0;
+  });
+}
+
+/** How far `el`'s box lies from where it would with every scroll offset at zero, x then y: the offsets of the scrollers
+ * it scrolls in, the document's included, up to a fixed ancestor, which no scroll above it moves (D9). */
+function unscrolled(el) {
+  let dx = 0, dy = 0;
+  for (let a = el.parentElement; a; a = a.parentElement) {
+    if (getComputedStyle(a).position === "fixed") break;
+    dx += a.scrollLeft;
+    dy += a.scrollTop;
+  }
+  return getComputedStyle(el).position === "fixed" ? [0, 0] : [dx, dy];
 }
 
 /** The document's unsafe area, top right bottom left, as the browser's `env(safe-area-inset-*)` gives it. */
@@ -107,4 +156,3 @@ export function documentBand() {
   return band;
 }
 
-const same = (a, b) => a === b || (a != null && b != null && a.every((v, i) => Math.abs(v - b[i]) < 0.01));

@@ -14,6 +14,8 @@ final class BoxAnimations: BoxAnimating {
     private var fills: [UInt32: Redirect] = [:]
     /// The layer each box plays its translate and scale on, where not its own (`setTransformProxy`).
     private var proxies: [UInt32: Redirect] = [:]
+    /// The shape layer each box's clip is, where it is its layer's own mask (`setClip`): a moving clip's `path` plays there.
+    private var clips: [UInt32: Redirect] = [:]
     private var hiddenBoxes: Set<UInt32> = []
     private var flyingBoxes: Set<UInt32> = []
     private var seeked: Double?
@@ -26,15 +28,17 @@ final class BoxAnimations: BoxAnimating {
     }
 
     /// `specs` on the box's layer, its background colour's on its fill's (`setFill`), its translate and scale on its
-    /// proxy (`setTransformProxy`).
+    /// proxy (`setTransformProxy`), and its clip's `path` on its clip's (`setClip`): a box layer has no path, so with no
+    /// clip layer a path plays nowhere.
     private func play(_ id: UInt32, _ specs: [CssAnimation], layer: CALayer, clock: Double?) {
         let filled = fills[id] != nil
         // Keep all transform animations together on the box's layer when any unproxied transform (rotation, negative scale) runs.
         let proxied = proxies[id] != nil && Self.canProxy(specs)
-        let own = specs.filter { !(filled && Self.filled($0.key)) && !(proxied && Self.proxied($0.key)) }
+        let own = specs.filter { $0.key != "path" && !(filled && Self.filled($0.key)) && !(proxied && Self.proxied($0.key)) }
         CssAnimations.apply(own, to: layer, clock: clock, installed: &boxInstalled[id, default: [:]])
         fills[id]?.play(specs.filter { Self.filled($0.key) }, clock: clock)
         proxies[id]?.play(proxied ? specs.filter { Self.proxied($0.key) } : [], clock: clock)
+        clips[id]?.play(specs.filter { $0.key == "path" }, clock: clock)
     }
 
     private static func filled(_ key: String) -> Bool { key == "backgroundColor" }
@@ -54,6 +58,8 @@ final class BoxAnimations: BoxAnimating {
 
     func setFill(_ id: UInt32, _ fill: CALayer?, clock: Double?) { redirect(id, \.fills, to: fill, clock: clock) }
     func setTransformProxy(_ id: UInt32, _ proxy: CALayer?, clock: Double?) { redirect(id, \.proxies, to: proxy, clock: clock) }
+    /// A replaced clip takes the run in phase from its start, so it survives the box's other style changes.
+    func setClip(_ id: UInt32, _ clip: CALayer?, clock: Double?) { redirect(id, \.clips, to: clip, clock: clock) }
 
     /// Points `id`'s redirect in `table` at `layer` (nil for the box's own), and moves what played there.
     private func redirect(_ id: UInt32, _ table: ReferenceWritableKeyPath<BoxAnimations, [UInt32: Redirect]>, to layer: CALayer?, clock: Double?) {
@@ -103,6 +109,7 @@ final class BoxAnimations: BoxAnimating {
         if let entry = boxSpecs.removeValue(forKey: id) { CssAnimations.apply([], to: entry.layer, clock: nil, installed: &boxInstalled[id, default: [:]]) }
         fills.removeValue(forKey: id)?.clear()
         proxies.removeValue(forKey: id)?.clear()
+        clips.removeValue(forKey: id)?.clear()
         boxInstalled.removeValue(forKey: id)
         hiddenBoxes.remove(id)
         flyingBoxes.remove(id)

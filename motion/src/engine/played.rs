@@ -214,6 +214,32 @@ impl Engine {
         ))
     }
 
+    /// A box's `clip-path` transition its host plays (LLP 1003.003 D7): the
+    /// clips at its ends, when it starts moving and its curve, from progress
+    /// 0 to 1. `None` when the clip is not moving or the engine samples it.
+    pub fn played_clip(
+        &self,
+        node: u64,
+    ) -> Option<(
+        Arc<crate::clip::ClipValue>,
+        Arc<crate::clip::ClipValue>,
+        f64,
+        PlayedCurve,
+    )> {
+        let key = (node, Property::ClipPath);
+        if !self.played.contains(&key) {
+            return None;
+        }
+        let running = self.slots.get(&key)?.running()?;
+        let track = self.clips.get(&node)?;
+        Some((
+            track.from.clone(),
+            track.target.clone(),
+            running.start,
+            played_curve(running)?,
+        ))
+    }
+
     /// Played transitions that would have ended by `now` are dropped: their
     /// slots settle at the target they already present, and are presented
     /// again, so that an animation the transition covered shows.

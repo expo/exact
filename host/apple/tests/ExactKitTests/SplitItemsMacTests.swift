@@ -48,13 +48,13 @@ final class SplitItemsMacTests: XCTestCase {
               text "Other"
     """
 
-    private func boot() throws -> (ExactSession, ExactSidebarController) {
+    private func boot(_ source: String? = nil) throws -> (ExactSession, ExactSidebarController) {
         _ = NSApplication.shared
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let contract = dir.appendingPathComponent("app.contract"), plan = dir.appendingPathComponent("app.plan")
-        try app.write(to: contract, atomically: true, encoding: .utf8)
+        try (source ?? app).write(to: contract, atomically: true, encoding: .utf8)
         let compiler = Process(), said = Pipe()
         compiler.executableURL = URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_CONTRACT"]))
         compiler.arguments = ["build", contract.path, "-o", plan.path]
@@ -97,10 +97,31 @@ final class SplitItemsMacTests: XCTestCase {
             XCTAssertTrue(split.pageItem.automaticallyAdjustsSafeAreaInsets, "the route's true")
             XCTAssertFalse(split.detailItem.automaticallyAdjustsSafeAreaInsets, "nothing splits: AppKit's default")
         }
-        // Unsaid, each is AppKit's default again
+        // Unsaid, each is AppKit's default again; and a property Exact never owned stays its owner's
+        if #available(macOS 26, *) { split.detailItem.automaticallyAdjustsSafeAreaInsets = true }
         session.presenter.press(try node("toggle").id)
         settle("the defaults back") { sidebar.allowsFullHeightLayout && inspector.allowsFullHeightLayout }
-        if #available(macOS 26, *) { XCTAssertFalse(split.pageItem.automaticallyAdjustsSafeAreaInsets) }
+        if #available(macOS 26, *) {
+            XCTAssertFalse(split.pageItem.automaticallyAdjustsSafeAreaInsets)
+            XCTAssertTrue(split.detailItem.automaticallyAdjustsSafeAreaInsets, "the window's owner's, untouched")
+        }
+    }
+
+    /// An inspector that goes gives back the element it showed as an accessory, to its route.
+    func testAnInspectorThatGoesGivesBackItsAccessory() throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("AppKit's split item accessories are macOS 26's") }
+        let source = app
+            .replacingOccurrences(of: #"aside width=200 testId="inspector" navigationSplitItemFullHeight=(shown ? "false" : "true")"#,
+                                  with: #"aside width=200 testId="inspector" visibility=(shown ? "visible" : "hidden") navigationSplitItemTopAccessory="tools""#)
+            .replacingOccurrences(of: #" navigationSplitItemTopAccessory=(shown ? "tools" : "")"#, with: "")
+        let (session, split) = try boot(source)
+        let tools = try node("tools")
+        settle("the inspector shows its accessory") { split.inspectorItem?.topAlignedAccessoryViewControllers.count == 1 }
+        XCTAssertTrue(session.presenter.blocks.owns(tools))
+        session.presenter.press(try node("toggle").id)
+        settle("the inspector goes") { split.inspectorItem == nil }
+        XCTAssertFalse(session.presenter.blocks.owns(tools), "given back")
+        XCTAssertTrue(tools.isDescendant(of: try node("route-home")), "back in its route")
     }
 
     func testAnAccessoryIsTheElementItsItemNames() throws {
