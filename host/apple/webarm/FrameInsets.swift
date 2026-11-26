@@ -38,28 +38,37 @@ extension ExactWebView {
         if let authoredMagnification { setMagnification(authoredMagnification, centeredAt: .zero) }
     }
 }
-#elseif os(iOS)
+#else
 import UIKit
+#endif
+
+#if os(iOS) || os(macOS)
+#if os(macOS)
+private typealias Insets = NSEdgeInsets
+#else
+private typealias Insets = UIEdgeInsets
+#endif
 
 extension WebArm {
     /// The obscured insets and their viewport range, where the frame's options say them: a word said
     /// and then dropped gives WebKit back its default.
     func applyInsets(to web: WKWebView, said: (String) -> Bool) {
+        func same(_ a: Insets, _ b: Insets) -> Bool { a.top == b.top && a.left == b.left && a.bottom == b.bottom && a.right == b.right }
         // How much of the guest lies under its owner's bars and band, top left bottom right (LLP 1123
         // D15): WebKit lays the page's fixed and sticky content and its visible rect out clear of it, as
-        // in a web view pinned under a navigation bar
-        if #available(iOS 26.0, *), said("obscured") {
+        // in a web view pinned under a navigation bar or a window's title bar
+        if #available(iOS 26.0, macOS 26.0, *), said("obscured") {
             let o = (options["obscured"] as? [NSNumber])?.map(\.doubleValue) ?? [0, 0, 0, 0]
-            let insets = o.count == 4 ? UIEdgeInsets(top: o[0], left: o[1], bottom: o[2], right: o[3]) : .zero
-            if web.obscuredContentInsets != insets { web.obscuredContentInsets = insets }
+            let insets = o.count == 4 ? Insets(top: o[0], left: o[1], bottom: o[2], right: o[3]) : Insets(top: 0, left: 0, bottom: 0, right: 0)
+            if !same(web.obscuredContentInsets, insets) { web.obscuredContentInsets = insets }
         }
         // The range those insets move through, least then most: WebKit's large viewport clears the
         // least and its small viewport the most, as under bars that collapse (`lvh`, `svh`)
         if said("viewportRange") {
             let r = (options["viewportRange"] as? [NSNumber])?.map(\.doubleValue) ?? []
-            let edges = { (i: Int) in r.count == 8 ? UIEdgeInsets(top: r[i], left: r[i + 1], bottom: r[i + 2], right: r[i + 3]) : .zero }
+            let edges = { (i: Int) in r.count == 8 ? Insets(top: r[i], left: r[i + 1], bottom: r[i + 2], right: r[i + 3]) : Insets(top: 0, left: 0, bottom: 0, right: 0) }
             let (least, most) = (edges(0), edges(4))
-            if web.minimumViewportInset != least || web.maximumViewportInset != most {
+            if !same(web.minimumViewportInset, least) || !same(web.maximumViewportInset, most) {
                 web.setMinimumViewportInset(least, maximumViewportInset: most)
             }
         }

@@ -539,9 +539,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         // displayed frame after a zoom unobservable (LLP 1020.002 D6).
         if said("zoom") { web.pageZoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1) }
         if said("allowsBackForwardNavigationGestures") { web.allowsBackForwardNavigationGestures = options["allowsBackForwardNavigationGestures"] as? Bool ?? false }
-        #if os(iOS)
         applyInsets(to: web, said: said)
-        #endif
         #if os(macOS)
         (web as? ExactWebView)?.configureMagnification(options["magnification"] as? String, id: id)
         if said("allowsMagnification") { web.allowsMagnification = options["allowsMagnification"] as? Bool ?? false }
