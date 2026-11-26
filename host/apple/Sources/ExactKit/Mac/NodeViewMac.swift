@@ -831,13 +831,12 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         return nil
     }
 
-    /// The box on screen, through the placement of the placed child this
-    /// node is (or is under), for assistive technology — the same box the
-    /// agent's `layout` reports.
+    /// The laid-out box on screen, through the placement of the placed child this node is (or is under), for
+    /// assistive technology — the same box the agent's `layout` reports, not the frame reach draws (LLP 1123 D13).
     package override func accessibilityFrame() -> NSRect {
         if placedAncestor?.placementHidden == true { return .zero }
-        guard placedAncestor?.placement != nil, let win = window else { return super.accessibilityFrame() }
-        return win.convertToScreen(drawnRect(bounds))
+        guard placedAncestor?.placement != nil || laidOutBox != bounds, let win = window else { return super.accessibilityFrame() }
+        return win.convertToScreen(drawnRect(laidOutBox))
     }
 
     /// Whether this view draws in the dark appearance. The **owning view's**

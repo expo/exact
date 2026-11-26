@@ -136,7 +136,12 @@ extension Presenter {
         // A host that places the box is given layout's frame, as before the grid.
         let laid = v.frameInScrollDocument(rect)
         if let cell = v.superview as? DataTableCell { cell.place() }
-        else if !dialogs.frame(v, laid) && !menus.frame(v, laid) && !tables.frame(v, laid) { v.frame = frame }
+        else if !dialogs.frame(v, laid) && !menus.frame(v, laid) && !tables.frame(v, laid) {
+            // A box that does not scroll is drawn past its frame by its reach, its children where layout put them (LLP 1123 D13)
+            let reached = v.reached(place)
+            v.frame = reached.map { v.frameInScrollDocument($0.frame) } ?? frame
+            if let origin = reached?.origin ?? (v.bounds.origin == .zero ? nil : .zero) { v.setBoundsOrigin(origin) }
+        }
         v.arrangeShift = .zero
         v.textRasterGeometryChanged()
         v.scroll?.frame = v.bounds
