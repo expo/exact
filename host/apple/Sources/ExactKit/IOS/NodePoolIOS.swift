@@ -593,6 +593,7 @@ extension NodeView {
         let delegate = sv.delegate
         sv.delegate = nil
         sv.setContentOffset(.zero, animated: false)
+        (sv as? ScrollView)?.clampedLeft = nil // the reset is the new list's place, whatever UIKit clamped before
         presenter?.elementScrolls.forget(sv)
         sv.contentSize = .zero
         sv.delegate = delegate

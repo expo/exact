@@ -41,6 +41,65 @@ final class ScrollAnchoringIOSTests: XCTestCase {
         return ops
     }
 
+    /// A scroller's place along its sideways axis is the reader's, as CSS keeps `scrollLeft` through a layout: a
+    /// frame the batch passes through that leaves it less range (a strip framed wider for a moment as an iPhone Duo
+    /// unfolds) clamps nothing once the batch ends; a shorter range the batch ends with does, and an inset the host
+    /// sets keeps the offset as UIKit does.
+    func testAFrameABatchPassesThroughLeavesASidewaysScrollerItsPlace() throws {
+        let p = Presenter()
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        defer { p.reset(); window.isHidden = true }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 100.0],
+            ["op": "content", "id": 1, "w": 600.0, "h": 100.0],
+        ]))
+        let sv = try XCTUnwrap(p.views[1]?.scroll)
+        func frame(_ w: Double) -> [String: Any] { ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": w, "h": 100.0] }
+        sv.contentOffset.x = 296
+        sv.frame.size.width = 356
+        XCTAssertEqual(sv.contentOffset.x, 244, accuracy: 0.5, "UIKit clamps the offset to the range a wider frame leaves")
+        sv.frame.size.width = 300
+        sv.contentOffset.x = 296
+        p.apply(wireBatch([frame(356), frame(300)]))
+        XCTAssertEqual(sv.contentOffset.x, 296, accuracy: 0.5, "a width the batch passes through clamps nothing")
+        p.apply(wireBatch([frame(356)]))
+        XCTAssertEqual(sv.contentOffset.x, 244, accuracy: 0.5, "a batch that ends wider clamps it, as CSS does")
+        // The place stays until the scroller shows it: a window turning lays a strip out over several batches
+        p.apply(wireBatch([frame(330)]))
+        XCTAssertEqual(sv.contentOffset.x, 270, accuracy: 0.5, "a later batch shows as much of the place as its range allows")
+        p.apply(wireBatch([frame(300)]))
+        XCTAssertEqual(sv.contentOffset.x, 296, accuracy: 0.5, "and the place once the range gives it back")
+        p.apply(wireBatch([frame(356)]))
+        sv.contentOffset.x = 200
+        p.apply(wireBatch([frame(300)]))
+        XCTAssertEqual(sv.contentOffset.x, 200, accuracy: 0.5, "the reader's scroll after a clamp is a place of its own")
+        // An inset the host sets keeps the offset, as UIKit does (`reachScroll`)
+        let node = try XCTUnwrap(p.views[1])
+        sv.contentOffset.x = 100
+        sv.contentInset.left += 24
+        node.keepScrollLeft()
+        XCTAssertEqual(sv.contentOffset.x, 100, accuracy: 0.5, "an inset the host set leaves the offset where it was")
+        sv.contentInset.left -= 24
+        sv.contentOffset.x = 0
+        sv.contentInset.left += 24
+        sv.contentOffset.x = -24
+        node.keepScrollLeft()
+        XCTAssertEqual(sv.contentOffset.x, -24, accuracy: 0.5, "one at its start stays at its new start")
+        sv.contentInset.left -= 24
+        // A write after a clamp is a place of its own, which stays
+        sv.contentOffset.x = 296
+        sv.frame.size.width = 356
+        sv.frame.size.width = 300
+        sv.contentOffset.x = 270
+        node.keepScrollLeft()
+        XCTAssertEqual(sv.contentOffset.x, 270, accuracy: 0.5, "the host's write after the clamp")
+    }
+
     func testScrollLayoutBoxCachesUntilItsAncestryOrDisplayChanges() throws {
         let (p, _) = fixture(top: 200)
         defer { p.reset(); window.isHidden = true }
