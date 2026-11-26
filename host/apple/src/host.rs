@@ -140,6 +140,8 @@ mod share_in;
 #[path = "snapshot.rs"]
 pub(crate) mod snapshot;
 pub(crate) use scale::LaunchLayout;
+#[path = "clip_handover.rs"]
+mod clip_handover;
 #[cfg(test)]
 #[path = "spacing_tests.rs"]
 mod spacing_tests;
