@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { bindingChanges, packagedKinds, repack, repackedBuild, versionsOf } from './repack.mjs';
+import { bindingChanges, packagedKinds, repack, repackedBuild, unrebuiltEntry, versionsOf } from './repack.mjs';
 import { frameworkInfo, plistFile } from './assets.mjs';
 import { EXTENSION_KINDS } from './extensions.mjs';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,6 +32,17 @@ test('what the binary was built to provide still refuses a repack, by name', () 
   expect(bindingChanges(template, compat({ app: 'com.example.photos', icons: ['other.png'], executors: ['hermes', 'wasmi'] }))).toEqual(['inputs.executors']);
   expect(bindingChanges(template, compat({ app: 'dev.exact.template', icons: ['icon.png'], minimumOS: '18.0', hatches: ['x'] }))).toEqual(['inputs.minimumOS', 'inputs.hatches']);
   expect(bindingChanges(template, compat({ app: 'dev.exact.template', icons: ['icon.png'] }, { embedded: { trust: 'production', plan: 'p1', assets: 'a1' } }))).toEqual(['embedded']);
+});
+
+// A TypeScript app's full build embeds its module pair in typescript/ with or without widgets (bake widgets.rs), and a
+// repack writes that tree again from its own bake: a base holding it repacks. What repack cannot rebuild still refuses.
+test("a base's entry trees repack with or without widgets; an entry repack does not write refuses by name", () => {
+  const native = new Set(['Frameworks', 'PrivacyInfo.xcprivacy']), withWidgets = new Set([...native, 'PlugIns']);
+  const plain = ['Hello', 'Frameworks', 'Info.plist', 'PrivacyInfo.xcprivacy', 'receipt.json', '_CodeSignature', 'assets', 'AppIcon60x60@2x.png'];
+  expect(unrebuiltEntry([...plain, 'typescript'], 'Hello', native)).toBeNull();
+  expect(unrebuiltEntry([...plain, 'typescript', 'plans', 'activities', 'PlugIns'], 'Hello', withWidgets)).toBeNull();
+  expect(unrebuiltEntry([...plain, 'PlugIns'], 'Hello', native)).toBe('PlugIns');
+  expect(unrebuiltEntry([...plain, 'typescript', 'Watch'], 'Hello', native)).toBe('Watch');
 });
 
 test("a widget's plan edit moves embedded.plans and repacks; the packaged kinds are the full build's", () => {

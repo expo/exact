@@ -18,9 +18,9 @@
 // An app with widgets or Live Activities links its plan into its own copy of ExactCore, not its executable
 // (widgets.mjs placeCoreFramework). It repacks only on its own previous build, and only while what its extension's
 // binary is generated from is the base's (receipt `build.widgets`, widgets.mjs widgetsDigest): ExactCore's sections are
-// refitted; the bake's entry trees (plans/, typescript/, activities/) are written into the bundle and the extension;
-// the app's widget keys (ExactWidgetGeneration, ExactKeychainAccessGroup, ExactWidgetTypeScript) and the extension's
-// Info.plist are written as a full build writes them; and ExactCore and the extension are signed again.
+// refitted; the bake's entry trees (plans/, typescript/, activities/) are written into the extension, as into every
+// app's bundle; the app's widget keys (ExactWidgetGeneration, ExactKeychainAccessGroup, ExactWidgetTypeScript) and the
+// extension's Info.plist are written as a full build writes them; and ExactCore and the extension are signed again.
 //
 // The base may be another app's (for example a template built once from `exact new`): the app's identity
 // (its id and name) reaches no compiled code, only the bundle, executable and framework names and Info.plists,
@@ -69,11 +69,15 @@ const tool = (cmd, args, opts = {}) => {
 // fingerprint it matches. Since the privacy check (40377f0086) every bundle has one, and refusing it ended every repack.
 /** An app with widgets' shared framework, which holds its plan's sections, and its one extension. */
 const CORE = 'Frameworks/ExactCore.framework/ExactCore', WIDGET_EXTENSION = 'PlugIns/ExactWidgets.appex';
-/** The bake's entry trees a full build copies into the bundle root (build.mjs, from `<bake>.entries`). */
+/** The bake's entry trees a full build copies into every app's bundle root (build.mjs, from `<bake>.entries`): a widget
+ * app's plans, TypeScript and activities, and any TypeScript app's module pair (typescript/app.hbc, app.module.json). */
 const ENTRY_TREES = ['plans', 'typescript', 'activities'];
 const NATIVE_ENTRIES = new Set(['Frameworks', 'ExactSvgFilter.metallib', 'Metadata.appintents', 'PrivacyInfo.xcprivacy']);
 /** What this repack writes again (assembleIOS's bundle-level resources) and the signature it replaces. */
 const REBUILT = (name) => ['Info.plist', 'receipt.json', '_CodeSignature', 'assets', 'deck', 'Assets.car'].includes(name) || /^AppIcon.*\.png$/.test(name) || name.endsWith('.lproj');
+/** The first of a base bundle's entries that repack neither keeps (its executable, `kept`) nor writes again, or null. */
+export const unrebuiltEntry = (entries, executable, kept) =>
+  entries.find(entry => entry !== executable && !kept.has(entry) && !REBUILT(entry) && !ENTRY_TREES.includes(entry)) ?? null;
 /** compat.json's parts the binary acts on: what it was built to provide (`inputs`, but for the app's identity and
  * grants), its target and trust. A plan-only change leaves all of them as they were. */
 const BINDING = ['inputs', 'target', 'embedded'];
@@ -213,7 +217,8 @@ export async function repack(args) {
     const differs = widgets && widgetBaseRefusal({ app: app.id, digest: widgetsDigest(app, [...packaged]) }, { app: baseCompat.inputs?.app, digest: baseReceipt.build.widgets, alarm: basePlist.includes('<key>ExactAlarmCountdown</key>') });
     if (differs) refuse(differs);
     const kept = widgets ? new Set([...NATIVE_ENTRIES, 'PlugIns']) : NATIVE_ENTRIES;
-    for (const entry of readdirSync(base)) if (entry !== baseName && !kept.has(entry) && !REBUILT(entry) && !(widgets && ENTRY_TREES.includes(entry))) refuse(`the base bundle holds ${entry}, which repack does not rebuild`);
+    const unknown = unrebuiltEntry(readdirSync(base), baseName, kept);
+    if (unknown) refuse(`the base bundle holds ${unknown}, which repack does not rebuild`);
     if (widgets) for (const entry of readdirSync(resolve(base, 'PlugIns'))) if (entry !== 'ExactWidgets.appex') refuse(`the base bundle holds PlugIns/${entry}, which repack does not rebuild`);
 
     // A new bundle: the base's native entries, then what assembleIOS writes for an unsigned development archive.
@@ -257,19 +262,19 @@ export async function repack(args) {
     writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, true, { development: null, distributed: false, reach: appleReach, tv: false }));
     mark('plist1');
     copyAppleStaticTrees(app.dir, bundle, [['assets', 'assets'], ['deck', 'deck']]);
-    // The bake's entry trees, as build.mjs captures them into the bundle (B1), and the widgets' own copies of the plans
-    // and TypeScript in the extension, as packageWidgets copies them (the base's are the old bake's).
+    // The bake's entry trees, as build.mjs captures them into every app's bundle (B1), and the widgets' own copies of the
+    // plans and TypeScript in the extension, as packageWidgets copies them (the base's are the old bake's).
+    copyAppleStaticTrees(resolve(env.EXACT_BAKE_OUTPUT, `ios-${TARGET}.entries`), bundle, ENTRY_TREES.map(tree => [tree, tree]));
     if (widgets) {
-      copyAppleStaticTrees(resolve(env.EXACT_BAKE_OUTPUT, `ios-${TARGET}.entries`), bundle, ENTRY_TREES.map(tree => [tree, tree]));
       const extension = resolve(bundle, WIDGET_EXTENSION);
       for (const tree of ['plans', 'typescript']) {
         rmSync(resolve(extension, tree), { recursive: true, force: true });
         if (existsSync(resolve(bundle, tree))) cpSync(resolve(bundle, tree), resolve(extension, tree), { recursive: true });
       }
       if (!existsSync(resolve(extension, 'plans')) && platformWidgetEntries(app).length) throw new Error('the bake wrote no plans tree for the widget extension');
-      // What the bundle now holds of the bake's files is what its compat.json embeds, as assembleIOS checks it.
-      verifyBakeFiles(compat, plan, listAssets(bundle, true, ['typescript']));
     }
+    // What the bundle now holds of the bake's files is what its compat.json embeds, as the full build checks it.
+    verifyBakeFiles(compat, plan, listAssets(bundle, true, ['typescript']));
     mark('trees');
     const linkRoot = paths.scratch; mkdirSync(linkRoot, { recursive: true });
     // The compiler the base's icons were keyed by: the same one, since the native fingerprint pins the toolchain.
