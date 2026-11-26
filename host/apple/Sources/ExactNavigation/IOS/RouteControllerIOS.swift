@@ -180,6 +180,14 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     @available(iOS 27.1, *)
     override var preferredVerticalBarBehavior: UIVerticalBarBehavior { verticalBarDisabled ? .disabled : .automatic }
     #endif
+    // A resize lays the route out ahead of UIKit's own layout (`ExactView.fitAheadOfLayout`), while UIKit is still
+    // moving its containers, and UIKit keeps the safe area it gave the route's view then: one in a collapsed split's
+    // nested stack kept the cover display's landscape side inset back in portrait. Laying the view out once the
+    // transition ends has UIKit give it the safe area of where it rests.
+    override func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.viewIfLoaded?.setNeedsLayout() }
+    }
     // The bar's height changed (a push to an inline title, a rotation, a
     // hatch): the route's content area follows (LLP 1075.003 §3.5), once
     // Exact's own writes settle (LLP 1123 D11).
