@@ -786,8 +786,43 @@ fn store_response(
     });
 }
 
+/// What RFC 9111 lets a cache outside this executor do with a 200 it stores:
+/// the painted host's remote images, kept across launches (LLP 1011 §2).
+pub struct Freshness {
+    /// Its corrected initial age (§4.2.3).
+    pub age: Duration,
+    /// How long it is fresh from its generation (§4.2.1).
+    pub lifetime: Duration,
+    /// Validated before each use (`no-cache`, an unreadable `max-age` or `Date`).
+    pub validate: bool,
+    /// How long past its lifetime it may be shown while it is refreshed (RFC 5861);
+    /// none under `must-revalidate`.
+    pub stale_while_revalidate: Duration,
+}
+/// The [`Freshness`] of a response received at `received` (since the epoch)
+/// `delay` after it was asked for; `None` when it may not be stored.
+pub fn freshness_of(
+    headers: &[(String, String)],
+    delay: Duration,
+    received: Duration,
+) -> Option<Freshness> {
+    let (age, lifetime, validate) = freshness(headers, delay, received)?;
+    let directives = Directives::of(headers);
+    Some(Freshness {
+        age,
+        lifetime,
+        validate,
+        stale_while_revalidate: Duration::from_secs(
+            (!directives.must_revalidate)
+                .then_some(directives.stale_while_revalidate)
+                .flatten()
+                .unwrap_or(0),
+        ),
+    })
+}
+
 fn freshness(
-    headers: &Headers,
+    headers: &[(String, String)],
     delay: Duration,
     received: Duration,
 ) -> Option<(Duration, Duration, bool)> {
@@ -817,7 +852,7 @@ fn freshness(
     ))
 }
 
-fn current_age(headers: &Headers, delay: Duration, received: Duration) -> Duration {
+fn current_age(headers: &[(String, String)], delay: Duration, received: Duration) -> Duration {
     let date = first(headers, "date")
         .and_then(http_date)
         .map(Duration::from_secs)
@@ -1032,9 +1067,11 @@ struct Directives {
     max_age: Option<u64>,
     min_fresh: Option<u64>,
     invalid_age: bool,
+    stale_while_revalidate: Option<u64>,
+    must_revalidate: bool,
 }
 impl Directives {
-    fn of(headers: &Headers) -> Self {
+    fn of(headers: &[(String, String)]) -> Self {
         let mut out = Self::default();
         let mut age_seen = false;
         for value in values(headers, "cache-control") {
@@ -1054,6 +1091,8 @@ impl Directives {
                         out.max_age = Some(age.unwrap_or(0));
                     }
                     "min-fresh" => out.min_fresh = seconds(value),
+                    "stale-while-revalidate" => out.stale_while_revalidate = seconds(value),
+                    "must-revalidate" => out.must_revalidate = true,
                     _ => {}
                 }
             }

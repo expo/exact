@@ -955,6 +955,7 @@ export const classifications = [
     ["painted:host/painted/src/package.rs", "Context::publish_image Notifier::picture_changed Notifier::publish_image"],
     ["painted:host/painted/src/image/published.rs", "PublishedImage::new"],
     ["painted:host/painted/src/image/bitmap.rs", "Bitmap::animation_file Bitmap::bytes Bitmap::crop Bitmap::hardware Bitmap::height Bitmap::natural Bitmap::pixels Bitmap::placed Bitmap::shared Bitmap::width"],
+    ["painted:host/painted/src/image/disk.rs", "Disk::get Disk::new Disk::put Disk::remove Entry::copy_to Head::of Head::refreshed Head::usable Head::validators"],
     ["painted:host/painted/src/image/hardware.rs", "hardware_pictures"],
     ["painted:host/painted/src/image/jpeg.rs", "decoder"],
     ["painted:host/painted/src/image/package.rs", "Images::package_answer Images::package_asks Images::package_changed Images::set_package_schemes"],

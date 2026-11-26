@@ -18,6 +18,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
+#[path = "disk.rs"]
+mod disk;
+
 /// `link` cut at its query or fragment, whatever its form.
 pub(crate) fn without_query(link: &str) -> &str {
     &link[..link.find(['?', '#']).unwrap_or(link.len())]
@@ -242,7 +245,21 @@ struct Job {
     /// A picture that fills the screen: taken first, though not more than
     /// [`URGENT_STREAK`] in a row while others wait.
     urgent: bool,
+    /// A stored picture shown stale, asked for again behind it ([`Downloads::refreshes`]).
+    refresh: bool,
 }
+
+/// What a download leaves the disk cache to do once its load has settled.
+enum Then {
+    /// Keep its body under this (clean) URL with this head.
+    Store(String, disk::Head),
+    /// It was shown from the disk within its `stale-while-revalidate` window.
+    Refresh,
+}
+
+/// How many downloads may run for a refresh to start: refreshes never hold
+/// more than two of the threads, as Apple runs two (`RasterDownload.refreshes`).
+const REFRESHING: usize = 2;
 
 /// How many urgent downloads a thread takes in a row while an ordinary one
 /// waits: then the oldest ordinary one, so a run of screen-filling pictures
@@ -260,6 +277,10 @@ pub(super) struct Downloads {
     streak: AtomicUsize,
     started: std::sync::Once,
     cache: Mutex<Cache>,
+    /// Responses kept across launches; none in tests that make their own.
+    disk: Option<disk::Disk>,
+    /// Source URLs to refresh once no download waits, one entry each.
+    refreshes: Mutex<Vec<String>>,
     /// URLs whose server said when to ask again (`Retry-After`), until then,
     /// with its answer: a source asked for meanwhile, however new, has that
     /// answer at once and asks nothing.
@@ -271,9 +292,20 @@ pub(super) struct Downloads {
 impl Downloads {
     pub fn process() -> &'static Arc<Downloads> {
         static DOWNLOADS: OnceLock<Arc<Downloads>> = OnceLock::new();
-        DOWNLOADS.get_or_init(|| Downloads::new(Policy::default()))
+        DOWNLOADS.get_or_init(|| {
+            let dir = cache_base().join("exact").join("image-cache");
+            Downloads::with(
+                Policy::default(),
+                Some(disk::Disk::new(dir, disk::DISK_BYTES)),
+            )
+        })
     }
+    /// Downloads with no disk cache, for a test's own.
+    #[cfg(test)]
     pub fn new(policy: Policy) -> Arc<Self> {
+        Self::with(policy, None)
+    }
+    fn with(policy: Policy, disk: Option<disk::Disk>) -> Arc<Self> {
         Arc::new(Self {
             policy,
             transport: Box::new(RustlsHttpTransport::new()),
@@ -283,6 +315,8 @@ impl Downloads {
             streak: AtomicUsize::new(0),
             started: std::sync::Once::new(),
             cache: Mutex::new(Cache::new(policy.cache)),
+            disk,
+            refreshes: Mutex::new(Vec::new()),
             cooling: Mutex::new(HashMap::new()),
             clock: Clock::default(),
             fetches: AtomicU64::new(0),
@@ -342,6 +376,7 @@ impl Downloads {
             load: Arc::downgrade(&load),
             url: url.to_owned(),
             urgent,
+            refresh: false,
         };
         if urgent {
             queue_urgent(&mut queue, job);
@@ -407,9 +442,13 @@ impl Downloads {
     pub fn holds(&self, url: &str) -> bool {
         self.cache.lock().unwrap().entries.contains_key(url)
     }
-    /// Forget `url`'s cached body if it is `body`, which no decode can use.
+    /// Forget `url`'s cached body if it is `body`, which no decode can use,
+    /// and whatever the disk holds for it.
     pub fn forget(&self, url: &str, body: &Arc<Body>) {
         self.cache.lock().unwrap().forget(url, body);
+        if let (Some(disk), Some(url)) = (&self.disk, clean(url)) {
+            disk.remove(url.as_str());
+        }
     }
     fn start(self: &Arc<Self>) {
         self.started.call_once(|| {
@@ -440,10 +479,19 @@ impl Downloads {
                     let ordinary = (self.streak.load(Ordering::SeqCst) >= URGENT_STREAK)
                         .then(|| queue.iter().position(|job| !job.urgent))
                         .flatten();
-                    let taken = match ordinary {
+                    let mut taken = match ordinary {
                         Some(at) => queue.remove(at),
                         None => queue.pop_front(),
                     };
+                    // Nothing waits: a picture shown stale is refreshed.
+                    if taken.is_none() && self.running.load(Ordering::SeqCst) < REFRESHING {
+                        taken = self.refreshes.lock().unwrap().pop().map(|url| Job {
+                            load: Weak::new(),
+                            url,
+                            urgent: false,
+                            refresh: true,
+                        });
+                    }
                     if let Some(job) = taken {
                         if job.urgent {
                             self.streak.fetch_add(1, Ordering::SeqCst);
@@ -458,6 +506,17 @@ impl Downloads {
                 }
             };
             let _running = Running(&self.running);
+            if job.refresh {
+                let (controller, mut then) = (AbortController::new(), None);
+                let whole = Instant::now() + self.policy.whole;
+                let result = self.fetch(&job, &controller.signal(), whole, &mut then);
+                let body = result.ok().filter(|body| body.status.is_none());
+                if let Some(body) = &body {
+                    self.cache.lock().unwrap().put(&job.url, body.clone());
+                }
+                self.then(&job.url, body, then);
+                continue;
+            }
             // Gone, or timed out while it waited.
             let Some(load) = job.load.upgrade().filter(|load| !load.settled()) else {
                 continue;
@@ -470,7 +529,8 @@ impl Downloads {
             // Only the source holds the load while it downloads: dropping it
             // aborts the download.
             drop(load);
-            let result = self.fetch(&job, &signal, whole);
+            let mut then = None;
+            let result = self.fetch(&job, &signal, whole, &mut then);
             if let Err(Failure {
                 after: Some(at),
                 message,
@@ -490,23 +550,76 @@ impl Downloads {
                 None => true,
             };
             // Only a 2xx is kept, as before a status that is not was read.
-            if let Some(body) = body.filter(|body| stood && body.status.is_none()) {
-                cache.put(&job.url, body);
+            let body = body.filter(|body| stood && body.status.is_none());
+            if let Some(body) = &body {
+                cache.put(&job.url, body.clone());
             }
+            drop(cache);
+            self.then(&job.url, body, then);
         }
     }
-    fn fetch(&self, job: &Job, signal: &AbortSignal, whole: Instant) -> Outcome {
+    /// After a load: its body to the disk, or `url` to refresh.
+    fn then(&self, url: &str, body: Option<Arc<Body>>, then: Option<Then>) {
+        match (then, &self.disk) {
+            (Some(Then::Store(key, head)), Some(disk)) => {
+                if let Some(body) = body {
+                    disk.put(&key, &head, &body.path, body.len);
+                }
+            }
+            (Some(Then::Refresh), Some(_)) => {
+                let mut refreshes = self.refreshes.lock().unwrap();
+                if !refreshes.iter().any(|u| u == url) {
+                    refreshes.push(url.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    /// `job`'s body: from the disk when it is fresh there, or within its
+    /// `stale-while-revalidate` window unless this is that refresh; else from
+    /// the network, asked with the stored validators, whose 304 is the stored
+    /// body. `then`: what the disk is to do once the load has settled.
+    fn fetch(
+        &self,
+        job: &Job,
+        signal: &AbortSignal,
+        whole: Instant,
+        then: &mut Option<Then>,
+    ) -> Outcome {
         let progress = || {
             if let Some(load) = job.load.upgrade() {
                 load.progress(self.policy.request);
             }
         };
         let mut url = clean(&job.url).ok_or_else(|| refused("not an http or https URL"))?;
+        let key = url.to_string();
+        let mut stored = self.disk.as_ref().and_then(|disk| disk.get(&key));
+        if let Some(entry) = &mut stored {
+            let usable = entry.head.usable(SystemTime::now());
+            let shown = !job.refresh
+                && matches!(usable, disk::Use::Fresh | disk::Use::StaleWhileRevalidate);
+            // One that cannot be copied is fetched instead.
+            if let Some(body) = shown.then(|| spooled(entry)).and_then(Result::ok) {
+                if usable == disk::Use::StaleWhileRevalidate {
+                    *then = Some(Then::Refresh);
+                }
+                return Ok(body);
+            }
+            if entry.head.validators().is_empty() {
+                stored = None;
+            }
+        }
+        // Kept under the URL asked for only while every hop is permanent.
+        let mut permanent = true;
+        let (asked, started) = (SystemTime::now(), Instant::now());
         let mut redirects = 0;
         let mut response = loop {
             self.fetches.fetch_add(1, Ordering::Relaxed);
             let mut request = Request::get(url.as_str());
             request.headers.set("accept", ACCEPT);
+            for (name, value) in stored.iter().flat_map(|entry| entry.head.validators()) {
+                request.headers.set(name, value);
+            }
             // The cap applies to the answer, after its status (below).
             request.max_body = Some(usize::MAX);
             // The transport's own phases outlast the clock's whole-load bound.
@@ -523,6 +636,7 @@ impl Downloads {
             let Some(location) = location else {
                 break response;
             };
+            permanent &= matches!(response.status, 301 | 308);
             redirects += 1;
             if redirects > MAX_REDIRECTS {
                 return Err(refused("too many redirects"));
@@ -533,6 +647,18 @@ impl Downloads {
                 .and_then(|next| clean(next.as_str()))
                 .ok_or_else(|| refused(format!("a redirect to {}", without_query(location))))?;
         };
+        if let (304, Some(entry)) = (response.status, &mut stored) {
+            let head = entry
+                .head
+                .refreshed(response.headers.entries(), asked, started.elapsed());
+            let body = spooled(entry)?;
+            *then = Some(Then::Store(key, head));
+            return Ok(body);
+        }
+        if response.status == 200 && permanent {
+            let head = disk::Head::of(response.headers.entries(), asked, started.elapsed());
+            *then = Some(Then::Store(key, head));
+        }
         // A status that is not 2xx is the failure of a body that is not an
         // image; its body is read all the same, as a browser reads it.
         let status = (!(200..300).contains(&response.status)).then(|| {
@@ -575,16 +701,7 @@ impl Downloads {
         if declared.is_some_and(|n| n > self.policy.limit) {
             return Err(over());
         }
-        let path = spool_dir()
-            .map_err(|e| failed(format!("no spool directory: {e}")))?
-            .join(spool_name().map_err(|e| failed(format!("no spool name: {e}")))?);
-        let mut file = spool_file(&path).map_err(|e| failed(format!("no spool file: {e}")))?;
-        // Removes the file on every early return.
-        let mut body = Body {
-            path,
-            len: 0,
-            status: None,
-        };
+        let (mut body, mut file) = spool()?;
         let mut chunk = vec![0; 64 * 1024];
         loop {
             let n = response
@@ -608,6 +725,31 @@ impl Downloads {
         body.status = status;
         Ok(Arc::new(body))
     }
+}
+
+/// An empty spool file, removed with the body unless it is kept.
+fn spool() -> Result<(Body, std::fs::File), Failure> {
+    let path = spool_dir()
+        .map_err(|e| failed(format!("no spool directory: {e}")))?
+        .join(spool_name().map_err(|e| failed(format!("no spool name: {e}")))?);
+    let file = spool_file(&path).map_err(|e| failed(format!("no spool file: {e}")))?;
+    // Removes the file on every early return.
+    let body = Body {
+        path,
+        len: 0,
+        status: None,
+    };
+    Ok((body, file))
+}
+
+/// A stored entry's body in a spool file of its own.
+fn spooled(entry: &mut disk::Entry) -> Result<Arc<Body>, Failure> {
+    let (mut body, mut file) = spool()?;
+    entry
+        .copy_to(&mut file)
+        .map_err(|e| failed(format!("reading the disk cache: {e}")))?;
+    body.len = entry.len;
+    Ok(Arc::new(body))
 }
 
 /// `job` goes after the urgent jobs already waiting and ahead of the
@@ -713,24 +855,7 @@ fn spool_dir() -> Result<PathBuf, String> {
     if let Some((path, _)) = &*dir {
         return Ok(path.clone());
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join(".cache"))
-                .filter(|p| p.is_absolute())
-        })
-        .unwrap_or_else(std::env::temp_dir);
-    #[cfg(windows)]
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(std::env::temp_dir);
-    #[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
-    let base = std::env::temp_dir();
-    let root = base.join("exact").join("images");
+    let root = cache_base().join("exact").join("images");
     let at = |path: &Path, e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
     std::fs::create_dir_all(&root).map_err(|e| at(&root, &e))?;
     let namespace = root.join(".namespace.lock");
@@ -755,6 +880,28 @@ fn spool_dir() -> Result<PathBuf, String> {
     drop(file);
     *dir = Some((mine.clone(), held));
     Ok(mine)
+}
+
+/// The user's cache directory ([`spool_dir`]).
+fn cache_base() -> PathBuf {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".cache"))
+                .filter(|p| p.is_absolute())
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(std::env::temp_dir);
+    #[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
+    let base = std::env::temp_dir();
+    base
 }
 
 fn lock_file(path: &Path) -> std::io::Result<std::fs::File> {
