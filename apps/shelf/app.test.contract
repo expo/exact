@@ -1,6 +1,9 @@
 // Shelf's flows, the same on the web and on iOS (`bun scripts/agent.mjs <host>
 // --test apps/shelf/app.test.contract`). Each test starts from the seed library.
 
+// Open Library answers Discover from this fixture, so no test waits on the service.
+answer fetch "https://openlibrary.org/subjects" with 200 {"works": [{"key": "/works/OL1W", "title": "The Fixture", "authors": [{"name": "A. Writer"}]}]}
+
 test "the library opens with the seed books, newest first"
   expect text "library-count" == "3 of 3 books"
   expect text "book-status-seed-3" == "Want to Read"
@@ -175,7 +178,8 @@ test "discover shows an error, then tries again"
   tap "tab-discover"
   clock data
   expect tree has "discover-error"
-  pass fetch "https://openlibrary.org/subjects"
+  // The service answers again (the file's fixture, in place of the failure)
+  answer fetch "https://openlibrary.org/subjects" with 200 {"works": [{"key": "/works/OL1W", "title": "The Fixture", "authors": [{"name": "A. Writer"}]}]}
   tap "retry"
   clock data
   expect tree missing "discover-error"
