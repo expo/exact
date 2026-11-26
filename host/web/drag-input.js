@@ -21,7 +21,11 @@ export function lightDomDragPath(event) {
       // A slot can also wrap that slot as fallback content, so prefer the entry reached by a jump.
       const entry = elements.findLastIndex((el, i) => isSlot(el) && elements[i - 1]?.parentNode !== el);
       const slot = entry < 0 ? elements.findLastIndex(isSlot) : entry;
-      if (slot >= 0) elements.length = slot;
+      // A listener that moved the fallback content within this tree makes its slot look like a jump, so the first
+      // element still in this tree bounds the detour too
+      const inside = elements.findIndex((el) => el.getRootNode?.() === node);
+      const cut = Math.min(...[slot, inside].filter((at) => at >= 0));
+      if (cut < elements.length) elements.length = cut;
     }
   }
   return elements;

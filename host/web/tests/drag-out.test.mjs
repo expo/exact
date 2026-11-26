@@ -294,6 +294,9 @@ need('chromium', chromium().unavailable).each([
   ['a script-owned wrapper moves into a frame’s shadow root', { move: 'wrapper', to: 'shadow' }],
   ['a script-owned wrapper moves into a frame’s shadow root while the wasm listener loads',
     { move: 'wrapper', to: 'shadow', waiting: true }],
+  ['the card’s fallback wrapper moves out of its slot within the card’s shadow root', { move: 'fallback', to: 'root' }],
+  ['the card’s fallback wrapper moves out of its slot within the card’s shadow root while the wasm listener loads',
+    { move: 'fallback', to: 'root', waiting: true }],
 ])('chromium: capture checks the image drag owner after %s', async (_, { move, to, waiting }) => {
   const browser = await suiteBrowser('chromium');
   try {
@@ -314,20 +317,27 @@ need('chromium', chromium().unavailable).each([
         if (move === 'card') {
           wrapper.append(document.createElement('slot'));
           card.attachShadow({ mode: 'open' }).append(wrapper);
+        } else if (move === 'fallback') {
+          // `<slot name="unused"><div draggable="true"><slot></slot></div></slot>`: the image is assigned to the inner slot
+          const unused = Object.assign(document.createElement('slot'), { name: 'unused' });
+          wrapper.append(document.createElement('slot'));
+          unused.append(wrapper);
+          card.attachShadow({ mode: 'open' }).append(unused);
         } else {
           wrapper.append(image);
           card.append(wrapper);
         }
       }
       let destination = document.body;
-      if (to !== 'body') {
+      if (to === 'root') destination = card.shadowRoot;
+      else if (to !== 'body') {
         const frame = document.createElement('iframe');
         frame.hidden = true;
         document.body.append(frame);
         destination = frame.contentDocument.body;
         if (to === 'shadow') destination = destination.attachShadow({ mode: 'open' });
       }
-      const moved = { card, image, wrapper }[move];
+      const moved = { card, image, wrapper, fallback: wrapper }[move];
       window.addEventListener('dragstart', () => destination.append(moved), { capture: true, once: true });
       image.addEventListener('dragstart', (event) => {
         window.imageDrag = {
@@ -345,9 +355,11 @@ need('chromium', chromium().unavailable).each([
     }, { move, to, waiting });
     expect(draggable).toBe(!waiting);
     await drag(page, '#picture', [0, 20]);
+    // A card still in the document and draggable drags as itself, its text on the drag
+    const own = move === 'fallback' && !waiting;
     expect(await page.evaluate(() => window.imageDrag)).toEqual({
       imageTarget: true, wrapperOnPath: true, moved: true, connected: true,
-      cardInDocument: move !== 'card', cancelled: move !== 'wrapper', text: '',
+      cardInDocument: move !== 'card', cancelled: move !== 'wrapper' && !own, text: own ? 'card' : '',
     });
   } finally {
     await browser.close();
