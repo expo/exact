@@ -1397,6 +1397,7 @@ extension Agent {
                 }
                 if node.props["popover"] != nil { row["open"] = presenter.menus.isOpen(node) }
                 #if os(iOS) || os(tvOS)
+                if node.video?.state()["pictureInPicture"] as? Bool == true { row["pictureInPicture"] = ["presentation": "system"] }
                 if let why = unshown[node.id] { row["unshown"] = why }
                 #endif
             }

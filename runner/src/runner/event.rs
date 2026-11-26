@@ -8,6 +8,8 @@ use std::rc::Rc;
 mod focus;
 pub(super) mod frame_navigation;
 mod keyboard;
+mod picture_in_picture;
+pub(super) use picture_in_picture::FloatingVideo;
 mod view_event;
 pub use keyboard::KeyboardEvent;
 pub(in crate::runner) use view_event::absent_is_none;
@@ -1168,18 +1170,14 @@ impl<D: DataSource> Runner<D> {
             return Err(RunnerError::InvalidEvent { event });
         }
         let (node, frames) = self
-            .find(view)
-            .or_else(|| {
-                matches!(event, Event::Focusout { .. })
-                    .then(|| self.take_detached_focus(view))
-                    .flatten()
-            })
+            .event_target(view, &event)
             .ok_or(RunnerError::UnknownView(view))?;
         // Events without a listener do nothing: a picker's `cancel` (LLP
         // 1069.010 D3), a dialog's `close` (LLP 1021), a scroll's end or drag, a swipe.
         if matches!(
             event,
-            Event::Cancel
+            Event::Media(EventKind::Enterpictureinpicture, _)
+                | Event::Cancel
                 | Event::Close
                 | Event::Scrollend
                 | Event::Scrolldragstart
@@ -1187,6 +1185,7 @@ impl<D: DataSource> Runner<D> {
                 | Event::Historyswipe(_)
         ) {
             let kind = match event {
+                Event::Media(kind, _) => kind,
                 Event::Close => EventKind::Close,
                 Event::Scrollend => EventKind::Scrollend,
                 Event::Scrolldragstart => EventKind::Scrolldragstart,

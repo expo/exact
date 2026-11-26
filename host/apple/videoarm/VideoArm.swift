@@ -148,6 +148,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     /// The full-screen presentation `requestFullscreen` made, while it shows.
     var fullscreen: FullscreenPlayer?
     #if os(iOS)
+    private var floatingController: AVPlayerViewController?
     var audioControls: AudioControls?
     var presentation: UIView? { audioControls ?? controller?.view ?? inline }
     #else
@@ -316,7 +317,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var isFullscreen: Bool { fullscreen != nil }
     var snapshot: [String: Any] {
         let duration = player.currentItem?.duration.seconds ?? .nan
-        return ["currentTime": seconds, "duration": duration.isFinite ? duration as Any : NSNull(),
+        var state: [String: Any] = ["currentTime": seconds, "duration": duration.isFinite ? duration as Any : NSNull(),
                 "playing": player.timeControlStatus == .playing, "paused": player.rate == 0, "muted": player.isMuted, "volume": player.volume,
                 "playbackRate": player.rate, "readyState": player.currentItem?.status == .readyToPlay ? 4 : 0,
                 "videoWidth": naturalSize.width, "videoHeight": naturalSize.height,
@@ -326,7 +327,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
                 // @ref LLP 1100 D11
                 "hdr": hdrItem, "eligibleForHDR": AVPlayer.eligibleForHDRPlayback,
                 "dynamicRange": props["dynamicRangeLimit"] ?? "no-limit",
-                "appliedDynamicRange": appliedDynamicRange].merging(fullscreenReport) { $1 }
+                "appliedDynamicRange": appliedDynamicRange]
+        #if os(iOS)
+        state["pictureInPicture"] = floatingController != nil
+        #endif
+        return state.merging(fullscreenReport) { $1 }
     }
     func emit(_ event: String = "snapshot", payload: String = "") {
         guard !invalidated else { return }
@@ -1159,6 +1164,14 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     func invalidate() {
         guard !invalidated else { return }
         invalidated = true; generation += 1; posterGeneration += 1
+        #if os(iOS)
+        if let floatingController {
+            self.floatingController = nil
+            floatingController.player = nil
+            // Removal ends this presentation before AVKit can report its stop (LLP 1042 §9.3).
+            if listeners.contains("leavepictureinpicture") { send(["event": "leavepictureinpicture", "payload": ""]) }
+        }
+        #endif
         placePicture(nil, overlay: nil)
         variantRead?.cancel(); variantRead = nil
         clearPlaybackClock()
@@ -1195,13 +1208,30 @@ extension VideoArm: AVPlayerViewDelegate {
 #else
 extension VideoArm: AVPlayerViewControllerDelegate {
     #if os(iOS)
+    func playerViewControllerDidStartPictureInPicture(_ source: AVPlayerViewController) {
+        guard !invalidated, source.delegate === self else { return }
+        let entered = floatingController == nil
+        floatingController = source
+        if entered { emit("enterpictureinpicture") }
+    }
+    func playerViewControllerDidStopPictureInPicture(_ source: AVPlayerViewController) {
+        guard floatingController === source else { return }
+        floatingController = nil
+        emit("leavepictureinpicture")
+    }
+    func playerViewController(_ source: AVPlayerViewController, failedToStartPictureInPictureWithError error: Error) {
+        guard !invalidated, source.delegate === self else { return }
+        emit("pictureinpictureerror", payload: error.localizedDescription)
+    }
     func playerViewController(_ playerViewController: AVPlayerViewController, willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+        guard playerViewController === controller else { return }
         nativeFullscreen = true; layout()
         coordinator.animate(alongsideTransition: nil) { [weak self] context in
             if context.isCancelled { self?.nativeFullscreen = false; self?.layout() }
         }
     }
     func playerViewController(_ playerViewController: AVPlayerViewController, willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+        guard playerViewController === controller else { return }
         coordinator.animate(alongsideTransition: nil) { [weak self] context in
             if !context.isCancelled { self?.nativeFullscreen = false; self?.layout() }
         }
@@ -1238,6 +1268,8 @@ extension VideoArm {
         let full = FullscreenPlayer()
         #if os(iOS)
         // AVKit's default publishes Now Playing, which a claimant may own.
+        full.delegate = self
+        full.allowsPictureInPicturePlayback = !bool("disablepictureinpicture") && bool("allowsPictureInPicturePlayback", true)
         full.updatesNowPlayingInfoCenter = avkitPublishes
         #endif
         full.player = player

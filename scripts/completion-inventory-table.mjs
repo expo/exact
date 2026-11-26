@@ -5,7 +5,6 @@ function group(family, protocol, lifetime, kind, evidence, sites, durableWhen) {
   return { family, protocol, lifetime, class: kind, inference: true, evidence, ...(durableWhen ? { durableWhen } : {}),
     ids: sites.flatMap(([scope, names]) => names.split(/\s+/).filter(Boolean).map(name => `${scope}:${name}`)) };
 }
-
 export const classifications = [
   group("desktop stills", ["one-shot"], "pending send until cancellation or session destruction", "UI-owned",
     "Captures checks its held request before renaming any staged files. Cancellation and Drop retire that authority; the process worker owns no independent publication.", [
@@ -527,6 +526,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/preferences.rs", "Presenter::extension_agent Presenter::midi_agent"],
     ["runner:runner/src/midi.rs", "Midi::push#next:1 Midi::retract_seq#next:1 Midi::ticks#next:1"],
     ["runner:runner/src/runner/audio_seam.rs", "Runner::end_sounds Runner::midi_agent Runner::midi_host Runner::plays_audio Runner::take_midi Runner::take_sounds Runner::transport_playing"],
+    ["runner:runner/src/runner/event/picture_in_picture.rs", "Runner::expects_video_leave"],
     ["runner:runner/src/runner/midi.rs", "Runner::midi Runner::midi_input Runner::midi_inputs Runner::set_midi"],
     ["runner:runner/src/runner/modules/samples.rs", "Runner::surface_sensor_events_linked#next:1"],
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::surface_sensor_events Runner::surface_sensor_inputs"],

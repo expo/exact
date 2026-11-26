@@ -194,6 +194,18 @@ extension Presenter {
         let id = args.first as? String ?? ""
         let node = views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == id })
         guard let node else { session?.log("requestPictureInPicture \"\(id)\" refused: no live node with that id"); return }
+        if node.kind == "video", node.props["semanticTag"] != "audio" {
+            if args.count > 1 { return PictureInPictureHost.refuse(node, "presentation, title, width and height are image-only options") }
+            #if os(iOS)
+            let platform = "iOS"
+            #elseif os(tvOS)
+            let platform = "tvOS"
+            #else
+            // AVPlayerView offers its own control and delegate (LLP 1042 §9.3).
+            let platform = "macOS"
+            #endif
+            return PictureInPictureHost.refuse(node, "video picture in picture is not available by command on \(platform) yet")
+        }
         guard node.kind == "image" else { return PictureInPictureHost.refuse(node, "not an image") }
         PictureInPictureHost.request(node, .init(args))
     }

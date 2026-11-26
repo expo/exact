@@ -2217,7 +2217,8 @@ A failed request reports its reason through `pictureinpictureerror`.
 | --- | --- |
 | Web JS | Reads `document.pictureInPictureEnabled`. Headed Chromium ran the Contract button, the element events, repeat entry, exit and removal with a bundled MP4. |
 | Web wasm | Reads false and reports a request error. |
-| iOS, tvOS, macOS | The video command is unavailable. iOS PiP events have not been run on hardware. |
+| iOS | Reads false and reports that the command is unavailable on iOS. AVKit’s control reports enter, leave and failure. Delegate callbacks passed on iOS 27.2 and 26.5 simulators. The iOS events have not been run on a physical iPhone. |
+| tvOS, macOS | Read false and report a platform-specific request error. The Mac’s ordinary video uses AVPlayerView’s built-in control. |
 | Painted Linux and Windows, terminal | Read false and report a request error. |
 
 ## Over-the-air updates

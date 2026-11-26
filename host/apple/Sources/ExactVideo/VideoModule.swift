@@ -90,6 +90,7 @@ struct OffscreenAutoplay {
 
 final class VideoView: VideoPlaying, VisibilityRefreshing {
     weak var owner: NodeView?
+    private let generation: Int?
     #if os(iOS) || os(tvOS)
     // Player creation and the first source update together include AVKit's presentation view.
     private var creationSeconds: TimeInterval?
@@ -117,9 +118,8 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
     /// `fastSeek` and `load` (podcast F8, F18), each a numbered request the
     /// arm runs once: a seek every time, even to the time it last sought.
     private var commands: (seek: Int, seconds: Double, load: Int) = (0, 0, 0)
-    /// The media events the arm reports (LLP 1042 §3), and the media
-    /// session's six (LLP 1098 D2), and fullscreenchange; others are not sent.
-    static let events: Set<String> = ["loadedmetadata", "canplay", "play", "playing", "pause", "ended", "waiting", "seeking", "seeked", "ratechange", "volumechange", "timeupdate", "durationchange", "error", "fullscreenchange", "seekbackward", "seekforward", "seekto", "previoustrack", "nexttrack", "stop"]
+    /// Events the player and its media session can send to a Contract listener.
+    static let events: Set<String> = ["loadedmetadata", "canplay", "play", "playing", "pause", "ended", "waiting", "seeking", "seeked", "ratechange", "volumechange", "timeupdate", "durationchange", "error", "fullscreenchange", "enterpictureinpicture", "leavepictureinpicture", "pictureinpictureerror", "seekbackward", "seekforward", "seekto", "previoustrack", "nexttrack", "stop"]
     /// A remote play's latch over the visibility threshold (LLP 1098 D3):
     /// it holds across the `paused` bound when it was set, the app's stale
     /// `true` included, until a later commit writes `true` or the element
@@ -175,6 +175,7 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
         defer { creationSeconds = CACurrentMediaTime() - started }
         #endif
         self.owner = owner
+        generation = owner.presenter?.session?.generation
         guard let module = VideoModule.shared else { return }
         let context = Unmanaged.passUnretained(self).toOpaque()
         var player: UnsafeMutableRawPointer?
@@ -317,6 +318,7 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
         if ExactEnv.agentMode { props["exactPublish"] = "false" }
         if let remoteRequest { props["exactRemote"] = remoteRequest }
         var listeners = owner.handlers.intersection(Self.events)
+        if listeners.contains("leavepictureinpicture") { listeners.insert("enterpictureinpicture") }
         if autoplayRule { listeners.formUnion(["pause", "play"]) }
         #if os(iOS) || os(tvOS)
         listeners.formUnion(["playing", "waiting", "pause", "ended", "error", "volumechange"])
@@ -407,7 +409,15 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
             autoplay.observed(paused: event == "pause")
             if was && !autoplay.armed { DispatchQueue.main.async { [weak self] in self?.update() } }
         }
-        guard let event = message["event"] as? String, owner.handlers.contains(event) else { return }
+        guard let event = message["event"] as? String else { return }
+        if event == "enterpictureinpicture" || event == "leavepictureinpicture" {
+            guard owner.handlers.contains(event) || owner.handlers.contains("leavepictureinpicture"),
+                  let session = owner.presenter?.session else { return }
+            guard session.generation == generation else { return }
+            session.apply(session.runtime.media(owner.id, event: event, payload: "", now: session.now()))
+            return
+        }
+        guard owner.handlers.contains(event) else { return }
         let payload = message["payload"] as? String ?? ""
         DispatchQueue.main.async { [weak self, weak owner] in
             guard let self, let owner, owner.video === self, let session = owner.presenter?.session else { return }
