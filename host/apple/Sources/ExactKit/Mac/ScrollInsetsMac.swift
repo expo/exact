@@ -144,16 +144,20 @@ package struct ScrollInsetsMac: Equatable {
     /// the reach, keeps the offset from before `move`, clamped to the range those insets give (D14).
     package static func moving(_ scroll: NSScrollView, _ move: () -> Void) {
         let clip = scroll.contentView, inset = scroll.contentInsets, origin = clip.bounds.origin, z = max(scroll.magnification, 0.01)
-        let atEnd = keepsEnd(scroll) && origin.y >= end(of: scroll, under: inset) - 1
+        // A record no write has taken up yet, still valid, holds the offset from before an earlier move: it is kept
+        let pending = (objc_getAssociatedObject(scroll, &movedKey) as? Moved).flatMap { $0.at == origin ? $0 : nil }
+        let top = pending?.top ?? origin.y * z + inset.top, left = pending?.left ?? origin.x * z + inset.left
+        let atEnd = pending?.atEnd ?? (keepsEnd(scroll) && origin.y >= end(of: scroll, under: inset) - 1)
         move()
         objc_setAssociatedObject(scroll, &movedKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        let kept = clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin
+        let wanted = NSPoint(x: (left - inset.left) / z, y: (top - inset.top) / z)
+        let kept = clip.constrainBoundsRect(NSRect(origin: wanted, size: clip.bounds.size)).origin
         if kept != clip.bounds.origin {
             clip.scroll(to: kept)
             scroll.reflectScrolledClipView(clip)
         }
-        if clip.bounds.origin != origin {
-            let moved = Moved(top: origin.y * z + inset.top, left: origin.x * z + inset.left, atEnd: atEnd, at: clip.bounds.origin)
+        if clip.bounds.origin != wanted {
+            let moved = Moved(top: top, left: left, atEnd: atEnd, at: clip.bounds.origin)
             objc_setAssociatedObject(scroll, &movedKey, moved, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
     }
