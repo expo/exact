@@ -12,8 +12,11 @@ import ExactCore
 /// the scroller nearest it, the top and the vertical scroller's side the vertical scroller's, the
 /// bottom and the other side the horizontal scroller's, with the occupied depth on every edge, as
 /// AppKit's own adjustment moves its scrollers with the content. The clip view's own accommodation of
-/// rulers and headers is AppKit's, neither written nor counted. Activation (stage 5) writes every
-/// scroller through it; until then only its tests do.
+/// rulers and headers is AppKit's, neither written nor counted. A write claims the scroll view
+/// (`Claim`): from then until its release the writer alone writes its adjustment and insets, the
+/// host's other writers leave them, and a zoomed child's placement is one of its held terms.
+/// Activation (stage 5)
+/// writes every scroller through it; until then only its tests do.
 package struct ScrollInsetsMac: Equatable {
     /// `contentInsets` and `scrollerInsets`, each top right bottom left.
     package var content: [CGFloat]
@@ -56,23 +59,79 @@ package struct ScrollInsetsMac: Equatable {
         return ScrollInsetsMac(content: content, scrollers: scrollers)
     }
 
-    /// Write D14's insets to `scroll`, a scroller of the owner whose view is `owner`: AppKit's
-    /// adjustment off, then its content and scroller insets, each skipped within half a device pixel.
-    /// It keeps CSS `scrollTop` and `scrollLeft` as they were before the writes, or the end of a list
-    /// that keeps its end (`scrollStart="end"`, `scrollFollowEnd`) and rested there. Out of a window,
-    /// or out of `owner`, the band is unavailable (D9) and nothing is written.
+    /// D14's hold on a scroll view, from the writer's first write to its release: what the view had
+    /// before, which the release gives back, and the last write's inputs, which `rewrite` writes again.
+    package final class Claim {
+        fileprivate let adjusts: Bool, content: NSEdgeInsets, scrollers: NSEdgeInsets
+        fileprivate weak var owner: NSView?
+        fileprivate var terms = ScrollTerms(), rows = Rows(), held: [CGFloat] = [0, 0, 0, 0], consumed: [CGFloat] = [0, 0, 0, 0]
+
+        fileprivate init(_ scroll: NSScrollView) {
+            (adjusts, content, scrollers) = (scroll.automaticallyAdjustsContentInsets, scroll.contentInsets, scroll.scrollerInsets)
+        }
+    }
+
+    nonisolated(unsafe) private static var claimKey: UInt8 = 0
+
+    /// The writer's hold on `scroll`, while it has one.
+    package static func claim(of scroll: NSScrollView) -> Claim? {
+        objc_getAssociatedObject(scroll, &claimKey) as? Claim
+    }
+
+    /// Write D14's insets to `scroll`, a scroller of the owner whose view is `owner`, claiming it at the
+    /// first: AppKit's adjustment off, then its content and scroller insets, each skipped within half a
+    /// device pixel. It keeps CSS `scrollTop` and `scrollLeft` as they were before the writes, or the
+    /// end of a list that keeps its end (`scrollStart="end"`, `scrollFollowEnd`) and rested there. Out
+    /// of a window, or out of `owner`, the band is unavailable (D9) and nothing is written.
     package static func write(_ scroll: NSScrollView, in owner: NSView, terms: ScrollTerms, rows: Rows,
                               held: [CGFloat] = [0, 0, 0, 0], consumed: [CGFloat] = [0, 0, 0, 0]) {
         guard scroll.window != nil, scroll.isDescendant(of: owner) else { return }
+        let claim = claim(of: scroll) ?? {
+            let made = Claim(scroll)
+            objc_setAssociatedObject(scroll, &claimKey, made, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            return made
+        }()
+        (claim.owner, claim.terms, claim.rows, claim.held, claim.consumed) = (owner, terms, rows, held, consumed)
+        let side = (scroll.verticalScroller?.frame.midX ?? .infinity) < scroll.bounds.midX ? 3 : 1
+        let zoom = (scroll as? ChainingScrollView)?.zoom?.placement ?? NSEdgeInsetsZero
+        let placed = [zoom.top, zoom.right, zoom.bottom, zoom.left]
+        let next = insets(terms: terms, rows: rows, held: (0..<4).map { held[$0] + placed[$0] }, band: band(of: scroll, in: owner),
+                          consumed: consumed, verticalSide: side)
+        keepingOffset(scroll) {
+            if scroll.automaticallyAdjustsContentInsets { scroll.automaticallyAdjustsContentInsets = false }
+            if !near(scroll.contentInsets, next.content, $0) { scroll.contentInsets = edgeInsets(next.content) }
+            if !near(scroll.scrollerInsets, next.scrollers, $0) { scroll.scrollerInsets = edgeInsets(next.scrollers) }
+        }
+    }
+
+    /// Write a claimed `scroll`'s insets again from its last write's inputs, as its zoomed child's
+    /// placement moves.
+    package static func rewrite(_ scroll: NSScrollView) {
+        guard let claim = claim(of: scroll), let owner = claim.owner else { return }
+        write(scroll, in: owner, terms: claim.terms, rows: claim.rows, held: claim.held, consumed: claim.consumed)
+    }
+
+    /// End the writer's hold on `scroll`: its adjustment and its content and scroller insets as it had
+    /// them before the first write, or a zoomed child's placement as it is now, keeping CSS `scrollTop`
+    /// and `scrollLeft`; the host's other writers then write them again.
+    package static func release(_ scroll: NSScrollView) {
+        guard let claim = claim(of: scroll) else { return }
+        objc_setAssociatedObject(scroll, &claimKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        keepingOffset(scroll) { _ in
+            scroll.automaticallyAdjustsContentInsets = claim.adjusts
+            scroll.contentInsets = (scroll as? ChainingScrollView)?.zoom?.placement ?? claim.content
+            scroll.scrollerInsets = claim.scrollers
+        }
+    }
+
+    /// Make `writes` to `scroll`'s insets, given half a device pixel, keeping CSS `scrollTop` and
+    /// `scrollLeft`, or the end of a list that keeps its end and rested there.
+    private static func keepingOffset(_ scroll: NSScrollView, _ writes: (CGFloat) -> Void) {
         let clip = scroll.contentView, before = scroll.contentInsets, origin = clip.bounds.origin
         let top = origin.y + before.top, left = origin.x + before.left
         let atEnd = keepsEnd(scroll) && origin.y >= end(of: scroll, under: before) - 1
-        if scroll.automaticallyAdjustsContentInsets { scroll.automaticallyAdjustsContentInsets = false }
-        let side = (scroll.verticalScroller?.frame.midX ?? .infinity) < scroll.bounds.midX ? 3 : 1
-        let next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), consumed: consumed, verticalSide: side)
         let half = 0.5 / max(scroll.window?.backingScaleFactor ?? 1, 1)
-        if !near(scroll.contentInsets, next.content, half) { scroll.contentInsets = edgeInsets(next.content) }
-        if !near(scroll.scrollerInsets, next.scrollers, half) { scroll.scrollerInsets = edgeInsets(next.scrollers) }
+        writes(half)
         let now = scroll.contentInsets
         let target = NSPoint(x: left - now.left, y: atEnd ? end(of: scroll, under: now) : top - now.top)
         let kept = clip.constrainBoundsRect(NSRect(origin: target, size: clip.bounds.size)).origin, at = clip.bounds.origin
