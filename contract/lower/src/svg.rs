@@ -898,6 +898,21 @@ fn check_svg_attrs_with(
                 a.span,
             );
         }
+        // @ref LLP 1003.003 D1 — an SVG element's scene, the outer `svg`'s
+        // included, draws its authored clip, so a literal list that names
+        // `clip-path` there would move nothing natively.
+        if (element || tag == "svg")
+            && a.name == "transition"
+            && matches!(&a.value, Expr::Str(v, _) if exact_motion::Transitions::parse(v).is_ok_and(|t| {
+                t.0.iter().any(|d| d.property == exact_motion::TransitionProperty::Property(exact_motion::Property::ClipPath))
+            }))
+        {
+            return err(
+                "lower-attr-value",
+                format!("`transition` names `clip-path`, which moves a box's clip (LLP 1003.003), but `{tag}` is drawn in its SVG scene, whose clip changes at once. Give a surrounding box the `clip-path` and the `transition`"),
+                a.span,
+            );
+        }
         if a.name == "clip-path"
             && !element
             && matches!(&a.value, Expr::Str(v, _) if v.trim_start().starts_with("url("))

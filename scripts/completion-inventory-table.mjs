@@ -993,7 +993,7 @@ export const classifications = [
     ["painted:host/painted/src/paint/field.rs", "effective_overflow"],
     ["painted:host/painted/src/paint/look.rs", "page_color"],
     ["painted:host/painted/src/paint/presented.rs", "PaintedBox::center PaintedBox::surface PaintValues::color PaintValues::is_empty PaintValues::set PaintValues::value Presented::from_style Presented::translate_at"],
-    ["painted:host/painted/src/paint/rows.rs", "Dirty::commit Dirty::layout Dirty::node"],
+    ["painted:host/painted/src/paint/rows.rs", "Dirty::commit Dirty::layout Dirty::moving Dirty::node"],
     ["painted:host/painted/src/paint/scrollbar.rs", "Bar::coordinate Bar::destination Bar::length Bar::scroll_offset Bar::start State::ink State::look"],
     ["painted:host/painted/src/paint/shadow.rs", "ShadowPaint::blurred ShadowPaint::capture ShadowPaint::fills ShadowPaint::inset ShadowPaint::lifted ShadowPaint::over"],
     ["painted:host/painted/src/paint/shape.rs", "Shape::elliptical Shape::inset Shape::new Shape::rect Shape::rounded Shape::with_corners"],
