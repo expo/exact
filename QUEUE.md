@@ -1709,6 +1709,7 @@ sits on that list carries the trade it would take.
 - On iOS, deliver y=60 before the final y=60.2 while the nominal hold has begun. A plain `during` read can sample 60. The runner needs confirmation of the committed waypoint before lifting the expectation refusal (#1766).
 - On iOS, delay the tree reply of a plain tree-and-layout checkpoint past lift. The layout request can start after pointerup because XCTest schedules the move and lift in one record (#1766).
 - Run the fractional-waypoint and before-pointerup tests on a native Windows painted host and compare its held and lifted values (#1766).
+- On iOS, compare a plain held screenshot with the pixels of a moving view at the same waypoint. The held capture skips motion settling. Give the view different press, move and lift colors so a frame from the wrong phase is visible (#1766).
 - Stall a checkpoint screenshot through its deadline and inspect the destination directory. The staging directory survives until the capture answers, even after the gesture ends (#1766).
 - Give a drag release check a 50 ms allowance and stall its reply. The timeout message reports 10,000 ms. Preserve the allowance and the release diagnostic when reporting a failed cleanup (#1766).
 - Check whether a process ticket can be reused between completion and process cleanup. Pause the old worker after `complete`, admit a one-shot on that ticket, and check that its reservation survives the old worker’s cleanup.
