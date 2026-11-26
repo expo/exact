@@ -313,3 +313,44 @@ fn a_scrollers_own_bar_stays_on_its_scrollport_over_its_content() {
         "the content scrolls on below it"
     );
 }
+
+/// Under a claim whose top inset, 100, is deeper than its reach, 40, what a scroller reveals is centred in its clear
+/// region, the reached port less its insets, at the CSS offset that puts it there; and the runner's geometry reads the
+/// content where it is painted, its displacement, while the CSS offset stays the presenter's.
+#[test]
+fn a_claimed_scroller_reveals_in_its_clear_region_and_tells_the_runner_its_displacement() {
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(SCROLLER),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let port = id(&p, "port");
+    p.frame();
+    assert!(p.set_scroll_claim(port, Some(([40., 0., 60., 0.], [100., 0., 60., 0.]))));
+    p.scroll.insert(port, (0., 400.));
+    p.frame();
+    p.reveal(id(&p, "row-0")).unwrap();
+    assert_eq!(
+        p.scroll_of(port),
+        (0., 0.),
+        "row 0 at the clear region's top: CSS offset 0"
+    );
+    p.scroll.insert(port, (0., 700.));
+    p.frame();
+    p.reveal(id(&p, "row-3")).unwrap();
+    // Centred in the clear region, 60 to 300 below the box's top, it is painted at 180: CSS offset 230
+    assert_eq!(p.scroll_of(port), (0., 230.));
+    p.scroll.insert(port, (0., 200.));
+    p.publish_scroll();
+    assert_eq!(
+        p.host.runner().scroll_offset(Some(port)),
+        (0., 140.),
+        "200 + 40 - 100"
+    );
+    assert_eq!(p.scroll_of(port), (0., 200.));
+}
