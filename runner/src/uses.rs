@@ -81,8 +81,9 @@ pub enum Capability {
     /// reach the algorithm ([`apple_uses`]).
     Grid,
     /// `frame` and `measure` (LLP 1051.000): a plan whose actions read
-    /// geometry. Native hosts answer from the kernel; the web links a
-    /// synchronous import the page answers.
+    /// geometry, or that reads a geometry fact (LLP 1123 D6). Native hosts
+    /// answer from the kernel; the web links a synchronous import the page
+    /// answers.
     Geometry,
     /// `env(viewport-segment-*)` lengths (LLP 1078 D3): the segment grammar,
     /// resolution and wire decode, for a plan whose strings name a segment.
@@ -578,6 +579,10 @@ fn plan_uses(plan: &Plan, mut uses: Uses) -> Uses {
     // so the set is never smaller than what a run can reach.
     if plan.strings.iter().any(names_segment) {
         uses = uses.with(Capability::Segments);
+    }
+    // A geometry fact is the page's to answer where the page lays out (LLP 1123 D6)
+    if (plan.resources.iter()).any(|r| crate::native_geometry::is_geometry(plan.str(r.source))) {
+        uses = uses.with(Capability::Geometry);
     }
     if !plan.surfaces.is_empty()
         || plan.resources.iter().any(|r| {

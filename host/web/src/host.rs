@@ -25,6 +25,7 @@ mod boot;
 #[path = "canvas2d.rs"]
 mod canvas2d;
 mod complete;
+mod facts;
 pub mod fonts;
 mod mode;
 mod outcome;

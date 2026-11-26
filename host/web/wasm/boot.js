@@ -1,5 +1,5 @@
 import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers, track } from "../glue.js";
-import { send, applyBatch } from "./commit.js";
+import { send, applyBatch, settleGeometry } from "./commit.js";
 import { navigation, shortcutKeyboard, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, orientationCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
 import { WINDOW_STATE } from "../navigation/store.js";
@@ -67,7 +67,7 @@ addEventListener("unhandledrejection", (e) => e.reason instanceof ModuleStopped 
 export function loadGeometry() {
   return loadOnce(host, 'geometryLoading', () => new Promise(resolve => requestAnimationFrame(resolve))
     .then(() => loadAfterPaint('./geometry-glue.js', 'geometry'))
-    .then(create => { host.geometry = create(root); }), error => console.error('exact: geometry:', error));
+    .then(create => { host.geometry = create(root); settleGeometry(); }), error => console.error('exact: geometry:', error));
 }
 function geometry() {
   if (!host.geometry) loadGeometry();
@@ -567,6 +567,7 @@ export async function main() {
         return 1;
       },
       read: (op, view, out) => geometry()?.read(op, views.get(view), new Float64Array(host.memory.buffer, out, 4)) ?? 0,
+      fact: (view, space, node, out) => geometry()?.fact(views.get(view), space, node ? views.get(node - 1) : null, new Float64Array(host.memory.buffer, out, 4)) ?? 0,
       scroll_metrics: (view, out) => {
         const values = geometry()?.scrollMetrics(views.get(view));
         if (!values) return 0;

@@ -14,8 +14,9 @@ export function helperClassifications(group) {
     ["runner:runner/src/design.rs", "batch digest Edit::json Edit::parse notice Scrub::older shape snapshot structure tokens"],
     ["runner:runner/src/desktop.rs", "buttons dock_menu presents status_items"],
     ["runner:runner/src/geometry.rs",
-      "GeometryAnswer::of GeometryAnswer::value GeometryEnv::new GeometryEnv::read GeometryLinks::ahead GeometryLinks::new GeometryLinks::with_range_frame GeometryLinks::with_scroll_metrics " +
+      "GeometryAnswer::of GeometryAnswer::value GeometryEnv::new GeometryEnv::read " +
       "Scrolled::note Scrolled::place Scrolled::shown Scrolled::top_layer Scrolled::top_layer_frames"],
+    ["runner:runner/src/geometry/links.rs", "GeometryLinks::ahead GeometryLinks::new GeometryLinks::with_page_box GeometryLinks::with_range_frame GeometryLinks::with_scroll_metrics"],
     ["runner:runner/src/geometry/modal.rs", "Scrolled::top_layer_backdrop"],
     ["runner:runner/src/head.rs", "Head::fields"],
     ["runner:runner/src/orientation.rs", "conflict_line Lock::json session Session::lock types"],

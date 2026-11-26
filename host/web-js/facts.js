@@ -14,7 +14,7 @@
 //   surface's published record, decoded against each reader's shape.
 import { data, Resources, commit, R, Refusal, Kept, say, Sounds } from "./rt.js";
 import * as rt from "./rt.js";
-import { environment, screenOrientation, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode } from "./navigation.js";
+import { environment, screenOrientation, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode, drawnBox } from "./navigation.js";
 
 const again = (source, why, snaps) => {
   const changed = () => {
@@ -163,14 +163,11 @@ export function geometry(readers) {
   // their own; compared with the generation left out, which a refresh moves for every reader
   const told = new Map();
   const answer = (args, generation) => {
-    const doc = globalThis.document, find = (id) => typeof id === "string" ? doc?.getElementById?.(id) : null;
-    const el = find(args?.[0]);
-    if (!el?.getClientRects?.().length) return { ...geometryAbsent, generation };
-    const r = el.getBoundingClientRect(), space = args[1] ?? "owner", node = space === "node" ? find(args[2]) : null;
-    const origin = space === "owner" ? [-(globalThis.scrollX ?? 0), -(globalThis.scrollY ?? 0)] : space === "window" ? [0, 0]
-      : node?.getClientRects().length && !transformed(node) ? [node.getBoundingClientRect().left, node.getBoundingClientRect().top] : null;
-    const frame = origin && { x: r.left - origin[0], y: r.top - origin[1], width: r.width, height: r.height };
-    return { ...geometryAbsent, available: true, generation, size: { width: r.width, height: r.height }, frame };
+    const find = (id) => typeof id === "string" ? globalThis.document?.getElementById?.(id) : null;
+    const space = args?.[1] ?? "owner", box = drawnBox(find(args?.[0]), space, space === "node" ? find(args[2]) : null);
+    if (!box) return { ...geometryAbsent, generation };
+    const [width, height] = box.size, frame = box.frame && { x: box.frame[0], y: box.frame[1], width, height };
+    return { ...geometryAbsent, available: true, generation, size: { width, height }, frame };
   };
   const shapedAnswer = (name, args, at = generation) => {
     const [fields, shape] = readers[name], v = answer(args, at);
@@ -201,15 +198,6 @@ export function geometry(readers) {
   if (typeof addEventListener === "function") addEventListener("resize", () => check("resize"));
 }
 /** The web has no native chain, and no settle loop that leaves a box unsettled until D17: each answered unavailable. */
-/** Whether `el` or an ancestor of it is transformed, which a bounding rectangle cannot undo. */
-function transformed(el) {
-  for (let e = el; e?.nodeType === 1; e = e.parentElement) {
-    const s = getComputedStyle(e);
-    if ((s.transform && s.transform !== "none") || (s.scale && s.scale !== "none") || (s.rotate && s.rotate !== "none") || (s.translate && s.translate !== "none")) return true;
-  }
-  return false;
-}
-
 export function nativeChain(readers) {
   (data.reserved ??= {}).exactNativeChain = (_, a, name) => byName(readers, name, { available: false, generation: 0, entries: null });
 }

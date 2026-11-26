@@ -1254,8 +1254,22 @@ export function applyBatch(batch) {
       globalThis.exact.committed?.();
       // A commit may settle the request a replacement waits for (boot.js).
       globalThis.exact.replacementChanged?.();
+      settleGeometry();
     }
     host.frameSampler?.batch(batch.seq, outer ? performance.now() - began : 0);
+  }
+}
+// @ref LLP 1123 D6 — the page laid out a commit's batch: the runner answers again each geometry fact whose box it moved,
+// in a commit of its own, until a layout moves none or D6's bound holds them. Skip while a settle runs: its loop asks
+// again after each batch it applies, so a batch applied inside it loses nothing.
+let settling = false;
+export function settleGeometry() {
+  if (settling || !host.wasm?.exact_geometry_settled || !host.geometry) return;
+  settling = true;
+  try {
+    for (let len; (len = host.wasm.exact_geometry_settled());) applyBatch(JSON.parse(readOut(len)));
+  } finally {
+    settling = false;
   }
 }
 export function send(len) {

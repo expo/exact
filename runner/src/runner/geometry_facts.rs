@@ -30,13 +30,16 @@ pub(super) struct Facts {
     committed: bool,
     /// Whether this chain's `geometry-feedback` was said.
     said: bool,
+    /// The layouts a page that lays out has reported ([`Runner::refresh_geometry`]), which the
+    /// facts count in place of the kernel's there.
+    page_layouts: u64,
 }
 
 impl<D: DataSource> Runner<D> {
     /// What geometry resource `i` reads now, as the shape it declares. Its `generation` is the
-    /// kernel's count of layouts, the number of the layout it reads.
+    /// number of the layout it reads, the kernel's or the page's ([`Runner::count_page_layout`]).
     pub(super) fn geometry_answer(&mut self, i: usize, args: &[Value]) -> Result<Value, DataError> {
-        let generation = self.kernel.layouts();
+        let generation = self.facts_layouts();
         self.geometry.answered.insert(i, generation);
         self.geometry_answer_at(i, args, generation)
     }
@@ -49,14 +52,20 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<Value, DataError> {
         let row = self.resource_row(i);
         let source = self.plan.str(row.source);
-        let fact: Fact = match facts::query(source, args)? {
-            Query::Geometry {
-                id,
-                space,
-                inactive,
-            } => facts::geometry(&self.kernel, &id, &space, inactive, generation),
-            Query::Chain { id } => facts::chain(&self.kernel, &id, generation),
-            Query::Unsettled => facts::unsettled(&self.kernel, generation),
+        let fact: Fact = match (facts::query(source, args)?, self.page_box()) {
+            (Query::Geometry { id, space, .. }, Some(read)) => {
+                facts::page_geometry(&self.kernel, &id, &space, generation, read)
+            }
+            (
+                Query::Geometry {
+                    id,
+                    space,
+                    inactive,
+                },
+                None,
+            ) => facts::geometry(&self.kernel, &id, &space, inactive, generation),
+            (Query::Chain { id }, _) => facts::chain(&self.kernel, &id, generation),
+            (Query::Unsettled, _) => facts::unsettled(&self.kernel, generation),
         };
         facts::project(&self.plan, row.ty, &fact, source)
     }
@@ -68,7 +77,7 @@ impl<D: DataSource> Runner<D> {
     /// makes, never with the last one's. An idle resource is asked nothing, as a refresh asks it
     /// nothing; one whose answer is refused is asked again, so its commit says why.
     pub(super) fn deliver_geometry(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
-        let layouts = self.kernel.layouts();
+        let layouts = self.facts_layouts();
         if layouts == self.geometry.read_at {
             self.geometry.committed = false;
             return Ok(None);
@@ -106,6 +115,27 @@ impl<D: DataSource> Runner<D> {
         let result = self.recommit(changed, "geometry");
         self.geometry.committed = matches!(result, Ok(Some(_)));
         result
+    }
+
+    /// Count a layout of a page that lays out and whose kernel does not (the web's wasm target),
+    /// which calls [`Runner::refresh_geometry`] after each: the facts number their answers by
+    /// these, as by the kernel's layouts elsewhere.
+    pub(super) fn count_page_layout(&mut self) {
+        if self.page_box().is_some() {
+            self.geometry.page_layouts += 1;
+        }
+    }
+
+    /// The layouts the facts read: the page's where it lays out, else the kernel's.
+    fn facts_layouts(&self) -> u64 {
+        match self.page_box() {
+            Some(_) => self.geometry.page_layouts,
+            None => self.kernel.layouts(),
+        }
+    }
+
+    fn page_box(&self) -> Option<crate::geometry::PageBoxRead> {
+        self.links.geometry.and_then(|g| g.page_box)
     }
 
     /// `geometry-feedback`: what moved after each answer, and what to do about it.
