@@ -28,19 +28,20 @@ enum LayoutRegionsMac {
         return safe + margins + marginsCorners + margins + marginsCorners
     }
 
-    /// The view's margins, top, right, bottom, left: macOS 26's margins region, or before it the margins guide.
-    static func margins(of view: NSView) -> [CGFloat] {
-        if #available(macOS 26.0, *) { return edges(of: view.rect(for: .margins()), in: view) }
-        return edges(of: view.layoutMarginsGuide.frame, in: view)
+    /// The view's margins, top, right, bottom, left: macOS 26's margins region, or before it the margins guide; `signed`,
+    /// as AppKit gives them where a negative safe area puts them past the bounds, else at least 0.
+    static func margins(of view: NSView, signed: Bool = false) -> [CGFloat] {
+        if #available(macOS 26.0, *) { return edges(of: view.rect(for: .margins()), in: view, signed: signed) }
+        return edges(of: view.layoutMarginsGuide.frame, in: view, signed: signed)
     }
 
     /// How far `rect` lies inside the view's bounds at each edge, top, right, bottom, left, in the view's own
-    /// orientation.
-    private static func edges(of rect: NSRect, in view: NSView) -> [CGFloat] {
+    /// orientation, at least 0 unless `signed`.
+    private static func edges(of rect: NSRect, in view: NSView, signed: Bool = false) -> [CGFloat] {
         let bounds = view.bounds
         let top = view.isFlipped ? rect.minY - bounds.minY : bounds.maxY - rect.maxY
         let bottom = view.isFlipped ? bounds.maxY - rect.maxY : rect.minY - bounds.minY
-        return [top, bounds.maxX - rect.maxX, bottom, rect.minX - bounds.minX].map { max(0, $0) }
+        return [top, bounds.maxX - rect.maxX, bottom, rect.minX - bounds.minX].map { signed ? $0 : max(0, $0) }
     }
 }
 #endif

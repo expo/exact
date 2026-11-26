@@ -106,6 +106,20 @@ final class BoxReachMacTests: XCTestCase {
         p.setReach(2, NSEdgeInsetsZero)
         XCTAssertEqual(scroll.frame, box.bounds)
         XCTAssertEqual(offset(), start)
+        // At the end of its range the offset AppKit clamps to the reached port's range under the old insets comes back
+        // with D14's write, whose insets follow the reach; and the reach adds no range of its own: a document no larger
+        // than the box stays the box's size
+        scroll.contentView.scroll(to: NSPoint(x: 600, y: 900))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let end = offset()
+        p.setReach(2, NSEdgeInsets(top: 47, left: 10, bottom: 0, right: 0))
+        ScrollInsetsMac.write(scroll, in: try XCTUnwrap(window.contentView), terms: ScrollTerms(reserved: [47, 0, 0, 10]), rows: .init())
+        XCTAssertEqual(offset(), end, "the offset from before the reach")
+        ScrollInsetsMac.release(scroll)
+        p.setReach(2, NSEdgeInsetsZero)
+        p.apply(wireBatch([["op": "content", "id": 2, "w": 300, "h": 100]]))
+        p.setReach(2, NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10))
+        XCTAssertEqual(try XCTUnwrap(scroll.documentView).frame.size, NSSize(width: 300, height: 100), "the laid-out port's floor")
     }
 }
 #endif

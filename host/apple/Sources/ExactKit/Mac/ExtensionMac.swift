@@ -14,6 +14,8 @@ package final class BoxExtension {
     let picture: NSView?
     /// How far it reaches past the border box, top right bottom left.
     var outsets: NSEdgeInsets
+    /// While the picture is mirrored, the box's own fill over what its reach draws past the extension (`placeReachStrip`).
+    var reachStrip: CAShapeLayer?
 
     init(view: NSView, picture: NSView?, outsets: NSEdgeInsets) {
         self.view = view; self.picture = picture; self.outsets = outsets
@@ -29,6 +31,8 @@ final class ExtensionState {
 /// The extension view on macOS 26, which takes no click: a click on its strip is the box's.
 @available(macOS 26.0, *)
 final class ExtensionMirror: NSBackgroundExtensionView {
+    // Flipped, as the box is, so the picture placed by hand at the border box is in the box's top-down coordinates
+    override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func isAccessibilityElement() -> Bool { false }
 }
@@ -163,6 +167,7 @@ extension NodeView {
     /// Ends the box's extension: its picture goes back to the box's own layer.
     func clearExtension() {
         guard let state = Self.extensionStates.object(forKey: self), let view = state.made?.view else { return }
+        state.made?.reachStrip?.removeFromSuperlayer()
         rehostPicture { state.made = nil }
         view.removeFromSuperview()
         PaintOrder.changed(self)
@@ -185,6 +190,30 @@ extension NodeView {
             strip.place(around: box)
             strip.colour = pictureFill
         }
+        placeReachStrip(e, frame: frame)
+    }
+
+    /// While the picture is mirrored, the box's own fill over what its reach draws past the extension (D13): its bounds
+    /// less the extension's frame, under its children, so each point shows one paint.
+    private func placeReachStrip(_ e: BoxExtension, frame: CGRect) {
+        guard e.picture != nil, !frame.contains(bounds), let layer, let fill = pictureFill, fill.alpha > 0 else {
+            e.reachStrip?.removeFromSuperlayer()
+            e.reachStrip = nil
+            return
+        }
+        let strip = e.reachStrip ?? CAShapeLayer()
+        e.reachStrip = strip
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        path.addRect(frame)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        strip.fillRule = .evenOdd
+        strip.frame = layer.bounds
+        strip.bounds = layer.bounds
+        strip.path = path
+        strip.fillColor = fill
+        CATransaction.commit()
+        if strip.superlayer !== layer { layer.insertSublayer(strip, at: 0) }
     }
 
     /// Runs `change`, which starts or ends the extension, moving the picture's layers to where the box paints its

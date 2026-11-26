@@ -52,6 +52,9 @@ final class ScrollportBarsMacTests: XCTestCase {
         ScrollportBars.set([], in: p)
         XCTAssertTrue(bar.isDescendant(of: scroll), "back in the scroll view")
         XCTAssertNil(holder.superview, "the holder gone")
+        // Named again after its scroller's children mounted, it moves onto the scrollport
+        ScrollportBars.set([3], in: p)
+        XCTAssertTrue(bar.superview is ScrollportHolder, "on the scrollport again")
     }
 }
 #endif

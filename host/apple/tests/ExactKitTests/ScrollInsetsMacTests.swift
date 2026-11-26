@@ -243,6 +243,42 @@ final class ScrollInsetsMacTests: XCTestCase {
         XCTAssertTrue(NSEdgeInsetsEqual(scroll.contentInsets, zoom.placement), "the zoom's own placement, at twice the size")
     }
 
+    /// At twice the magnification the offset is kept in the scroll view's points, the insets' units: the clip's 100 in
+    /// the document is 200, and stays 200 as a 40-point inset comes.
+    func testAMagnifiedScrollerKeepsItsOffsetInItsOwnPoints() throws {
+        let (owner, _, _, scroll) = try titled()
+        owner.additionalSafeAreaInsets = NSEdgeInsets(top: -owner.safeAreaInsets.top, left: 0, bottom: 0, right: 0)
+        owner.layoutSubtreeIfNeeded()
+        scroll.allowsMagnification = true
+        scroll.magnification = 2
+        ScrollInsetsMac.write(scroll, in: owner, terms: .init(), rows: .init())
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let points = { scroll.contentView.bounds.origin.y * scroll.magnification + scroll.contentInsets.top }
+        XCTAssertEqual(points(), 200, accuracy: 0.5)
+        var rows = ScrollInsetsMac.Rows()
+        rows.authored = [40, 0, 0, 0]
+        ScrollInsetsMac.write(scroll, in: owner, terms: .init(), rows: rows)
+        XCTAssertEqual(scroll.contentInsets.top, 40, accuracy: 0.01)
+        XCTAssertEqual(points(), 200, accuracy: 0.5, "the offset kept in points")
+    }
+
+    /// A claim made while a zoom placed the content insets, released after the zoom has gone, leaves none: the placement
+    /// was the zoom's, not the view's own.
+    func testReleasingAfterTheZoomHasGoneLeavesNoPlacement() throws {
+        let (owner, p, node, scroll) = try titled([
+            ["op": "create", "id": 2, "kind": "view"], ["op": "children", "id": 1, "ids": [2]],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 100, "h": 100], ["op": "content", "id": 1, "w": 100, "h": 100],
+        ], style: ["overflow_x": "scroll", "overflow_y": "scroll", "min_zoom": 1, "max_zoom": 4])
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 0, "w": 100, "h": 100]]))
+        XCTAssertNotNil(scroll.zoom)
+        ScrollInsetsMac.write(scroll, in: owner, terms: .init(), rows: .init())
+        node.dropZoom(scroll)
+        XCTAssertNil(scroll.zoom)
+        ScrollInsetsMac.release(scroll)
+        XCTAssertTrue(NSEdgeInsetsEqual(scroll.contentInsets, NSEdgeInsetsZero), "no zoom's placement back")
+    }
+
     /// Out of a window the band is unavailable and nothing is written.
     func testAWriteOutOfAWindowWritesNothing() {
         let owner = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100)), scroll = NSScrollView(frame: owner.bounds)

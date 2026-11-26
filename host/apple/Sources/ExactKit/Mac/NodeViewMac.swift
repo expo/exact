@@ -1315,7 +1315,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
 
     package func fitScroll() {
         guard let scroll, let document = scroll.documentView else { return }
-        let visible = scroll.contentView.bounds.size, origin = scroll.kernelDocumentOrigin, o = grid?.origin ?? .zero, s = presenter?.gridScale ?? 1
+        let r = reach, port = scroll.contentView.bounds.size, origin = scroll.kernelDocumentOrigin, o = grid?.origin ?? .zero, s = presenter?.gridScale ?? 1
+        let visible = CGSize(width: port.width - r.left - r.right, height: port.height - r.top - r.bottom) // the laid-out port, no reach's (LLP 1123 D13)
         var size = CGSize(width: max(PixelGrid.length(content.width, from: o, vertical: false, scale: s) - origin.x, visible.width), height: max(PixelGrid.length(content.height, from: o, vertical: true, scale: s) - origin.y, visible.height)) // ending where its last edge is drawn (`PixelGridMac.swift`)
         if let height = presenter?.tables.feeds[id]?.sectionDocumentHeight { size.height = max(size.height, height) }
         if case let size = scroll.zoom?.child?.grid?.layout.size ?? size, document.frame.size != size { document.setFrameSize(size) }

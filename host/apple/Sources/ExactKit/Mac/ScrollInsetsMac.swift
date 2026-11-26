@@ -63,11 +63,14 @@ package struct ScrollInsetsMac: Equatable {
     /// before, which the release gives back, and the last write's inputs, which `rewrite` writes again.
     package final class Claim {
         fileprivate let adjusts: Bool, content: NSEdgeInsets, scrollers: NSEdgeInsets
+        /// Whether a zoom placed the content insets when the writer first wrote: they were its placement, not the view's own.
+        fileprivate let zoomed: Bool
         fileprivate weak var owner: NSView?
         fileprivate var terms = ScrollTerms(), rows = Rows(), held: [CGFloat] = [0, 0, 0, 0], consumed: [CGFloat] = [0, 0, 0, 0]
 
         fileprivate init(_ scroll: NSScrollView) {
             (adjusts, content, scrollers) = (scroll.automaticallyAdjustsContentInsets, scroll.contentInsets, scroll.scrollerInsets)
+            zoomed = (scroll as? ChainingScrollView)?.zoom != nil
         }
     }
 
@@ -112,28 +115,63 @@ package struct ScrollInsetsMac: Equatable {
     }
 
     /// End the writer's hold on `scroll`: its adjustment and its content and scroller insets as it had
-    /// them before the first write, or a zoomed child's placement as it is now, keeping CSS `scrollTop`
-    /// and `scrollLeft`; the host's other writers then write them again.
+    /// them before the first write, or a zoomed child's placement as it is now, none where the zoom that
+    /// placed them has gone, keeping CSS `scrollTop` and `scrollLeft`; the host's other writers then
+    /// write them again.
     package static func release(_ scroll: NSScrollView) {
         guard let claim = claim(of: scroll) else { return }
         objc_setAssociatedObject(scroll, &claimKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         keepingOffset(scroll) { _ in
             scroll.automaticallyAdjustsContentInsets = claim.adjusts
-            scroll.contentInsets = (scroll as? ChainingScrollView)?.zoom?.placement ?? claim.content
+            scroll.contentInsets = (scroll as? ChainingScrollView)?.zoom?.placement ?? (claim.zoomed ? NSEdgeInsetsZero : claim.content)
             scroll.scrollerInsets = claim.scrollers
         }
     }
 
+    /// The offset `scroll` had before its reach moved it (`moving`), which AppKit clamped to the moved port's range under
+    /// the old insets: CSS `scrollTop` and `scrollLeft` in the scroll view's points, whether it rested at a kept end, and
+    /// the clip's origin AppKit left. The writer's next write or release keeps it and drops it; a scroll since, which
+    /// moves the clip from that origin, makes it stale, so a record no write takes up keeps nothing from anyone.
+    private final class Moved {
+        let top: CGFloat, left: CGFloat, atEnd: Bool, at: NSPoint
+        init(top: CGFloat, left: CGFloat, atEnd: Bool, at: NSPoint) { (self.top, self.left, self.atEnd, self.at) = (top, left, atEnd, at) }
+    }
+
+    nonisolated(unsafe) private static var movedKey: UInt8 = 0
+
+    /// Make `move`, which moves `scroll`'s frame for its reach (D13), keeping CSS `scrollTop` and `scrollLeft` as far as
+    /// the range under its insets allows; where AppKit clamps the offset, the writer's next write, whose insets follow
+    /// the reach, keeps the offset from before `move`, clamped to the range those insets give (D14).
+    package static func moving(_ scroll: NSScrollView, _ move: () -> Void) {
+        let clip = scroll.contentView, inset = scroll.contentInsets, origin = clip.bounds.origin, z = max(scroll.magnification, 0.01)
+        let atEnd = keepsEnd(scroll) && origin.y >= end(of: scroll, under: inset) - 1
+        move()
+        objc_setAssociatedObject(scroll, &movedKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let kept = clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin
+        if kept != clip.bounds.origin {
+            clip.scroll(to: kept)
+            scroll.reflectScrolledClipView(clip)
+        }
+        if clip.bounds.origin != origin {
+            let moved = Moved(top: origin.y * z + inset.top, left: origin.x * z + inset.left, atEnd: atEnd, at: clip.bounds.origin)
+            objc_setAssociatedObject(scroll, &movedKey, moved, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+    }
+
     /// Make `writes` to `scroll`'s insets, given half a device pixel, keeping CSS `scrollTop` and
-    /// `scrollLeft`, or the end of a list that keeps its end and rested there.
+    /// `scrollLeft`, or the end of a list that keeps its end and rested there, as they were before a reach that
+    /// moved it clamped them (`moving`). The offset is kept in the scroll view's points, the insets' units: the
+    /// clip's origin, in the document's, times the magnification.
     private static func keepingOffset(_ scroll: NSScrollView, _ writes: (CGFloat) -> Void) {
-        let clip = scroll.contentView, before = scroll.contentInsets, origin = clip.bounds.origin
-        let top = origin.y + before.top, left = origin.x + before.left
-        let atEnd = keepsEnd(scroll) && origin.y >= end(of: scroll, under: before) - 1
+        let clip = scroll.contentView, before = scroll.contentInsets, origin = clip.bounds.origin, z = max(scroll.magnification, 0.01)
+        let moved = (objc_getAssociatedObject(scroll, &movedKey) as? Moved).flatMap { $0.at == origin ? $0 : nil }
+        objc_setAssociatedObject(scroll, &movedKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let top = moved?.top ?? origin.y * z + before.top, left = moved?.left ?? origin.x * z + before.left
+        let atEnd = moved?.atEnd ?? (keepsEnd(scroll) && origin.y >= end(of: scroll, under: before) - 1)
         let half = 0.5 / max(scroll.window?.backingScaleFactor ?? 1, 1)
         writes(half)
         let now = scroll.contentInsets
-        let target = NSPoint(x: left - now.left, y: atEnd ? end(of: scroll, under: now) : top - now.top)
+        let target = NSPoint(x: (left - now.left) / z, y: atEnd ? end(of: scroll, under: now) : (top - now.top) / z)
         let kept = clip.constrainBoundsRect(NSRect(origin: target, size: clip.bounds.size)).origin, at = clip.bounds.origin
         if abs(at.x - kept.x) > half || abs(at.y - kept.y) > half {
             clip.scroll(to: kept)
@@ -163,8 +201,8 @@ package struct ScrollInsetsMac: Equatable {
 
     /// The clip view's origin at which `scroll`'s content's end rests under `inset`.
     private static func end(of scroll: NSScrollView, under inset: NSEdgeInsets) -> CGFloat {
-        let height = scroll.documentView?.frame.height ?? 0
-        return max(-inset.top, height + inset.bottom - scroll.contentView.bounds.height)
+        let height = scroll.documentView?.frame.height ?? 0, z = max(scroll.magnification, 0.01)
+        return max(-inset.top / z, height + inset.bottom / z - scroll.contentView.bounds.height)
     }
 
     private static func near(_ a: NSEdgeInsets, _ b: [CGFloat], _ tolerance: CGFloat) -> Bool {

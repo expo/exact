@@ -75,7 +75,8 @@ package enum ScrollportBars {
     /// holder in their order; the rest are the caller's to place in its container. A scroller's list is kept, to place
     /// it again when its bars change (`set`).
     static func place(_ parent: NodeView, _ ids: [UInt32], in presenter: Presenter) -> [UInt32] {
-        guard let state = states.object(forKey: presenter) else { return ids }
+        // The lists are kept from the first, so bars set after their scroller's children mounted place them again
+        let state = state(of: presenter)
         if parent.scroll != nil || state.childLists[parent.id] != nil { state.childLists[parent.id] = ids.isEmpty ? nil : ids }
         let bars = state.bars.isEmpty ? [] : ids.filter(state.bars.contains)
         guard !bars.isEmpty || holders.object(forKey: parent) != nil else { return ids }

@@ -168,8 +168,9 @@ package final class BlockHost {
             presenter.topLayerChanged()
         }
         tellInsets(node, in: container)
+        // A container the node has since left samples it no more: a later layout of it is no update of this owner's
         (container as? BlockView)?.laidOut = { [weak self, weak node, weak container] in
-            guard let self, let node, let container, self.entries[node.id]?.node === node else { return }
+            guard let self, let node, let container, self.entries[node.id]?.node === node, node.superview === container else { return }
             self.sample(node, in: container)
         }
         tell([(node.id, block)], placements: [(node.id, placement)], shows: placeholder ? [(node.id, true)] : [])

@@ -38,20 +38,15 @@ extension NodeView {
         return CGRect(x: b.minX - r.left, y: b.minY - r.top, width: b.width + r.left + r.right, height: b.height + r.top + r.bottom)
     }
 
-    /// A scroller's scroll view moved to its reach (`scrollFrame`), keeping CSS `scrollTop` and `scrollLeft`, the box's
-    /// own clip left to the scroll view while it reaches (`clipsItself`).
+    /// A scroller's scroll view moved to its reach (`scrollFrame`), keeping CSS `scrollTop` and `scrollLeft` through
+    /// D14's next write (`ScrollInsetsMac.moving`), the box's own clip left to the scroll view while it reaches
+    /// (`clipsItself`).
     func reachScroll() {
         guard let sv = scroll else { return }
-        let clip = sv.contentView, before = sv.contentInsets
-        let top = clip.bounds.origin.y + before.top, left = clip.bounds.origin.x + before.left
         if clipsToBounds != clipsItself { clipsToBounds = clipsItself }
-        sv.frame = scrollFrame
-        fitScroll()
-        let now = sv.contentInsets
-        let kept = clip.constrainBoundsRect(NSRect(origin: NSPoint(x: left - now.left, y: top - now.top), size: clip.bounds.size)).origin
-        if kept != clip.bounds.origin {
-            clip.scroll(to: kept)
-            sv.reflectScrolledClipView(clip)
+        ScrollInsetsMac.moving(sv) {
+            sv.frame = scrollFrame
+            fitScroll()
         }
     }
 

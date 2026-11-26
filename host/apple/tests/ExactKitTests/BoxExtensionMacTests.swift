@@ -67,11 +67,17 @@ final class BoxExtensionMacTests: XCTestCase {
         XCTAssertTrue(e.view is NSBackgroundExtensionView)
         XCTAssertEqual(e.view.frame, NSRect(x: -25, y: -40, width: 275, height: 240), "the border box outset")
         XCTAssertEqual(try XCTUnwrap(e.picture).frame, NSRect(x: 25, y: 40, width: 250, height: 200), "the picture at the border box")
+        XCTAssertEqual(box.convert(try XCTUnwrap(e.picture).frame, from: e.view), box.laidOutBox, "in the box's own top-down coordinates")
         XCTAssertNil(box.layer?.backgroundColor, "the box's own layer stops painting the fill")
         XCTAssertNotNil(e.picture?.layer?.backgroundColor, "its picture paints it")
         XCTAssertEqual(try pixel(at: NSPoint(x: 150, y: 250)), inside, "the translucent fill painted once")
         XCTAssertEqual(box.heldSubviews, [child], "no child of the box for its readers")
         XCTAssertTrue(box.subviews.first === e.view, "behind the child")
+        // A new frame for the box moves the extension and its picture with it
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 25, "y": 100, "w": 200, "h": 150]]))
+        XCTAssertEqual(e.view.frame, NSRect(x: -25, y: -40, width: 225, height: 190), "the new border box outset")
+        XCTAssertEqual(try XCTUnwrap(e.picture).frame, NSRect(x: 25, y: 40, width: 200, height: 150))
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 25, "y": 100, "w": 250, "h": 200]]))
         // Reaching as far as it extends, the box takes a click in the strip, and the child one over it
         p.setReach(2, outsets)
         XCTAssertEqual(e.view.frame, NSRect(x: -25, y: -40, width: 275, height: 240), "from the laid-out box")
@@ -134,6 +140,19 @@ final class BoxExtensionMacTests: XCTestCase {
             XCTAssertNil(box.boxExtension, name)
             window?.close()
         }
+    }
+
+    /// A box that reaches farther than it extends paints its own fill where its reach goes past the extension, once.
+    func testReachPastTheExtensionIsTheBoxsOwnPaint() throws {
+        guard #available(macOS 26.0, *) else { throw XCTSkip("AppKit's extension view is macOS 26's") }
+        let (p, box, _) = try presenter()
+        let inside = try pixel(at: NSPoint(x: 150, y: 250))
+        p.setReach(2, NSEdgeInsets(top: 0, left: 20, bottom: 0, right: 0))
+        box.setExtension(NSEdgeInsets(top: 40, left: 0, bottom: 0, right: 0))
+        let strip = try XCTUnwrap(box.boxExtension?.reachStrip, "a strip past the extension")
+        XCTAssertEqual(try pixel(at: NSPoint(x: 15, y: 200)), inside, "the reach's strip in the box's fill")
+        box.setExtension(NSEdgeInsetsZero)
+        XCTAssertNil(strip.superlayer, "gone with the extension")
     }
 
     /// A box that reaches extends from its laid-out border box, not the frame its reach draws.

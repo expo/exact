@@ -101,6 +101,12 @@ final class OwnerUpdateMacTests: XCTestCase {
         XCTAssertEqual(LayoutRegionsMac.margins(of: container)[1], (shown.margins?.root.right ?? 0) + 20, accuracy: 0.5, "AppKit adds it to the margins")
         XCTAssertEqual(added.margins?.root, shown.margins?.root, "the root's margins less the contribution, as the band is")
         XCTAssertEqual(added.margins?.plain, shown.margins?.plain)
+        // A negative contribution takes the safe area past zero, as AppKit adds it, and the margins less it are as before
+        ContributionsMac.of(container).write(.init(node: node.id, operation: .additionalInsets), NSEdgeInsets(top: -100, left: 0, bottom: 0, right: 20))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let negative = try XCTUnwrap(blocks.pending[node.id])
+        XCTAssertEqual(negative.margins?.root, shown.margins?.root, "the root's, less the contributions")
+        XCTAssertEqual(negative.margins?.plain, shown.margins?.plain, "a plain view's")
         // The kernel decodes it, and refuses a truncated one
         let encoded = added.encode()
         XCTAssertNil(s.runtime.ownerReports(updates: [(node.id, encoded)]).error)

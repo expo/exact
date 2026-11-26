@@ -45,15 +45,18 @@ enum OwnerUpdateMac {
     static func edges(_ i: NSEdgeInsets) -> OwnerUpdateWire.Edges { .init(top: i.top, right: i.right, bottom: i.bottom, left: i.left) }
 
     /// The container's margins (D8) as AppKit gives them, less Exact's contributions as the band is (D11), which AppKit
-    /// adds to them as to the safe area. AppKit sets no view's own margins, so a plain view's are the container's less
-    /// its safe area.
+    /// adds to them as to the safe area, a negative one included. AppKit sets no view's own margins, so a plain view's
+    /// are the container's less its safe area. Each is taken from AppKit's signed distances and is at least 0 after.
     static func margins(of view: NSView, less contributions: [OwnerUpdateWire.Contribution]) -> OwnerUpdateWire.Margins {
-        let m = LayoutRegionsMac.margins(of: view), safe = view.safeAreaInsets
+        let m = LayoutRegionsMac.margins(of: view, signed: true), safe = view.safeAreaInsets
         let added = contributions.reduce(OwnerUpdateWire.Edges.zero) {
             .init(top: $0.top + $1.effect.top, right: $0.right + $1.effect.right, bottom: $0.bottom + $1.effect.bottom, left: $0.left + $1.effect.left)
         }
-        return .init(root: .init(top: m[0] - added.top, right: m[1] - added.right, bottom: m[2] - added.bottom, left: m[3] - added.left),
-                     plain: .init(top: m[0] - safe.top, right: m[1] - safe.right, bottom: m[2] - safe.bottom, left: m[3] - safe.left),
+        let at0 = { (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat) in
+            OwnerUpdateWire.Edges(top: max(0, top), right: max(0, right), bottom: max(0, bottom), left: max(0, left))
+        }
+        return .init(root: at0(m[0] - added.top, m[1] - added.right, m[2] - added.bottom, m[3] - added.left),
+                     plain: at0(m[0] - safe.top, m[1] - safe.right, m[2] - safe.bottom, m[3] - safe.left),
                      minimum: nil, readableWidth: nil)
     }
 
