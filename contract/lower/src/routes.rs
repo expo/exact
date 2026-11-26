@@ -509,6 +509,20 @@ impl NavPlace {
         }
         popover::check(attrs, self.is_route(attrs))?;
         allocation::check(attrs, self.is_route(attrs))?;
+        // AppKit's full-size content, read on a popover route and the window's root route (LLP 1123 D7, D16)
+        if let Some(a) = attrs
+            .iter()
+            .rev()
+            .find(|a| a.name == "navigationFullSizeContent")
+        {
+            if !self.is_route(attrs) {
+                return err(
+                    "lower-attr-value",
+                    "`navigationFullSizeContent` is read only on a route (an element with a `navigationKey`): on a popover route, whether its content runs under the popover's arrow; on the window's root route, whether the window's content runs under its title bar; elsewhere no host reads it",
+                    a.span,
+                );
+            }
+        }
         // A sheet opens at, and a route may hold it at, one of its own heights, which its route
         // says; a list the compiler cannot read is given the benefit of the doubt (iOS journals
         // a miss).

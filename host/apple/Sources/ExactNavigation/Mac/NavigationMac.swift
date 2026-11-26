@@ -160,6 +160,9 @@ final class NavigationHost {
                     sheeted = sheetRoutes(routes, selected: selected, root: nav, concerned: concerned)
                     split.read(root: nav, routes: routes, selected: selected)
                 } else { split.readNone() }
+                // The stack's root route says whether the window's content is full size (LLP 1123 D16)
+                let stackRoot = found.flatMap { stacks.indices.contains($0) ? stacks[$0].first : nil }
+                presenter.rootFullSizeContent = stackRoot?.props["navigationFullSizeContent"].map { $0 == "true" }
                 // The top presentation, a popover route with its anchor in the window, is an `NSPopover`, not a sheet
                 poppedRoute = popoverRoute(of: sheeted)
                 sheets = poppedRoute == nil ? sheeted : Array(sheeted.dropLast())

@@ -322,6 +322,7 @@ fn attr_moves(name: &str) -> Option<&'static str> {
         "navigationPopoverArrows",
         "navigationPopoverOverlapsSource",
         "navigationPopoverAdaptation",
+        "navigationFullSizeContent",
         "navigationSource",
         "sharedElement",
         "popover",

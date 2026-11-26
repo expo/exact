@@ -43,3 +43,32 @@ fn a_popover_attribute_off_a_popover_route_and_a_malformed_one_are_refused() {
         assert!(error.contains(says), "{attrs:?} {inner:?}: {error}");
     }
 }
+
+/// LLP 1123 D7, D16: `navigationFullSizeContent` is AppKit's full-size content, read on a route (a popover route's
+/// content under its arrow, the window's root route's under the title bar), with its two words.
+#[test]
+fn full_size_content_is_a_routes_with_its_two_words() {
+    for attrs in [
+        "navigationPresentation=\"popover\" navigationPopoverAnchor=\"open\" navigationFullSizeContent=\"true\"",
+        "navigationFullSizeContent=\"false\"",
+    ] {
+        contract::compile(&route(attrs, "")).unwrap_or_else(|e| panic!("{attrs:?}: {e}"));
+    }
+    for (attrs, inner, says) in [
+        (
+            "",
+            "navigationFullSizeContent=\"true\"",
+            "`navigationFullSizeContent` is read only on a route",
+        ),
+        (
+            "navigationFullSizeContent=\"yes\"",
+            "",
+            "`navigationFullSizeContent` takes",
+        ),
+    ] {
+        let error = contract::compile(&route(attrs, inner))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(says), "{attrs:?} {inner:?}: {error}");
+    }
+}

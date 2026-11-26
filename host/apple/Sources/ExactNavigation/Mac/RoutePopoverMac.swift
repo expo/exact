@@ -4,10 +4,10 @@
 // the popover's content, laid out in a block that is a maximum on each axis, where it is a content owner (D2), and the
 // popover takes the size that comes back.
 //
-// **Its choices.** AppKit offers one of the route's popover choices: `navigationPopoverArrows` names the side of the
-// anchor it lies on, opposite the first direction its arrow may point (an arrow `up` lies below), and below it where
-// unsaid; AppKit moves it to another side where that one has no room. Margins, overlap of the anchor and adaptation
-// are UIKit's and are not read here.
+// **Its choices.** `navigationFullSizeContent="true"` runs its content under the arrow, the arrow's area its safe
+// area's (`hasFullSizeContent`). `navigationPopoverArrows` names the side of the anchor it lies on, opposite the first
+// direction its arrow may point (an arrow `up` lies below), and below it where unsaid; AppKit moves it to another side
+// where that one has no room. Margins, overlap of the anchor and adaptation are UIKit's and are not read here.
 //
 // **What dismisses it** is the route's `closedby`, as a sheet's: unwritten or `closerequest`, AppKit's transient
 // popover, which closes on Escape, on a click elsewhere and when another window becomes key; `none`, only the app. Its
@@ -38,6 +38,8 @@ final class RoutePopover: NSObject, NSPopoverDelegate {
         popover.contentViewController = controller
         popover.contentSize = route.frame.size
         popover.behavior = base.props["closedby"] == "none" ? .applicationDefined : .transient
+        // Its content under the arrow too, the arrow's area its safe area's (LLP 1123 D7)
+        popover.hasFullSizeContent = base.props["navigationFullSizeContent"] == "true"
         popover.animates = !ExactEnv.agentFreezes
         popover.delegate = self
     }

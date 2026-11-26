@@ -2142,6 +2142,12 @@
       "_comment": "@ref LLP 1123 D7: `sheet` (the default) or `none`: what a popover route becomes in a compact-width window, a sheet as UIKit adapts it, or still a popover."
     },
     {
+      "id": 341,
+      "name": "navigationFullSizeContent",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7, D16: `true` or `false`: whether AppKit's content runs under its chrome. On a popover route, `NSPopover.hasFullSizeContent` (default `false`); on the window's root route, the window's `.fullSizeContentView` (unsaid, the host's own choice)."
+    },
+    {
       "id": 334,
       "name": "appleMagnification",
       "kind": "float",

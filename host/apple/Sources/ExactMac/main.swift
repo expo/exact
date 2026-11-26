@@ -367,8 +367,15 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
         view.controlsOverlay = overlay
         let cover = view.viewportFit == "cover" || overlay
         sidebar?.viewportFitChanged()
+        // The window's root route says whether its content is full size (LLP 1123 D16), over the choice below
+        let full = { (choice: Bool) in
+            let wanted = self.view.fullSizeContent ?? choice
+            if wanted != self.window.styleMask.contains(.fullSizeContentView) {
+                if wanted { self.window.styleMask.insert(.fullSizeContentView) } else { self.window.styleMask.remove(.fullSizeContentView) }
+            }
+        }
         if cover {
-            if !window.styleMask.contains(.fullSizeContentView) { window.styleMask.insert(.fullSizeContentView) }
+            full(true)
             window.titlebarAppearsTransparent = !view.hasWindowToolbar
             window.titleVisibility = view.hasWindowToolbar ? .visible : .hidden
             // A translucent page draws no canvas: the window's own shows through it.
@@ -379,8 +386,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate, NSWindowRestoration {
             // A sidebar runs the window's full height, under the title bar
             // (LLP 1115.002 D3): the content is full size for it, and the
             // page starts under the bar in its own pane.
-            if sidebar != nil, !window.styleMask.contains(.fullSizeContentView) { window.styleMask.insert(.fullSizeContentView) }
-            if sidebar == nil, window.styleMask.contains(.fullSizeContentView) { window.styleMask.remove(.fullSizeContentView) }
+            full(sidebar != nil)
             window.titlebarAppearsTransparent = false
             window.titleVisibility = .visible
             if #available(macOS 11.0, *) { window.titlebarSeparatorStyle = .automatic }

@@ -631,8 +631,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "document" => AttrTarget::Prop(p("scrollDocument")),
         "virtualized" => AttrTarget::Prop(p("virtualized")),
         "testId" => AttrTarget::Prop(p("testId")),
-        // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
-        // `none` for a full-bleed screen.
+        // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar (`none`: full bleed).
         "navigationWidthFollowsPreferredContentSize" | "navigationKey" => AttrTarget::Prop(p(name)),
         "navigationEdgeAttachedInCompactHeight" | "navigationGrabber" => AttrTarget::Prop(p(name)),
         "navigationExtendsUnderOpaqueBars" | "navigationInitialDetent" => AttrTarget::Prop(p(name)),
@@ -641,6 +640,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "navigationPopoverAdaptation" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
         "navigationPopoverMargins" | "navigationExtendedLayout" => AttrTarget::Prop(p(name)),
         "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
+        "navigationFullSizeContent" => AttrTarget::Prop(p(name)),
         "navigationPresentation" | "navigationVerticalBar" => AttrTarget::Prop(p(name)),
         "navigationHistory" | "navigationDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
         "navigationBack" | "navigationBar" => AttrTarget::Prop(p(name)),

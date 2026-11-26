@@ -1,6 +1,7 @@
 // @ref LLP 1123 D7 — a popover route on AppKit, in a whole session: its subtree is in an `NSPopover` beside the
-// element its anchor names, an owner there, its arrows naming the side; AppKit's close is the stack's way back; one
-// whose anchor is nowhere in the window is the window sheet; and `closedby="none"` leaves AppKit's own closes out.
+// element its anchor names, an owner there, its arrows naming the side and `navigationFullSizeContent` its full-size
+// content; AppKit's close is the stack's way back; one whose anchor is nowhere in the window is the window sheet; and
+// `closedby="none"` leaves AppKit's own closes out. The stack's root route says the window's full-size content (D16).
 #if os(macOS)
 import AppKit
 import XCTest
@@ -17,7 +18,7 @@ final class RoutePopoverMacTests: XCTestCase {
         screen = "home"
       view
         column testId="root" navigationKey=screen navigationBack="back" width="100%" height="100%" position="relative"
-          column navigationKey="home" testId="home" position="absolute" inset=0 padding=20 gap=12
+          column navigationKey="home" navigationFullSizeContent="true" testId="home" position="absolute" inset=0 padding=20 gap=12
             button id="anchor" testId="open-pick" press=open("pick")
               text "Pick"
             button testId="open-fixed" press=open("fixed")
@@ -26,7 +27,7 @@ final class RoutePopoverMacTests: XCTestCase {
               text "Loose"
             text `screen ${screen}` testId="status"
           if screen == "pick"
-            column navigationKey="pick" navigationPresentation="popover" navigationPopoverAnchor="anchor" navigationPopoverArrows="down" testId="pick" padding=12 gap=8
+            column navigationKey="pick" navigationPresentation="popover" navigationPopoverAnchor="anchor" navigationPopoverArrows="down" navigationFullSizeContent="true" testId="pick" padding=12 gap=8
               text "Choose one" testId="pick-body"
               button id="back" press=back testId="pick-done"
                 text "Done"
@@ -64,6 +65,8 @@ final class RoutePopoverMacTests: XCTestCase {
         XCTAssertFalse(route.window === f.window, "in the popover's window")
         XCTAssertTrue(shown.content.isFlipped, "the owner's container")
         XCTAssertEqual(shown.popover.behavior, .transient)
+        XCTAssertTrue(shown.popover.hasFullSizeContent, "its content under the arrow, as the route says")
+        XCTAssertEqual(f.presenter.rootFullSizeContent, true, "the stack's root route says the window's")
         XCTAssertGreaterThan(shown.popover.contentSize.width, 0, "its size the route's")
         XCTAssertEqual(shown.popover.positioningRect, anchor.bounds, "pointed at its anchor")
         // AppKit's close, as on Escape or a click elsewhere, is the stack's way back, once its close has played
@@ -80,6 +83,7 @@ final class RoutePopoverMacTests: XCTestCase {
         let f = try make()
         try f.press("open-fixed")
         XCTAssertEqual(f.presenter.navigationHost.routePopover?.popover.behavior, .applicationDefined)
+        XCTAssertEqual(f.presenter.navigationHost.routePopover?.popover.hasFullSizeContent, false, "unsaid, AppKit's default")
         // The app's own way back closes it
         f.presenter.press(try XCTUnwrap(f.presenter.views.values.first { $0.props["id"] == "back" && $0.window != f.window }).id)
         f.settle()
