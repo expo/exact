@@ -128,6 +128,7 @@ fn paint(p: &mut Painter, k: &Kernel) -> crate::paint::Frame {
             scaled_presented: &Default::default(),
             paths: &|_| None,
             filters: &|_| None,
+            clips: &|_| None,
             scroll: &BTreeMap::new(),
             page: (0., 0.),
             images: &BTreeMap::new(),

@@ -269,7 +269,7 @@ export function helperClassifications(group) {
   group("presentation helpers", ["one-shot"], "current painted frame, geometry, menu or paint resource", "UI-owned",
     "paint/shared.rs retains the host's current flight frames; top/status.rs projects and paints the live menu. These helpers create no runner request.", [
     ["painted:host/painted/src/bars.rs", "Host::place_status_items"],
-    ["painted:host/painted/src/paint_motion.rs", "Host::presented_filter"],
+    ["painted:host/painted/src/paint_motion.rs", "Host::presented_clip Host::presented_filter"],
     ["painted:host/painted/src/paint/shape.rs", "PaintedBox::contains"],
     ["painted:host/painted/src/paint/shared.rs", "SharedState::update"],
     ["painted:host/painted/src/presenter/alert.rs", "Presenter::alert_anchor_scroll Presenter::backdrop"],

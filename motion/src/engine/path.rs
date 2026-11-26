@@ -1,10 +1,11 @@
-//! A list value under `transition`: a path's `d` (LLP 1055.000 D15) and a
-//! `filter` (LLP 1003.002 D6).
+//! A list value under `transition`: a path's `d` (LLP 1055.000 D15), a
+//! `filter` (LLP 1003.002 D6) and a box's `path()` clip (LLP 1003.003 D5).
 //!
 //! @ref CSS Transitions 1 §3 (starting, interrupting, reversing)
 //!
 //! Neither is a [`Value`], so its transition runs in two parts: the node's
-//! slot for the property ([`Property::D`], [`Property::Filter`]) runs the
+//! slot for the property ([`Property::D`], [`Property::Filter`],
+//! [`Property::ClipPath`]) runs the
 //! curve, a progress from 0 to 1 under the matching declaration, and a
 //! [`Track`] holds the values at its ends. The presented value is the one
 //! between them at that progress. The slot takes part in everything a curve
@@ -20,6 +21,7 @@
 //! rest (LLP 1062 D3).
 
 use super::{Engine, Live, Slot};
+use crate::clip::ClipValue;
 use crate::filter::FilterValue;
 use crate::path::PathValue;
 use crate::property::{Property, Value};
@@ -100,6 +102,25 @@ impl Tracked for FilterValue {
     }
 }
 
+impl Tracked for ClipValue {
+    const PROPERTY: Property = Property::ClipPath;
+    fn interpolable(&self, other: &Self) -> bool {
+        ClipValue::interpolable(self, other)
+    }
+    fn lerp(&self, to: &Self, progress: f64) -> Self {
+        ClipValue::lerp(self, to, progress)
+    }
+    fn is_finite(&self) -> bool {
+        ClipValue::is_finite(self)
+    }
+    fn tracks(engine: &Engine) -> &BTreeMap<u64, Track<Self>> {
+        &engine.clips
+    }
+    fn tracks_mut(engine: &mut Engine) -> &mut BTreeMap<u64, Track<Self>> {
+        &mut engine.clips
+    }
+}
+
 /// One node's value and its transition's ends.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Track<T> {
@@ -153,6 +174,20 @@ impl Engine {
         self.observe_track(node, filter, (!new).then(FilterValue::default))
     }
 
+    /// A box's committed `clip-path` (LLP 1003.003 D6): its `path()`, or
+    /// `None` for any other clip (`none`, a basic shape) and for a box that
+    /// stops being rendered, which forgets the clip and stops its transition.
+    /// `none` and a basic shape interpolate with nothing, so a box the engine
+    /// keeps no clip for takes its next one at once. Otherwise as
+    /// [`Engine::observe_path`].
+    pub fn observe_clip(&mut self, node: u64, clip: Option<ClipValue>) {
+        (self.links.observe_clip)(self, node, clip)
+    }
+
+    pub(super) fn observe_clip_full(&mut self, node: u64, clip: Option<ClipValue>) {
+        self.observe_track(node, clip, None)
+    }
+
     /// CSS Transitions §3 for a list value. `before`: what a node with no
     /// track had (`None`: the node is first seen, and takes its value with
     /// no transition).
@@ -163,8 +198,13 @@ impl Engine {
                 self.running.remove(&key);
                 self.pending.remove(&key);
                 self.played.remove(&key);
-                self.slots.remove(&key);
-                self.dirty.remove(&key);
+                // A run cancelled presents the row, so a host that showed
+                // its value shows the row again ([`Engine::frame`])
+                if self.slots.remove(&key).is_some() {
+                    self.dirty.insert(key);
+                } else {
+                    self.dirty.remove(&key);
+                }
             }
             return;
         };
@@ -295,6 +335,21 @@ impl Engine {
     /// The path a host draws for `node` now: the one between a running
     /// transition's ends, or `None` while nothing runs (the row shows).
     pub fn presented_path(&self, node: u64) -> Option<PathValue> {
+        self.presented_track(node)
+    }
+
+    /// A running clip transition's two clips, start and target (LLP
+    /// 1003.003 D7).
+    pub fn clip_ends(&self, node: u64) -> Option<(Arc<ClipValue>, Arc<ClipValue>)> {
+        self.slots.get(&(node, Property::ClipPath))?.running()?;
+        let track = self.clips.get(&node)?;
+        Some((track.from.clone(), track.target.clone()))
+    }
+
+    /// The clip a host draws for `node` now (LLP 1003.003): the one between
+    /// a running transition's ends, or `None` while nothing runs (the row
+    /// shows).
+    pub fn presented_clip(&self, node: u64) -> Option<ClipValue> {
         self.presented_track(node)
     }
 

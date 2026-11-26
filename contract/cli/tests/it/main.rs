@@ -38,6 +38,7 @@ mod checking;
 mod checkpoint;
 mod child_derive_costs;
 mod child_state_lifetime;
+mod clip_transition;
 mod clipboard;
 mod clock_timeline;
 mod collection;

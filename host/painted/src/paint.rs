@@ -25,7 +25,9 @@ mod rotation;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 pub(crate) use presentation::Presentation;
 pub mod border;
+mod scene;
 mod shape;
+pub use scene::Scene;
 pub use shape::Shape;
 pub(crate) use shape::{bezier_outline, bezier_path, svg_bezier_path};
 use space::sticky;
@@ -333,45 +335,6 @@ struct HitGeometry {
     projective: Option<ProjectiveHit>,
 }
 
-/// What a frame is painted from.
-pub struct Scene<'a> {
-    /// The kernel: frames, styles, props.
-    pub kernel: &'a Kernel,
-    /// @ref LLP 1038 D6 — hidden route subtrees paint no pixels or hit boxes.
-    pub hidden: &'a dyn Fn(ViewId) -> bool,
-    /// The roots, in order.
-    pub roots: &'a [ViewId],
-    /// A node's presentation values.
-    pub presented: &'a dyn Fn(ViewId) -> Presented,
-    /// Nodes whose played or held scale differs from identity.
-    pub scaled_presented: &'a std::collections::BTreeSet<ViewId>,
-    /// A path's `d` while a transition moves it (LLP 1055.000 D15).
-    pub paths: &'a dyn Fn(ViewId) -> Option<exact_motion::PathValue>,
-    /// A `filter` while a transition moves it (LLP 1003.002 D8).
-    pub filters: &'a dyn Fn(ViewId) -> Option<exact_motion::FilterValue>,
-    /// Scroll offsets of scroll containers (host state, LLP 1010).
-    pub scroll: &'a BTreeMap<ViewId, (f32, f32)>,
-    /// The page's scroll offset: the window is a viewport over a document.
-    pub page: (f32, f32),
-    /// Decoded images by node.
-    pub images: &'a BTreeMap<ViewId, Arc<Bitmap>>,
-    /// The focused node, if any (its ring, or a field's caret, is painted).
-    pub focus: Option<ViewId>,
-    /// The focused text field's selection (x2apps codeedit #2).
-    pub selection: Option<exact_runner::FieldSelection>,
-    /// At a wrap, a click or visual-line End can choose the preceding line.
-    pub caret_upstream: bool,
-    /// Unbound checkboxes' own states, which the host keeps (LLP 1069.001 D4).
-    pub controls: &'a BTreeMap<ViewId, bool>,
-    /// Values chosen in a date, range or select, or typed into a field, since
-    /// its bound value last changed: (choice, bound).
-    pub chosen: &'a BTreeMap<ViewId, (String, String)>,
-    /// A select's open menu, painted over everything (LLP 1069.001 D7).
-    pub menu: Option<control::MenuPaint>,
-    /// The pointer, in viewport points, when the host draws one.
-    pub pointer: Option<(f32, f32)>,
-}
-
 mod frame;
 pub(crate) mod grid;
 pub use crate::canvas2d::CanvasUpdate;
@@ -440,6 +403,9 @@ pub struct Painter {
     pub(crate) composition: Option<Rc<field::Composition>>,
     pub(crate) inline_text: HashMap<ViewId, Rc<inline_frame::PaintedInline>>,
     region_picture: Option<Rc<region::Picture>>,
+    /// How many times a moving list value (a `d`, a `filter`, a clip) presented a new value: a current
+    /// region's picture taken at another count, a restored one too, is taken again (LLP 1003.003 D7).
+    region_motion: u64,
     region_frame: Option<region::Published>,
     damage: damage::Retained,
     /// `backgroundMaterial` names the schema lacks.
@@ -565,6 +531,7 @@ impl Painter {
             lift: Lift::default(),
             shared: SharedState::default(),
             region_picture: None,
+            region_motion: 0,
             region_frame: None,
             damage: Default::default(),
             materials: Default::default(),
@@ -1069,12 +1036,16 @@ impl Painter {
         }
         // @ref LLP 1043.000 §3 D7 — polygon demo ink and exclusion share an outline.
         let (sx, sy, sw, sh) = surface;
-        let css = node.style.rare.clip_path.resolved(sw, sh);
+        let css = shape::shown_clip(walk.scene, &node, sw, sh);
         let clip_ts = ts.pre_translate(sx, sy);
-        let path_clip = css.has_path() && self.backend.push_css_clip(&css, clip_ts);
-        self.without_grid(transformed, |painter| {
-            painter.box_content(walk, &node, rect, ts, offset, clip_rect);
-        });
+        // A clip that draws no area clips the whole box (CSS Masking 1 §5)
+        let hidden = css.draws_nothing();
+        let path_clip = !hidden && css.has_path() && self.backend.push_css_clip(&css, clip_ts);
+        if !hidden {
+            self.without_grid(transformed, |painter| {
+                painter.box_content(walk, &node, rect, ts, offset, clip_rect);
+            });
+        }
         shape::clip_hits(
             &mut walk.boxes[hit_start..],
             &css,

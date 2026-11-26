@@ -283,6 +283,7 @@ impl<D: DataSource> Presenter<D> {
             scaled_presented: host.scaled_presented(),
             paths: &|id| host.presented_path(id),
             filters: &|id| host.presented_filter(id),
+            clips: &|id| host.presented_clip(id),
             scroll: displaced.as_ref().unwrap_or(&self.scroll),
             page: self.page,
             images: &self.images.bitmaps,

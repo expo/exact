@@ -211,6 +211,7 @@ fn alert_focus_stops_at_the_presented_root_for_hidden_placements() {
         scaled_presented: p.host.scaled_presented(),
         paths: &|_| None,
         filters: &|_| None,
+        clips: &|_| None,
         scroll: &p.scroll,
         page: p.page,
         images: &p.images.bitmaps,
