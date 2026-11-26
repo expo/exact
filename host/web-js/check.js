@@ -308,6 +308,8 @@ export function observe(views, inactive = () => false) {
     const b = box(el), scroller = el.dataset.scroll === 'true';
     if (!shown(el, b, scroller)) continue;
     const cs = getComputedStyle(el), item = { id: ids.get(el), x: r2(b.x), y: r2(b.y), w: r2(b.width), h: r2(b.height) };
+    const pop = el.closest('[popover]:popover-open');
+    if (pop) item.layer = viewOf(pop) ?? 'popover';
     if (scroller) {
       observeScroll(el, cs, b, item);
       if (!b.width || !b.height) continue;
@@ -433,6 +435,10 @@ export function observe(views, inactive = () => false) {
         if (p && p.textContent.trim() !== el.textContent.trim()) item.inline = true;
       }
       if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') item.disabled = true;
+      if (item.on === undefined) {
+        const under = backing(el, b);
+        if (under) { item.on = under.by === item.id ? 'own' : under.by ?? 'page'; if (under.solid) item.solid = true; }
+      }
     }
     // What lets taps through (`pointer-events: none`) is no target, and a hit test cannot say what lies over it. In an
     // announcement laid over the page (a toast: a live region out of flow), it lies over what is beneath by design.

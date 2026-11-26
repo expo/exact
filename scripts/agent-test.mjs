@@ -772,7 +772,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   if (unchecked) console.error(`properties on ${host}: ${unchecked} lines not checked (after, its frames and commands, and never refuses); the driver exposes no commit trace`);
   let propertyChecks = 0, propertyFalse = 0;
   const tests = backendFetchPrefixes(authored.tests.map((t, index) => ({ ...t, index }))
-    .filter(t => (only == null || t.name === only) && (testIndex == null || t.index === testIndex)), granted.length ? granted : appOrigins);
+    .filter(t => (only == null || t.name.includes(only)) && (testIndex == null || t.index === testIndex)), granted.length ? granted : appOrigins);
   const reseeded = tests.filter(t => t.steps.some(s => s.op === 'fresh')).length;
   if (reseeded) console.error(`fresh: reseeding before each of ${reseeded} tests`);
   const results = [], landed = (result) => { results.push(result); atResult?.(result); };

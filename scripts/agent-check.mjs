@@ -252,26 +252,35 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
     else add(kind, it, { ...detail, unit }, regionHint(kind));
   }
   // A list's section header (`pinned`) lies over the rows passing under it, as UIKit pins it, and an announcement laid
-  // over the page that lets taps through (`overlay`, a toast) over what it passes: no overlap.
+  // over the page that lets taps through (`overlay`, a toast) over what it passes: no overlap. Items in different
+  // popover presentation layers (`layer`) or hidden behind an opaque sibling surface (`beneath` + `on` + `solid`) do
+  // not collide (LLP 1156.008.000 D8.3).
+  const sameLayer = (a, b) => (a.layer ?? null) === (b.layer ?? null);
+  const within = (id, root) => {
+    for (let k = 0; id != null && k < 256; id = nodes.get(id)?.parent, k++) if (id === root) return true;
+    return false;
+  };
+  const hides = (top, below, i) => {
+    if (below.beneath == null || !top.solid) return false;
+    const owner = top.on === 'own' ? top.id : top.on;
+    return typeof owner === 'number' && (owner === below.beneath.by || within(owner, below.beneath.by)) && holds(below.beneath, i);
+  };
   for (const a of controls) for (const b of items) {
-    if (a === b || !(b.control || b.text) || b.pinned || b.overlay || (b.control && b.id < a.id)) continue;
+    if (a === b || !(b.control || b.text) || b.pinned || b.overlay || !sameLayer(a, b) || (b.control && b.id < a.id)) continue;
     if (!b.control && (b.of === a.id || controls.some((c) => c !== a && holds(c, b)))) continue; // its own label, or another control's
     if (clears(obs, b, a) || (b.control && clears(obs, a, b))) continue; // what scrolls passes under a control that stays (a composer, a floating button)
     const i = meeting(where(a), where(b));
+    if (hides(a, b, i) || hides(b, a, i)) continue;
     if (i.w >= 2 && i.h >= 2 && !holds(a, b) && !holds(b, a)) add('overlap', a, { with: b.id, by: [r0(i.w), r0(i.h)] }, 'give them room (a gap, or let the row wrap)');
   }
   // Two texts running into each other: where their lines are drawn (`ink`, where the host says it is not the box) share
   // any width at all. Glyphs a pixel or two into a neighbour's read as one word ("GoingMaybe", event-rsvp at the largest
   // text size, round 21), and two texts set flush on purpose ("$" then "12") only touch.
   const texts = items.filter((it) => it.text && !it.control && !it.squeezed);
-  // A text drawn on the opaque fill of the view laid over another's middle (a bar over its list's row) hides that
-  // one where they meet, if that view's box holds all of the meeting: they do not run together there (the host's
-  // `beneath`, `on` and `solid`; a label running past its bar's edge still meets the row outside it).
   // A control's own label goes with it over what scrolls under it
   const labels = (a, b) => controls.some((c) => c.id === b.of && clears(obs, a, c));
-  const hides = (top, below, i) => below.beneath != null && top.on === below.beneath.by && top.solid && holds(below.beneath, i);
   for (const [k, a] of texts.entries()) for (const b of texts.slice(k + 1)) {
-    if (holds(a, b) || holds(b, a) || a.pinned || b.pinned || a.overlay || b.overlay || labels(a, b) || labels(b, a)) continue;
+    if (holds(a, b) || holds(b, a) || a.pinned || b.pinned || a.overlay || b.overlay || !sameLayer(a, b) || labels(a, b) || labels(b, a)) continue;
     const i = meeting(drawn(a), drawn(b));
     if (hides(a, b, i) || hides(b, a, i)) continue;
     if (i.w > 0.5 && i.h >= 2) add('overlap', a, { with: b.id, by: [Math.round(i.w * 10) / 10, r0(i.h)] }, 'give them room (a gap, or let the row wrap)');

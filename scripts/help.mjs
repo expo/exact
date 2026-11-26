@@ -171,7 +171,7 @@ Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreg
     common: ['test [web|ios] [<file>…] [--size <w>x<h>] [--sim <name>]'],
     flags: DRIVE.filter(naming(['--size', '--sim'], true)),
     more: [
-      ['--test <file>', 'a test file, as a bare path or glob is (from the current directory)'],
+      ['--test <file> · --only <pattern>', 'a test file, as a bare path or glob is · run only tests whose name contains this substring'],
       ['--storage <name>', 'the base of each test\'s own store name (default test)'],
       ...DRIVE.filter(naming(['--storage', '--size', '--sim', ...TEST_IGNORES.map(name)], false)),
     ],
@@ -181,7 +181,7 @@ it: web builds the app (web-build); ios, macos and windows build when the build 
 older than its sources, saying so on stderr; windows drives at app.json's window size. Each test launches the app fresh with its own
 store, after its first data has landed; its leading lines (size, epoch, fail fetch …) override flags. Exit 1 when a test fails.
 Host     unnamed: one app.json ships, chosen as verify's (verify --help) and macos or linux too; none here: refused, saying why.
-Server   restarts empty per test (DB=.exact/test/db.sqlite; database:false too); an ancestor's stays shared; else refuses a live server or ignored DB.
+Server   restarts empty per test (DB=.exact/test/p<port>/db.sqlite; database:false too); an ancestor's stays shared; else refuses a live server or ignored DB.
 Runs     to completion; nothing is left running; a test past 30 s says its line every 30 s.
 Backend  start snapback4 dev on app.ts’s selected origin’s port first; checked before launch.
          A server this run did not start stays shared. EXACT_PORT is the page’s.
@@ -201,7 +201,7 @@ Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: head
       '  each op one quoted argument: "tap <target>" "type <target> <text>" "clock data|settle|+<ms>" "state [<name>]" tree "check [both]" "screenshot <png>" "resize <w>x<h>" "prefer <feature> <value>" back'],
     flags: DRIVE.filter(naming(DRIVE_FIRST, true)),
     more: DRIVE.filter(naming(DRIVE_FIRST, false)),
-    internal: ['--test <file>', ...DRIVE_INTERNAL],
+    internal: ['--test <file>', '--only <pattern>', ...DRIVE_INTERNAL],
     body: `Gallery: ios|macos widget|activity <entry> tree|state|screenshot|clock
   tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · rotate <orientation> (iOS simulator) · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
@@ -217,7 +217,7 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
   },
   verify: {
     line: 'build if stale, run *.test.contract, check each screen it reaches light and dark, relaunch once',
-    usage: 'bun exact.mjs verify [web|ios|windows|android] [--sim <udid|name>] [--duo <udid|name>|none] [--shots <dir>] [--rescroll] [--strict] [--json]',
+    usage: 'bun exact.mjs verify [web|ios|windows|android] [<file.test.contract>|<glob>]… [--sim <udid|name>] [--duo <udid|name>|none] [--shots <dir>] [--rescroll] [--strict] [--json]',
     common: ['verify [ios] [--shots <dir>] [--sim <name>]    done when it says "verify: clean"'],
     flags: [
       DRIVE.find(([flag]) => flag === '--backend <url>'),
@@ -231,7 +231,7 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
 web launches at 390x844 and 1280x900, ios at the simulator's own size with UIKit's bars (an edit to only
 app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
 light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
-beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
+beside it, as test runs them (named files run partial, unrecorded). Each test's last screen is checked the same way in the test's own session (web: at
 both widths; ios runs them with UIKit's bars). A real-time relaunch checks what a passing test stored.
 One report: the build if it built, compiler warnings (as contract build prints them), the tests, check's findings (each
 once, naming the screens it was on), tree --ax's (each screen's accessibility tree, read once), the relaunch, then
@@ -252,7 +252,7 @@ Runs     to completion: exit 1 when the build, a test, a launch or the relaunch 
          relaunch's, the largest text size's, scrolling's) and the compiler's warnings are counted, never fail it but under --strict. A
          screen no test ends on is not checked: end a test there. Its first line says about how long it takes (its last run's time): wait that once.
 Server   an app's own: restarts empty per test, database:false too; relaunch replays the chosen test first.
-         DB=.exact/verify/db.sqlite is removed after. Remote servers stay shared; an ancestor's is shared by test and agent --test.
+         DB=.exact/verify/p<port>/db.sqlite is removed after. Remote servers stay shared; an ancestor's is shared by test and agent --test.
          A dev server already answering is refused, as is an entry that does not read DB unless server.database is false.
 Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simulator's socket).`,
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',

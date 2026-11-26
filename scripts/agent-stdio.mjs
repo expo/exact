@@ -29,6 +29,10 @@ export async function closeStdio(child, closed, cleanup) {
   });
 }
 
+/** When Linux drives a live dev loop (`--url`), Contract and TypeScript edits reload over HTTP without rebuilding the native binary (LLP 1156.008.000 D9.4). */
+export const linuxDevStaleChanges = (changes, liveUrl) =>
+  liveUrl ? changes.filter(path => !/\.(?:contract|tsx?)$/.test(path)) : changes;
+
 /** The command that builds what an Android drive runs: the APK (`reader`), else the Linux host for Android. */
 export function androidRebuild(a, reader) {
   const selected = reader && apkRecord(a)?.abis, abis = selected?.length ? ` --abis ${selected.join(',')}` : '';
@@ -130,7 +134,7 @@ export async function openStdio({ host, plan, world, size, app, appServerUrl, en
   }
   else if ((linux && process.env.EXACT_LINUX_BIN) || (android && process.env.EXACT_ANDROID_BIN)) unchecked(host, android ? 'EXACT_ANDROID_BIN' : 'EXACT_LINUX_BIN');
   else if (android && bin.endsWith('.apk')) refuseStale(host, bin, [...apkChanges(a, bin), ...bakedSettingChanges(bin, a)], androidRebuild(a, true));
-  else if (linux || android) refuseStale(host, bin, [...depInfoChanges(bin, a), ...bakedSettingChanges(bin, a, { launch: linux ? childEnv : null })], android ? androidRebuild(a, false) : linuxRebuild(a));
+  else if (linux || android) refuseStale(host, bin, [...(linux ? linuxDevStaleChanges(depInfoChanges(bin, a), !!(extra.EXACT_DEV_PLAN || process.env.EXACT_DEV_PLAN)) : depInfoChanges(bin, a)), ...bakedSettingChanges(bin, a, { launch: linux ? childEnv : null })], android ? androidRebuild(a, false) : linuxRebuild(a));
   else if (!device && process.env.EXACT_MAC_BIN) unchecked(host, 'EXACT_MAC_BIN');
   if (device && (plan || extra.EXACT_PLAN || extra.EXACT_ASSETS)) throw new Error('a phone cannot read host-local plan/assets paths; use --url or its embedded app');
   const ph = device ? phone(pick) : null;

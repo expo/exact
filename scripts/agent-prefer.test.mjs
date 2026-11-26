@@ -1,7 +1,7 @@
 // `prefer`'s facts by their names (agent-prefer.mjs `preferGroups`): a fact answers to its near spellings
 // (LLP 1116.007 D3.5: `prefer color-scheme dark`), and an unknown fact or value is still refused.
 import { test, expect } from 'bun:test';
-import { PREFERENCES, mediaHeard, preferGroups, preferWeb } from './agent-prefer.mjs';
+import { PREFERENCES, mediaHeard, parsePreferArgs, preferGroups, preferWeb } from './agent-prefer.mjs';
 import { MalformedOperation } from './agent-keys.mjs';
 import { displayMode, pageReporter, preferDisplayMode, preferences } from '../host/web/navigation/environment.js';
 
@@ -206,4 +206,15 @@ test('freeze and resume are document facts; prefer substitutes them under the ag
   expect(agent.read().frozen).toBe(true);
   agent.prefer({ frozen: false }); expect(agent.read().frozen).toBe(false);
   expect(told).toEqual([false, true, false]);
+});
+
+test('parsePreferArgs respects quoted values such as safe-area and preserves extension tails (LLP 1156.008.000 D9.1)', () => {
+  expect(parsePreferArgs('prefer safe-area "47 0 34 0"')).toEqual({ 'safe-area': '47 0 34 0' });
+  expect(preferGroups(parsePreferArgs('prefer safe-area "47 0 34 0" color-scheme dark'))).toMatchObject({
+    page: { 'safe-area': '47 0 34 0' },
+    media: { 'prefers-color-scheme': 'dark' },
+  });
+  expect(parsePreferArgs("prefer safe-area '10 0 20 0'")).toEqual({ 'safe-area': '10 0 20 0' });
+  expect(parsePreferArgs('prefer extension speech.listen={"heard":"pick up milk"}'))
+    .toEqual({ extension: 'speech.listen={"heard":"pick up milk"}' });
 });

@@ -307,17 +307,21 @@ const NOTE_ADVICE = '  a saved value must survive a reload; a game or a draft in
 export function refusalsOf({ lines = [], host = [] } = {}, expected = []) {
   const found = [], journal = new Map(), accepted = new Map();
   for (const line of expected) accepted.set(line,(accepted.get(line) ?? 0)+1);
+  // App-authored `console.<level>:` output without the `exact:` marker is not a host refusal (LLP 1156.008.000 D8.1).
+  const appConsole = raw => /^console\.\w+:\s/.test(String(raw)) && !/^console\.\w+:\s*exact:\s/i.test(String(raw));
   const normalized = raw => String(raw).replace(/^t=\d+(?:\.\d+)?\s+/, '').replace(/^(?:app|console\.\w+|chrome|warning|error): /, '').replace(/^exact: /, '').trim();
   const collect = line => {
     if (/\brefus(?:ed|es|al)\b/i.test(line) && !/\b(?:dismissal|back|back gesture|drag) refused\b|connection[ _]refused|fetch failed \(driver fault\)/i.test(line) && !found.includes(line)) found.push(line);
   };
   for (const raw of lines) {
+    if (appConsole(raw)) continue;
     const line=normalized(raw), count=accepted.get(String(raw)) ?? 0;
     journal.set(line,(journal.get(line) ?? 0)+1);
     if (count) accepted.set(String(raw),count-1); else collect(line);
   }
   // A native host can also print its journal; that mirror is one event.
   for (const raw of host) {
+    if (appConsole(raw)) continue;
     const line=normalized(raw), mirrors=journal.get(line) ?? 0;
     if (mirrors) journal.set(line,mirrors-1); else collect(line);
   }
@@ -544,15 +548,54 @@ export const testEnd = (host, shots, persisted, capture = true) => async (s, t) 
  * as a compile error, or no simulator chosen); `{ none }` without a file. A test is numbered by its place in `results`,
  * so its captures' names are its own across the files, and each file after the first runs under a storage name of its
  * own, so a store one file's test left is not another's. */
-async function tests(host, app, shots, running) {
+/** Resolve optional `.test.contract` file paths or globs for `verify [host] [file ...]`. */
+export function selectVerifyFiles(appDir, specs, all = null) {
+  const totalFiles = all ?? authoredTestsSync(appDir);
+  if (!specs?.length) return { files: totalFiles, partial: null };
+  const selected = [];
+  for (const spec of specs) {
+    let found;
+    if (spec.includes('*')) {
+      found = [...new Bun.Glob(spec).scanSync({ absolute: true })].sort();
+      if (!found.length && resolve(process.cwd()) !== resolve(appDir)) found = [...new Bun.Glob(spec).scanSync({ cwd: appDir, absolute: true })].sort();
+    } else {
+      const direct = resolve(spec), inApp = resolve(appDir, spec);
+      found = existsSync(direct) ? [direct] : existsSync(inApp) ? [inApp] : [];
+    }
+    if (!found.length) throw new Error(`no test file matches ${spec}`);
+    for (const file of found) if (!selected.includes(file)) selected.push(file);
+  }
+  return { files: selected, partial: { selected: selected.length, total: totalFiles.length } };
+}
+const authoredTestsSync = (dir) => {
+  const others = readdirSync(dir).filter((n) => n.endsWith('.test.contract') && n !== 'app.test.contract').sort();
+  return [...(existsSync(resolve(dir, 'app.test.contract')) ? ['app.test.contract'] : []), ...others].map((n) => resolve(dir, n));
+};
+
+async function tests(host, app, shots, running, selectedFiles = null) {
   const [{ runTests }, { authoredTests }] = await Promise.all([import('./agent-test.mjs'), import('./app.mjs')]);
-  const persisted = persistedStates(app.dir), files = authoredTests(app.dir);
+  const persisted = persistedStates(app.dir), files = selectedFiles ?? authoredTests(app.dir);
   if (!files.length) return { none: true };
   const atEnd = testEnd(host, shots, persisted), out = { passed: 0, failed: 0, results: [] }, errors = [];
   for (const [i, file] of files.entries()) {
     const first = out.results.length;
+    const started = new Map();
+    let fileStart = Date.now();
     try {
-      const r = await runTests({ host, file, app: app.selector, running, ax: readsAx(host), atEnd: (s, t) => atEnd(s, { ...t, index: first + t.index }), ...(i ? { storage: `test${i}` } : {}), ...hostOpen(host, app) });
+      const r = await runTests({
+        host, file, app: app.selector, running, ax: readsAx(host),
+        atLine: ({ index }) => { if (!started.has(index)) started.set(index, Date.now()); },
+        atResult: (res) => {
+          const ms = Date.now() - (started.get(res.index) ?? fileStart);
+          fileStart = Date.now();
+          const status = res.skipped ? 'skip' : res.failures.length ? 'FAIL' : 'pass';
+          const count = (res.end?.runs ?? []).reduce((n, run) => n + (run.findings?.length ?? 0), 0)
+            + (res.end?.refusals?.length ?? 0) + (res.end?.large?.findings?.length ?? 0);
+          process.stderr.write(`verify ${host}: ${status} ${quoted(res.name, 40)} (${secs(ms)}${count ? `, ${plural(count, 'finding')}` : ''})\n`);
+        },
+        atEnd: (s, t) => atEnd(s, { ...t, index: first + t.index }),
+        ...(i ? { storage: `test${i}` } : {}), ...hostOpen(host, app),
+      });
       out.passed += r.passed; out.failed += r.failed;
       // A failure the test did not arrange is a finding (LLP 1146 D4): `runTests` says it in a note.
       out.results.push(...r.results.map(({ name, index, failures, notes = [], end, store, shots }) => ({ name, index, file: basename(file), failures, unarranged: notes.filter((n) => n.startsWith('unarranged: ')).map((n) => n.slice(12)), ...(shots ? { shots } : {}), ...(end ? { end } : {}), ...(store ? { store } : {}) })));
@@ -571,7 +614,7 @@ async function tests(host, app, shots, running) {
  * 6 on average; most on an app with its own server, whose tour runs after the rest. */
 const LARGE_TOUR_SCREENS = 12, LARGE_TOUR_MS = 40_000;
 const kindOf = (id) => String(id).replace(/\d+/g, '#');
-async function largeTour(app, running) {
+async function largeTour(app, running, selectedFiles = null) {
   const [{ runTests }, { authoredTests }] = await Promise.all([import('./agent-test.mjs'), import('./app.mjs')]);
   const shown = new Set(), read = [], started = Date.now();
   const spent = () => read.length >= LARGE_TOUR_SCREENS || Date.now() - started > LARGE_TOUR_MS;
@@ -584,7 +627,7 @@ async function largeTour(app, running) {
     const r = await largestText(s, `line ${line} of ${quoted(name, 24)}`);
     if (r && !r.error) read.push(r);
   };
-  for (const file of authoredTests(app.dir)) {
+  for (const file of selectedFiles ?? authoredTests(app.dir)) {
     if (spent()) break;
     try { await runTests({ host: 'web', file, app: app.selector, running, size: WEB_SIZES[0], storage: 'verify-tour', atStep }); }
     catch { /* the tests' own run says what does not compile */ }
@@ -877,7 +920,7 @@ const KINDS_FROM = 10; // findings from which the closing line says their kinds
 
 /** The report's lines and its problem count, from what each stage gave; `full`, every finding of each group, one a line,
  *  which verify writes to `listed` (a path the report names when the groups leave any line out). */
-export function report({ host, built, compiler = [], server, tested, checks, ax = [], relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, duo = null, launch = [], shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false }) {
+export function report({ host, built, compiler = [], server, tested, checks, ax = [], relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, duo = null, launch = [], shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false, partial = null }) {
   const out = [], full = [];
   const all = listed ? `${listed} lists them all` : 'verify --json lists them all';
   let failedTests = 0, findings = 0, broken = 0;
@@ -1087,7 +1130,8 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
   const [top, topCount] = byKind[0] ?? [];
   if (many && acceptable.has(top) && topCount * 2 > findings + largeCount) out.push(`most findings are ${top} (${topCount}): fix them, or, where the design means them, app.json's verify.accept takes each by its kind and testId (docs/recipes/tests.md)`);
   const caveats = [axSaid.tree, scrolled?.error && 'scrolling was not measured'].filter(Boolean).join('; ');
-  out.push(problems ? `verify: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'})${caveats ? `, and ${caveats}` : ''} in ${secs(ms)}` : `verify: clean${caveats ? `, but ${caveats}` : ''} in ${secs(ms)}`);
+  const prefix = partial ? `verify (partial: ${partial.selected}/${partial.total} test files)` : 'verify';
+  out.push(problems ? `${prefix}: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'})${caveats ? `, and ${caveats}` : ''} in ${secs(ms)}` : `${prefix}: clean${caveats ? `, but ${caveats}` : ''} in ${secs(ms)}`);
   // Counted problems never fail a run (LLP 1116.020 D4) unless the caller gates on them: `--strict` (LLP 1156.001 D1). A
   // finding verify.accept takes is not counted; a compiler warning is, and is fixed in the source, never accepted.
   return { lines: out, problems, exit: failedTests || broken || (strict && problems) ? 1 : 0, full: grouped ? full : [], axUnread: axSaid.unread };
@@ -1103,7 +1147,11 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   const flagged = new Set([args.indexOf('--app') + 1, args.indexOf('--sim') + 1, args.indexOf('--shots') + 1, args.indexOf('--duo') + 1, args.indexOf('--variant') + 1].filter((i) => i > 0));
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(value('--app'));
-  const named = args.find((a, i) => !a.startsWith('-') && !flagged.has(i)), chosen = named ? { host: named } : shippedHost('verify', app.manifest);
+  const positional = args.filter((a, i) => !a.startsWith('-') && !flagged.has(i));
+  const firstIsHost = positional.length > 0 && (['web', 'ios', 'windows', 'android'].includes(positional[0])
+    || (!/\.contract$|\*/.test(positional[0]) && !existsSync(resolve(positional[0])) && !existsSync(resolve(app.dir, positional[0]))));
+  const named = firstIsHost ? positional[0] : undefined, fileSpecs = firstIsHost ? positional.slice(1) : positional;
+  const chosen = named ? { host: named } : shippedHost('verify', app.manifest);
   // No platform the app ships has a leg here: the semantics check runs alone, and the run says so.
   if (!chosen.host) {
     if (json) emitJSON({ host: null, skipped: chosen.why, problems: 0, exit: 0 }); else ended(`verify: ${chosen.why}`);
@@ -1111,6 +1159,11 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   }
   const host = chosen.host;
   if (!['web', 'ios', 'windows', 'android'].includes(host)) { console.error(`verify: web, ios, windows or android, not ${host} (test ${host} runs the tests there)`); return declined(2); }
+  let selectedFiles = null, partial = null;
+  if (fileSpecs.length) {
+    try { ({ files: selectedFiles, partial } = selectVerifyFiles(app.dir, fileSpecs)); }
+    catch (e) { console.error(`verify: ${e.message}`); return declined(2); }
+  }
   if (host === 'windows' && process.platform !== 'win32') { console.error('verify windows runs on Windows (bun exact.mjs verify windows there)'); return declined(2); }
   if (['web', 'ios', 'windows'].includes(host)) {
     const { privateWebBuild, privateNativeBuild } = await import('./web-build.mjs');
@@ -1176,10 +1229,10 @@ async function deviceMain(argv, emitJSON, declined, ended) {
         serverHealth();
       }
       await freshServer();
-      tested = await tests(host, app, shots, running);
+      tested = await tests(host, app, shots, running, selectedFiles);
     }
-    else if (host === 'web') [tested, toured, ...firsts] = await Promise.all([tests(host, app, shots), largeTour(app), ...WEB_SIZES.map(launch)]);
-    else { tested = await tests(host, app, shots); firsts = [await launch(null, 0)]; }
+    else if (host === 'web') [tested, toured, ...firsts] = await Promise.all([tests(host, app, shots, null, selectedFiles), largeTour(app, null, selectedFiles), ...WEB_SIZES.map(launch)]);
+    else { tested = await tests(host, app, shots, null, selectedFiles); firsts = [await launch(null, 0)]; }
     serverHealth();
     results = tested?.results ?? [];
     const fresh = firsts.find((runs) => runs.seen)?.seen ?? null;
@@ -1217,7 +1270,7 @@ async function deviceMain(argv, emitJSON, declined, ended) {
       })().catch((e) => ({ test: chosen.name, error: e.message }));
     }
     // The tour uses the same per-test server restarts as the main test pass.
-    if (running && host === 'web') { serverHealth(); toured = await largeTour(app, running); serverHealth(); }
+    if (running && host === 'web') { serverHealth(); toured = await largeTour(app, running, selectedFiles); serverHealth(); }
     if (host === 'ios' && firsts.some((runs) => runs.tall)) {
       if (running) await freshServer();
       const key = await scrollKey(app, { udid: firsts.find((runs) => runs.udid)?.udid, server: owned ? server : null }).catch(() => null);
@@ -1273,16 +1326,16 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   // LLP 1163 D2: where the launch colour is not the first screen's, on the hosts that show one before the first frame
   const launchNote = ['ios', 'android', 'web'].includes(host) ? launchNotes(app.manifest, firstGrounds(firsts.flat()), host, host === 'ios' ? await builtGround(app) : null) : [];
   const findingsFile = resolve(shots, `${host}-findings.txt`), listed = relative(process.cwd(), findingsFile);
-  const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, duo, launch: launchNote, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict') });
+  const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, duo, launch: launchNote, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict'), partial });
   if (r.full.length) writeFileSync(findingsFile, r.full.join('\n') + '\n'); else rmSync(findingsFile, { force: true });
   writeFileSync(resolve(shots, 'last.json'), JSON.stringify({ ...lastRuns(app), [host]: Date.now() - started }) + '\n');
   if (json) {
     const testsOut = tested?.results ? { ...tested, results: results.map(({ name, file, failures, end }) => ({ name, file, failures, ...(end?.shot && existsSync(end.shot) ? { shot: end.shot } : {}), ...(end?.error ? { endError: end.error } : {}) })) } : tested;
     const relaunchOut = relaunched && (({ runs, large, ...rest }) => rest)(relaunched);
-    emitJSON({ host, built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, ax: axReads, reloads, large, fixed, launch: launchNote, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), ...(duo ? { duo } : {}), screenshots: kept, problems: r.problems, axUnread: r.axUnread, exit: r.exit, ms: Date.now() - started });
+    emitJSON({ host, ...(partial ? { partial: true, files: partial } : {}), built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, ax: axReads, reloads, large, fixed, launch: launchNote, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), ...(duo ? { duo } : {}), screenshots: kept, problems: r.problems, axUnread: r.axUnread, exit: r.exit, ms: Date.now() - started });
   } else { say(r.lines.slice(0, -1)); ended(r.lines.at(-1)); }
-  // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
-  (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: `${r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean'}${r.axUnread ? `${r.problems ? ', and' : ', but'} the accessibility tree was not read whole` : ''}`, timing: 'agent', sim });
+  // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`). Filtered runs stay partial (LLP 1156.008.000 D8.2).
+  if (!partial) (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: `${r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean'}${r.axUnread ? `${r.problems ? ', and' : ', but'} the accessibility tree was not read whole` : ''}`, timing: 'agent', sim });
   return r.exit;
 }
 
