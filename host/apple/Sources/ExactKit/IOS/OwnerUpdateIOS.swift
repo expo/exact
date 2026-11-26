@@ -218,6 +218,8 @@ package struct OwnerUpdateIOS: Equatable {
         hasher.combine(navigation?.navigationBar.prefersLargeTitles)
         hasher.combine(controller.navigationItem.largeTitleDisplayMode.rawValue)
         hasher.combine(tabs?.tabBar.isHidden)
+        // iPadOS's floating tab bar hides through `isTabBarHidden` and leaves `tabBar.isHidden` as it was
+        if #available(iOS 18, tvOS 18, *) { hasher.combine(tabs?.isTabBarHidden) }
         let traits = view.traitCollection
         hasher.combine(traits.horizontalSizeClass.rawValue)
         hasher.combine(traits.verticalSizeClass.rawValue)

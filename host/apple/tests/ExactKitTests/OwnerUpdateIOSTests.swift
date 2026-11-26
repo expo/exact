@@ -247,6 +247,28 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(sample(), first)
     }
 
+    /// A tab's configuration moves when its tab bar hides through `setTabBarHidden`, which on iPadOS's
+    /// floating tab bar leaves `tabBar.isHidden` as it was (D9, "Moving edges").
+    func testATabsConfigurationMovesWithItsTabBar() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a configuration is a window's") }
+        guard #available(iOS 18, *) else { throw XCTSkip("setTabBarHidden is iOS 18's") }
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let tab = UIViewController(), tabs = UITabBarController()
+        tab.tabBarItem = UITabBarItem(title: "One", image: nil, tag: 0)
+        tabs.viewControllers = [tab, UIViewController()]
+        window.rootViewController = tabs
+        window.makeKeyAndVisible()
+        self.window = window
+        tabs.view.layoutIfNeeded()
+        let sample = { OwnerUpdateIOS.sample(controller: tab, view: tab.view, session: nil).configuration }
+        let first = try XCTUnwrap(sample())
+        tabs.setTabBarHidden(true, animated: false)
+        XCTAssertNotEqual(sample(), first, "hidden, tabBar.isHidden \(tabs.tabBar.isHidden)")
+        tabs.setTabBarHidden(false, animated: false)
+        XCTAssertEqual(sample(), first)
+    }
+
     func testATargetsIdentityIsItsViewsForLife() {
         let (a, b) = (UIView(), UIView())
         XCTAssertEqual(TargetIds.id(of: a), TargetIds.id(of: a))

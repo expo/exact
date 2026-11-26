@@ -87,6 +87,26 @@ final class ArrangementSizingIOSTests: XCTestCase {
                                     withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
     }
 
+    /// LLP 1123 D2, D16: a shown pane's update is sampled with its block, as a route's is, so its band moving at an
+    /// unchanged size is an update the take holds.
+    func testAShownPanesUpdateIsTakenWithItsBlock() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements are iOS 27.1's") }
+        let (session, _, _) = try fixture()
+        let p = session.presenter, primary = try node("primary")
+        p.owners.samplesOwners = true
+        let holder = try XCTUnwrap(p.arrangements.shownPanes[primary.id], "the primary pane is shown")
+        p.owners.publish()
+        waitFor("the pane's update is taken") { p.owners.toldUpdates[primary.id] != nil }
+        let top = holder.view.safeAreaInsets.top, block = p.owners.told[primary.id]?.block
+        _ = p.owners.takeUpdates()
+        holder.additionalSafeAreaInsets.top += 20
+        window?.layoutIfNeeded()
+        p.owners.publish()
+        waitFor("the band's move is an update") { p.owners.pending[primary.id]?.band?.top == top + 20 }
+        XCTAssertEqual(p.owners.told[primary.id]?.block, block, "at the size it had")
+        holder.additionalSafeAreaInsets.top -= 20
+    }
+
     func testWithoutNavigationAPaneTakenOutIsCoveredWholeUntilItIsPutBack() throws {
         guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
         let make = NavigationLink.make, makeModals = NavigationLink.makeModals
