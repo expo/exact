@@ -70,11 +70,20 @@ struct RetainedList {
     site: Option<(exact_plan::NodesId, Vec<InstanceStep>)>,
 }
 
+/// The columns a root could not narrow to, as its trials used them (as asked, clamped to the allocation), while its
+/// style, as a failed trial's layout left it, and its allocation, measured before that trial, stand: a split refused
+/// for one column is tried again for another, and once for each column, not every frame.
+struct Refusal {
+    style: exact_kernel::StyleProps,
+    allocation: Rect4,
+    columns: Vec<f32>,
+}
+
 #[derive(Default)]
 pub(crate) struct State {
     pub active: Option<Split>,
     retained: BTreeMap<NodeKey, Option<RetainedList>>,
-    refused: BTreeMap<NodeKey, (exact_kernel::StyleProps, Rect4)>,
+    refused: BTreeMap<NodeKey, Refusal>,
     logged: BTreeSet<NodeKey>,
     actions: BTreeMap<ViewId, Association>,
     blocks: BTreeMap<NodeKey, ViewId>,
@@ -265,26 +274,22 @@ impl<D: DataSource> Presenter<D> {
             (f.width - l - r).max(0.),
             (f.height - t - b).max(0.),
         );
-        if self
-            .host
-            .navigation
-            .split
-            .refused
-            .get(&key)
-            .is_some_and(|(style, allocation)| {
-                kernel.node(root).is_some_and(|n| style == n.style) && *allocation == rect
-            })
-        {
-            return None;
-        }
-        if rect.2 < THRESHOLD || rect.2 < MIN_LIST + DIVIDER + MIN_DETAIL {
-            return None;
-        }
+        // The column the trial would use, clamped to the allocation, which the refusal is kept against
         let list_width = rule
             .width
             .unwrap_or(LIST_WIDTH)
             .max(MIN_LIST)
             .min(rect.2 - DIVIDER - MIN_DETAIL);
+        if (self.host.navigation.split.refused.get(&key)).is_some_and(|r| {
+            kernel.node(root).is_some_and(|n| r.style == *n.style)
+                && r.allocation == rect
+                && r.columns.contains(&list_width)
+        }) {
+            return None;
+        }
+        if rect.2 < THRESHOLD || rect.2 < MIN_LIST + DIVIDER + MIN_DETAIL {
+            return None;
+        }
         let routes: Vec<_> = stack
             .iter()
             .skip(1)
@@ -588,12 +593,27 @@ impl<D: DataSource> Presenter<D> {
             };
             let content = root.frame.x + root.frame.width - cover - s.rect.0;
             if (content - s.list_width).abs() > 0.5 {
-                let key = root.key;
-                self.host
-                    .navigation
-                    .split
-                    .refused
-                    .insert(key, (root.style.clone(), s.rect));
+                // Kept against the root's style as the trial's layout left it
+                let (key, style) = (root.key, root.style.clone());
+                let refused = &mut self.host.navigation.split.refused;
+                match refused.get_mut(&key) {
+                    Some(r) if r.style == style && r.allocation == s.rect => {
+                        if !r.columns.contains(&s.list_width) {
+                            r.columns.push(s.list_width);
+                        }
+                    }
+                    _ => {
+                        let columns = vec![s.list_width];
+                        refused.insert(
+                            key,
+                            Refusal {
+                                style,
+                                allocation: s.rect,
+                                columns,
+                            },
+                        );
+                    }
+                }
                 if self.host.navigation.split.logged.insert(key) {
                     self.host.log(format!(
                         "split: route {} cannot narrow to its {} px column (its content ends at {content} px)",

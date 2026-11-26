@@ -8,6 +8,8 @@ use super::reveal::Geometry;
 use super::*;
 use exact_kernel::id::IdSet;
 use exact_kernel::style::snap::SnapAlign;
+use exact_kernel::Display;
+use std::collections::BTreeSet;
 
 type Stamp = (u64, u64, u64);
 
@@ -18,6 +20,8 @@ pub(super) struct Layouts {
     checked: Option<(Stamp, (f32, f32), f32)>,
     offered: BTreeMap<(ViewId, bool), AxisLayout>,
     touch_scale: f32,
+    #[cfg(test)]
+    pub(super) probe_paints: usize,
     axes: BTreeMap<(ViewId, bool), AxisLayout>,
 }
 
@@ -386,11 +390,14 @@ impl<D: DataSource> Presenter<D> {
     }
 
     fn snap_busy(&self, id: ViewId) -> bool {
+        self.pending_model_scroll(id).is_some() || self.snap_input_busy(id)
+    }
+
+    fn snap_input_busy(&self, id: ViewId) -> bool {
         let inside = |node| node == id || self.is_inside(node, id);
         self.snap_input_active(id)
             || self.gliding(id)
             || self.zoom_animating(id)
-            || self.pending_model_scroll(id).is_some()
             || self
                 .control_contact
                 .is_some_and(|(node, _, _)| inside(node))
@@ -412,22 +419,56 @@ impl<D: DataSource> Presenter<D> {
                     })
     }
 
+    fn changed_snap_ids(&self) -> Vec<ViewId> {
+        let kernel = self.host.kernel();
+        self.host
+            .snap_changes
+            .pending
+            .iter()
+            .filter_map(|&key| {
+                let node = kernel.node_by_key(key)?;
+                if !node.style.scroll_snap_type.mandatory()
+                    || self.host.route_visibility(node.id).0
+                    || self.snap_input_busy(node.id)
+                    || (self.pending_model_scroll(node.id).is_some()
+                        && self.snap_model_target(node.id).is_none())
+                {
+                    return None;
+                }
+                let owns = |o| matches!(o, Overflow::Scroll | Overflow::Auto | Overflow::Hidden);
+                let (x, y) = effective_overflow(&node);
+                if !owns(x) && !owns(y) {
+                    return None;
+                }
+                let mut at = Some(node);
+                while let Some(n) = at {
+                    if n.style.display == Display::None {
+                        return None;
+                    }
+                    at = n.parent.and_then(|id| kernel.node(id));
+                }
+                Some(node.id)
+            })
+            .collect()
+    }
+
     /// A gesture keeps the areas its release uses until it rests. Other scrollers can
     /// follow their areas in the first picture of the new layout.
     pub(crate) fn snap_probe_needed(&self) -> bool {
         let stamp = self.host.kernel().layout_stamp();
-        self.snap_layout.axes.iter().any(|(&(id, vertical), axis)| {
-            let at = self.scroll_of(id);
-            axis.stamp != stamp
-                && axis.absent != Some(stamp)
-                && !self.snap_busy(id)
-                && (self
-                    .host
-                    .kernel()
-                    .node(id)
-                    .is_some_and(|n| n.style.scroll_snap_type.mandatory())
-                    || axis.rested(if vertical { at.1 } else { at.0 }).is_some())
-        })
+        !self.changed_snap_ids().is_empty()
+            || self.snap_layout.axes.iter().any(|(&(id, vertical), axis)| {
+                let at = self.scroll_of(id);
+                axis.stamp != stamp
+                    && axis.absent != Some(stamp)
+                    && !self.snap_busy(id)
+                    && (self
+                        .host
+                        .kernel()
+                        .node(id)
+                        .is_some_and(|n| n.style.scroll_snap_type.mandatory())
+                        || axis.rested(if vertical { at.1 } else { at.0 }).is_some())
+            })
     }
 
     /// Read the new picture's boxes before drawing it. Input still addresses the
@@ -435,15 +476,38 @@ impl<D: DataSource> Presenter<D> {
     pub(crate) fn resnap_before_paint(&mut self) {
         let stamp = self.host.kernel().layout_stamp();
         let mut moves = BTreeMap::new();
-        let axes: Vec<_> = self.snap_layout.axes.keys().copied().collect();
+        let changed = self.changed_snap_ids();
+        let mut axes: BTreeSet<_> = self.snap_layout.axes.keys().copied().collect();
+        for &id in &changed {
+            let enabled = self
+                .host
+                .kernel()
+                .node(id)
+                .unwrap()
+                .style
+                .scroll_snap_type
+                .axes();
+            axes.extend(
+                [(id, false), (id, true)]
+                    .into_iter()
+                    .filter(|&(_, vertical)| if vertical { enabled.1 } else { enabled.0 }),
+            );
+        }
         for (id, vertical) in axes {
-            let old = &self.snap_layout.axes[&(id, vertical)];
-            if old.stamp == stamp || old.absent == Some(stamp) || self.snap_busy(id) {
+            let fresh = changed.contains(&id);
+            let old = self.snap_layout.axes.get(&(id, vertical));
+            if !fresh
+                && (self.snap_busy(id)
+                    || old.is_none_or(|a| a.stamp == stamp || a.absent == Some(stamp)))
+            {
                 continue;
             }
-            let at = self.scroll_of(id);
+            let model = self.snap_model_target(id);
+            let at = model.unwrap_or_else(|| self.scroll_of(id));
             let current = if vertical { at.1 } else { at.0 };
-            let rested = old.rested(current);
+            let rested = old
+                .filter(|_| model.is_none())
+                .and_then(|a| a.rested(current));
             if rested.is_none()
                 && !self
                     .host
@@ -482,8 +546,13 @@ impl<D: DataSource> Presenter<D> {
         }
         for (id, to) in moves {
             let from = self.scroll_of(id);
-            if from != to {
+            if !self.retarget_snap_model(id, to) && from != to {
                 self.set_scroll_offset(id, from, to, Completion::Instant);
+            }
+        }
+        for id in changed {
+            if let Some(node) = self.host.kernel().node(id) {
+                self.host.snap_changes.pending.remove(&node.key);
             }
         }
     }

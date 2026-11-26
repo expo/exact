@@ -847,3 +847,69 @@ fn a_split_detail_plays_its_motion_in_its_pane() {
     assert!(!red(pane.0 + pane.2 * 0.75), "half of it gone");
     assert!(!red(pane.0 - DIVIDER - 20.), "none of it over the list");
 }
+
+#[test]
+fn a_refused_split_is_tried_again_for_another_column_width() {
+    // A root that cannot narrow below 400 px refuses the default 320 px column, and takes a 400 px one once asked
+    let source = APP
+        .replace("\"SPLIT\"", "column")
+        .replace(
+            "  state value = \"\"",
+            "  state value = \"\"\n  state column = \"split\"",
+        )
+        .replace(
+            "  action back\n",
+            "  action widen\n    column = \"400\"\n  action back\n",
+        )
+        .replace(
+            "position=\"absolute\" inset=0 testId",
+            "position=\"absolute\" inset=0 min-width=400 testId",
+        );
+    let mut p = boot_source(1200., &source);
+    p.sync_split();
+    assert!(state(&mut p).is_null());
+    act(&mut p, "widen", vec![]);
+    p.sync_split();
+    assert!(!state(&mut p).is_null());
+}
+
+#[test]
+fn a_split_refused_for_several_columns_tries_each_once() {
+    // A root that cannot narrow below 400 px refuses the default 320 px column and a 250 px one; asked for either
+    // again, it lays out no more than any commit does
+    let source = APP
+        .replace("\"SPLIT\"", "column")
+        .replace(
+            "  state value = \"\"",
+            "  state value = \"\"\n  state column = \"split\"",
+        )
+        .replace(
+            "  action back\n",
+            "  action narrower\n    column = \"250\"\n  action default\n    column = \"split\"\n  action back\n",
+        )
+        .replace(
+            "position=\"absolute\" inset=0 testId",
+            "position=\"absolute\" inset=0 min-width=400 testId",
+        );
+    let mut p = boot_source(1200., &source);
+    p.sync_split();
+    assert!(state(&mut p).is_null());
+    // A trial lays the split out and rolls it back, two layouts more than the request's own
+    let passes = |p: &Presenter<()>| p.host.kernel().layout_stamp().2;
+    let before = passes(&p);
+    act(&mut p, "narrower", vec![]);
+    p.sync_split();
+    let tried = passes(&p) - before;
+    assert!(state(&mut p).is_null());
+    let before = passes(&p);
+    act(&mut p, "default", vec![]);
+    p.sync_split();
+    let back = passes(&p) - before;
+    assert!(back < tried, "the refused 320 px column is not tried again");
+    assert!(state(&mut p).is_null());
+    let before = passes(&p);
+    act(&mut p, "narrower", vec![]);
+    p.sync_split();
+    assert_eq!(passes(&p) - before, back, "nor the refused 250 px one");
+    assert!(state(&mut p).is_null());
+}

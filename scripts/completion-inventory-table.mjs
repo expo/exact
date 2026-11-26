@@ -1273,7 +1273,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/scrollers.rs", "Presenter::claims_at Presenter::hidden_scrollers Presenter::module_ancestor Presenter::scroll_bounds_of Presenter::set_scroll_offset Presenter::touch_kept"],
     ["painted:host/painted/src/presenter/select.rs", "Presenter::menu_key Presenter::select_key Presenter::selected_row"],
     ["painted:host/painted/src/presenter/shortcuts.rs", "Presenter::shortcut"],
-    ["painted:host/painted/src/presenter/snap.rs", "Presenter::advance_snap_layout Presenter::remember_snap_layout Presenter::resnap_before_paint Presenter::snap_busy Presenter::snap_motion_landed Presenter::snap_probe_needed Presenter::snap_requested"],
+    ["painted:host/painted/src/presenter/snap.rs", "Presenter::advance_snap_layout Presenter::remember_snap_layout Presenter::resnap_before_paint Presenter::changed_snap_ids Presenter::snap_input_busy Presenter::snap_busy Presenter::snap_motion_landed Presenter::snap_probe_needed Presenter::snap_requested"],
     ["painted:host/painted/src/presenter/stage/touch.rs", "Presenter::preview_target Presenter::settle_sheet Presenter::sheet_drag_directions Presenter::stage_up"],
     ["painted:host/painted/src/presenter/svg_hit.rs", "Presenter::drawn_in Presenter::svg_hit"],
     ["painted:host/painted/src/presenter/swipe.rs", "Presenter::begin_swipe"],

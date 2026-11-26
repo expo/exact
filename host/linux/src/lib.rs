@@ -29,6 +29,9 @@ pub mod display;
 mod display_flip;
 #[cfg(target_os = "linux")]
 mod drag_copy;
+#[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
+#[path = "window/drop_received.rs"]
+mod drop_received;
 #[cfg(any(target_os = "linux", all(test, unix, not(target_os = "android"))))]
 #[path = "display/event_loop.rs"]
 mod event_loop;
