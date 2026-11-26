@@ -232,7 +232,10 @@ final class HeaderSearchResults: UIViewController {
                 else if overlap.maxX >= safe.maxX { safe.size.width = overlap.minX - safe.minX }
             }
         }
-        var frame = occupancy.contentBlock(safe, policy: policy, ignoringKeyboard: SearchClearance.ignoresKeyboard(root))
+        // The keys change the results' scroller's inset, not their frame, as a UIKit search results controller's
+        // view keeps its frame while its list insets for the keyboard: hiding the keys only uncovers rows the list
+        // already laid out (`SearchClearance.fit`). Results with no scroller to inset end above the keys.
+        var frame = safe
         frame.size.height -= clearance.fit(root, in: view, allocation: frame, occupancy: occupancy, policy: policy, enabled: true)
         if mount.frame != frame { mount.frame = frame }
     }

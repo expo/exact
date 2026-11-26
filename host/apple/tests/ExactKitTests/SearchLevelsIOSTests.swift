@@ -318,14 +318,14 @@ final class SearchLevelsIOSTests: XCTestCase {
                 + "occupancy \(occupancy), mount bottom \(String(describing: try? mountBottom())), safe bottom \(nativeSafeBottom()), "
                 + "results frame \(view.frame), safe insets \(view.safeAreaInsets). \(fixture.searchFacts)"
         }) {
-            guard let keys = fixture.session.presenter.keyboardTop, let bottom = try? mountBottom() else { return false }
-            return bottom <= min(nativeSafeBottom(), keys) + 1
+            guard let keys = fixture.session.presenter.keyboardTop else { return false }
+            return screen(outer.bounds, from: outer).maxY - outer.adjustedContentInset.bottom <= keys + 1
         }
         let keys = try XCTUnwrap(fixture.session.presenter.keyboardTop)
-        let nativeBottom = nativeSafeBottom()
         XCTAssertGreaterThan(keys, window.bounds.minY)
         XCTAssertLessThan(keys, window.bounds.maxY)
-        XCTAssertLessThanOrEqual(try mountBottom(), min(nativeBottom, keys) + 1)
+        // The keys inset the results' scroller, as a UIKit search results controller's list: the results keep their frame
+        XCTAssertEqual(try mountBottom(), nativeSafeBottom(), accuracy: 1)
         try lastRowClearsChrome()
 
         try fixture.navigate("/visual")
@@ -334,11 +334,49 @@ final class SearchLevelsIOSTests: XCTestCase {
 
         try fixture.navigate("/layout")
         try fixture.navigate("/none")
-        XCTAssertEqual(try mountBottom(), min(nativeSafeBottom(), keys), accuracy: 1, "the root still resizes")
+        XCTAssertEqual(try mountBottom(), nativeSafeBottom(), accuracy: 1, "the results keep their frame")
+        try lastRowClearsChrome()
 
         try fixture.navigate("/overlays")
         XCTAssertEqual(try mountBottom(), nativeSafeBottom(), accuracy: 1)
         XCTAssertTrue(fixture.search.bindEditor().isFirstResponder)
+    }
+
+    /// Hiding the keyboard over results in the detail column only uncovers them, as over a UIKit search results
+    /// controller's list: the results keep their frame, and no row is laid out again or animates while the keys go down.
+    func testHidingTheKeyboardOnlyUncoversTheDetailResults() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents search and its keyboard in a window scene") }
+        let fixture = try boot(regular: true, detailSearch: true)
+        let window = try XCTUnwrap(window)
+        let shown = expectation(forNotification: UIResponder.keyboardDidShowNotification, object: nil)
+        try fixture.openQuery("Fuji")
+        wait(for: [shown], timeout: 15)
+        fixture.settle("the keyboard is up over the results")
+        if let keys = KeyboardSampleIOS.existing(in: window)?.sample, !keys.frame.intersects(window.bounds) {
+            throw XCTSkip("the simulator laid the keyboard out at \(keys.frame), outside this window \(window.bounds); run this class alone")
+        }
+        let results = try XCTUnwrap(fixture.search.results)
+        XCTAssertTrue(results.parent === fixture.split.detail, fixture.searchFacts)
+        let list = try XCTUnwrap(try fixture.node("results-list").scrollView)
+        func frame() throws -> CGRect {
+            let block = try XCTUnwrap(results.block)
+            return block.view.convert(block.block, to: window)
+        }
+        let before = try frame()
+        func animating(_ view: UIView) -> Bool { !(view.layer.animationKeys() ?? []).isEmpty || view.subviews.contains(where: animating) }
+        var moved: Set<String> = []
+        let sampler = Timer(timeInterval: 1.0 / 120, repeats: true) { _ in
+            for cell in list.subviews where cell is UICollectionViewCell && animating(cell) { moved.insert("\(cell.frame)") }
+        }
+        RunLoop.main.add(sampler, forMode: .common)
+        let hidden = expectation(forNotification: UIResponder.keyboardDidHideNotification, object: nil)
+        XCTAssertTrue(fixture.search.bindEditor().resignFirstResponder())
+        wait(for: [hidden], timeout: 15)
+        fixture.settle("the keys are down")
+        sampler.invalidate()
+        XCTAssertTrue(results.visible, "the results stay")
+        XCTAssertEqual(try frame(), before, "the results keep their frame")
+        XCTAssertEqual(moved, [], "no row moves or animates as the keys go down")
     }
 
     func testDetailResultsTransferThroughBrowsingEditingAndChosenPostures() throws {
