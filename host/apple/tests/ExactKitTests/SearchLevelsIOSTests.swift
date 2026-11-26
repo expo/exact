@@ -280,7 +280,8 @@ final class SearchLevelsIOSTests: XCTestCase {
         let view = results.view!
         let bar = fixture.search.controller.searchBar
         func screen(_ rect: CGRect, from view: UIView) -> CGRect { view.convert(rect, to: window) }
-        func nativeSafeBottom() -> CGFloat { screen(view.bounds.inset(by: view.safeAreaInsets), from: view).maxY }
+        // The results run under the bar, the keys and the home indicator, to the bottom of their view
+        func viewBottom() -> CGFloat { screen(view.bounds, from: view).maxY }
         func mountBottom() throws -> CGFloat {
             let block = try XCTUnwrap(results.block)
             return screen(block.block, from: block.view).maxY
@@ -315,7 +316,7 @@ final class SearchLevelsIOSTests: XCTestCase {
             return "sampler \(sampler != nil) sample \(String(describing: sampler?.sample)), session guide \(String(describing: sessionView?.keyboardLayoutGuide.layoutFrame)), "
                 + "same window \(view.window === sessionView?.window), results window \(String(describing: view.window.map { ObjectIdentifier($0) })), "
                 + "keyboard top \(String(describing: fixture.session.presenter.keyboardTop)), policy \(fixture.session.presenter.keyboardPolicy), "
-                + "occupancy \(occupancy), mount bottom \(String(describing: try? mountBottom())), safe bottom \(nativeSafeBottom()), "
+                + "occupancy \(occupancy), mount bottom \(String(describing: try? mountBottom())), view bottom \(viewBottom()), "
                 + "results frame \(view.frame), safe insets \(view.safeAreaInsets). \(fixture.searchFacts)"
         }) {
             guard let keys = fixture.session.presenter.keyboardTop else { return false }
@@ -324,21 +325,22 @@ final class SearchLevelsIOSTests: XCTestCase {
         let keys = try XCTUnwrap(fixture.session.presenter.keyboardTop)
         XCTAssertGreaterThan(keys, window.bounds.minY)
         XCTAssertLessThan(keys, window.bounds.maxY)
-        // The keys inset the results' scroller, as a UIKit search results controller's list: the results keep their frame
-        XCTAssertEqual(try mountBottom(), nativeSafeBottom(), accuracy: 1)
+        // The keys and the bar inset the results' scroller, as a UIKit search results controller's list: the results keep
+        // their frame, to the bottom
+        XCTAssertEqual(try mountBottom(), viewBottom(), accuracy: 1)
         try lastRowClearsChrome()
 
         try fixture.navigate("/visual")
-        XCTAssertEqual(try mountBottom(), nativeSafeBottom(), accuracy: 1)
+        XCTAssertEqual(try mountBottom(), viewBottom(), accuracy: 1)
         try lastRowClearsChrome()
 
         try fixture.navigate("/layout")
         try fixture.navigate("/none")
-        XCTAssertEqual(try mountBottom(), nativeSafeBottom(), accuracy: 1, "the results keep their frame")
+        XCTAssertEqual(try mountBottom(), viewBottom(), accuracy: 1, "the results keep their frame")
         try lastRowClearsChrome()
 
         try fixture.navigate("/overlays")
-        XCTAssertEqual(try mountBottom(), nativeSafeBottom(), accuracy: 1)
+        XCTAssertEqual(try mountBottom(), viewBottom(), accuracy: 1)
         XCTAssertTrue(fixture.search.bindEditor().isFirstResponder)
     }
 

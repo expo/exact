@@ -223,7 +223,11 @@ final class HeaderSearchResults: UIViewController {
         guard let host, let root, let view = viewIfLoaded, exposed,
               let occupancy = host.searchOccupancy(in: view) else { return }
         let policy = host.presenter.keyboardPolicy
-        var safe = view.bounds.inset(by: view.safeAreaInsets)
+        // The results run under the bottom band (the search bar, the keys, the home indicator), which their scroller
+        // takes as its inset (`SearchClearance.fit`), as a UIKit results controller's list runs under the bar
+        var insets = view.safeAreaInsets
+        insets.bottom = 0
+        var safe = view.bounds.inset(by: insets)
         if let split = host.split, parent === split.detail, let sidebar = split.list.viewIfLoaded {
             // A beside sidebar may cover part of the detail controller's view.
             let overlap = safe.intersection(view.convert(sidebar.bounds, from: sidebar))
