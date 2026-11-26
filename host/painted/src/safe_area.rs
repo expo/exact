@@ -1,14 +1,35 @@
-//! @ref LLP 1123 D13 — what the painted hosts' executors hold of the safe area, per node: a box's reach, which grows
+//! @ref LLP 1123 D13, D14 — what the painted hosts' executors hold of the safe area, per node. A box's reach grows
 //! its surface (its background, border and the clip it puts on its children) and the frame that takes its hits past
-//! its laid-out border box, its layout, its children and what reads its geometry staying where they are. Tests set it;
-//! activation (stage 5) sets it from the kernel's `Kernel::box_reach` after each layout.
+//! its laid-out border box, its layout, its children and what reads its geometry staying where they are. A scroller's
+//! claim is its reach, which grows its scrollport and the frame that takes its hits while its decoration keeps its box,
+//! and D14's content insets, which widen its scroll range; CSS `scrollTop` and `scrollLeft` stay the offsets the
+//! presenter keeps. Tests set them; activation (stage 5) sets them from the kernel's `Kernel::box_reach` and
+//! `Kernel::scroll_terms` after each layout.
 use exact_kernel::{Kernel, NodeKey, ViewId};
 use std::collections::HashMap;
 
-/// Each reaching box's reach, top right bottom left in points, by its node.
+/// A scroller's claim (D13, D14): how far its scrollport reaches past its laid-out box and its content insets, each
+/// top right bottom left in points. Its displacement and range follow (`ScrollClaim::displacement`, `ScrollBounds`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct ScrollClaim {
+    pub(crate) reach: [f32; 4],
+    pub(crate) insets: [f32; 4],
+}
+
+impl ScrollClaim {
+    /// How far the scroller's content is moved at CSS offset `(left, top)`: the offset, plus the reach on the leading
+    /// edge, which moves the scrollport's origin out, less the content inset there, which moves the content's start in.
+    pub(crate) fn displacement(&self, (x, y): (f32, f32)) -> (f32, f32) {
+        let ([top, _, _, left], [inset_top, _, _, inset_left]) = (self.reach, self.insets);
+        (x + left - inset_left, y + top - inset_top)
+    }
+}
+
+/// Each reaching box's reach and each scroller's claim, by its node.
 #[derive(Debug, Default)]
 pub(crate) struct SafeArea {
     reach: HashMap<NodeKey, [f32; 4]>,
+    scrollers: HashMap<NodeKey, ScrollClaim>,
     /// Moves on with each change, so a still frame, which nothing else of this moves, is no longer still.
     generation: u64,
 }
@@ -38,14 +59,50 @@ impl SafeArea {
         changed
     }
 
-    /// Drop the reach of the views `renewed`, which a commit made new (LLP 1078).
+    /// The box `key`'s reach and, for a claimed scroller, its claim.
+    pub(crate) fn of(&self, key: NodeKey) -> ([f32; 4], Option<ScrollClaim>) {
+        (self.reach(key), self.scroll_claim(key))
+    }
+
+    /// The scroller `key`'s claim, while it has one.
+    pub(crate) fn scroll_claim(&self, key: NodeKey) -> Option<ScrollClaim> {
+        self.scrollers.get(&key).copied()
+    }
+
+    /// Each claimed scroller and its claim.
+    pub(crate) fn scroll_claims(&self) -> impl Iterator<Item = (NodeKey, ScrollClaim)> + '_ {
+        self.scrollers.iter().map(|(k, c)| (*k, *c))
+    }
+
+    /// Set or release (`None`) the scroller `key`'s claim; whether it changed. As `set_reach`, each call drops the
+    /// claims of scrollers no longer live.
+    pub(crate) fn set_scroll_claim(
+        &mut self,
+        kernel: &Kernel,
+        key: NodeKey,
+        claim: Option<ScrollClaim>,
+    ) -> bool {
+        self.scrollers
+            .retain(|k, _| kernel.node_by_key(*k).is_some());
+        let finite = |c: &ScrollClaim| c.reach.iter().chain(&c.insets).all(|v| v.is_finite());
+        let claim = claim.filter(|c| finite(c) && c.reach.iter().all(|v| *v >= 0.0));
+        let changed = match claim {
+            Some(c) => self.scrollers.insert(key, c) != Some(c),
+            None => self.scrollers.remove(&key).is_some(),
+        };
+        self.generation += u64::from(changed);
+        changed
+    }
+
+    /// Drop the reach and the claims of the views `renewed`, which a commit made new (LLP 1078).
     pub(crate) fn renewed(&mut self, kernel: &Kernel, renewed: &[ViewId]) {
         for key in renewed
             .iter()
             .filter_map(|id| kernel.node(*id))
             .map(|n| n.key)
         {
-            self.generation += u64::from(self.reach.remove(&key).is_some());
+            let dropped = self.reach.remove(&key).is_some() | self.scrollers.remove(&key).is_some();
+            self.generation += u64::from(dropped);
         }
     }
 
