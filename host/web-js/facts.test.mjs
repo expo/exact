@@ -209,9 +209,9 @@ test('a render answers the bake default for frozen', async () => {
   } finally { globalThis.document = document; rmSync(dir, {recursive:true, force:true}); }
 });
 
-test('the geometry facts are unavailable on the web, each quantity none', async () => {
-  // LLP 1123 D6: the web has no owner's geometry to report until D17, so a reader is answered,
-  // not failed, with what it declares
+test('the geometry facts are unavailable where nothing is laid out, the native quantities none', async () => {
+  // LLP 1123 D6: with no element of that id laid out a reader is answered, not failed, with what it declares; the
+  // native chain and the unsettled list are unavailable on the web
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-facts-'));
   try {
     writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
@@ -226,4 +226,48 @@ test('the geometry facts are unavailable on the web, each quantity none', async 
     expect(data.reserved.exactNativeChain(null, ['hero'], 'c')).toEqual([false]);
     expect(data.reserved.exactSafeAreaUnsettled(null, [], 'u')).toEqual([false, 0, []]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a geometry fact is the browser's layout of the element, answered again as the layout moves it", async () => {
+  // LLP 1123 D6: the element's size and frame in the document, the viewport or a node's border box, the other
+  // quantities none; after a commit that moves it a commit of its own answers again at the next generation, and at
+  // the bound of eight such commits in a row the answers hold until another cause
+  const rects = { hero: { left: 10, top: 120, width: 200, height: 80 }, card: { left: 0, top: 100, width: 300, height: 400 } };
+  const element = (id) => rects[id] && { getClientRects: () => [rects[id]], getBoundingClientRect: () => rects[id] };
+  const prior = globalThis.document;
+  Object.assign(globalThis, { document: { getElementById: element }, scrollX: 0, scrollY: 40 });
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-layout-'));
+  try {
+    writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [], said = [];
+      export const Resources = [{ name: 'g', source: 'exactGeometry' }, { name: 'n', source: 'exactGeometry' }];
+      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.name === 'g' ? ['hero'] : ['hero', 'node', 'card'], r.name)); }
+      export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
+      export const Refusal = Error, Kept = () => '', say = (m) => said.push(m);`);
+    const { geometry } = await import(resolve(dir, 'facts.js'));
+    const { data, After, commits, said } = await import(resolve(dir, 'rt.js'));
+    const rect = { x: 'n', y: 'n', width: 'n', height: 'n' };
+    const shape = { available: 'b', generation: 'n', size: ['?', { width: 'n', height: 'n' }], frame: ['?', rect], observations: ['?', 'n'], keyboard: ['?', 'n'] };
+    geometry({ g: [['available', 'generation', 'size', 'frame', 'observations', 'keyboard'], shape], n: [['available', 'generation', 'size', 'frame', 'observations', 'keyboard'], shape] });
+    const read = (name, args) => data.reserved.exactGeometry(null, args, name);
+    expect(read('g', ['hero'])).toEqual([true, 0, [200, 80], [10, 160, 200, 80], null, null]);
+    expect(read('n', ['hero', 'node', 'card'])).toEqual([true, 0, [200, 80], [10, 20, 200, 80], null, null]);
+    expect(read('g', ['hero', 'window'])[3]).toEqual([10, 120, 200, 80]);
+    expect(read('g', ['gone'])).toEqual([false, 0, null, null, null, null]);
+    read('g', ['hero']);
+    // A commit that moves the element: one of its own answers again at the next generation, and then it rests
+    rects.hero = { left: 10, top: 130, width: 200, height: 80 };
+    for (const a of After) a();
+    expect(commits.map(c => c.why)).toEqual(['geometry']);
+    expect(commits[0].read).toEqual([[true, 1, [200, 80], [10, 170, 200, 80], null, null], [true, 1, [200, 80], [10, 30, 200, 80], null, null]]);
+    // An answer that moves its own layout each time: eight in a row, then the answers hold
+    commits.length = 0;
+    let top = 130;
+    data.reserved.exactGeometry = ((read) => (s, args, name) => { rects.hero = { ...rects.hero, top: ++top }; return read(s, args, name); })(data.reserved.exactGeometry);
+    rects.hero = { ...rects.hero, top: ++top };
+    for (const a of After) a();
+    expect(commits.length).toBe(8);
+    expect(said.some(m => m.startsWith('geometry-feedback'))).toBe(true);
+  } finally { globalThis.document = prior; rmSync(dir, { recursive: true, force: true }); }
 });
