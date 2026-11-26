@@ -20,6 +20,7 @@ beforeAll(() => {
     if (path === '/keyboard') return new Response(KEYBOARD, { headers: { 'content-type': 'text/html' } });
     if (path === '/transitions') return new Response(TRANSITIONS, { headers: { 'content-type': 'text/html' } });
     if (path === '/scrolled') return new Response(SCROLLED, { headers: { 'content-type': 'text/html' } });
+    if (path === '/observed') return new Response(OBSERVED, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
       <div id="top" style="position:absolute;top:0;left:0;width:390px;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
@@ -92,6 +93,38 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader is measur
     await page.waitForFunction(() => window.result);
     // At rest 100 and 600 below the top, clear of the 47-point band, though scrolling has moved each under it
     expect(await page.evaluate(() => window.result)).toEqual(['0px', '0px']);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A reader its input moves through several heights in the rounds, watched by a ResizeObserver and an
+// IntersectionObserver, which the browser delivers at its rendering step, after the task the rounds run in
+const OBSERVED = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
+  <div id="grows" style="top:calc(60px - var(--exact-safe-area-inset-top, 60px));height:calc(20px + var(--exact-safe-area-inset-top, 0px))"></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const el = document.getElementById('grows'), sizes = [], crossings = [];
+    await new Promise((done) => new ResizeObserver((entries) => { for (const e of entries) sizes.push(e.contentRect.height); done(); }).observe(el));
+    await new Promise((done) => new IntersectionObserver((entries) => { for (const e of entries) crossings.push(Math.round(e.intersectionRect.height)); done(); }).observe(el));
+    sizes.length = crossings.length = 0;
+    const { rounds } = observe([el], [47, 0, 34, 0]);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    window.result = { rounds, sizes, crossings, height: el.getBoundingClientRect().height };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`observers see only the settled layout, not a round's, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}observed`);
+    await page.waitForFunction(() => window.result);
+    const r = await page.evaluate(() => window.result);
+    // The rounds moved it through 67 and 54 points tall back to 20, the height it had: no observer saw a round's
+    expect(r.rounds).toBeGreaterThan(1);
+    expect(r.height).toBe(20);
+    expect(r.sizes).toEqual([]);
+    expect(r.crossings.length).toBeLessThanOrEqual(1);
   } finally {
     await browser.close();
   }
