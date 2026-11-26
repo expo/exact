@@ -490,26 +490,22 @@ impl SizeIndex {
         self.total_height() + self.trailing
     }
 
-    /// The padding after the last row, as the list's layout resolved it.
+    /// The padding after the last row, as the list's layout resolved it:
+    /// signed, a negative content inset (LLP 1123 D14) ending the range short
+    /// of the rows' end.
     pub(crate) fn set_trailing(&mut self, trailing: f64) {
-        self.trailing = if trailing.is_finite() {
-            trailing.max(0.0)
-        } else {
-            0.0
-        };
+        self.trailing = if trailing.is_finite() { trailing } else { 0.0 };
     }
 
     pub(crate) fn trailing(&self) -> f64 {
         self.trailing
     }
 
-    /// The padding before the first row, as the list's style resolved it.
+    /// The padding before the first row, as the list's style resolved it:
+    /// signed, a negative content inset (LLP 1123 D14) starting the range past
+    /// the first row's start.
     pub(crate) fn set_leading(&mut self, leading: f64) {
-        self.leading = if leading.is_finite() {
-            leading.max(0.0)
-        } else {
-            0.0
-        };
+        self.leading = if leading.is_finite() { leading } else { 0.0 };
     }
 
     pub(crate) fn leading(&self) -> f64 {

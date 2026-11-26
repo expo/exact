@@ -58,7 +58,7 @@ extension NodeView {
     @objc package func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
         presenter?.elementScrolls.userScrolled(scrollView)
         guard scrollView === self.scrollView else { return true }
-        dropCarriedScroll()
+        dropCarriedScroll(); afterScrollAnimation = nil
         guard let collections = presenter?.collections, let snapshot = collections.snapshot(id), !snapshot.horizontal else { return true }
         collections.readerMoves(id)
         let top = -scrollView.adjustedContentInset.top, glide = scrollView.bounds.height * 2

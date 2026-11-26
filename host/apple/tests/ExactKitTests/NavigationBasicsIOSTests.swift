@@ -1466,7 +1466,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertFalse(nav.isNavigationBarHidden)
         XCTAssertEqual(chat.view.safeAreaInsets.top, top, accuracy: 0.5)
         XCTAssertEqual(sv.adjustedContentInset.top, inset, accuracy: 0.5)
-        XCTAssertEqual(list.scrollOrigin, list.scrollCollapsed, "an inline title has no collapse slack")
+        XCTAssertEqual(list.scrollOrigin, inset, accuracy: 0.5, "an inline title's inset is the one it has")
         list.pendingScrollTop = 100_000
         list.applyPendingScroll()
         spin(0.3)

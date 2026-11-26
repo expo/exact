@@ -85,6 +85,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var barSpaces: [UInt32: UIBarButtonItem] = [:]
     /// The header's search field as UIKit's search controller (§9.6).
     var search: HeaderSearch?
+    #if os(iOS)
+    /// Where UIKit had put the search field when the route's filter was last projected (`searchLayout`, `scope`).
+    var searchLayoutRead: [Int]?
+    #endif
     /// The title Exact drew from the heading's group, and the subtitle it
     /// wrote; whether the root's tablist was hidden when it last looked (§9.10).
     let titleInk = NavigationTitleInk()
@@ -97,6 +101,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.init(nibName: nil, bundle: nil)
         #if os(iOS)
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (c: RouteController, _: UITraitCollection) in c.reopenTitle() }
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (c: RouteController, _: UITraitCollection) in c.widthClassChanged() }
         #endif
     }
     /// Whether UIKit is making it appear as the destination of its stack's pop: from `viewIsAppearing` until
@@ -167,6 +172,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     #if os(iOS)
     /// Whether the route said `navigationVerticalBar="disabled"`.
     private var verticalBarDisabled = false
+    /// Whether UIKit sets its bar in the vertical bar (an iPhone Duo).
+    var inVerticalBar: Bool { traitCollection.placesVerticalBar && !verticalBarDisabled }
     @available(iOS 27.1, *)
     override var preferredVerticalBarBehavior: UIVerticalBarBehavior { verticalBarDisabled ? .disabled : .automatic }
     #endif
@@ -221,6 +228,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         if scrollEdgesOwed { host?.settleScrollEdges() }
         #if os(iOS)
         search?.labelScopes()
+        // A fold or a width class can move where a filter the bar projects belongs (LLP 1134 and 1135, amended)
+        filterPlacementMoved()
         #endif
     }
 
