@@ -89,6 +89,93 @@ fn url_suffix_markers_can_close_emphasis() {
 }
 
 #[test]
+fn marker_preceded_urls_start_with_an_ascii_letter_or_digit() {
+    for (source, expected) in [
+        (
+            "**https://[host](glossary)**",
+            &[("https://", BOLD, ""), ("host", BOLD | LINK, "glossary")][..],
+        ),
+        (
+            "**https://`host`/path**",
+            &[
+                ("https://", BOLD, ""),
+                ("host", BOLD | CODE, ""),
+                ("/path", BOLD, ""),
+            ],
+        ),
+        (
+            "**http://**/**https://**",
+            &[("http://", BOLD, ""), ("https://", BOLD, "")],
+        ),
+        ("**https://**[^1]", &[("https://", BOLD, "")]),
+        (
+            "**https://{host}/path**",
+            &[("https://{host}/path", BOLD, "")],
+        ),
+        ("**https://é.dev**", &[("https://é.dev", BOLD, "")]),
+        (
+            "**http://127.0.0.1**",
+            &[("http://127.0.0.1", BOLD | LINK, "http://127.0.0.1")],
+        ),
+        (
+            "https://{host}/path",
+            &[("https://{host}/path", LINK, "https://{host}/path")],
+        ),
+    ] {
+        assert_spans(source, expected);
+    }
+}
+
+#[test]
+fn an_open_bracket_on_the_line_blocks_only_marker_preceded_urls() {
+    let url = "https://example.org";
+    for source in [
+        "See [**https://example.org**].",
+        "See [[inner] **https://example.org**.",
+        r"See [\] **https://example.org**.",
+        "See [`]` **https://example.org**.",
+    ] {
+        let styled = style(source, None);
+        assert!(styled.spans.iter().all(|s| s.href.is_empty()), "{source}");
+        assert!(
+            styled
+                .spans
+                .iter()
+                .any(|s| s.style == BOLD && utf16(source, s.range) == url),
+            "{source}"
+        );
+    }
+    for (source, expected) in [
+        (
+            r"See \[**https://example.org**.",
+            &[(url, BOLD | LINK, url)][..],
+        ),
+        (
+            "See `[` **https://example.org**.",
+            &[("[", CODE, ""), (url, BOLD | LINK, url)],
+        ),
+        (
+            "See [closed] **https://example.org**.",
+            &[(url, BOLD | LINK, url)],
+        ),
+        (
+            "See [open\n**https://example.org**.",
+            &[(url, BOLD | LINK, url)],
+        ),
+        (
+            "See [`across\nlines` **https://example.org**.",
+            &[("across\nlines", CODE, ""), (url, BOLD | LINK, url)],
+        ),
+        (
+            "See [ https://example.org now (https://example.org)",
+            &[(url, LINK, url); 2],
+        ),
+    ] {
+        assert_spans(source, expected);
+    }
+}
+
+#[test]
 fn interior_markers_are_part_of_the_url() {
     for (source, visible, url, flags) in [
         (

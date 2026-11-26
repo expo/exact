@@ -333,6 +333,7 @@ impl Scanner<'_> {
         }
         let mut delims: Vec<Delim> = Vec::new();
         let mut autolink_end = AutolinkEnd::default();
+        let mut open_brackets = 0usize;
         let mut i = lo;
         while i < hi {
             let c = self.ch(i);
@@ -346,25 +347,45 @@ impl Scanner<'_> {
                 '`' => self.code(i, hi),
                 '<' => self.autolink(i, hi, &mut autolink_end),
                 '!' if i + 1 < hi && self.ch(i + 1) == '[' => self.bracket(i + 1, hi, true, depth),
-                '[' => self.bracket(i, hi, false, depth),
+                '[' => {
+                    let next = self.bracket(i, hi, false, depth);
+                    if next.is_none() {
+                        open_brackets += 1;
+                    }
+                    next
+                }
+                ']' => {
+                    open_brackets = open_brackets.saturating_sub(1);
+                    None
+                }
                 // Past depth 0 is a link's label, where GFM links no bare URL.
-                'h' if depth == 0
-                    && (i == lo
-                        || self.ch(i - 1).is_whitespace()
-                        || matches!(self.ch(i - 1), '(' | '*' | '_' | '~')) =>
-                {
-                    self.bare_url(i, hi)
+                'h' if depth == 0 => {
+                    let before = if i == lo { ' ' } else { self.ch(i - 1) };
+                    let after_marker = matches!(before, '*' | '_' | '~');
+                    if before.is_whitespace()
+                        || before == '('
+                        || (after_marker && open_brackets == 0)
+                    {
+                        self.bare_url(i, hi, after_marker)
+                    } else {
+                        None
+                    }
                 }
                 '*' | '_' | '~' => {
                     let len = self.run(i, hi);
-                    if let Some(delim) = self.delimiter(i, len, lo, hi) {
-                        delims.push(delim);
+                    if c != '~' || len == 2 {
+                        delims.push(self.delimiter(i, len, lo, hi));
                     }
                     Some(i + len)
                 }
                 _ => None,
             };
-            i = next.unwrap_or(i + 1);
+            let end = next.unwrap_or(i + 1);
+            // A code span or link can consume the line break with its content.
+            if open_brackets > 0 && self.cs[i..end].iter().any(|&(_, c)| c == '\n') {
+                open_brackets = 0;
+            }
+            i = end;
         }
         self.emphasis(delims);
     }
@@ -445,7 +466,7 @@ impl Scanner<'_> {
         Some(close + 1)
     }
 
-    fn bare_url(&mut self, i: usize, hi: usize) -> Option<usize> {
+    fn bare_url(&mut self, i: usize, hi: usize, after_marker: bool) -> Option<usize> {
         let tail = &self.source[self.pos(i)..];
         let scheme = if tail.starts_with("https://") {
             8
@@ -454,6 +475,9 @@ impl Scanner<'_> {
         } else {
             return None;
         };
+        if after_marker && (i + scheme >= hi || !self.ch(i + scheme).is_ascii_alphanumeric()) {
+            return None;
+        }
         let mut j = i;
         while j < hi && !self.ch(j).is_whitespace() && !matches!(self.ch(j), '<' | '>') {
             j += 1;
@@ -576,11 +600,8 @@ impl Scanner<'_> {
         (close < hi).then_some(close)
     }
 
-    fn delimiter(&self, i: usize, len: usize, lo: usize, hi: usize) -> Option<Delim> {
+    fn delimiter(&self, i: usize, len: usize, lo: usize, hi: usize) -> Delim {
         let c = self.ch(i);
-        if c == '~' && len != 2 {
-            return None;
-        }
         let before = if i > lo { self.ch(i - 1) } else { ' ' };
         let after = if i + len < hi { self.ch(i + len) } else { ' ' };
         let left = !after.is_whitespace()
@@ -595,14 +616,14 @@ impl Scanner<'_> {
         } else {
             (left, right)
         };
-        Some(Delim {
+        Delim {
             ch: c,
             start: i,
             len,
             total: len,
             open,
             close,
-        })
+        }
     }
 
     /// CommonMark's delimiter algorithm: each closer takes its nearest opener.
@@ -633,8 +654,8 @@ impl Scanner<'_> {
                 let found = (bottom..ci).rev().find(|&oi| {
                     let (o, c) = (&d[oi], &d[ci]);
                     let thirds = (o.open && o.close || c.open && c.close)
-                        && (o.total + c.total).is_multiple_of(3)
-                        && !(o.total.is_multiple_of(3) && c.total.is_multiple_of(3));
+                        && (o.total + c.total) % 3 == 0
+                        && !(o.total % 3 == 0 && c.total % 3 == 0);
                     o.ch == c.ch && o.open && o.len > 0 && !thirds
                 });
                 let Some(oi) = found else {
