@@ -15,7 +15,9 @@ pub(super) mod separator;
 use scroll_overflow::scaled_content;
 
 /// The props `emit_layout` derives from a node's layout, not its author's.
-pub(super) const DERIVED_PROPS: [&str; 6] = [
+pub(super) const DERIVED_PROPS: [&str; 8] = [
+    "boxExtendEdges",
+    "boxExtension",
     "fitScale",
     "flexGrows",
     "listMarker",

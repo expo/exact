@@ -7,6 +7,7 @@ mod canvas_defer;
 mod content_box;
 mod content_region;
 mod controls;
+mod derived_props;
 mod development;
 mod entry;
 mod firing_holds;
