@@ -6,10 +6,12 @@ use super::*;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::mpsc::channel;
+use std::sync::Barrier;
 
 /// A keep-alive peer that answers `/events` with an event stream's head and
-/// a comment, held open, and anything else with `ok`. It counts the
-/// connections whose first request was not `/events`.
+/// a comment, held open, `/hold` once `INDEPENDENT` concurrent reads arrive,
+/// and anything else with `ok`. It counts the connections whose first request
+/// was not `/events`.
 struct Peer {
     url: String,
     reads: Arc<AtomicUsize>,
@@ -20,10 +22,12 @@ fn peer() -> Peer {
     let url = format!("http://{}", listener.local_addr().unwrap());
     let reads = Arc::new(AtomicUsize::new(0));
     let counted = reads.clone();
+    let hold = Arc::new(Barrier::new(INDEPENDENT));
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { return };
             let counted = counted.clone();
+            let hold = hold.clone();
             std::thread::spawn(move || {
                 let (mut head, mut byte, mut first) = (Vec::new(), [0], true);
                 while stream.read_exact(&mut byte).is_ok() {
@@ -41,7 +45,11 @@ fn peer() -> Peer {
                     if std::mem::take(&mut first) {
                         counted.fetch_add(1, SeqCst);
                     }
+                    let held = head.starts_with(b"GET /hold ");
                     head.clear();
+                    if held {
+                        hold.wait();
+                    }
                     let reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
                     if stream.write_all(reply).is_err() {
                         return;
@@ -67,10 +75,14 @@ fn core_on(peer: &Peer, host: fn() -> ibex2::host::Host) -> (Core, std::sync::mp
     (core, woke)
 }
 
-fn read(peer: &Peer, ticket: u64, scope: Option<&str>) -> RequestOut {
-    let mut request = Request::get(&format!("{}/read", peer.url)).independent_http(4096);
+fn read_path(peer: &Peer, path: &str, ticket: u64, scope: Option<&str>) -> RequestOut {
+    let mut request = Request::get(&format!("{}{path}", peer.url)).independent_http(4096);
     request.grants = scope.map(str::to_owned);
     job(ticket, request)
+}
+
+fn read(peer: &Peer, ticket: u64, scope: Option<&str>) -> RequestOut {
+    read_path(peer, "/read", ticket, scope)
 }
 
 /// Six reads one after another, the last with a source's scope, each on
@@ -111,11 +123,13 @@ fn reads_at_once_reuse_the_lanes_connections(host: fn() -> ibex2::host::Host) {
     }
     let mut opened = vec![];
     for wave in 0..2 {
-        for ticket in 1..=6 {
-            core.run(read(&peer, wave * 10 + ticket, None), None)
+        // Hold each wave until all `INDEPENDENT` reads are in flight together,
+        // so wave 0 opens every lane connection and wave 1 reuses them all.
+        for ticket in 1..=INDEPENDENT as u64 {
+            core.run(read_path(&peer, "/hold", wave * 10 + ticket, None), None)
                 .unwrap();
         }
-        let outcomes = collect(&core, &woke, 6);
+        let outcomes = collect(&core, &woke, INDEPENDENT);
         assert!(
             (outcomes.iter()).all(|(_, o)| matches!(o, Outcome::Response(r) if r.body == b"ok")),
             "{outcomes:?}"
@@ -123,8 +137,8 @@ fn reads_at_once_reuse_the_lanes_connections(host: fn() -> ibex2::host::Host) {
         opened.push(peer.reads.load(SeqCst));
     }
     assert!(
-        opened[0] <= 6 && opened[1] == opened[0],
-        "connections after each six: {opened:?}"
+        opened[0] == INDEPENDENT && opened[1] == opened[0],
+        "connections after each {INDEPENDENT}: {opened:?}"
     );
 }
 

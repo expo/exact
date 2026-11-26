@@ -3109,10 +3109,11 @@ custom circle.
 `appearance="none"` without `buttonStyle`. It is a styleable host-policy prop;
 its names and allowable branches
 are checked against `schema.json`'s `buttonStyles`. Backgrounds, borders,
-shadows, filters, `font-family`, other typography or inner layout and
-`-exact-press-scale` are refused with `lower-button-style-attr`, naming a custom
-`button` as the alternative. A native button still takes size, place, opacity
-and transform rows. Hosts implementing the measure hook supply its fitting
+shadows, filters, `font-family`, `overflow` and `direction` are refused with
+`lower-button-style-attr`, naming a custom `button` as the alternative. A native button still takes size, place, opacity
+and transform rows, and `-exact-layout-transition`: it takes its new size at
+once and moves by its centre, so a button pinned by one edge that changes width
+shows that edge off its place until the move settles. Hosts implementing the measure hook supply its fitting
 size before the first frame, including height-for-width; hosts without it
 keep the existing intrinsic-size report. Test the actual
 platform look; macOS can report stand-ins for gap, subtitle and wrapping.

@@ -615,11 +615,12 @@ pub(crate) fn button_context(
 }
 
 /// The style rows a native button's box may carry (LLP 1069.011 D6): where it
-/// sits and how big it is, whether it shows (`display` is checked to be its
-/// own `flex` or `none`), its opacity and transforms, its clip, its accent,
-/// and `outline: none`, which takes the platform's focus ring off (LLP 1104
-/// D6). Its semantic content rows are LLP 1069.011.001 D2–D9, D14–D17;
-/// chrome and arbitrary inner layout remain the platform's to draw.
+/// sits and how big it is, and the layout transition that moves it there (LLP
+/// 1063), whether it shows (`display` is checked to be its own `flex` or
+/// `none`), its opacity and transforms, its clip, its accent, and `outline:
+/// none`, which takes the platform's focus ring off (LLP 1104 D6). Its semantic
+/// content rows are LLP 1069.011.001 D2–D9, D14–D17; chrome and arbitrary inner
+/// layout remain the platform's to draw.
 const NATIVE_ROWS: &[StyleId] = &[
     StyleId::ControlSize,
     StyleId::ControlCornerStyle,
@@ -683,6 +684,7 @@ const NATIVE_ROWS: &[StyleId] = &[
     StyleId::OutlineStyle,
     StyleId::Appearance,
     StyleId::Transition,
+    StyleId::LayoutTransition,
     StyleId::Animation,
     StyleId::ExitAnimation,
     StyleId::PressScale,

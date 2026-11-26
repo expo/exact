@@ -178,8 +178,16 @@ package struct OwnerUpdateIOS: Equatable {
         guard view.window != nil else { return update }
         let minimum = controller.systemMinimumLayoutMargins
         let rtl = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        // The root's margins less Exact's contributions, as the band is (D8, D11): UIKit measures them from the safe area,
+        // which the contributions move one for one, so they come off as measured, and the result is clamped at 0
+        let effect = update.contributions.map(\.effect).reduce(UIEdgeInsets.zero) {
+            UIEdgeInsets(top: $0.top + $1.top, left: $0.left + $1.left, bottom: $0.bottom + $1.bottom, right: $0.right + $1.right)
+        }
+        let given = view.layoutMargins
+        let root = UIEdgeInsets(top: max(0, given.top - effect.top), left: max(0, given.left - effect.left),
+                                bottom: max(0, given.bottom - effect.bottom), right: max(0, given.right - effect.right))
         update.margins = Margins(
-            root: view.layoutMargins, plain: UIView().layoutMargins,
+            root: root, plain: UIView().layoutMargins,
             minimum: UIEdgeInsets(top: minimum.top, left: rtl ? minimum.trailing : minimum.leading,
                                   bottom: minimum.bottom, right: rtl ? minimum.leading : minimum.trailing),
             readableWidth: ReadableWidthIOS.of(in: session.flatMap { $0.window === view.window ? $0 : nil } ?? view))

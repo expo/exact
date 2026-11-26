@@ -22,6 +22,7 @@ beforeAll(() => {
     if (path === '/scrolled') return new Response(SCROLLED, { headers: { 'content-type': 'text/html' } });
     if (path === '/observed') return new Response(OBSERVED, { headers: { 'content-type': 'text/html' } });
     if (path === '/readers') return new Response(READERS, { headers: { 'content-type': 'text/html' } });
+    if (path === '/motion') return new Response(MOTION, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
       <div id="top" style="position:absolute;top:0;left:0;width:390px;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
@@ -154,6 +155,47 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`the readers are th
     await page.waitForFunction(() => window.result);
     // In document order; the declaring ancestor and the plain one read nothing
     expect(await page.evaluate(() => window.result)).toEqual(['pads', 'keys']);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A box whose height transitions from 200 to 0 over half a second, below a 10-point reader and above another; the rounds
+// follow the reader after it up under the 47-point band as the box shrinks
+const MOTION = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; width: 100px }</style>
+  <div id="before" style="height:10px;margin-left:var(--exact-safe-area-inset-left, 0px)"></div>
+  <div id="column">
+    <div id="shrinks" style="height:200px;transition:height 0.5s linear"></div>
+    <div id="after" style="height:50px;padding-top:var(--exact-safe-area-inset-top, 0px)"></div>
+  </div>
+  <script type="module">
+    import { observe, moving, follow } from '/observe.js';
+    const ids = ['before', 'column', 'shrinks', 'after'], el = (id) => document.getElementById(id);
+    const readers = ['before', 'after'].map(el);
+    observe(readers, [47, 0, 34, 0]);
+    const rest = el('after').style.getPropertyValue('--exact-safe-area-inset-top');
+    el('shrinks').getBoundingClientRect();
+    el('shrinks').style.height = '0px';
+    const animated = moving(readers).map((r) => r.id);
+    const stop = follow(readers, [47, 0, 34, 0], 0);
+    await new Promise((r) => setTimeout(r, 700));
+    stop();
+    window.result = { rest, animated, settled: el('after').style.getPropertyValue('--exact-safe-area-inset-top'), still: moving(readers).length };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`the rounds follow a reader an animation moves, each frame, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}motion`);
+    await page.waitForFunction(() => window.result, null, { timeout: 10_000 });
+    const r = await page.evaluate(() => window.result);
+    // At rest below the box, clear of the band; the reader after the shrinking box moves, the one before it not
+    expect(r.rest).toBe('0px');
+    expect(r.animated).toEqual(['after']);
+    // Once the box has gone, the reader rests at 10, under 37 of the band, measured there without a commit
+    expect(r.settled).toBe('37px');
+    expect(r.still).toBe(0);
   } finally {
     await browser.close();
   }
