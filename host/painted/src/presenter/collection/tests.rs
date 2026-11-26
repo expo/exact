@@ -277,3 +277,101 @@ fn a_claimed_list_reports_its_reached_port_and_its_insets_as_padding() {
             .unwrap_or_else(|e| panic!("{list}: {e:?}"));
     }
 }
+
+/// @ref LLP 1123 D14 — a claimed list that follows its end follows the claim's: at its end when a claim reaching 40
+/// above and 60 below with insets 40 and 100 comes, it follows to that claim's end, 40 past the one it was at, and
+/// stays at the end as its padding grows under the claim; released, it follows back to the unclaimed end.
+#[test]
+fn a_claimed_list_follows_the_claims_end() {
+    struct Rows;
+    impl DataSource for Rows {
+        fn query(
+            &mut self,
+            _: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<exact_runner::Value, exact_runner::DataError> {
+            Ok(exact_runner::Value::list(
+                (0..20)
+                    .map(|i| exact_runner::Value::Number(i as f64))
+                    .collect(),
+            ))
+        }
+    }
+    let source = r#"component App
+  resource rows = rows() as shape number[]
+  state end = 83
+  action grow
+    end = end + 26
+  view
+    column
+      button "Grow" press=grow testId="grow"
+      list virtualized=true scrollFollowEnd=true height=180 width=200 padding-bottom=end box-sizing="border-box" testId="feed"
+        for x in rows key=x
+          text `row ${x}` height=24
+"#;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(source),
+        Rows,
+        (400., 500.),
+        1.,
+        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let settle = |p: &mut Presenter<Rows>| {
+        for _ in 0..16 {
+            assert!(p.pump(p.host.now()).is_none());
+            if p.dirty() {
+                let _ = p.frame();
+            }
+        }
+    };
+    let named = |p: &Presenter<Rows>, name: &str| {
+        let key = p.host.kernel().find_by_test_id(name)[0];
+        p.host.kernel().node_by_key(key).unwrap().id
+    };
+    settle(&mut p);
+    let view = named(&p, "feed");
+    p.wheel(view, 0., 10_000_000.).unwrap();
+    settle(&mut p);
+    let end = p.collection_scroll_limits()[&view];
+    assert_eq!(p.scroll_of(view).1, end, "at the end");
+    assert!(p.set_scroll_claim(view, Some(([40., 0., 60., 0.], [40., 0., 100., 0.]))));
+    settle(&mut p);
+    // Every row measured, its range is 40 more: its insets' 140 less its reach's 100
+    let claimed = p.collection_scroll_limits()[&view];
+    assert_eq!(claimed, end + 40., "the claim's range");
+    assert_eq!(p.scroll_of(view).1, claimed, "followed to the claim's end");
+    p.tap(named(&p, "grow")).unwrap();
+    settle(&mut p);
+    // The padding after the rows grows by 26 under the claim's 100
+    let snapshot = p
+        .host
+        .collections_shallow()
+        .into_iter()
+        .find(|s| s.view == view)
+        .unwrap();
+    let g = geometry(p.host.kernel(), &snapshot, 400., p.list_claim(&snapshot)).unwrap();
+    assert_eq!(g.padding, [40., 209.]);
+    let grown = p.collection_scroll_limits()[&view];
+    assert_eq!(grown, claimed + 26.);
+    assert_eq!(
+        p.scroll_of(view).1,
+        grown,
+        "followed to the grown end under the claim"
+    );
+    assert!(p.set_scroll_claim(view, None));
+    settle(&mut p);
+    let released = p.collection_scroll_limits()[&view];
+    assert_eq!(released, grown - 40.);
+    assert_eq!(
+        p.scroll_of(view).1,
+        released,
+        "followed back to the unclaimed end"
+    );
+    // The runner heard of the release at once: a wheel moves the list from there
+    p.wheel(view, 0., -100.).unwrap();
+    settle(&mut p);
+    assert_eq!(p.scroll_of(view).1, released - 100.);
+}
