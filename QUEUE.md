@@ -1698,14 +1698,19 @@ sits on that list carries the trade it would take.
 - In Chromium, pause a checkpoint’s layout read, release the mouse with a second CDP input client, then resume the read. The checkpoint can see the width set by pointerup (#1766).
 - On iOS, stall a plain read until its ten-second deadline, disconnect the touch runner and delay the read for another second. The timeout can follow transport shutdown without evidence of lift in the app’s dispatch log (#1766).
 - On the #1766 parent, manually cancel a Chromium mouse move after its first sample. The release can use the press coordinate even when the last delivered sample has moved.
-- On the #1766 parent, pause a move inside the carrier, cancel manually, press again, then resume the move. The old move and lift can reach the second contact. A blocked library read on the painted host also leaves the first contact down when its callback times out.
+- On the #1766 parent, pause a move inside the carrier, cancel manually, press again, then resume the move. The old move and lift can reach the second contact.
+- On the #1766 parent, block a library read on painted Linux through its timeout. The first contact stays down and prevents the next drag. Resuming the old callback can still close the session.
 - On the AR6 parent `0e408dcdc`, run `cargo test -p contract --test it -- auth::`. Five Android callback and logout tests fail while checking callback ownership and which request to present.
 - Check how `expect no failures` accounts for a direct `expect refusal` inside a `perf` block. The runner collects arranged refusals at the top level and at drag checkpoints.
 - Verify the fractional waypoint and completion before pointerup on Android’s native driver before enabling checkpoint expectations (#1766).
 - A synchronous library drag callback can block the driver’s event loop past its deadline. A busy callback delays delivery of the release until it yields.
 - A stationary plain drag read can precede the press landing. Give the press a handler whose effect appears on landing and read that state at the zero-delta checkpoint.
 - A checkpoint comparison between two layout boxes reads each box in a separate request. Check whether both operands can come from one committed frame when layout changes between the reads (#1766).
-- On iOS, synchronize drag checkpoints with delivery of the exact waypoint and completion of its reads before lift. Deliver y=60 before the final y=60.2 while the nominal hold has begun, or delay the tree read of a tree-and-layout check past lift. Plain `during` can sample 60 or start the layout read after pointerup. XCTest schedules both move and lift in one record (#1766).
+- On iOS, deliver y=60 before the final y=60.2 while the nominal hold has begun. A plain `during` read can sample 60. The runner needs confirmation of the committed waypoint before lifting the expectation refusal (#1766).
+- On iOS, delay the tree reply of a plain tree-and-layout checkpoint past lift. The layout request can start after pointerup because XCTest schedules the move and lift in one record (#1766).
+- Run the fractional-waypoint and before-pointerup tests on a native Windows painted host and compare its held and lifted values (#1766).
+- Stall a checkpoint screenshot through its deadline and inspect the destination directory. The staging directory survives until the capture answers, even after the gesture ends (#1766).
+- Give a drag release check a 50 ms allowance and stall its reply. The timeout message reports 10,000 ms. Preserve the allowance and the release diagnostic when reporting a failed cleanup (#1766).
 - Check whether a process ticket can be reused between completion and process cleanup. Pause the old worker after `complete`, admit a one-shot on that ticket, and check that its reservation survives the old worker’s cleanup.
 - A one-shot with room in its own budget can still hit the independent lane’s response-size check. At `a9aeb4f1a`, admit a stream with a 32 MiB response ceiling, then a one-shot with a 4 MiB response ceiling. The executor refuses it with 67,240,502 bytes held by open streams.
 - Run `cargo clippy -p exact-kernel --lib -- -D warnings`. The two `push_primitive` calls in `kernel/src/svg/scene/filter.rs` at lines 769 and 830 trigger `clippy::question_mark` on Rust 1.99.1.
