@@ -72,7 +72,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     var svgPressed: UInt32?
     /// Its button went down as a Control-click's context click (X85).
     var contextClicked = false
-    var cachedTextSpec: Spec? { didSet { cachedTextHeadroom = nil } }
+    var cachedTextSpec: Spec? { didSet { cachedTextHeadroom = nil; labelInk = nil } }
+    var labelInk: CGRect?
     var cachedTextHeadroom: Float?
     var proseMarker: CATextLayer?
     var textLayoutValid = false
@@ -90,7 +91,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     var textRasterUsesStrips = false
     var flowShapes: [TextFlowShape] = []
     var columnRecord: ColumnRecord?  // LLP 1093 D7: fragments or columns
-    var cachedTextLayout: (width: CGFloat, paragraph: Paragraph)?
+    var cachedTextLayout: (width: CGFloat, paragraph: Paragraph)? { didSet { labelInk = nil } }
     var liveText: String?
     package var props: [String: String] = [:] { didSet { presenter?.propsChanged(self); presenter?.mouseChain.bubbledPress?.validate() } }
     var nativeActiveRefusals: [String: String] = [:]
@@ -1301,6 +1302,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// Clips and corner radii resolve after layout supplies the new size.
     package override func setFrameSize(_ newSize: NSSize) {
         let changed = newSize != frame.size
+        if changed { labelInk = nil }
         super.setFrameSize(newSize)
         guard changed else { return }
         overflowClipGeometryChanged()

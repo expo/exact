@@ -1166,12 +1166,13 @@ package final class Presenter {
         var retired = Set<UInt32>()
         for op in batch.ops {
             let kind = op.op
+            if kind == .paragraph && op.runs.isEmpty && views[op.id]?.inlineText.isEmpty == true { continue }
             let id = op.id
             // `fieldContent` carries resolved padding the face holds (a percentage of a box that resized).
             if batch.controlReads == nil, Batch.dropsFace.contains(kind) { controls.faceChanged(id) }
             // A box the reveal destroys with its parent goes unseen: the parent's walk is the paragraph's.
             if kind == .destroy, let stage, let up = views[id]?.nodeSuperview, stage.destroyed.contains(up.id) {} else
-            if kind == .children { touched(id, children: true) } else if kind != .roots && kind != .create { touched(id, textChanged: kind == .props || kind == .style || kind == .destroy || kind == .fieldContent) }
+            if kind == .children { touched(id, children: true) } else if kind != .roots && kind != .create { touched(id, textChanged: kind == .props || kind == .destroy || kind == .fieldContent, paintsText: op.paintsText || (kind == .present && op.property != "opacity" && views[id]?.gradientFixed == true)) }
             switch kind {
             case .transformDrag, .heightDrag: _ = drags.bind(kind, op.payload)
             case .retireMotion:
@@ -1192,7 +1193,7 @@ package final class Presenter {
             case .style:
                 guard let v = views[id] ?? leaving[id]?.view else { continue }
                 let color = v.style["text_color"], old = v.style
-                v.applyStyle(v.presented(op.style))
+                v.applyBatchStyle(op.style)
                 v.refreshPressInheritance()
                 anchorChanges.note(id, from: old, to: v.style, popover: v.props["popover"] != nil)
                 if v.surface != nil { v.applySurface() }
@@ -1467,16 +1468,11 @@ package final class Presenter {
     /// An op touched a node (LLP 1014 D4 a): every canvas it is painted
     /// through captures again at the end of the batch — the canvas above
     /// it, and itself for its own `children` op.
-    func touched(_ id: UInt32, children: Bool = false, textChanged: Bool = false) {
+    func touched(_ id: UInt32, children: Bool = false, textChanged: Bool = false, paintsText: Bool = true) {
         // A filtered box draws again when it or anything in it changes.
         if let boxFilters, !boxFilters.isEmpty, let start = views[id] { boxFilters.touched(start) }
         guard let start = views[id] else { return }
-        var paragraph: NodeView? = start
-        while let node = paragraph, node.kind == "text" {
-            if textChanged || children { node.invalidateText() }
-            node.needsDisplay = true
-            paragraph = node.superview as? NodeView
-        }
+        if paintsText { start.refreshParagraph(changed: textChanged || children) }
         if children, start.overlay != nil { start.needsCapture = true }
         if let c = start.paragraphOwner.canvasAbove { c.needsCapture = true }
     }

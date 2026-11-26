@@ -161,11 +161,22 @@ extension Presenter {
     /// moves moves its children's edges with it. Inside an animation UIKit
     /// has open, it moves only if the last frame showed it (`moveOrPlace`).
     func applyFrame(_ v: NodeView, _ rect: CGRect) { moveOrPlace(v) { frame(v, rect) } }
+    private func setGrid(_ node: NodeView, _ place: GridPlace) {
+        let old = node.grid
+        let snapsNumerals = node.isParagraph && node.hasContentTransition && old?.origin != place.origin
+        let before = snapsNumerals ? node.textPlace(scale: gridScale) : nil
+        node.grid = place
+        guard node.isParagraph else { return }
+        if old?.layout.size != place.layout.size || old?.drawn.size != place.drawn.size
+            || old?.origin.scale != place.origin.scale || (old?.origin != place.origin && node.gradientFixed)
+            || (before != nil && before != node.textPlace(scale: gridScale)) { node.setNeedsDisplay() }
+    }
+
     private func frame(_ v: NodeView, _ rect: CGRect) {
         let origin = gridOrigin(above: v)
         let place = PixelGrid.place(rect, in: origin, scale: gridScale(under: origin))
         let moved = place.origin != v.grid?.origin
-        v.grid = place
+        setGrid(v, place)
         // A frame is set untransformed (UIKit's `frame` is undefined
         // under a transform); the presentation goes back on after.
         v.transform = .identity
@@ -201,7 +212,7 @@ extension Presenter {
             // Drawn where it was in its parent, which moved by whole pixels (a row below one inserted above it):
             // only the absolute origin its own children are placed from changes, and its box keeps its frame.
             if place.drawn == old.drawn {
-                child.grid = place
+                setGrid(child, place)
                 moveOrPlace(child) { child.placeTextRaster() } // its text's box is placed from its absolute origin
                 menus.framed(child); stickies.regridded(child.id)
                 regridChildren(of: child)

@@ -19,7 +19,7 @@
   },
   "counts": {
     "nodeViewCasts": {
-      "ceiling": 597,
+      "ceiling": 596,
       "sites": [
         "host/apple/Sources/ExactAnimations/CssAnimationPlay.swift: (layer.delegate as? NodeView",
         "host/apple/Sources/ExactCollections/Collection.swift: current as? NodeView",
@@ -343,7 +343,6 @@
         "host/apple/Sources/ExactKit/IOS/PresenceIOS.swift: view as? NodeView",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: $0 as? NodeView",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: current as? NodeView",
-        "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: node.superview as? NodeView",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: r as? NodeView",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: root.subviews.first as? NodeView",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: root.subviews.first as? NodeView",
@@ -481,7 +480,6 @@
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: containing as? NodeView",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: current as? NodeView",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: node.superview as? NodeView",
-        "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: node.superview as? NodeView",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: preview.superview as? NodeView",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: r as? NodeView",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: return (root.subviews.first as? NodeView",
@@ -523,6 +521,7 @@
         "host/apple/Sources/ExactKit/NodeText.swift: ($0 as? NodeView",
         "host/apple/Sources/ExactKit/NodeText.swift: $0 as? NodeView",
         "host/apple/Sources/ExactKit/NodeText.swift: if (self as? NodeView",
+        "host/apple/Sources/ExactKit/NodeText.swift: node.superview as? NodeView",
         "host/apple/Sources/ExactKit/NodeText.swift: return at as? NodeView",
         "host/apple/Sources/ExactKit/NodeText.swift: view as? NodeView",
         "host/apple/Sources/ExactKit/PaintCapture.swift: owner as? NodeView",
@@ -621,7 +620,7 @@
       ]
     },
     "treeWalks": {
-      "ceiling": 594,
+      "ceiling": 593,
       "sites": [
         "host/apple/Sources/ExactCollections/Collection.swift: guard let parent = (node as? PlatformView)?.superview else { return nil }",
         "host/apple/Sources/ExactCollections/Collection.swift: parent = current.superview",
@@ -951,7 +950,6 @@
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: for r in root.subviews {",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: if let first = root.subviews.first as? NodeView {",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: let first = root.subviews.first as? NodeView",
-        "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: paragraph = node.superview as? NodeView",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: return menus.logicalParent(of: view) ?? groupedLists?.logicalParent(of: view) ?? navigation.lifted?.parent(of: view) ?? view.superview",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: root.subviews.forEach { $0.removeFromSuperview() }",
         "host/apple/Sources/ExactKit/IOS/PresenterIOS.swift: sequence(first: self as UIView, next: { [weak presenter] in presenter?.authoredParent(of: $0) ?? $0.superview })",
@@ -1002,9 +1000,9 @@
         "host/apple/Sources/ExactKit/KeyEvents.swift: next = v.superview",
         "host/apple/Sources/ExactKit/KeyEvents.swift: return view.superview",
         "host/apple/Sources/ExactKit/LayoutPan.swift: at = current.superview",
-        "host/apple/Sources/ExactKit/Links/NavigationLink.swift: pending += v.subviews",
-        "host/apple/Sources/ExactKit/Links/NavigationLink.swift: pending += v.subviews",
-        "host/apple/Sources/ExactKit/Links/NavigationLink.swift: var found: [UICollectionView] = [], pending: [UIView] = view.subviews",
+        "host/apple/Sources/ExactKit/Links/NavigationLink.swift: pending += view.subviews",
+        "host/apple/Sources/ExactKit/Links/NavigationLink.swift: pending += view.subviews",
+        "host/apple/Sources/ExactKit/Links/NavigationLink.swift: var found: UICollectionView?, best = (-1, 0), pending = root.subviews",
         "host/apple/Sources/ExactKit/Mac/AgentMac.swift: above = s.superview",
         "host/apple/Sources/ExactKit/Mac/AgentMac.swift: guard let content = v.window?.contentView, let frame = content.superview,",
         "host/apple/Sources/ExactKit/Mac/AgentMac.swift: if let clip = sequence(first: v.superview, next: { $0?.superview }).first(where: { $0 is NSClipView }) as? NSClipView,",
@@ -1092,7 +1090,6 @@
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: guard let ancestor = containing.superview else { break }",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: guard let panel = ancestor, let parent = panel.superview else { continue }",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: let first = root.subviews.first as? NodeView",
-        "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: paragraph = node.superview as? NodeView",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: return (root.subviews.first as? NodeView)?.color(\"background_color\", ground) ?? ground",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: var ancestor = preview.superview as? NodeView",
         "host/apple/Sources/ExactKit/Mac/PresenterMac.swift: view = current.superview",
@@ -1129,6 +1126,7 @@
         "host/apple/Sources/ExactKit/Mac/ToolbarReadsMac.swift: let up = { (view: NSView) in chain == 1 ? self.presenter.authoredSuperview(of: view) ?? view.superview : view.superview }",
         "host/apple/Sources/ExactKit/NodeText.swift: at = v.superview",
         "host/apple/Sources/ExactKit/NodeText.swift: if (self as? NodeView)?.held == true { return subviews }",
+        "host/apple/Sources/ExactKit/NodeText.swift: paragraph = node.superview as? NodeView",
         "host/apple/Sources/ExactKit/NodeText.swift: return subviews.filter { ($0 as? NodeView)?.held != true }",
         "host/apple/Sources/ExactKit/NodeText.swift: stack.append(contentsOf: view.subviews)",
         "host/apple/Sources/ExactKit/NodeText.swift: var at = superview",

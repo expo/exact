@@ -1051,7 +1051,7 @@ package final class Presenter {
                 if flats.isFlat(id), flats.style(id, op) { return }
                 guard let v = views[id] ?? leaving[id]?.view else { return }
                 let color = v.style["text_color"], old = v.style
-                v.applyStyle(v.presented(op.style))
+                v.applyBatchStyle(op.style)
                 v.refreshPressInheritance()
                 anchorChanges.note(id, from: old, to: v.style, popover: v.props["popover"] != nil)
                 flats.styleChanged(id)
@@ -1169,6 +1169,7 @@ package final class Presenter {
         }
         for op in batch.ops {
             let kind = op.op
+            if kind == .paragraph && op.runs.isEmpty && views[op.id]?.inlineText.isEmpty == true { continue }
             let opBegan = ApplyProfile.on ? CACurrentMediaTime() : 0
             defer { if ApplyProfile.on { ApplyProfile.add("op.\(kind)", since: opBegan) } }
             switch kind {
@@ -1192,7 +1193,7 @@ package final class Presenter {
             let id = op.id
             if kind == .children { touched(id, children: true) } else if ![.roots, .create, .fieldContent].contains(kind) {
                 let wordsOnly = kind == .props && op.props.keys.allSatisfy { $0 == "text" } && op.clear.allSatisfy { $0 == "text" }
-                touched(id, textChanged: [.props, .style, .destroy].contains(kind), boxChanged: kind != .paragraph && !wordsOnly)
+                touched(id, textChanged: kind == .props || kind == .destroy, boxChanged: kind != .paragraph && !wordsOnly, paintsText: op.paintsText || (kind == .present && op.property != "opacity" && views[id]?.gradientFixed == true))
             }
             if animating { moveOrPlace(kind == .create ? nil : views[id] ?? leaving[id]?.view) { applyOp(op, kind, id) } } else { applyOp(op, kind, id) }
         }
@@ -1457,16 +1458,11 @@ package final class Presenter {
     }
     /// An op touched a node (LLP 1014 D4 a): every canvas it is painted
     /// through captures again at the end of the batch — the canvas above it, and itself for its own `children` op.
-    func touched(_ id: UInt32, children: Bool = false, textChanged: Bool = false, boxChanged: Bool = true) {
+    func touched(_ id: UInt32, children: Bool = false, textChanged: Bool = false, boxChanged: Bool = true, paintsText: Bool = true) {
         // A filtered box draws again when it or anything in it changes, a flat leaf (a layer in its parent's view) included.
         if let boxFilters, !boxFilters.isEmpty, let v = views[id] ?? flats.parent(of: id).flatMap({ views[$0] }) { boxFilters.touched(v) }
         guard let start = views[id] else { return }
-        var paragraph: NodeView? = start
-        while let node = paragraph, node.kind == "text" {
-            if textChanged || children { node.invalidateText() }
-            if boxChanged || node.hasContentTransition || !node.canRasterText { node.setNeedsDisplay() }
-            paragraph = node.superview as? NodeView
-        }
+        if paintsText { start.refreshParagraph(changed: textChanged || children, boxChanged: boxChanged) }
         if children, start.overlay != nil { start.needsCapture = true }
         if let c = start.paragraphOwner.canvasAbove { c.needsCapture = true }
     }

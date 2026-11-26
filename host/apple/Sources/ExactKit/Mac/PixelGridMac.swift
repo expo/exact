@@ -35,6 +35,8 @@ package struct GridPlace: Equatable {
     package var drawn: CGRect
     /// The box's own absolute origin, which its children are placed from.
     package var origin: GridOrigin
+
+    var baselineDrop: CGFloat { origin.scale > 0 ? origin.layoutY - CGFloat(origin.pixelY) / origin.scale : 0 }
 }
 
 package enum PixelGrid {
@@ -129,6 +131,7 @@ extension Presenter {
     func applyFrame(_ v: NodeView, _ rect: CGRect) {
         let place = gridPlace(v, rect)
         let moved = place.origin != v.grid?.origin
+        if v.isParagraph { v.prepareLabelMove(to: place) }
         v.grid = place
         defer { if moved { if isApplying { gridMoved.append(v) } else { regridChildren(of: v) } } }
         let frame = v.frameInScrollDocument(place.drawn)
@@ -202,8 +205,7 @@ extension NodeView {
     /// at its place on the page (`TextEngine.paintedLine`), as Chromium
     /// rounds it, not at its place in a box the grid moved.
     var gridDrop: CGFloat {
-        guard let o = grid?.origin, o.scale > 0 else { return 0 }
-        return o.layoutY - CGFloat(o.pixelY) / o.scale
+        grid?.baselineDrop ?? 0
     }
 }
 #endif

@@ -1,7 +1,61 @@
 // @ref LLP 1033: paint the same ordered inline runs the kernel measures.
 import Foundation
 
+extension BatchOp {
+    /// Placement and stacking carry the backing store. Frame and style setters
+    /// invalidate it when the new geometry or resolved paint requires it.
+    var paintsText: Bool {
+        switch op {
+        case .rank, .frame, .style: return false
+        case .present: return !["translate", "rotate", "scale", "layout", "opacity"].contains(property)
+        default: return true
+        }
+    }
+}
+
 extension NodeView {
+    func applyBatchStyle(_ incoming: NodeStyle) {
+        let next = presented(incoming)
+        guard next != style else { return }
+        if isParagraph && onlyPlacementChanged(to: next) {
+            let originChanged = next["transform_origin"] != style["transform_origin"]
+            style = next
+            if originChanged { applyTransform() }
+            return
+        }
+        refreshParagraph(changed: true)
+        applyStyle(next)
+    }
+
+    /// The presenter places these rows through frame, rank and transform ops.
+    /// Sticky offsets and a popover's position read the new style at batch end.
+    private func onlyPlacementChanged(to next: NodeStyle) -> Bool {
+        let placement = ["left", "top", "right", "bottom", "z_index", "transform_origin"]
+        func paint(_ style: NodeStyle) -> NodeStyle {
+            var rows = style
+            for key in placement { rows.removeValue(forKey: key) }
+            if let written = rows["written"]?.array {
+                let keep = written.filter { !placement.contains($0.string ?? "") }
+                rows["written"] = keep.isEmpty ? nil : .array(keep)
+            }
+            return rows
+        }
+        return paint(style) == paint(next)
+    }
+
+    func refreshParagraph(changed: Bool, boxChanged: Bool = true) {
+        var paragraph: NodeView? = self
+        while let node = paragraph, node.kind == "text" {
+            if changed { node.invalidateText() }
+            #if os(macOS)
+            node.needsDisplay = true
+            #else
+            if boxChanged || node.hasContentTransition || !node.canRasterText { node.setNeedsDisplay() }
+            #endif
+            paragraph = node.superview as? NodeView
+        }
+    }
+
     /// Resolve the computed tagged row after inheritance, using this node's font.
     package var usedLineHeight: CGFloat? {
         // JSON carries shortest f32 decimals; the measurement ABI carries f32

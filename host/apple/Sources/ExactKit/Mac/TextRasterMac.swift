@@ -273,6 +273,53 @@ final class TextRasterizer {
 }
 
 extension NodeView {
+    package override var visibleRect: NSRect {
+        guard let labelInk, !focusVisible, subviews.isEmpty, !Capture.capturing else { return super.visibleRect }
+        return super.visibleRect.intersection(bounds.union(labelInk))
+    }
+
+    func prepareLabelMove(to place: GridPlace) {
+        guard let old = grid, old != place else { return }
+        guard old.layout.size == place.layout.size, old.drawn.size == place.drawn.size,
+              old.origin.scale == place.origin.scale, !gradientFixed else {
+            labelInk = nil
+            needsDisplay = true
+            return
+        }
+        if labelInk == nil, textLayoutValid, let paragraph = cachedTextLayout?.paragraph, let spec = cachedTextSpec {
+            labelInk = directLabelInk(paragraph, spec: spec, scale: place.origin.scale)
+        }
+        guard old.baselineDrop != place.baselineDrop else { return }
+        if labelInk != nil, let paragraph = cachedTextLayout?.paragraph, let baseline = paragraph.baselines.first {
+            let top = paragraphBox().minY
+            let next = top + place.baselineDrop - old.baselineDrop
+            if TextEngine.paintedLine(baseline, top: top, scale: place.origin.scale, lineScale: paragraph.lineScale)
+                == TextEngine.paintedLine(baseline, top: next, scale: place.origin.scale, lineScale: paragraph.lineScale) { return }
+        }
+        labelInk = nil
+        needsDisplay = true
+    }
+
+    /// AppKit backs an unclipped view out to its visible rectangle, which can
+    /// reach the far side of the window. For a single line of plain glyphs,
+    /// Core Text gives us its ink, including overhang outside the layout box.
+    /// Other paint keeps AppKit's full coverage.
+    func directLabelInk(_ paragraph: Paragraph, spec: Spec, scale: CGFloat) -> CGRect? {
+        guard paragraph.lines.count == 1, let line = paragraph.lines.first, let baseline = paragraph.baselines.first,
+              flowShapes.isEmpty, columnRecord == nil, !focusVisible, !gradientFixed, subviews.isEmpty, spec.runs.count == 1, let run = spec.runs.first,
+              spec.shadow == nil, run.shadow == nil, run.stroke == nil, run.decoration.isEmpty, run.atomIcon == nil,
+              run.box == nil, run.background == nil, run.border == nil, run.outerBackgrounds.isEmpty else { return nil }
+        let box = paragraphBox(), drawn = spec.ellipsis ? paragraph.ellipsized(0, spec: spec, width: box.width) : line
+        let ink = CTLineGetImageBounds(drawn, nil).union(CTLineGetBoundsWithOptions(drawn, .useGlyphPathBounds))
+        var ascent: CGFloat = 0, descent: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(drawn, &ascent, &descent, nil))
+        let extent = CGRect(x: 0, y: -descent, width: width, height: ascent + descent).union(ink)
+        let x = box.minX + paragraph.origin(0, align: spec.align, width: box.width)
+        let y = TextEngine.paintedLine(baseline, top: box.minY, scale: scale, lineScale: paragraph.lineScale)
+        return CGRect(x: x + extent.minX, y: y - extent.maxY, width: extent.width, height: extent.height)
+            .insetBy(dx: -1, dy: -1).integral
+    }
+
     /// Whether this paragraph's text is a rasterized surface rather than
     /// something `draw` paints. Asked by AppKit through `wantsUpdateLayer`.
     var rastersText: Bool { canRasterText && !textRasterUsesStrips }

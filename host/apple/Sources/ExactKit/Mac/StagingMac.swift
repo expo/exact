@@ -41,7 +41,7 @@ extension Presenter {
             done += 1
             let op = plan.preparingOp(index), id = op.id
             if op.op == .children, plan.large.contains(id) { plan.attachments.append(index); continue }
-            if op.op == .children { touched(id, children: true) } else if op.op != .create { touched(id, textChanged: op.op == .props || op.op == .style) }
+            if op.op == .children { touched(id, children: true) } else if op.op != .create { touched(id, textChanged: op.op == .props, paintsText: op.paintsText) }
             switch op.op {
             case .create:
                 let v = newView(op, stage: .preparing(plan.publication))
@@ -62,7 +62,7 @@ extension Presenter {
             case .style:
                 guard let v = views[id] else { continue }
                 let color = v.style["text_color"]
-                v.applyStyle(v.presented(op.style))
+                v.applyBatchStyle(op.style)
                 v.refreshPressInheritance()
                 if v.surface != nil { v.applySurface() }
                 if v.style["text_color"] != color { session?.noteAppearance(v) }
