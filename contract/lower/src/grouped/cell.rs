@@ -248,11 +248,12 @@ fn without_box(
 }
 
 /// A row's block padding, the cell's content margins (`row-padding-block`),
-/// unless the row, or the subtitle-shaped column it holds, is known to write a
-/// box: a literal 300-point tile is the row's border box (`without_box`).
+/// unless the row, or the subtitle-shaped column it holds (`subtitle`, its
+/// attributes), is known to write a box: a literal 300-point tile is the row's
+/// border box (`without_box`).
 pub(super) fn row_padding(
     row: &[contract_syntax::Attr],
-    children: &[Node],
+    subtitle: Option<&[contract_syntax::Attr]>,
     class: super::ClassRows<'_>,
     span: contract_syntax::Span,
 ) -> Expr {
@@ -262,11 +263,14 @@ pub(super) fn row_padding(
         |w| exact_kernel::grouped::authored_row_box(w, false),
         super::mv("row-padding-block", span),
     );
-    match texts(children.iter().filter(|c| !super::hidden(c)).collect(), false).as_slice() {
-        [Node::Element { tag, attrs, children, .. }] if tag == "column" && super::standard_text_lines(children) => {
-            without_box(attrs, class, exact_kernel::grouped::authored_subtitle_box, padding)
-        }
-        _ => padding,
+    match subtitle {
+        Some(attrs) => without_box(
+            attrs,
+            class,
+            exact_kernel::grouped::authored_subtitle_box,
+            padding,
+        ),
+        None => padding,
     }
 }
 
