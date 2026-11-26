@@ -416,32 +416,32 @@ pub(in crate::window) struct Landing {
 /// An offer's MIME types, as the compositor lists them before its enter,
 /// the actions its source allows, which a version 3 offer is told before
 /// its enter too, and the action the compositor last chose for it.
+#[derive(Default)]
 struct Offered {
     types: Mutex<Vec<String>>,
     source: AtomicU32,
     action: AtomicU32,
 }
 
-impl Default for Offered {
-    fn default() -> Self {
-        Offered {
-            types: Mutex::default(),
-            // A source that names no actions copies, as one before version 3 does
-            source: AtomicU32::new(DndAction::Copy.bits()),
-            action: AtomicU32::new(0),
-        }
+impl Offered {
+    /// Whether `offer`'s source may allow a copy, the one action the window
+    /// takes: refused only when it names actions and copy is not among them.
+    /// No actions is no answer, since Weston tells a version 3 offer none for
+    /// a source before version 3, which it lets copy; the drop still waits
+    /// for the compositor to choose a copy.
+    fn copies(offer: &WlDataOffer) -> bool {
+        let source = offer
+            .data::<Offered>()
+            .map_or(0, |o| o.source.load(Ordering::Relaxed));
+        allows_copy(offer.version(), source)
     }
 }
 
-impl Offered {
-    /// Whether `offer`'s source allows a copy, the one action the window
-    /// takes.
-    fn copies(offer: &WlDataOffer) -> bool {
-        offer.version() < 3
-            || offer
-                .data::<Offered>()
-                .is_some_and(|o| o.source.load(Ordering::Relaxed) & DndAction::Copy.bits() != 0)
-    }
+/// Whether a source whose offer is at `version` and which named `source`
+/// actions (`wl_data_offer.source_actions`; none when it named none) may
+/// allow a copy.
+fn allows_copy(version: u32, source: u32) -> bool {
+    version < 3 || source == 0 || source & DndAction::Copy.bits() != 0
 }
 
 impl Listener {

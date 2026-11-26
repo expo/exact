@@ -180,6 +180,13 @@ fn a_titled_links_encoding_is_read_from_its_bytes() {
         .collect();
     cut.pop();
     assert_eq!(items(b"", &cut, b"").url, "");
+    let mut unmarked = utf16("https://example.com/ab");
+    unmarked.pop();
+    assert_eq!(
+        items(b"", &unmarked, b"").url,
+        "",
+        "unmarked UTF-16 cut short too"
+    );
 }
 
 #[test]

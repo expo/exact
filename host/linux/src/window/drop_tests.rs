@@ -113,3 +113,20 @@ fn a_cut_drop_keeps_a_check_that_ended_and_lands_before_the_next() {
     );
     *running.lock().unwrap() = Some(Vec::new());
 }
+
+/// A drag is refused at its enter only when its source names actions and
+/// copy is not among them: an offer before version 3 copies, and no actions
+/// is no answer, as Weston tells a version 3 offer of a source before
+/// version 3.
+#[test]
+fn a_source_that_names_actions_without_copy_is_refused() {
+    let (copy, moves, ask) = (
+        DndAction::Copy.bits(),
+        DndAction::Move.bits(),
+        DndAction::Ask.bits(),
+    );
+    assert!(allows_copy(3, copy) && allows_copy(3, copy | moves));
+    assert!(allows_copy(3, 0), "no actions named");
+    assert!(allows_copy(2, moves), "before version 3 a drop is a copy");
+    assert!(!allows_copy(3, moves) && !allows_copy(3, moves | ask));
+}

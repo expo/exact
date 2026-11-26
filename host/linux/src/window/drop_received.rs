@@ -220,27 +220,41 @@ impl Wanted {
     }
 }
 
-/// Whether MIME type `offered` is `wanted`: the same type, subtype and
-/// parameters, but for case, the spaces RFC 2045 allows around a `;` and an
-/// `=`, and a quoted value's quotes.
+/// Whether MIME type `offered` is `wanted`, as the forms the window reads
+/// are spelled: the type, subtype and each parameter's name and value alike
+/// but for case, with or without spaces around a `;` and an `=`, and a value
+/// quoted or not, so `text/plain; charset="UTF-8"` is
+/// `text/plain;charset=utf-8`.
 fn same_type(offered: &str, wanted: &str) -> bool {
-    let parts = |mime: &str| {
-        mime.split(';')
-            .map(|part| match part.split_once('=') {
-                Some((name, value)) => {
-                    let value = value.trim();
-                    let value = value
-                        .strip_prefix('"')
-                        .and_then(|v| v.strip_suffix('"'))
-                        .unwrap_or(value);
-                    format!("{}={value}", name.trim())
-                }
-                None => part.trim().to_owned(),
-            })
-            .map(|part| part.to_ascii_lowercase())
-            .collect::<Vec<_>>()
+    fn parts(mime: &str) -> impl Iterator<Item = (&str, Option<&str>)> {
+        mime.split(';').map(|part| match part.split_once('=') {
+            Some((name, value)) => {
+                let value = value.trim();
+                let value = value
+                    .strip_prefix('"')
+                    .and_then(|v| v.strip_suffix('"'))
+                    .unwrap_or(value);
+                (name.trim(), Some(value))
+            }
+            None => (part.trim(), None),
+        })
+    }
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let alike = |(a, x): (&str, Option<&str>), (b, y): (&str, Option<&str>)| {
+        same(a, b)
+            && match (x, y) {
+                (Some(x), Some(y)) => same(x, y),
+                (x, y) => x.is_none() && y.is_none(),
+            }
     };
-    parts(offered) == parts(wanted)
+    let (mut offered, mut wanted) = (parts(offered), parts(wanted));
+    loop {
+        match (offered.next(), wanted.next()) {
+            (None, None) => return true,
+            (Some(a), Some(b)) if alike(a, b) => {}
+            _ => return false,
+        }
+    }
 }
 
 /// The items a drop's URI list (RFC 2483), titled link and text give: each
@@ -295,8 +309,8 @@ pub(super) fn utf16_or_utf8(bytes: &[u8]) -> Option<String> {
     let (big, units) = match bytes {
         [0xFE, 0xFF, rest @ ..] => (true, rest),
         [0xFF, 0xFE, rest @ ..] => (false, rest),
-        [first, 0, ..] if *first != 0 && bytes.len().is_multiple_of(2) => (false, bytes),
-        [0, second, ..] if *second != 0 && bytes.len().is_multiple_of(2) => (true, bytes),
+        [first, 0, ..] if *first != 0 => (false, bytes),
+        [0, second, ..] if *second != 0 => (true, bytes),
         _ => {
             let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
             return Some(String::from_utf8_lossy(&bytes[..end]).into_owned());
