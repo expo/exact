@@ -146,6 +146,7 @@ public final class ExactSidebarController: NSSplitViewController {
     /// the window's content when the root has no tab bar for a sidebar and
     /// no stack that splits.
     public func release() {
+        releaseItemControls()
         exactView.session.presenter.navigationHost.split.detach(self)
         exactView.session.presenter.sidebarHost.detach(self)
         NSLayoutConstraint.deactivate(pins)

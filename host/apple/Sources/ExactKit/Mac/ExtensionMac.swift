@@ -203,9 +203,10 @@ extension NodeView {
         }
         let strip = e.reachStrip ?? CAShapeLayer()
         e.reachStrip = strip
+        // The reached bounds less what of them the extension covers: even-odd over the bounds and that overlap only
         let path = CGMutablePath()
         path.addRect(bounds)
-        path.addRect(frame)
+        path.addRect(frame.intersection(bounds))
         CATransaction.begin(); CATransaction.setDisableActions(true)
         strip.fillRule = .evenOdd
         strip.frame = layer.bounds
