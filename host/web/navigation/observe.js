@@ -67,6 +67,31 @@ export function readers(root = document) {
   return [...root.querySelectorAll(FAMILIES.map((f) => `[style*="var(--exact-${f}-"]`).join(", "))];
 }
 
+/** The readers a running animation or transition can move (D17, "The web: invalidation"): those in the layout
+ * dependency closure of an animated element, which is the element itself and its descendants, its ancestors, and
+ * everything after it in document order, its following siblings' and its ancestors' following siblings' subtrees. */
+export function moving(readers, animations = document.getAnimations()) {
+  const animated = [...new Set(animations.filter((a) => a.playState === "running").map((a) => a.effect?.target).filter(Boolean))];
+  return readers.filter((r) => animated.some((a) => a === r || a.contains(r) || r.contains(a)
+    || (a.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0));
+}
+
+/** Measure the readers an animation moves each frame while one runs (D17), in rounds as a commit's, until none moves
+ * them; returns a function that stops it. Activation (stage 5) starts it as a commit's rounds end; tests until then. */
+export function follow(readers, band, keyboard) {
+  let frame = 0, last = [];
+  const step = () => {
+    const now = moving(readers);
+    // Once nothing moves them, those it moved last are measured once more, where they came to rest
+    const measured = now.length ? now : last;
+    if (measured.length) observe(measured, band ?? documentBand(), keyboard ?? keyboardInset());
+    last = now;
+    frame = now.length ? requestAnimationFrame(step) : 0;
+  };
+  frame = requestAnimationFrame(step);
+  return () => cancelAnimationFrame(frame);
+}
+
 /** The rule under which a round's values start no transition: important in the page's first cascade layer, which wins
  * over every important declaration of the page's own sheets, layered after it or unlayered (CSS Cascade 5, "Cascade
  * Layers"). */
