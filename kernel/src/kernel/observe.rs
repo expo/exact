@@ -1032,12 +1032,14 @@ fn measure_families(arena: &NodeArena, slot: u32, space: &Space, read: Component
     if let (Some(owner), Some(band)) = (reported, space.band.filter(|_| read & margins_bits() != 0))
     {
         let regions = super::margins::regions(arena, slot, space, band, owner);
-        let families = Family::MARGINS.into_iter().chain([Family::SystemMinimum]);
-        for (i, family) in families.enumerate() {
+        let minimum = regions.minimum.map(|m| (Family::SystemMinimum, m, m));
+        let families = Family::MARGINS.into_iter().enumerate();
+        let families = families.map(|(i, f)| (f, regions.readings[i], regions.caps[i]));
+        for (family, reading, cap) in families.chain(minimum) {
             let at = family as usize * 4;
             for e in 0..4 {
-                observed[at + e] = Some(regions.readings[i][e]);
-                depths[at + e] = regions.caps[i][e];
+                observed[at + e] = Some(reading[e]);
+                depths[at + e] = cap[e];
             }
         }
     }

@@ -39,8 +39,8 @@ fn full() -> OwnerUpdate {
         margins: Some(OwnerMargins {
             root: [47.0, 16.0, 34.0, 16.0],
             plain: [8.0; 4],
-            minimum: [0.0, 16.0, 0.0, 16.0],
-            readable_width: 672.0,
+            minimum: Some([0.0, 16.0, 0.0, 16.0]),
+            readable_width: Some(672.0),
         }),
         keyboard: KeyboardReport::Shown(Keyboard {
             frame: [0.0, 500.0, 390.0, 344.0],
@@ -180,13 +180,14 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.extend(1u32.to_le_bytes());
     w.push(3);
     target(&mut w, 3, 44.0, Some([0.0, 0.0, 390.0, 844.0]));
+    // The margins: the root's and a plain view's, then the minimum and the readable width, each
+    // after a presence byte
     w.push(1);
-    f(
-        &mut w,
-        &[
-            47.0, 16.0, 34.0, 16.0, 8.0, 8.0, 8.0, 8.0, 0.0, 16.0, 0.0, 16.0, 672.0,
-        ],
-    );
+    f(&mut w, &[47.0, 16.0, 34.0, 16.0, 8.0, 8.0, 8.0, 8.0]);
+    w.push(1);
+    f(&mut w, &[0.0, 16.0, 0.0, 16.0]);
+    w.push(1);
+    f(&mut w, &[672.0]);
     w.push(2);
     f(&mut w, &[0.0, 500.0, 390.0, 344.0]);
     w.push(1);
@@ -267,7 +268,7 @@ fn an_owner_update_with_one_bad_field_changes_nothing() {
             u.targets.chain[1].kinds = 1 << Kind::ALL.len()
         }),
         ("margins", |u| {
-            u.margins.as_mut().unwrap().readable_width = -1.0
+            u.margins.as_mut().unwrap().readable_width = Some(-1.0)
         }),
         ("keyboard", |u| {
             if let KeyboardReport::Shown(k) = &mut u.keyboard {

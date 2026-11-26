@@ -1,5 +1,6 @@
 // LLP 1123 D2 on AppKit: an owner's update sampled from its container view as AppKit lays it out, its band, Exact's
-// contributions, its map into its window and its configuration, which the kernel decodes.
+// contributions, its chain and relations, its margins, its map into its window and its configuration, which the
+// kernel decodes.
 #if os(macOS)
 import AppKit
 import XCTest
@@ -61,6 +62,15 @@ final class OwnerUpdateMacTests: XCTestCase {
         XCTAssertEqual([map.tx, map.ty, map.a, map.d], [0, 0, 1, 1], "the container's origin at the window's top left, y down")
         XCTAssertNotNil(update.configuration)
         XCTAssertEqual(update.keyboard, .unreported, "AppKit has no software keyboard")
+        // AppKit's margins: the container's, and a plain view's those less its safe area; no minimum or readable width
+        let margins = try XCTUnwrap(update.margins)
+        let native = LayoutRegionsMac.margins(of: container), safe = container.safeAreaInsets
+        XCTAssertEqual([margins.root.top, margins.root.right, margins.root.bottom, margins.root.left], native)
+        XCTAssertEqual([margins.plain.top, margins.plain.right, margins.plain.bottom, margins.plain.left],
+                       [native[0] - safe.top, native[1] - safe.right, native[2] - safe.bottom, native[3] - safe.left])
+        XCTAssertGreaterThan(margins.root.top, update.band?.top ?? 0, "from the safe area under the title bar")
+        XCTAssertNil(margins.minimum)
+        XCTAssertNil(margins.readableWidth)
         _ = blocks.takeUpdates()
         // A toolbar shown at the same size moves the band and the configuration, sampled in the container's layout
         window.toolbar = NSToolbar(identifier: "owner-update")
@@ -77,6 +87,9 @@ final class OwnerUpdateMacTests: XCTestCase {
         let added = try XCTUnwrap(blocks.pending[node.id])
         XCTAssertEqual(added.contributions, [.init(node: node.id, operation: ContributionOperation.additionalInsets.rawValue, effect: .init(top: 0, right: 20, bottom: 0, left: 0))])
         XCTAssertEqual(added.band?.right ?? 0, (shown.band?.right ?? 0) + 20, accuracy: 0.5)
+        XCTAssertEqual(LayoutRegionsMac.margins(of: container)[1], (shown.margins?.root.right ?? 0) + 20, accuracy: 0.5, "AppKit adds it to the margins")
+        XCTAssertEqual(added.margins?.root, shown.margins?.root, "the root's margins less the contribution, as the band is")
+        XCTAssertEqual(added.margins?.plain, shown.margins?.plain)
         // The kernel decodes it, and refuses a truncated one
         let encoded = added.encode()
         XCTAssertNil(s.runtime.ownerReports(updates: [(node.id, encoded)]).error)

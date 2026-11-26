@@ -11,30 +11,36 @@ enum LayoutRegionsMac {
     /// Twenty insets, five regions of top, right, bottom, left, in
     /// `Region`'s order (`kernel/src/style/env.rs`), none less than zero.
     static func insets(of view: NSView) -> [CGFloat] {
-        let bounds = view.bounds
-        // How far `rect` lies inside the bounds at each edge, top, right,
-        // bottom, left, in the view's own orientation
-        func edges(_ rect: NSRect) -> [CGFloat] {
-            let top = view.isFlipped ? rect.minY - bounds.minY : bounds.maxY - rect.maxY
-            let bottom = view.isFlipped ? bounds.maxY - rect.maxY : rect.minY - bounds.minY
-            return [top, bounds.maxX - rect.maxX, bottom, rect.minX - bounds.minX].map { max(0, $0) }
-        }
-        let safe: [CGFloat], margins: [CGFloat], marginsCorners: [CGFloat]
+        let edges = { (rect: NSRect) in Self.edges(of: rect, in: view) }
+        let safe: [CGFloat], margins = Self.margins(of: view), marginsCorners: [CGFloat]
         if #available(macOS 26.0, *) {
             func adapted(_ region: (NSView.LayoutRegion.AdaptivityAxis) -> NSView.LayoutRegion) -> [CGFloat] {
                 let h = edges(view.rect(for: region(.horizontal))), v = edges(view.rect(for: region(.vertical)))
                 return [v[0], h[1], v[2], h[3]]
             }
             safe = adapted { .safeArea(cornerAdaptation: $0) }
-            margins = edges(view.rect(for: .margins()))
             marginsCorners = adapted { .margins(cornerAdaptation: $0) }
         } else {
             // The safe area and the margins guide, without adaptation
             safe = edges(view.safeAreaRect)
-            margins = edges(view.layoutMarginsGuide.frame)
             marginsCorners = margins
         }
         return safe + margins + marginsCorners + margins + marginsCorners
+    }
+
+    /// The view's margins, top, right, bottom, left: macOS 26's margins region, or before it the margins guide.
+    static func margins(of view: NSView) -> [CGFloat] {
+        if #available(macOS 26.0, *) { return edges(of: view.rect(for: .margins()), in: view) }
+        return edges(of: view.layoutMarginsGuide.frame, in: view)
+    }
+
+    /// How far `rect` lies inside the view's bounds at each edge, top, right, bottom, left, in the view's own
+    /// orientation.
+    private static func edges(of rect: NSRect, in view: NSView) -> [CGFloat] {
+        let bounds = view.bounds
+        let top = view.isFlipped ? rect.minY - bounds.minY : bounds.maxY - rect.maxY
+        let bottom = view.isFlipped ? bounds.maxY - rect.maxY : rect.minY - bounds.minY
+        return [top, bounds.maxX - rect.maxX, bottom, rect.minX - bounds.minX].map { max(0, $0) }
     }
 }
 #endif

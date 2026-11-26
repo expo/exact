@@ -218,7 +218,8 @@ impl OwnerUpdate {
     /// frame in its window (a rect); a chain entry
     /// a target and its kinds' bits (`u8`, `Kind::bit`); a relation its
     /// index in [`Relation::ALL`] (`u8`) and a target; the margins their
-    /// root, plain and minimum insets and the readable width (`f32`); the
+    /// root and plain insets, then the optional minimum insets and the
+    /// optional readable width (`f32`); the
     /// keyboard a byte, 0 unreported, 1 dismissed or 2 shown, a shown one's
     /// frame and a docked byte, 0 or 1, after it; segments their columns
     /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
@@ -240,8 +241,8 @@ impl OwnerUpdate {
         optional(&mut w, self.margins.as_ref(), |w, m| {
             floats(w, &m.root);
             floats(w, &m.plain);
-            floats(w, &m.minimum);
-            w.f32(m.readable_width);
+            optional(w, m.minimum.as_ref(), |w, minimum| floats(w, minimum));
+            optional(w, m.readable_width.as_ref(), |w, width| w.f32(*width));
         });
         keyboard_out(&mut w, &self.keyboard);
         optional(&mut w, self.segments.as_ref(), |w, g| {
@@ -318,8 +319,11 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         true => Some(OwnerMargins {
             root: four(r)?,
             plain: four(r)?,
-            minimum: four(r)?,
-            readable_width: r.f32().ok()?,
+            minimum: optional_four(r)?,
+            readable_width: match present(r)? {
+                true => Some(r.f32().ok()?),
+                false => None,
+            },
         }),
         false => None,
     };

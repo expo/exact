@@ -29,9 +29,11 @@ package struct OwnerUpdateWire: Equatable {
         package init(node: UInt32, operation: UInt8, effect: Edges) { (self.node, self.operation, self.effect) = (node, operation, effect) }
     }
 
+    /// The owner's margins (D8): its root view's and a plain view's, and the system minimum and the readable width,
+    /// each `nil` where the toolkit has none, as AppKit has neither.
     package struct Margins: Equatable {
-        package var root: Edges, plain: Edges, minimum: Edges, readableWidth: CGFloat
-        package init(root: Edges, plain: Edges, minimum: Edges, readableWidth: CGFloat) {
+        package var root: Edges, plain: Edges, minimum: Edges?, readableWidth: CGFloat?
+        package init(root: Edges, plain: Edges, minimum: Edges?, readableWidth: CGFloat?) {
             (self.root, self.plain, self.minimum, self.readableWidth) = (root, plain, minimum, readableWidth)
         }
     }
@@ -92,7 +94,7 @@ package struct OwnerUpdateWire: Equatable {
     /// The kernel's encoding: the band after a presence byte, top, right, bottom, left, as `f32`s; the contributions
     /// after their count, each its node (`u32`), operation and effect; the chain after its count, each its target and
     /// kinds; the relations after theirs, each its relation and target; the margins after a presence byte, the root
-    /// view's, a plain view's and the minimum's, then the readable width. The keyboard is a byte, 0 unreported,
+    /// view's and a plain view's, then the minimum and the readable width, each after its own. The keyboard is a byte, 0 unreported,
     /// 1 dismissed or 2 shown, and a shown one's frame, x, y, width, height, and a docked byte. Then the segments,
     /// each edge's bar region, the chrome, its vertical bar edge and its sidebar's availability each optional, the
     /// window map, its six terms in `CGAffineTransform`'s order, the configuration's identity (`u64`) and the reserved
@@ -129,8 +131,8 @@ package struct OwnerUpdateWire: Equatable {
         optional(margins) { m in
             edges(m.root)
             edges(m.plain)
-            edges(m.minimum)
-            f32(m.readableWidth)
+            optional(m.minimum, edges)
+            optional(m.readableWidth, f32)
         }
         switch keyboard {
         case .unreported: u8(0)

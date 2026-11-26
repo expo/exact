@@ -1,18 +1,19 @@
 // One content owner's update (LLP 1123 D2) as AppKit gives it at one pass of its container's layout: the container
 // view's own `safeAreaInsets`, Exact's contributions to that view (`ContributionsMac`), its containment ancestry and
-// relational targets (D9), the view's map into its window and its configuration's identity, in the form both Apple
-// hosts encode (`OwnerUpdateWire`). AppKit has no software keyboard, reserved regions, segments or bar regions, so
-// those stay unreported, nor a tab controller's content guide; the owner's margins are their own step.
+// relational targets (D9), its margins (D8), the view's map into its window and its configuration's identity, in the
+// form both Apple hosts encode (`OwnerUpdateWire`). AppKit has no software keyboard, reserved regions, segments or bar
+// regions, so those stay unreported, nor a tab controller's content guide, a system minimum or a readable width.
 #if os(macOS)
 import AppKit
 
 enum OwnerUpdateMac {
-    /// The update of the owner whose container is `view`. Exact's writes to the view are applied first, so the band
-    /// and their effects describe the same layout (D11). Out of a window the view has no band, map or configuration.
     /// The kernel's `Kind::bit`s and `Relation::ALL` indices that AppKit has.
     enum Kind { static let tab: UInt8 = 1 << 3, split: UInt8 = 1 << 4, column: UInt8 = 1 << 5 }
     enum Relation { static let presenter: UInt8 = 0, session: UInt8 = 1, root: UInt8 = 2, window: UInt8 = 3, windowContent: UInt8 = 5, screen: UInt8 = 6 }
 
+    /// The update of the owner whose container is `view`. Exact's writes to the view are applied first, so the band
+    /// and their effects describe the same layout (D11). Out of a window the view has no band, margins, map or
+    /// configuration.
     static func sample(_ view: NSView, session: NSView? = nil) -> OwnerUpdateWire {
         var update = OwnerUpdateWire()
         if let ledger = ContributionsMac.existing(on: view) {
@@ -33,12 +34,26 @@ enum OwnerUpdateMac {
         ]
         update.relations = related.compactMap { r, t in t.map { (relation: r, target: $0) } }
         update.band = edges(view.safeAreaInsets)
+        update.margins = margins(of: view, less: update.contributions)
         update.windowMap = map(of: view, in: window)
         update.configuration = configuration(of: window)
         return update
     }
 
     static func edges(_ i: NSEdgeInsets) -> OwnerUpdateWire.Edges { .init(top: i.top, right: i.right, bottom: i.bottom, left: i.left) }
+
+    /// The container's margins (D8) as AppKit gives them, less Exact's contributions as the band is (D11), which AppKit
+    /// adds to them as to the safe area. AppKit sets no view's own margins, so a plain view's are the container's less
+    /// its safe area.
+    static func margins(of view: NSView, less contributions: [OwnerUpdateWire.Contribution]) -> OwnerUpdateWire.Margins {
+        let m = LayoutRegionsMac.margins(of: view), safe = view.safeAreaInsets
+        let added = contributions.reduce(OwnerUpdateWire.Edges.zero) {
+            .init(top: $0.top + $1.effect.top, right: $0.right + $1.effect.right, bottom: $0.bottom + $1.effect.bottom, left: $0.left + $1.effect.left)
+        }
+        return .init(root: .init(top: m[0] - added.top, right: m[1] - added.right, bottom: m[2] - added.bottom, left: m[3] - added.left),
+                     plain: .init(top: m[0] - safe.top, right: m[1] - safe.right, bottom: m[2] - safe.bottom, left: m[3] - safe.left),
+                     minimum: nil, readableWidth: nil)
+    }
 
     /// The owner's containment ancestry (D9, "The native chain"): its container view first, then the controllers
     /// above it, as AppKit's `parent` gives them, each with the kinds it is. A split's item is a column.
