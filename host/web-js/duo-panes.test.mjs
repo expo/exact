@@ -63,6 +63,8 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     expect(title.x).toBeGreaterThanOrEqual(40 + 12);
     expect(activity.x).toBeGreaterThanOrEqual(56);
     expect(activity.x + activity.width).toBeLessThanOrEqual(760);
+    // The tab bar, along the bottom of one segment across, keeps its tabs inside the left safe area
+    expect(Math.round((await page.getByTestId('tab-fold').boundingBox()).x)).toBe(40);
     // On a book fold the panes pad their sides by the route's insets and not the browser's, which are 0 here: their
     // content keeps 16 CSS pixels inside insets of 40 and 24
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: 0 } });
@@ -109,13 +111,27 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     await page.getByTestId('tab-fold').click();
     expect(await page.getByTestId('fact-h').textContent()).toBe('1');
     // A fold moves the panes of both screens apart, or down to the lower segment, on UIKit's spring, and back as it opens;
-    // neither the route's header nor the tab bar moves. Under Reduce Motion the panes take their places at once.
+    // neither the route's header nor the tab bar moves, and across a book fold the bar's tabs move to the second segment
+    // and back. Under Reduce Motion the panes and the tabs take their places at once.
     const screens = { panes: ['panes-workspace-pane', 'panes-activity-pane', 'screen-panes'], arrangement: ['arrangement-1-primary', 'arrangement-1-secondary', 'arrangement-1-screen'] };
     const boxes = ids => page.evaluate(([first, second, screen]) => {
       const box = element => { const r = element.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom].map(v => Math.round(v)); };
       const at = id => document.querySelector(`[data-testid="${id}"]`);
-      return { first: box(at(first)), second: box(at(second)), header: box(at(screen).querySelector('header')), bar: box(at('tab-bar')) };
+      return { first: box(at(first)), second: box(at(second)), header: box(at(screen).querySelector('header')), bar: box(at('tab-bar')),
+        tabs: [...at('tab-bar').querySelectorAll('[role="tab"]')].map(box) };
     }, ids);
+    // Notes, from each frame until `moved` reads it, which of `ids` have an animation running
+    const watch = ids => page.evaluate(ids => {
+      const seen = globalThis.duoSeen = Object.fromEntries(ids.map(id => [id, false]));
+      const look = () => {
+        if (globalThis.duoSeen !== seen) return;
+        for (const id of ids) seen[id] ||= document.querySelector(`[data-testid="${id}"]`).getAnimations().length > 0;
+        requestAnimationFrame(look);
+      };
+      look();
+    }, ids);
+    const moved = () => page.evaluate(() => { const seen = globalThis.duoSeen; globalThis.duoSeen = null; return seen; });
+    const tabs = ['fold', 'panes', 'images', 'reflow', 'combos', 'keyboard', 'arrangement'].map(name => `tab-${name}`);
     for (const [name, ids] of Object.entries(screens)) {
       for (const reducedMotion of ['no-preference', 'reduce']) {
         await page.emulateMedia({ reducedMotion });
@@ -125,24 +141,26 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
           await page.getByTestId(`tab-${name}`).click();
           const settled = start => page.waitForFunction(([id, edge, start]) => {
             const pane = document.querySelector(`[data-testid="${id}"]`);
-            return (start == null || Math.abs(pane.getBoundingClientRect()[edge] - start) < 0.5) && !pane.getAnimations().length;
+            const tabs = document.querySelectorAll('[data-testid="tab-bar"] [role="tab"]');
+            return (start == null || Math.abs(pane.getBoundingClientRect()[edge] - start) < 0.5) && !pane.getAnimations().length && [...tabs].every(tab => !tab.getAnimations().length);
           }, [ids[1], edge, start]);
           await settled();
           const flat = await boxes(ids);
-          // The folded panes' moves, as the second's animations were first seen
-          const moves = page.evaluate(id => new Promise(resolve => {
-            const pane = document.querySelector(`[data-testid="${id}"]`), before = JSON.stringify(pane.getBoundingClientRect());
-            const look = () => JSON.stringify(pane.getBoundingClientRect()) === before && !pane.getAnimations().length ? requestAnimationFrame(look) : resolve(pane.getAnimations().length);
-            look();
-          }), ids[1]);
+          // The second pane moves, and across a book fold every tab too
+          const motion = reducedMotion === 'no-preference';
+          const animates = Object.fromEntries([[ids[1], motion], ...tabs.map(tab => [tab, motion && edge === 'left'])]);
+          await watch(Object.keys(animates));
           await pose({ orientation, offset: 460, maskLength: 40 });
-          expect({ name, reducedMotion, moves: await moves > 0 }).toEqual({ name, reducedMotion, moves: reducedMotion === 'no-preference' });
           await settled(500);
+          expect({ name, edge, reducedMotion, folding: await moved() }).toEqual({ name, edge, reducedMotion, folding: animates });
           const folded = await boxes(ids);
           expect({ name, end: folded.first[edge === 'left' ? 2 : 3], start: folded.second[edge === 'left' ? 0 : 1] }).toEqual({ name, end: 460, start: 500 });
           expect({ name, header: folded.header, bar: folded.bar }).toEqual({ name, header: flat.header, bar: flat.bar });
+          expect({ name, edge, tabs: folded.tabs.filter((tab, i) => edge === 'left' ? tab[0] < 500 || tab[2] > 960 : tab.join() !== flat.tabs[i].join()) }).toEqual({ name, edge, tabs: [] });
+          await watch(Object.keys(animates));
           await pose();
           await settled(flat.second[edge === 'left' ? 0 : 1]);
+          expect({ name, edge, reducedMotion, opening: await moved() }).toEqual({ name, edge, reducedMotion, opening: animates });
           expect(await boxes(ids)).toEqual(flat);
         }
       }

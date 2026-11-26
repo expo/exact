@@ -28,7 +28,7 @@
 import { runTests } from './agent-test.mjs';
 import { hasSimulatorHinge, hingeHelper, simulatorTurns } from './duo/hinge.mjs';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { appleArtifacts } from '../host/apple/build.mjs';
@@ -471,9 +471,10 @@ async function suite({ open: openSession, check: record }, reset) {
   // The insets fixture serves its leg and the keyboard probe, which the legs that type need
   const probe = leg('insets') || leg('keyboard-bar') || leg('lab') || leg('rotate') || leg('web') || leg('navigation') || leg('navigation-gestures') || leg('secondary-navigation') || leg('host-navigation');
   const plans = {};
-  const compile = (name, source) => {
+  /** Compile `source` to `<name>.plan`, or, given `text`, that text as though it were `source`. */
+  const compile = (name, source, text) => {
     const plan = resolve(out, `${name}.plan`);
-    const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, '-o', plan], { cwd: ROOT, encoding: 'utf8' });
+    const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, ...(text == null ? [] : ['--stdin']), '-o', plan], { cwd: ROOT, encoding: 'utf8', input: text });
     if (check(c.status === 0, `the ${name} fixture did not compile: ${c.stderr}`)) plans[name] = plan;
   };
   if (leg('rotate')) compile('closed-duo', resolve(ROOT, 'scripts/fixtures/closed-duo.contract'));
@@ -488,11 +489,9 @@ async function suite({ open: openSession, check: record }, reset) {
   if (leg('rotate') || leg('web')) {
     const source = readFileSync(resolve(lab.dir, 'app.contract'), 'utf8'), tall = source.replace('state sheetPx = 400', 'state sheetPx = 600');
     if (check(tall !== source, 'duo-lab no longer declares `state sheetPx = 400`, which the rotate and web legs raise to 600')) {
-      // The copy compiles beside duo-lab's `app.json`, which declares the `data` names and hatches it uses
-      const fixture = mkdtempSync(resolve(out, 'duo-lab-tall-'));
-      copyFileSync(resolve(lab.dir, 'app.json'), resolve(fixture, 'app.json'));
-      writeFileSync(resolve(fixture, 'app.contract'), tall);
-      compile('duo-lab-tall', resolve(fixture, 'app.contract'));
+      // The variant compiles as duo-lab's own `app.contract`, so its `use` lines, symbols, colours and `app.json`
+      // resolve as the app's do
+      compile('duo-lab-tall', resolve(lab.dir, 'app.contract'), tall);
     }
   }
   const labBundle = appleArtifacts(lab, { destination: 'ios-simulator' }).bundle;
