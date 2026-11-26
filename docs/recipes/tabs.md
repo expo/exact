@@ -11,7 +11,7 @@ row role="tablist"
 
 Tabs stay hidden through later pushes and return on pop to History. All hosts apply the display. Only iPhone needs it.
 
-An app-drawn bar overlays full-height routes. Pad each by the bar height plus its safe inset.
+An app-drawn bar overlays full-height routes. Pad each by the bar and its safe inset.
 Label the badge for VoiceOver.
 
 ```contract

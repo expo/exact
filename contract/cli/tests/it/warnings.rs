@@ -210,8 +210,7 @@ fn a_header_with_no_heading_or_two_is_named_as_no_bar() {
 
 /// A stack whose root names its Back control `back` (or `root` says
 /// otherwise), with a route pushed over Home: `route` is the pushed route's
-/// attributes and `body` its children, their lines at 16 on, before the
-/// route's `head title`, which names it in Back's history.
+/// attributes and `body` its children, their lines at 16 on, before its title.
 fn pushed(root: &str, route: &str, body: &str) -> String {
     let body: String = body.lines().map(|l| format!("            {l}\n")).collect();
     format!(

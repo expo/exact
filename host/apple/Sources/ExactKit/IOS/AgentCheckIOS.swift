@@ -879,4 +879,21 @@ extension Agent {
         return container.convert(CGPoint(x: 0, y: top), to: nil).y
     }
 }
+
+extension Agent {
+    /// `boxes` (the test runner's comparison with a fresh build, `rebuild`): each shown node's box in the content of
+    /// the nearest scroller around it, so how far a page or a list is scrolled does not count, else in the window.
+    /// The box is the view's whole bounds, a reach past its laid-out box included: a reach kept from before is
+    /// what the comparison is for.
+    func boxes() -> [String: Any] {
+        var boxes: [String: [Double]] = [:]
+        for (id, v) in presenter.views where v.window != nil {
+            let chain = sequence(first: v as UIView, next: { $0.superview })
+            guard !chain.contains(where: { $0.isHidden || $0.alpha == 0 }) else { continue }
+            let f = v.convert(v.bounds, to: chain.dropFirst().first { $0 is UIScrollView })
+            boxes[String(id)] = [f.minX, f.minY, f.width, f.height].map(Agent.r2)
+        }
+        return ["boxes": boxes]
+    }
+}
 #endif

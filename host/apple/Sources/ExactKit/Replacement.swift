@@ -32,6 +32,17 @@ package enum ReplacementCompletion: Equatable {
 }
 
 extension ExactApp {
+    /// The running plan applied again in every session with the app's state carried and every view built new: a
+    /// fresh build of what the screens show, which the test runner compares with what the steps left (`rebuild`).
+    /// A delivered generation goes through the dev loop's path; otherwise each session applies the plan it booted
+    /// (`bootedPlan`, else the one baked into the library) as a host's plan replacement does, its focus kept.
+    func rebuild() -> Bool {
+        if let plan = lastPlan { return applyTogether(plan, label: "rebuild", resolver: resolver, token: selectedToken, identity: devGeneration, commit: { true }) == .applied }
+        let booted = sessions.filter { $0.booted && $0.state != .destroyed }
+        let baked = booted.contains { $0.bootedPlan == nil } ? Runtime.bakedPlan() : Data()
+        return !booted.isEmpty && booted.map { $0.apply($0.bootedPlan ?? baked, label: "rebuild") }.allSatisfy { $0 }
+    }
+
     /// `development`: requests in flight hold it for a second at most, as
     /// the web's dev loop does (LLP 1007 §6). `now`: the person asked for it,
     /// so no interaction holds it. `producer`: what brought it, which

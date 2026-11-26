@@ -16,22 +16,6 @@
 import AVFoundation
 import UIKit
 
-/// The node a view lay in as a press found it: a pooled view lent to another node since, or a native control kept
-/// as its node was rebound, is that node's no longer (`incarnation`, LLP 1068 §4.9)
-struct PressedNode {
-    weak var node: NodeView?
-    let incarnation: UInt64
-    init?(_ view: UIView) {
-        guard let node = NodeView.innermost(view) else { return nil }
-        self.node = node
-        incarnation = node.incarnation
-    }
-    func still(_ view: UIView) -> Bool {
-        guard let node, node.incarnation == incarnation else { return false }
-        return NodeView.innermost(view) === node
-    }
-}
-
 final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditMenuInteractionDelegate {
     private weak var presenter: Presenter?
     private weak var menus: MenuHost?
@@ -644,7 +628,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             }
         }
         if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
-        let parameters = Self.lifted(shown, source: source)
+        let parameters = LiftTarget.parameters(of: shown, source: source)
         // In its parent, which moves, fades and clips it as it is (over the controller's view where a box already cuts
         // it, `LiftTarget.target`), unless a box that clips would cut it as UIKit grows it (a strip as tall as its
         // cards) and a stage can take its parent's space
@@ -674,27 +658,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
               view === source || (view as? GroupedMenuSurface)?.menuSource === source || lift.lifted.map({ $0.node === view && $0.still(view) }) == true else { return nil }
         // Where a stage can no longer carry it, where the highlight would stand without one (`LiftStage.carries`)
         guard let target = LiftStage.carries(view) ? LiftTarget.target(view, on: lift.stage) : LiftTarget.target(view) else { return nil }
-        return UITargetedPreview(view: view, parameters: Self.lifted(view, source: source), target: target)
-    }
-
-    /// The parameters of `view` lifted as its own preview, from its outline and fill as they are now: the menu's own
-    /// node, `source`, in what its clip path leaves of it (`LiftTarget.clipLift`)
-    private static func lifted(_ view: UIView, source: NodeView) -> UIPreviewParameters {
-        let parameters = UIPreviewParameters()
-        if view === source, let lift = LiftTarget.clipLift(source) {
-            parameters.visiblePath = lift.outline
-            parameters.backgroundColor = lift.ground
-        } else {
-            parameters.visiblePath = LiftTarget.rounded(view)
-            // UIKit's lifted copy leaves out the view's own layer fill (as a
-            // pull-down's stand-in does, `MenuFocus.lendFill`): the preview's ground
-            // is that fill, so a chat bubble keeps its colour, not UIKit's white. A
-            // fill drawn otherwise (`background-clip: text`) is in the copy already.
-            if let fill = view.ownFill, fill.alpha > 0 {
-                parameters.backgroundColor = UIColor(cgColor: fill)
-            }
-        }
-        return parameters
+        return UITargetedPreview(view: view, parameters: LiftTarget.parameters(of: view, source: source), target: target)
     }
 
     /// Whether a title's menu lifts its avatar alone: its popover holds no

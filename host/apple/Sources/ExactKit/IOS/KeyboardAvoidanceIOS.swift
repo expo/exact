@@ -403,4 +403,35 @@ extension Presenter {
     }
 }
 
+
+extension Presenter {
+    /// The editor the keyboard types into: the first responder, where it is one of the session's mounts, its native
+    /// prompt or a route's bar search field.
+    package var keyboardEditor: UIView? {
+        guard let responder = FirstResponder.current as? UIView, responder is UIKeyInput,
+              mounts(responder) || responder === keyboardPrompt
+                || navigation.primaryRouteSurfaces.contains(where: { $0.headerSearchEditor === responder }) else { return nil }
+        return responder
+    }
+    var hasKeyboardEditor: Bool { keyboardEditor != nil }
+
+    package func ownsKeyboard(in container: UIView) -> Bool { edits(in: container) || editsInBar(of: container) }
+    package func edits(in container: UIView) -> Bool { keyboardEditor?.isDescendant(of: container) == true }
+    /// Whether this route owns the editing search field.
+    package func editsInBar(of container: UIView) -> Bool {
+        guard let editor = keyboardEditor else { return false }
+        return (ViewPresentation.controller(for: container) as? any RouteSurface)?.headerSearchEditor === editor
+    }
+    /// The docked keyboard's occupied geometry in its owning container.
+    package func keyboardGuideTop(in container: UIView) -> CGFloat? {
+        #if os(tvOS)
+        return nil
+        #else
+        guard container.window != nil, hasKeyboardEditor else { return nil }
+        if let view = container as? ExactView, !view.hasKeyboardGuide { return nil }
+        let guide = container.keyboardLayoutGuide.layoutFrame
+        return guide.height > 0 ? guide.minY : nil
+        #endif
+    }
+}
 #endif

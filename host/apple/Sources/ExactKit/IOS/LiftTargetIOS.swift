@@ -121,6 +121,26 @@ package enum LiftTarget {
         parameters.backgroundColor = .clear
         return UITargetedPreview(view: view, parameters: parameters, target: target)
     }
+
+    /// The parameters of `view` lifted as its own preview, from its outline and fill as they are now: the menu's own
+    /// node, `source`, in what its clip path leaves of it (`clipLift`)
+    static func parameters(of view: UIView, source: NodeView) -> UIPreviewParameters {
+        let parameters = UIPreviewParameters()
+        if view === source, let lift = LiftTarget.clipLift(source) {
+            parameters.visiblePath = lift.outline
+            parameters.backgroundColor = lift.ground
+        } else {
+            parameters.visiblePath = LiftTarget.rounded(view)
+            // UIKit's lifted copy leaves out the view's own layer fill (as a
+            // pull-down's stand-in does, `MenuFocus.lendFill`): the preview's ground
+            // is that fill, so a chat bubble keeps its colour, not UIKit's white. A
+            // fill drawn otherwise (`background-clip: text`) is in the copy already.
+            if let fill = view.ownFill, fill.alpha > 0 {
+                parameters.backgroundColor = UIColor(cgColor: fill)
+            }
+        }
+        return parameters
+    }
 }
 
 /// Where UIKit grows, lifts and returns a long-pressed node's own preview: a
@@ -300,6 +320,22 @@ final class LiftStage: UIView {
         @objc func fire(_ link: CADisplayLink) {
             if let stage { stage.follow() } else { link.invalidate() }
         }
+    }
+}
+
+/// The node a view lay in as a press found it: a pooled view lent to another node since, or a native control kept
+/// as its node was rebound, is that node's no longer (`incarnation`, LLP 1068 §4.9)
+struct PressedNode {
+    weak var node: NodeView?
+    let incarnation: UInt64
+    init?(_ view: UIView) {
+        guard let node = NodeView.innermost(view) else { return nil }
+        self.node = node
+        incarnation = node.incarnation
+    }
+    func still(_ view: UIView) -> Bool {
+        guard let node, node.incarnation == incarnation else { return false }
+        return NodeView.innermost(view) === node
     }
 }
 #endif

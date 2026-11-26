@@ -643,13 +643,11 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
         "navigationPresentation" | "navigationVerticalBar" => AttrTarget::Prop(p(name)),
         "navigationHistory" | "navigationDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
-        "navigationBack" | "navigationBar" => AttrTarget::Prop(p(name)),
+        "navigationBack" | "navigationBar" | "navigationInspector" => AttrTarget::Prop(p(name)),
         // @ref LLP 1125 D11 — the Screen Wake Lock API's one type, on any element.
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.
         "orientationlock" => AttrTarget::Prop(p("orientationlock")),
-        // @ref LLP 1127 — a sheet that an expanded split shows as its inspector.
-        "navigationInspector" => AttrTarget::Prop(p(name)),
         "navigationSource" | "sharedElement" | "arrangement" => AttrTarget::Prop(p(name)),
         // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
         "portal" => AttrTarget::Prop(p("portal")),
@@ -759,11 +757,10 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "destructive" => AttrTarget::Prop(p("destructive")),
         "scrollFollowEnd" => AttrTarget::Prop(p("scrollFollowEnd")),
         "refreshing" => AttrTarget::Prop(p("refreshing")),
-        "keyboardDismissMode" => AttrTarget::Prop(p("keyboardDismissMode")),
+        "keyboardDismissMode" | "keyboardAvoidance" => AttrTarget::Prop(p(name)),
         // @ref LLP 1077 D12 — what a discrete symbol effect plays on.
         "symbolEffectValue" => AttrTarget::Prop(p("symbolEffectValue")),
-        "href" | "target" | "keyboardAvoidance" | "searchStyle" => AttrTarget::Prop(p(name)),
-        "searchResultsPlacement" => AttrTarget::Prop(p(name)),
+        "href" | "target" | "searchStyle" | "searchResultsPlacement" => AttrTarget::Prop(p(name)),
         "disabled" => AttrTarget::Prop(p("disabled")),
         "inert" => AttrTarget::Prop(p("inert")),
         "readonly" => AttrTarget::InvertedBoolProp(p("editable")),

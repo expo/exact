@@ -16,7 +16,7 @@ import { equalJson } from '../host/web-js/declared-values.js';
 import { compareBox, samplePoints } from './agent-compare.mjs';
 import { perfDelta } from './agent-inspect.mjs';
 import { named } from './agent-check.mjs';
-import { freshBuildDifferences } from './agent-rebuild.mjs';
+import { compareWithFreshBuild } from './agent-rebuild.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { macSandboxed } from './agent-build.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
@@ -1381,15 +1381,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
         const pending = (state.pending ?? []).filter((p) => !p.device && !p.held && !p.stream).map((p) => p.name);
         if (pending.length) notes.push(`ended with ${pending.length} request${pending.length === 1 ? '' : 's'} in flight (${pending.join(', ')}): a reply lands at a clock step, so what the test read last may not include it`);
       } catch { /* advice only */ }
-      // The screen the test ended on against a fresh build of the same state (UIKit hosts): a box that differs is
-      // layout the host kept from what happened before, which a person sees until something re-renders.
-      // Not under `verify`, whose end checks read the screen the test left.
-      if (closedAt == null && !failures.length && !atEnd && ['ios', 'host-ios'].includes(host)) try {
-        const { differences, unkept, skipped } = await freshBuildDifferences(s);
-        if (skipped) notes.push(`not compared with a fresh build: ${skipped}`);
-        else if (unkept) notes.push(`not compared with a fresh build: the screen holds state a restart does not keep (${unkept}), so a rebuild shows another screen`);
-        for (const line of differences) failures.push(`${t.name}: ${line}`);
-      } catch (e) { failures.push(`${t.name}: the comparison with a fresh build: ${e.message}`); }
+      // The screen the test ended on against a fresh build (UIKit hosts); not under `verify`, whose end checks read it
+      if (closedAt == null && !failures.length && !atEnd && ['ios', 'host-ios'].includes(host)) await compareWithFreshBuild(s, t.name, notes, failures);
       if (atEnd && closedAt == null) end = await atEnd(s, { name: t.name, index: n, size: facts.size, store, failures, reload: t.steps.some((st) => st.op === 'reload'), launch: { ...launchFacts({ ...facts, epoch: first, env: env ?? {} }), media: { ...media }, permissions: { ...permissions } }, reached: await reached(), typed: [...typed], touched: [...touched], expectedRefusals: [...expectedRefusals], ...(s.host === 'web' ? { restart: async () => { await reload(); await data(); } } : {}) }).catch((e) => ({ error: e.message }));
       // A failed test shows what the data module logged, the last lines of it (sb4 farm wave 7, E1: 093 rendered
       // values into the view to see them; `logs` had them all along). Advice only.

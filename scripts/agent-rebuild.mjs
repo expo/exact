@@ -1,6 +1,20 @@
 import { named } from './agent-check.mjs';
 
 /**
+ * Compares the screen test `name` ended on with a fresh build of the same state: a box that differs is layout the
+ * host kept from what happened before, which a person sees until something re-renders. Each difference is a failure;
+ * a screen that cannot be compared is a note.
+ */
+export async function compareWithFreshBuild(s, name, notes, failures) {
+  try {
+    const { differences, unkept, skipped } = await freshBuildDifferences(s);
+    if (skipped) notes.push(`not compared with a fresh build: ${skipped}`);
+    else if (unkept) notes.push(`not compared with a fresh build: the screen holds state a restart does not keep (${unkept}), so a rebuild shows another screen`);
+    for (const line of differences) failures.push(`${name}: ${line}`);
+  } catch (e) { failures.push(`${name}: the comparison with a fresh build: ${e.message}`); }
+}
+
+/**
  * The screen a test ended on against a fresh build of it (`boxes`, `rebuild`): each shown node's box where the
  * steps left it and where the same state, booted again with every view built new, puts it. A box that differs by a
  * point or more is layout the host kept from what happened before (a fold and back, a swipe let go), which a

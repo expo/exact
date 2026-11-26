@@ -143,6 +143,13 @@ extension UINavigationBar {
 #endif
 
 extension Agent {
+    /// A route's navigation bar, which draws its header (LLP 1115.000 D5.2): whether it shows, and where
+    func navigationBarObservation(of host: NodeView) -> [String: Any]? {
+        guard let route = presenter.navigation.routeSurfaces[host.id], route.node === host, let nav = route.navigationController else { return nil }
+        let shown = !nav.isNavigationBarHidden && nav.navigationBar.window != nil
+        return shown ? ["visible": true, "frame": AgreementReport.rect(box(nav.navigationBar))] : ["visible": false]
+    }
+
     func drawnBarBoxes() -> [UInt32: BarLayoutBox] {
         let nav = presenter.navigation
         var boxes = nav.headerLayout { node in

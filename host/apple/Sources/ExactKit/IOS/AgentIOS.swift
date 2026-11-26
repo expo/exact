@@ -265,9 +265,7 @@ extension Agent {
         #if !os(tvOS)
         if let view = presenter.session?.view, view.hasKeyboardGuide { keyboard["guide"] = Agent.r2(view.keyboardLayoutGuide.layoutFrame.minY) }
         if let window = vp.window, let sample = KeyboardSampleIOS.existing(in: window)?.sample {
-            let frame = sample.frame
-            keyboard["frame"] = ["x": Agent.r2(frame.minX), "y": Agent.r2(frame.minY),
-                                 "w": Agent.r2(frame.width), "h": Agent.r2(frame.height)]
+            keyboard["frame"] = AgreementReport.rect(sample.frame)
             keyboard["visible"] = true
         }
         #endif
@@ -329,21 +327,6 @@ extension Agent {
         return [f.minX, f.minY, f.width, f.height].map(Agent.r2)
     }
 
-
-    /// `boxes` (the test runner's comparison with a fresh build, `rebuild`): each shown node's box in the content of
-    /// the nearest scroller around it, so how far a page or a list is scrolled does not count, else in the window.
-    /// The box is the view's whole bounds, a reach past its laid-out box included: a reach kept from before is
-    /// what the comparison is for.
-    func boxes() -> [String: Any] {
-        var boxes: [String: [Double]] = [:]
-        for (id, v) in presenter.views where v.window != nil {
-            let chain = sequence(first: v as UIView, next: { $0.superview })
-            guard !chain.contains(where: { $0.isHidden || $0.alpha == 0 }) else { continue }
-            let f = v.convert(v.bounds, to: chain.dropFirst().first { $0 is UIScrollView })
-            boxes[String(id)] = [f.minX, f.minY, f.width, f.height].map(Agent.r2)
-        }
-        return ["boxes": boxes]
-    }
 
     /// `layout <node>` (LLP 1035.002 D1): the runner's rows and their sources
     /// for one node, then what UIKit knows about it — its box in the viewport,
@@ -477,13 +460,7 @@ extension Agent {
             if let shown { observation["frame"] = rect(box(shown)) }
             native["tabBar"] = observation
         }
-        // A route's navigation bar, which draws its header (LLP 1115.000 D5.2)
-        if let route = navigation.routeSurfaces[host.id], route.node === host, let nav = route.navigationController {
-            let shown = !nav.isNavigationBarHidden && nav.navigationBar.window != nil
-            var observation: [String: Any] = ["visible": shown]
-            if shown { observation["frame"] = rect(box(nav.navigationBar)) }
-            native["navigationBar"] = observation
-        }
+        if let bar = navigationBarObservation(of: host) { native["navigationBar"] = bar }
         if let segment = presenter.segments.observation(host) { native["segmentedControl"] = segment }
         if let grouped = presenter.groupedLists?.observation(host) { native["groupedList"] = grouped }
         if let control = presenter.controls.observation(host) { native["control"] = control }
