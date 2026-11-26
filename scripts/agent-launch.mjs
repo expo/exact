@@ -776,7 +776,7 @@ export function launchFacts({seed, locale, formatLocale, timeZone, epoch, failFe
 }
 
 export function launchEnvironment(facts, host) {
-  return {...(facts.substitutes && host !== 'web' ? {EXACT_AGENT_SUBSTITUTES: JSON.stringify({ values: facts.substitutes, restore: !!facts.restoreSubstitutes, target: host })} : {}), EXACT_AGENT_SEED: String(facts.seed), EXACT_AGENT_LOCALE: facts.locale, EXACT_AGENT_TIME_ZONE: facts.timeZone, EXACT_AGENT_EPOCH: String(facts.epoch), ...(facts.formatLocale ? {EXACT_AGENT_FORMAT_LOCALE: facts.formatLocale} : {}), ...(facts.failFetch ? {EXACT_AGENT_FAIL_FETCH: facts.failFetch} : {})};
+  return {...(facts.substitutes && host !== 'web' ? {EXACT_AGENT_SUBSTITUTES: JSON.stringify({ values: facts.substitutes, restore: !!facts.restoreSubstitutes, target: host })} : {}), ...(host !== 'web' ? {TZ: facts.timeZone} : {}), EXACT_AGENT_SEED: String(facts.seed), EXACT_AGENT_LOCALE: facts.locale, EXACT_AGENT_TIME_ZONE: facts.timeZone, EXACT_AGENT_EPOCH: String(facts.epoch), ...(facts.formatLocale ? {EXACT_AGENT_FORMAT_LOCALE: facts.formatLocale} : {}), ...(facts.failFetch ? {EXACT_AGENT_FAIL_FETCH: facts.failFetch} : {})};
 }
 
 // Each carrier checks the inputs its build recorded (LLP 1012.001.000 D1).

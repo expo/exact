@@ -231,8 +231,20 @@ component Shelf
   // swipe-down press).
   action pick(name: string)
     nav = select(nav, name)
+  // A book is the library's detail: another opened while one shows in the Library tab (a row, a tag, a link, the
+  // browser's history) takes its place as a new visit, as a split's detail is replaced; the book shown, at another
+  // address, keeps its visit; everything else goes where `go` takes it (a book a stack holds is gone back to, one opened
+  // over a sheet or in another tab is pushed there).
   action follow(url: string)
-    nav = go(nav, url)
+    let moved = go(nav, url)
+    let to = top(moved)
+    let fresh = to.name == "book" and nav.tabs.filter(t => t.stack.filter(e => e.id == to.id).length > 0).length == 0
+    if fresh and current.name == "book" and current.params.id == to.params.id
+      nav = replace(nav, url)
+    else if fresh and current.name == "book" and nav.tab == "library"
+      nav = push(back(nav), url)
+    else
+      nav = moved
   action back
     if current.name == "scan"
       endTrack()
@@ -258,12 +270,15 @@ component Shelf
     showModal("remove")
   action askRemoveAimed
     showModal("remove")
+  // A removed book closes its own page, and only its own, whichever way it was removed.
   action remove
-    if current.name == "book"
+    if current.name == "book" and current.params.id == aimed
       nav = back(nav)
     send changed = removeBook(aimed)
   // A full swipe is its own confirmation, as in Mail.
   action swipeRemove(id: string)
+    if current.name == "book" and current.params.id == id
+      nav = back(nav)
     send changed = removeBook(id)
 
   // The add sheet
@@ -332,11 +347,13 @@ component Shelf
 
   // Add Quote from Photo: the lines a book's screen read from a photo, in a
   // sheet, into the notes.
+  // Only over the book whose photo was read: a read that answers after another book was opened opens no sheet.
   action showQuote(book: string, lines: string[])
-    quoteBook = book
-    quoteLines = lines
-    quoteOff = []
-    nav = push(nav, path("quote", book))
+    if current.name == "book" and current.params.id == book
+      quoteBook = book
+      quoteLines = lines
+      quoteOff = []
+      nav = push(nav, path("quote", book))
   action toggleLine(i: number, on: bool)
     quoteOff = on ? quoteOff.filter(x => x != i) : quoteOff.concat([i])
   action addQuote
@@ -370,7 +387,7 @@ component Shelf
     match found
       case some(o)
         if o.id != ""
-          nav = go(nav, path("book", o.id))
+          follow(path("book", o.id))
         else
           foundUrl = o.url
           showModal("not-on-shelf")
@@ -1170,7 +1187,7 @@ component StatsSections
       row padding-top=12 padding-bottom=12 testId="goal-row"
         column flex=1 gap=10
           row align-items="center" gap=8
-            text countText(lib.goal, "book", "books") testId="goal" flex=1
+            text countText(lib.goal, "book", "books") testId="goal" flex=1 font-variant-numeric="tabular-nums"
             button appearance="auto"
               buttonStyle="bordered"
               press=goalBy(-1)
@@ -1190,7 +1207,7 @@ component StatsSections
             tid="goal-progress"
           )
       footer
-        text (finished >= lib.goal ? "Goal reached." : `${lib.goal - finished} to go.`) testId="goal-left"
+        text (finished >= lib.goal ? "Goal reached." : `${lib.goal - finished} to go.`) testId="goal-left" font-variant-numeric="tabular-nums"
 
 // The Home Screen icon, chosen as an app's Settings offer it: Shelf's own and
 // the alternates the build ships, each with its picture, the one shown checked.

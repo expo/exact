@@ -227,6 +227,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         self.source.render_web();
     }
 
+    fn ambient_taint(&self, source: &str) -> (bool, bool) {
+        self.source.ambient_taint(source)
+    }
+
     fn preload(&self) -> Result<bool, DataError> {
         self.source.preload()
     }

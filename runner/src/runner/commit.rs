@@ -167,9 +167,10 @@ impl<D: DataSource> Runner<D> {
                 let kept = self.restore_store_refused(c.store);
                 self.slots = c.slots;
                 let mut resources = c.resources;
-                // A refused call still drew randomness; the bake must not keep its answer.
+                // A refused call still drew randomness or read the clock; bake must not keep its answer.
                 for (old, attempted) in resources.iter_mut().zip(&self.resources) {
                     old.entropy_reader |= attempted.entropy_reader;
+                    old.clock_reader |= attempted.clock_reader;
                 }
                 self.resources = resources;
                 self.readers_restore(c.module_readers);
@@ -1323,7 +1324,7 @@ impl<D: DataSource> Runner<D> {
         if let Some(dispatch) = self.module_dispatch(token).or(Self::held_dispatch(token)) {
             return dispatch;
         }
-        self.store.set_clock_ms(self.now_ms);
+        self.sync_store_clock();
         self.data.dispatch(token, &self.store)
     }
 

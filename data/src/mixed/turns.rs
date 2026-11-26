@@ -58,6 +58,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         let grants = self.javascript.grants();
         let mut local = Store::new(grants, envelope::snapshot(store, grants));
         local.set_clock_ms(store.clock_ms());
+        local.set_epoch_at_zero(store.epoch_at_zero());
         let result = self
             .javascript
             .module_delivery(&mut local, kept, outcome)

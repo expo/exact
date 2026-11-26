@@ -37,12 +37,25 @@ extension NavigationHost {
 import UIKit
 
 extension NavigationHost {
+    /// UIKit changed a layout a projected bar depends on (where it put the search field, the width class): the bars
+    /// are projected again in the next turn, unless a sync is under way, owed or held, which projects them anyway.
+    func reprojectBarsNextTurn() {
+        if tabOwner != nil { return syncNextTurn() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !syncing, !resyncOwed, !pendingSync else { return }
+            resync()
+        }
+    }
+
     /// D1, D2: the tablist the search bar takes as its scope bar, hidden
     /// and covered whole as the header is; the one it took before shown
     /// again (its cover goes with the next `reportCovers`).
     func scope(_ c: RouteController, shape: HeaderShape?) {
+        c.searchLayoutRead = shape?.search == nil ? nil : c.searchLayout
         let next = shape.flatMap { scopeFilter(after: $0, in: c) }
         if next !== c.scoped {
+            // The bar's height moves as the scope bar comes or goes, as the subtitle views' does (`resampleTitleInsets`).
+            if shape?.search != nil, c.scoped != nil || next != nil { c.resampleTitleInsets() }
             c.scoped?.isHidden = false
             c.scoped = next
             next?.isHidden = true
@@ -52,7 +65,8 @@ extension NavigationHost {
     }
 
     /// LLP 1135 D2: `list` as the segmented control under the large title
-    /// and under the inline one, or neither.
+    /// and under the inline one, or as a bar item where the bar is wide, or
+    /// neither.
     @available(iOS 26.0, *)
     private func subtitles(_ c: RouteController, _ list: NodeView?) {
         let item = c.navigationItem
@@ -61,19 +75,18 @@ extension NavigationHost {
                 // Only its own: a hatch's views stay.
                 if item.largeSubtitleView === mine.large { item.largeSubtitleView = nil }
                 if item.subtitleView === mine.inline { item.subtitleView = nil }
+                mine.leaveBar(item)
                 c.subtitleSegments = nil
-                SubtitleSegments.resample(c)
+                c.resampleTitleInsets()
             }
             return
         }
         let segments = c.subtitleSegments ?? {
             let made = SubtitleSegments(host: self, route: c)
             c.subtitleSegments = made
-            item.largeSubtitleView = made.large
-            item.subtitleView = made.inline
-            SubtitleSegments.resample(c)
             return made
         }()
+        segments.place(in: c)
         segments.apply(list)
     }
 
@@ -93,7 +106,10 @@ extension NavigationHost {
                 && (item.largeSubtitleView == nil || item.largeSubtitleView === mine?.large) && (item.subtitleView == nil || item.subtitleView === mine?.inline)
             return shape.level == 1 && shape.segments == nil && shape.group == nil && item.largeTitleDisplayMode == .always && free
         }()
-        guard UIDevice.current.userInterfaceIdiom == .phone, shape.authored.isEmpty, shape.search != nil || large else { return nil }
+        // A search's filter is its scope bar only where the scope bar fits (`scopeBarFits`); elsewhere it stays the
+        // page's, held above the list with the scroll edge under it (LLP 1131).
+        let scoped = shape.search != nil && c.scopeBarFits
+        guard UIDevice.current.userInterfaceIdiom == .phone, shape.authored.isEmpty, scoped || (shape.search == nil && large) else { return nil }
         let kids = c.node.container.subviews.compactMap { $0 as? NodeView }
         // What the host hides (this filter, a segmented control's tabs) is still the author's.
         let shown = { (v: NodeView) in v.style["display"]?.string != "none" && RouteGeometry.inFlow(v) }
@@ -219,6 +235,15 @@ final class SubtitleSegments: NSObject {
     private weak var list: NodeView?
     /// The segment last chosen or set (LLP 1134 D3).
     private var settled = UISegmentedControl.noSegment
+    /// `large` as the bar's item where the title shares its row (`place`), with no shared glass behind it: the
+    /// segmented control draws its own track, and the shared background wrapped it in a second one.
+    private(set) lazy var barItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(customView: large)
+        item.hidesSharedBackground = true
+        return item
+    }()
+    /// Whether the filter is that item rather than the subtitle views; nil before it is placed.
+    private(set) var onBar: Bool?
     init(host: NavigationHost, route: RouteController) {
         self.host = host
         super.init()
@@ -226,22 +251,33 @@ final class SubtitleSegments: NSObject {
         // A text size or Bold Text changes their height, and so the bar's.
         MainActor.assumeIsolated {
             large.registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitLegibilityWeight.self]) { [weak route] (_: UISegmentedControl, _: UITraitCollection) in
-                if let route { Self.resample(route) }
+                route?.resampleTitleInsets()
             }
         }
     }
 
-    /// The bar's height moves with them: the collapse scroller keeps its
-    /// place (CSS `scrollTop`, read with the insets it had) and its insets
-    /// are sampled afresh (`reportCovers`).
-    static func resample(_ c: RouteController) {
-        guard let node = c.collapseScroll, let sv = c.collapseScrollView, sv === node.scrollView else { return }
-        node.retainScrollPosition(from: sv)
-        node.scrollOrigin = 0
-        node.scrollCollapsed = 0
+    /// D2, amended 2026-11-25: where UIKit sets a large title in one row with the bar's items (`titleShareRow`: an
+    /// iPhone Duo, regular width), the filter is the last trailing item, beside the title; elsewhere it is the
+    /// subtitle views. The bar's projection keeps the item (`filterBarItems`).
+    func place(in c: RouteController) {
+        let item = c.navigationItem, wide = c.titleShareRow
+        if wide {
+            if item.largeSubtitleView === large { item.largeSubtitleView = nil }
+            if item.subtitleView === inline { item.subtitleView = nil }
+            if !(item.rightBarButtonItems ?? []).contains(barItem) { item.rightBarButtonItems = (item.rightBarButtonItems ?? []) + [barItem] }
+        } else {
+            leaveBar(item)
+            if item.largeSubtitleView == nil { item.largeSubtitleView = large }
+            if item.subtitleView == nil { item.subtitleView = inline }
+        }
+        if onBar != wide { onBar = wide; c.resampleTitleInsets() }
     }
 
-    /// The one the bar shows now: under the large title while it is out.
+    func leaveBar(_ item: UINavigationItem) {
+        if let items = item.rightBarButtonItems, items.contains(barItem) { item.rightBarButtonItems = items.filter { $0 !== barItem } }
+    }
+
+    /// The one the bar shows now: the bar's item, or under the large title while it is out.
     var shown: UISegmentedControl? {
         let visible = { (v: UIView) in v.window != nil && v.bounds.height > 1 && sequence(first: v, next: \.superview).allSatisfy { !$0.isHidden && $0.alpha > 0.01 } }
         return visible(large) ? large : visible(inline) ? inline : nil
@@ -291,6 +327,47 @@ extension RouteController {
     var subtitleSegments: SubtitleSegments? {
         get { objc_getAssociatedObject(self, &subtitleSegmentsKey) as? SubtitleSegments }
         set { objc_setAssociatedObject(self, &subtitleSegmentsKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
+    /// The bar's height moves as a filter comes or goes in it (the scope bar, the subtitle views, their text size):
+    /// the collapse scroller keeps its place (CSS `scrollTop`, read with the insets it had) and its insets are
+    /// sampled afresh (`reportCovers`).
+    func resampleTitleInsets() {
+        guard let node = collapseScroll, let sv = collapseScrollView, sv === node.scrollView else { return }
+        node.retainScrollPosition(from: sv)
+        node.scrollOrigin = 0
+    }
+
+    /// The width class changed (a fold, a turn): a filter the bar projects may move (LLP 1134 and 1135, amended
+    /// 2026-11-25).
+    func widthClassChanged() {
+        let filters = searchLayoutRead != nil || { if #available(iOS 26.0, *) { subtitleSegments != nil } else { false } }()
+        if filters { host?.reprojectBarsNextTurn() }
+    }
+
+    /// Where UIKit has put the search field and the title: what `scope` read for the filter.
+    var searchLayout: [Int] { [navigationItem.searchBarPlacement.rawValue, traitCollection.horizontalSizeClass.rawValue, inVerticalBar ? 1 : 0] }
+    /// Whether a search's filter can be its scope bar (LLP 1134, amended 2026-11-25). Not at regular width where UIKit
+    /// sets the field in the bar's row, as on an open iPhone Duo: it draws no scope bar there. Nor under a vertical
+    /// bar (an iPhone Duo, open or closed): a scope bar shown at rest counts in no bar height there, so the list lay
+    /// under it after a fold, and as the field collapsed on a scroll it hung over the rows with nothing behind it.
+    var scopeBarFits: Bool {
+        !(navigationItem.searchBarPlacement != .stacked && traitCollection.horizontalSizeClass == .regular) && !inVerticalBar
+    }
+    /// Whether UIKit sets a large title in one row with the bar's items: at regular width, and under a vertical bar.
+    /// A filter under the title is a bar item there (LLP 1135, amended 2026-11-25).
+    var titleShareRow: Bool { traitCollection.horizontalSizeClass == .regular || inVerticalBar }
+
+    /// A layout UIKit changed under the bar moved where a projected filter belongs: the bars are projected again.
+    func filterPlacementMoved() {
+        if let read = searchLayoutRead, searchLayout != read { searchLayoutRead = nil; host?.reprojectBarsNextTurn(); return }
+        if #available(iOS 26.0, *), let onBar = subtitleSegments?.onBar, onBar != titleShareRow { host?.reprojectBarsNextTurn() }
+    }
+
+    /// The filter's bar item, which the bar's projection keeps after the header's own trailing items.
+    var filterBarItems: [UIBarButtonItem] {
+        guard #available(iOS 26.0, *), let segments = subtitleSegments, segments.onBar == true else { return [] }
+        return [segments.barItem]
     }
 }
 #endif

@@ -650,20 +650,87 @@ final class AnalyzerEngine: RecognitionEngine {
 
     /// Each buffer of the capture, copied off the audio thread and converted on `queue` to the analyzer's format.
     private func attach(_ source: ExactAudioSource, _ format: AVAudioFormat) {
-        guard tap == nil, let input, let converter = AVAudioConverter(from: source.format, to: format) else { return }
+        guard tap == nil, let input else { return }
         let queue = queue
+        var converter = AVAudioConverter(from: source.format, to: format)
         tap = source.tap { buffer, _ in
             guard let copy = Self.copy(buffer) else { return }
             queue.async {
-                let ratio = format.sampleRate / copy.format.sampleRate
-                guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(Double(copy.frameLength) * ratio) + 16) else { return }
-                var fed = false
-                _ = converter.convert(to: out, error: nil) { _, status in
-                    if fed { status.pointee = .noDataNow; return nil }
-                    fed = true; status.pointee = .haveData; return copy
+                Self.conform(copy, to: format, using: &converter) { out in
+                    input.yield(AnalyzerInput(buffer: out))
                 }
-                if out.frameLength > 0 { input.yield(AnalyzerInput(buffer: out)) }
             }
+        }
+    }
+
+    /// Convert `buffer` to `format` and emit every produced buffer, draining and replacing
+    /// `converter` on any format boundary (including entering passthrough) and looping until
+    /// `buffer` is fully consumed.
+    static func conform(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat,
+                        using converter: inout AVAudioConverter?, emit: (AVAudioPCMBuffer) -> Void) {
+        guard buffer.frameLength > 0, buffer.format.sampleRate > 0, format.sampleRate > 0 else { return }
+        if let previous = converter,
+           buffer.format == format || previous.inputFormat != buffer.format || previous.outputFormat != format {
+            drain(previous, to: format, emit: emit)
+            converter = nil
+        }
+        if buffer.format == format {
+            emit(buffer)
+            return
+        }
+        if converter == nil {
+            converter = AVAudioConverter(from: buffer.format, to: format)
+        }
+        guard let active = converter else { return }
+        let ratio = format.sampleRate / buffer.format.sampleRate
+        let capacity = max(AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 64, 256)
+        var fed = false
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var error: NSError?
+            let status = active.convert(to: out, error: &error) { _, inputStatus in
+                if fed {
+                    inputStatus.pointee = .noDataNow
+                    return nil
+                }
+                fed = true
+                inputStatus.pointee = .haveData
+                return buffer
+            }
+            if status == .error || error != nil {
+                converter = nil
+                return
+            }
+            if out.frameLength > 0 { emit(out) }
+            switch status {
+            case .haveData:
+                if out.frameLength == 0 && fed { return }
+            case .inputRanDry:
+                return
+            case .endOfStream:
+                converter = nil
+                return
+            case .error:
+                converter = nil
+                return
+            @unknown default:
+                return
+            }
+        }
+    }
+
+    private static func drain(_ converter: AVAudioConverter, to format: AVAudioFormat, emit: (AVAudioPCMBuffer) -> Void) {
+        let capacity: AVAudioFrameCount = 1024
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var error: NSError?
+            let status = converter.convert(to: out, error: &error) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            if status == .error || error != nil { return }
+            if out.frameLength > 0 { emit(out) }
+            if status != .haveData || out.frameLength == 0 { return }
         }
     }
 

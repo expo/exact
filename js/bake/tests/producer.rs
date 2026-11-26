@@ -1264,65 +1264,53 @@ fn a_slow_first_frame_source_bakes_whatever_the_wall_clock() {
     );
 }
 
-/// The clock in the app's own code is refused at build, by file and line,
-/// in both compilers, so a Bun test (no guard there) cannot hide it from a
-/// device that refuses it on first use (LLP 1027.000).
+/// Disallowed timers (`setInterval`, `requestAnimationFrame`, `requestIdleCallback`)
+/// in app code remain refused at build by file and line; virtualized clock and
+/// `Math.random()` compile cleanly (LLP 1195.000 D2.8).
 #[test]
 fn the_clock_in_a_data_module_is_refused_at_build_by_file_and_line() {
     if !exact_js::ENGINE_LINKED {
         return;
     }
     let f = Fixture::new();
+    // Virtualized clock and Math.random() now pass static build checks (LLP 1195.000 D2.8).
     f.write(
         "logic.ts",
-        "export const prefix = 'old: ';\nexport const stamp = () => Date.now();\n",
+        "export const prefix = 'old: ';\nexport const stamp = () => Date.now() + performance.now() + Math.random();\n",
     );
-    let error = bake(&f.0, &Tools::default())
-        .err()
-        .expect("Date.now() refused");
-    assert!(
-        error.contains("logic.ts:2:28: Date.now() is unavailable in data sources; pass time or a random seed as an argument"),
-        "{error}"
-    );
+    assert!(bake(&f.0, &Tools::default()).is_ok());
     let mut producer = exact_js_bake::Producer::new(Tools::default()).unwrap();
-    assert!(producer
-        .bake(&f.0, None)
-        .err()
-        .unwrap()
-        .contains("logic.ts:2:28: Date.now()"));
-    // Through a global object, past `!`, after a CR line break.
-    f.write("logic.ts", "export const prefix = 'old: ';\rexport const a = () => globalThis.Date.now();\nexport const b = () => Date.now!();\nexport const c = () => window.setInterval(() => {}, 1);\n");
+    assert!(producer.bake(&f.0, None).is_ok());
+    // Disallowed timers still refuse by file and line through global objects, past `!`, and after CR line breaks.
+    f.write(
+        "logic.ts",
+        "export const prefix = 'old: ';\rexport const a = () => globalThis.setInterval(() => {}, 1);\nexport const b = () => requestAnimationFrame!(() => {});\nexport const c = () => window.requestIdleCallback(() => {});\n",
+    );
     let error = producer.bake(&f.0, None).err().unwrap();
-    assert!(error.contains("logic.ts:2:24: Date.now()"), "{error}");
-    assert!(error.contains("logic.ts:3:24: Date.now()"), "{error}");
     assert!(
-        error.contains(
-            "logic.ts:4:24: setInterval() is unavailable in data sources: an answer waits with setTimeout"
-        ),
+        error.contains("logic.ts:2:24: setInterval() is unavailable in data sources: an answer waits with setTimeout"),
         "{error}"
     );
-    // An angle-bracket assertion, a `declare`d class and a type-only
-    // namespace are erased: the global runs.
-    f.write("logic.ts", "export const prefix = 'old: ';\ndeclare class Date { static now(): number }\nnamespace Math { export type R = number }\nexport const a = () => (<any>Date).now() + Math.random();\n");
-    let error = producer.bake(&f.0, None).err().unwrap();
-    assert!(error.contains("logic.ts:4:24: Date.now()"), "{error}");
-    assert!(error.contains("logic.ts:4:44: Math.random()"), "{error}");
-    // LLP 1116 D8: the refusal names where randomness comes from instead.
     assert!(
-        error.contains(
-            "seed from crypto.getRandomValues in a source (docs/recipes/random-and-shuffle.md)"
-        ),
+        error.contains("logic.ts:3:24: requestAnimationFrame() is unavailable in data sources"),
         "{error}"
     );
-    // An explicit date, a member named `now` elsewhere, a comment, and a
-    // `Date` or `performance` the module binds itself are fine.
-    f.write("logic.ts", "export const prefix = 'old: ';\n// Date.now() is refused\nexport const epoch = new Date(0).getTime() + ({ now: () => 1 }).now();\nexport const stamp = (performance: { now(): number }) => performance.now();\n");
     assert!(
-        producer.bake(&f.0, None).is_ok(),
-        "{:?}",
-        producer.bake(&f.0, None).err()
+        error.contains("logic.ts:4:24: requestIdleCallback() is unavailable in data sources"),
+        "{error}"
     );
-    f.write("logic.ts", "export const prefix = 'old: ';\nnamespace Date { export function now() { return 1; } }\nexport const local = () => Date.now();\n");
+    // An angle-bracket assertion and a `declare`d function are erased: the global timer call still refuses.
+    f.write(
+        "logic.ts",
+        "export const prefix = 'old: ';\ndeclare function setInterval(f: () => void, ms: number): number;\nexport const a = () => (<any>globalThis).setInterval(() => {}, 1);\n",
+    );
+    let error = producer.bake(&f.0, None).err().unwrap();
+    assert!(error.contains("logic.ts:3:24: setInterval()"), "{error}");
+    // Comments and locally bound names remain valid.
+    f.write(
+        "logic.ts",
+        "export const prefix = 'old: ';\n// setInterval() is refused\nexport const epoch = new Date(0).getTime() + ({ setInterval: () => 1 }).setInterval();\nexport const local = (setInterval: () => number) => setInterval();\n",
+    );
     assert!(
         producer.bake(&f.0, None).is_ok(),
         "{:?}",
@@ -1330,7 +1318,7 @@ fn the_clock_in_a_data_module_is_refused_at_build_by_file_and_line() {
     );
 }
 
-/// Literal property access has the same build diagnostic as dot access.
+/// Literal property access keeps timer build diagnostics in both producers (LLP 1195.000 D2.8).
 #[test]
 fn literal_members_keep_ambient_diagnostics_in_both_producers() {
     if !exact_js::ENGINE_LINKED {
@@ -1340,32 +1328,24 @@ fn literal_members_keep_ambient_diagnostics_in_both_producers() {
     f.write(
         "logic.ts",
         r#"export const prefix = 'old: ';
-export const a = () => Date['now']();
-export const b = () => globalThis['setInterval'](() => {}, 1);
-export const c = () => Math[`random`]();
-export const d = () => globalThis['performance'][`now`]();
-export const e = () => new globalThis['Date']();
-export const f = () => self[`Date`]();
-export const g = () => globalThis['Date'].now?.();
-export const h = () => Date[('now' as const)]!();
-export const i = () => Date['n\u006fw']();
+export const a = () => globalThis['setInterval'](() => {}, 1);
+export const b = () => self[`requestAnimationFrame`](() => {});
+export const c = () => (globalThis as any)['requestIdleCallback']?.(() => {});
+export const d = () => globalThis[('setInterval' as const)]!(() => {}, 1);
+export const e = () => globalThis['setInterv\u0061l'](() => {}, 1);
 "#,
     );
     let mut producer = exact_js_bake::Producer::new(Tools::default()).unwrap();
     for result in [bake(&f.0, &Tools::default()), producer.bake(&f.0, None)] {
         let error = result
             .err()
-            .expect("literal ambient calls refused at build");
+            .expect("literal ambient timer calls refused at build");
         for (line, api) in [
-            (2, "Date.now()"),
-            (3, "setInterval()"),
-            (4, "Math.random()"),
-            (5, "performance.now()"),
-            (6, "new Date()"),
-            (7, "Date()"),
-            (8, "Date.now()"),
-            (9, "Date.now()"),
-            (10, "Date.now()"),
+            (2, "setInterval()"),
+            (3, "requestAnimationFrame()"),
+            (4, "requestIdleCallback()"),
+            (5, "setInterval()"),
+            (6, "setInterval()"),
         ] {
             assert!(
                 error.contains(&format!(
@@ -1375,14 +1355,11 @@ export const i = () => Date['n\u006fw']();
             );
         }
     }
-    // Dynamic keys still reach the runtime guard; explicit dates and
-    // unrelated objects are valid. None of these functions reads the clock at bake.
-    f.write("logic.ts", "export const prefix = 'old: ';\nexport const epoch = new globalThis['Date'](0).getTime();\nexport const dynamic = (key: 'now') => Date[key]();\nexport const template = (part: 'ow') => Date[`n${part}`]();\nexport const other = () => ({ now: () => 1 })['now']();\n");
-    for result in [bake(&f.0, &Tools::default()), producer.bake(&f.0, None)] {
-        assert!(result.is_ok(), "{:?}", result.err());
-    }
-    // Literal access on locally bound names is not an ambient read.
-    f.write("logic.ts", "export const prefix = 'old: ';\nexport const a = (Date: { now(): number }) => Date['now']();\nexport const b = (Math: { random(): number }) => Math[`random`]();\nexport const c = (globalThis: { setTimeout(): number }) => globalThis['setTimeout']();\nexport const d = (performance: { now(): number }) => performance[`now`]();\n");
+    // Clock and random literal accesses compile cleanly; locally bound names stay valid.
+    f.write(
+        "logic.ts",
+        "export const prefix = 'old: ';\nexport const a = () => Date['now']() + Math[`random`]() + performance['now']();\nexport const b = (globalThis: { setInterval(): number }) => globalThis['setInterval']();\n",
+    );
     for result in [bake(&f.0, &Tools::default()), producer.bake(&f.0, None)] {
         assert!(result.is_ok(), "{:?}", result.err());
     }

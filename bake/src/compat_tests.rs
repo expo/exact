@@ -1093,6 +1093,28 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     let needs = |bundle: &[u8]| super::typescript_runtime_of(bundle, "");
     assert_eq!(needs(b"export const answer = () => 'idle';"), 0);
     assert_eq!(needs(b"fetch(u)"), 0);
+    assert_eq!(needs(b"new FormData()"), 19);
+    assert_eq!(needs(b"crypto.subtle.sign('HMAC', k, b)"), 19);
+    assert_eq!(
+        needs(b"crypto.subtle.encrypt({name: 'AES-GCM', iv}, k, b)"),
+        19
+    );
+    assert_eq!(
+        needs(b"crypto.subtle.deriveBits({name: 'PBKDF2'}, k, 256)"),
+        19
+    );
+    assert_eq!(
+        needs(b"crypto.subtle.deriveBits({name: 'HKDF'}, k, 256)"),
+        19
+    );
+    assert_eq!(
+        needs(b"crypto.subtle.verify('RSASSA-PKCS1-v1_5', k, s, b)"),
+        19
+    );
+    assert_eq!(
+        needs(b"crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])"),
+        19
+    );
     assert_eq!(needs(b"export const turnBudgetsJson = '{}';"), 16);
     assert_eq!(needs(b"fetch(u, {exactPrefetch: true})"), 13);
     assert_eq!(
@@ -1350,6 +1372,20 @@ fn the_named_data_crate_and_the_generated_lock_are_identity() {
     )
     .unwrap();
     assert_ne!(locked, id(&dir, "ios"), "and its edit moves it");
+}
+
+/// The named data crate is found by its package name as Cargo reads it: a
+/// comment after the `[package]` header or the name is TOML's, not part of
+/// either, and a header may hold whitespace.
+#[test]
+fn a_comment_beside_the_package_name_still_names_the_data_crate() {
+    for manifest in [
+        "[package] # the app's records\nname = \"records\" # read by rust.data",
+        "[ package ]\nname = 'records'",
+    ] {
+        let name = super::package_name(manifest);
+        assert_eq!(name.as_deref(), Some("records"), "{manifest}");
+    }
 }
 
 /// A path crate outside the app's workspace is no member of it, so the

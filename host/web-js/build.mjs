@@ -644,9 +644,9 @@ writeFileSync(resolve(gen, 'main.js'), [
     // The zone's offset follows the clock (habits F6): a timer, a `then` or the agent's `clock` that finds the offset
     // at its instant changed (a DST change, a new zone) answers `exactTime` again first (LLP 1027.000.000 D2).
     "let told = reportTime(clock.now)[1];",
-    "Clocked.push(() => { const o = reportTime(clock.now)[1]; if (o === told) return; told = o; commit(() => { for (const r of Resources) if (r.source === 'exactTime') R(r); }, 'time'); });",
+    "Clocked.push(() => { const o = reportTime(clock.now)[1]; if (o === told) return; told = o; commit(() => { for (const r of Resources) if (r.source === 'exactTime' || r.clock) R(r); }, 'time'); });",
   ] : []),
-  ...(ts ? ["import './ts-link.js';", ...(seamLazy ? [
+  ...(ts ? ["import './ts-link.js';", ...(!production ? ["import './ts-seed.js';"] : []), ...(seamLazy ? [
     "import { seam } from './ts-load.js';",
     'const loadSeam = seam(data, inflight, journal, clock);',
   ] : [`import { install as ts${production ? '' : ', watchState'} } from './ts-data.js';`, `ts(data, ${JSON.stringify(rustSources)}${pageModules ? ", () => import('./native.js')" : ''});`, "import { answering } from './ts-fetch.js';"])] : []),
@@ -701,11 +701,8 @@ writeFileSync(resolve(gen, 'main.js'), [
   // own location, since a page made per request is served where it was made.
   `const named = typeof document === 'object' && document.querySelector('script[type=\"application/vnd.exact.checkpoint\"]${languages ? '' : '[data-src]'}');`,
   languages ? "const answers = named && renderedAnswers(named);" : "const answers = named && (globalThis.exact?.answers ?? fetch(named.dataset.src).then(r => r.ok ? r.text() : null, () => null)).then(t => { named.textContent = t ?? JSON.stringify({ location: location.pathname, time: 0, answers: [] }); });"] : ['const sheet = null, answers = null;']),
-  // Under the driver a TypeScript source draws the launch seed's stream (LLP 1069.005 D2b), from its first answer:
-  // the first render waits for the stream's module, which no other page loads before it needs storage.
-  ...(ts && !production && languages ? ["import {agentSeed, agentStream} from './storage-environment.js';",
-    "if (agentMode() && !globalThis.__exactRender) { const seed = agentSeed(); if (seed !== null) answering.entropy = Object.assign(agentStream(seed, 'typescript'), {seed}); }",
-    "const seeded = null;"] : ts && !production ? ["const seeded = agentMode() && !globalThis.__exactRender && import('./storage-environment.js').then(env => { const seed = env.agentSeed(); if (seed !== null) answering.entropy = Object.assign(env.agentStream(seed, 'typescript'), { seed }); });"] : ['const seeded = null;']),
+  // Agent random streams initialize synchronously in ts-seed.js before app.ts evaluates (LLP 1195.000 D2.5).
+  'const seeded = null;',
   ...(!languages ? ["const waits = [fonts, sheet, answers, seeded].filter(Boolean);"] : []),
   `if ((sheet || answers || seeded${languages ? " || inLanguage" : ""}) && !fonts) { (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; });${production ? '' : ' clock.agent = agentMode();'} }`,
   languages ? "const go = (f, module) => Promise.all([answers, Promise.race([Promise.all([fonts, sheet, seeded, module]), globalThis.exact.languageLaunch.deadline])]).then(() => inLanguage(f)).catch(e => { const l = globalThis.exact.languageLaunch; l?.finish(); l?.report('adoption failed: ' + e, document.documentElement.lang); throw e; });" : "const go = f => waits.length ? Promise.all(waits).then(f) : f();",
@@ -737,7 +734,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // `prepareChunks`, below, writes their names here as Rolldown renders the entry.
   `for (const name of __EXACT_DEFERRED_CHUNKS__) document.head.append(Object.assign(document.createElement('link'), { rel: 'modulepreload', fetchPriority: 'low', href: new URL(name, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'}).href }));`,
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'output.js', 'store.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'package-session.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) stageJs(f);
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'ts-seed.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'output.js', 'store.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'package-session.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) stageJs(f);
 const checkpointSource = readFileSync(resolve(here, 'page-checkpoint.js'), 'utf8'), checkpointFaultImport = "import { checkpointFaults } from '../web/faults.js';";
 if (!checkpointSource.includes(checkpointFaultImport)) throw new Error('page-checkpoint.js no longer imports checkpointFaults');
 writeFileSync(resolve(gen, 'page-checkpoint.js'), localImports(production ? checkpointSource.replace(checkpointFaultImport, 'const checkpointFaults = () => [];') : checkpointSource));
@@ -823,7 +820,7 @@ const uploadsImport = "import { ledger, requestKey } from './uploads.js';";
 // 1047.002 D3).
 const storageGrants = tsGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
 const storageFlag = 'const STORAGE_GRANTED = true;';
-const tsData = readFileSync(resolve(here, 'ts-data.js'), 'utf8');
+const tsData = localImports(readFileSync(resolve(here, 'ts-data.js'), 'utf8'));
 for (const line of [uploadsImport, storageFlag, streamImport]) if (!tsData.includes(line)) throw new Error(`host/web-js/ts-data.js: build.mjs replaces a line it no longer has: ${line}`);
 if (ts) writeFileSync(resolve(gen, 'ts-data.js'), localImports((seamLazy ? "import './held-hooks.js';\n" : '') + tsData.replace("'__APP_TS__'", () => JSON.stringify(pageAppTs))
   .replace(uploadsImport, streams ? uploadsImport : "import { data as runtime } from './rt.js'; const ledger = runtime.uploads, requestKey = () => undefined;")
@@ -1009,11 +1006,11 @@ const scopedModule = (code, id) => {
   // I/O refused, as the wasm target's realm refuses it, and code from a
   // string, which throws as on Hermes (`eval`, which no import may bind, is imported under a fresh name below).
   const bound = ['fetch', 'Date', 'Math', 'Intl', 'setTimeout', 'setInterval', 'requestAnimationFrame', 'requestIdleCallback',
-    'clearTimeout', 'clearInterval', 'cancelAnimationFrame', 'cancelIdleCallback', 'performance', 'scheduler', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'crypto', 'AbortSignal',
+    'clearTimeout', 'clearInterval', 'cancelAnimationFrame', 'cancelIdleCallback', 'performance', 'scheduler', 'process', 'crypto', 'AbortSignal',
     'Function', 'Promise', 'queueMicrotask', 'Response', 'exactHost'];
-  // The DOM and Node's globals are absent, as on Hermes (js/bake/src/typescript.mjs `packageRefusals`).
+  // The DOM, unshimmed Node globals, and absent I/O constructors match Hermes (LLP 1195.000 D1.3, D1.4).
   const absent = ['window', 'self', 'frames', 'parent', 'top', 'opener', 'document', 'navigator', 'location', 'history', 'localStorage', 'sessionStorage',
-    'indexedDB', 'HTMLElement', 'Element', 'getComputedStyle', 'customElements', 'alert', 'process', 'Buffer', 'global'];
+    'indexedDB', 'HTMLElement', 'Element', 'getComputedStyle', 'customElements', 'alert', 'Buffer', 'global', 'XMLHttpRequest', 'WebSocket', 'EventSource'];
   // The stage's normalized configuration, never one found beside the file: a
   // mount's own `tsconfig.json` may extend a file outside the mount.
   const transformed = transformSync(id, code, { tsconfig: resolve(tsStage, '__exact_tsconfig.json'),
@@ -1457,7 +1454,7 @@ if (pages.length && how === 'rust') {
   // repository has its own, LLP 1153 D1.4): the development profile, which the Linux host an agent drives shares.
   const renderApp = resolveApp(appDir);
   const r = spawnSync('cargo', ['run', ...injectedProfiles(renderApp), '--profile', 'host-dev', '-q', '-p', `${app}-${renderAt}`, '--bin', bin, '--', '--plan', plan, '--name', manifest.name, ...(manifest.app?.origin ? ['--origin', manifest.app.origin] : []), '--shell', resolve(out, 'index.html'), '--build'],
-    { cwd: renderApp.workspace, encoding: 'utf8', maxBuffer: 256 << 20, env: { ...process.env, CARGO_TARGET_DIR: renderApp.target, EXACT_UPDATE_TRUST: 'development' } });
+    { cwd: renderApp.workspace, encoding: 'utf8', maxBuffer: 256 << 20, env: { ...process.env, TZ: 'UTC', CARGO_TARGET_DIR: renderApp.target, EXACT_UPDATE_TRUST: 'development' } });
   let docs;
   try { docs = renderEntryPages(bin, r); } catch (e) { console.error(e.message); process.exit(1); }
   const files = buildPageFiles(out, docs, routes);
@@ -1469,7 +1466,7 @@ if (pages.length && how === 'rust') {
   writeCrawlerFiles(out, docs, manifest.app?.origin, routes);
   console.log(`${out}: ${pages.length} pages rendered by ${bin}`);
 } else if (pages.length && how === 'js') {
-  const r = spawnSync('bun', [resolve(here, 'render.mjs'), out, '--build'], { cwd: root, stdio: 'inherit' });
+  const r = spawnSync('bun', [resolve(here, 'render.mjs'), out, '--build'], { cwd: root, stdio: 'inherit', env: { ...process.env, TZ: 'UTC' } });
   if (r.status !== 0) process.exit(1);
 } else if (how !== 'none' && routes.length) {
   writeCrawlerFiles(out, [], null, routes, siteBase); // robots.txt alone: no page made at build to list

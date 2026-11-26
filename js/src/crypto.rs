@@ -74,17 +74,22 @@ fn ec(state: &mut HostState, op: u32, a: &str, data: &[u8]) -> Result<String, St
     let key = |state: &HostState, text: &str| -> Result<EcKey, String> {
         text.parse::<u64>()
             .ok()
-            .and_then(|i| state.keys.get(&i).cloned())
+            .and_then(|i| match state.keys.get(&i) {
+                Some(crate::crypto_subtle::NativeKey::Ec(k)) => Some(k.clone()),
+                _ => None,
+            })
             .ok_or_else(|| "InvalidAccessError: not a live CryptoKey".to_string())
     };
-    const MAX_KEYS: usize = 4096;
+    const MAX_KEYS: usize = crate::crypto_subtle::MAX_KEYS;
     let push = |state: &mut HostState, k: EcKey| -> Result<u64, String> {
         if state.keys.len() >= MAX_KEYS {
             return Err("QuotaExceededError: too many live CryptoKeys".into());
         }
         let handle = state.next_key;
         state.next_key += 1;
-        state.keys.insert(handle, k);
+        state
+            .keys
+            .insert(handle, crate::crypto_subtle::NativeKey::Ec(k));
         Ok(handle)
     };
     let pair = |state: &mut HostState, p: EcKeyPair| -> Result<String, String> {
@@ -199,6 +204,7 @@ pub(crate) unsafe extern "C" fn bytes_door(
     let reply = match op {
         1 => digest(&a, data),
         2..=7 => ec(state, op, &a, data),
+        16..=22 => crate::crypto_subtle::door(state, op, &a, data),
         10 => {
             if let Ok(handle) = a.parse::<u64>() {
                 state.keys.remove(&handle);

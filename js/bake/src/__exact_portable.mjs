@@ -75,7 +75,7 @@ const CODE=['Function','eval'];
 // TypeScript's nodes that hold code: every other `TS…` node is a type.
 const TS_CODE=['TSAsExpression','TSSatisfiesExpression','TSNonNullExpression','TSTypeAssertion','TSInstantiationExpression','TSParameterProperty','TSExportAssignment',
   'TSModuleDeclaration','TSModuleBlock','TSEnumDeclaration','TSEnumBody','TSEnumMember'];
-const NODE=['process','Buffer','global','__dirname','__filename','require'];
+const NODE=['Buffer','global','__dirname','__filename','require'];
 const SCOPES=['Program','BlockStatement','StaticBlock','SwitchStatement','ForStatement','ForInStatement','ForOfStatement','CatchClause','ClassExpression','TSModuleBlock'];
 const NOT_REFERENCES={MemberExpression:'property',Property:'key',MethodDefinition:'key',PropertyDefinition:'key',LabeledStatement:'label',BreakStatement:'label',ContinueStatement:'label',ImportSpecifier:'imported',ExportSpecifier:'exported',ExportAllDeclaration:'exported',MetaProperty:'property',
   TSModuleDeclaration:'id',TSEnumDeclaration:'id',TSEnumMember:'id',TSImportEqualsDeclaration:'id'};
@@ -319,7 +319,7 @@ export function walkRuntime(ast, visit) {
  * `warnings` instead, as `where(at) warning [code-from-string] text` (`CODE`).
  * `lang`: the parser's, `ts` or `tsx` for TypeScript, whose refusals the caller
  * does not take. */
-export function packageRefusals(code, label, parse, warnings=[], lang='js', where=label) {
+export function packageRefusals(code, label, parse, warnings=[], lang='js', where=label, sites=null) {
   const ast=parse(code,{lang}), found=[], at=lineColumn(code);
   // `path`: each ancestor as [node, key, index, how many scopes enclose its child].
   // `runtime`: the scopes of the warnings' model (`runtimeScope`).
@@ -353,8 +353,10 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
       : object?.type==='Identifier' && (object.name===name ? a.optional : HOSTS.includes(object.name) && propertyName(a)===name);
   };
   const exits=(s)=>s && (['ReturnStatement','ThrowStatement'].includes(s.type) || (s.type==='BlockStatement' && exits(s.body.at(-1))));
-  // Whether a use of `name`, under the ancestors `path` (outermost first), is guarded.
+  // Whether a use of `name`, under the ancestors `path` (outermost first), is guarded
+  // by a dominating `typeof` test or an enclosing `try { ... } catch` block (LLP 1195.000 D1.1).
   const guarded=(name,path)=>path.some(([node,key,index,depth])=>{
+    if (node.type==='TryStatement' && key==='block' && node.handler) return true;
     if (['IfStatement','ConditionalExpression'].includes(node.type) && key!=='test' && tests(node.test,name)) return true;
     if (['IfStatement','ConditionalExpression'].includes(node.type) && key==='consequent' && shows(node.test,name,depth)) return true;
     if (node.type==='LogicalExpression' && key==='right' && (tests(node.left,name) || (node.operator==='&&' && shows(node.left,name,depth)))) return true;
@@ -431,13 +433,55 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
       if (CODE.includes(name)) fromString(name,property.key);
     }
   };
-  const refuse=(name,node)=>{
-    const where=label(':'+at(node.start));
-    if (name==='import()') found.push(where+` loads code from a string ('${name}'), which a bundle cannot capture`);
-    else if (HOSTS.includes(name) && !DOM.includes(name)) found.push(where+` uses the page's '${name}' through the global object: a data module has no page`);
-    else if (DOM.includes(name)) found.push(where+` uses the DOM's '${name}': a data module has no DOM`);
-    else if (name==='require') found.push(where+' loads a module by a computed name, which a bundle cannot capture');
-    else found.push(where+` uses Node's '${name}': a data module runs on Hermes and in the browser, which have no Node APIs`);
+  // Compute a syntactically safe expression/statement span to wrap with a tree-shake marker (LLP 1195.000 D1.1).
+  const markerSpan=(node)=>{
+    const [parent,key]=path.at(-1) ?? [];
+    if (node.type==='MemberExpression') {
+      if ((['CallExpression','NewExpression'].includes(parent?.type) && key==='callee')
+        || (parent?.type==='UnaryExpression' && parent.operator==='delete')
+        || (parent?.type==='AssignmentExpression' && key==='left')
+        || (parent?.type==='UpdateExpression' && key==='argument')
+        || (['ForInStatement','ForOfStatement'].includes(parent?.type) && key==='left')) {
+        return { start:node.object.start, end:node.object.end, mode:'expr' };
+      }
+      return { start:node.start, end:node.end, mode:'expr' };
+    }
+    if (node.type==='Identifier') {
+      if (parent?.type==='Property' && parent.shorthand && key==='value') {
+        return { start:node.start, end:node.end, mode:'shorthand', key:node.name };
+      }
+      if ((parent?.type==='AssignmentExpression' && key==='left')
+        || (parent?.type==='UpdateExpression' && key==='argument')
+        || (parent?.type==='UnaryExpression' && parent.operator==='delete')) {
+        return { start:parent.start, end:parent.end, mode:'expr' };
+      }
+      if (['ForInStatement','ForOfStatement'].includes(parent?.type) && key==='left') {
+        return { start:parent.start, end:parent.start, mode:'stmt' };
+      }
+      // Inside a destructuring assignment target ({ x: document } = o): wrap the assignment expression.
+      for (let i=path.length-1;i>=0;i--) {
+        const [anc,ak]=path[i];
+        if (anc.type==='AssignmentExpression' && ak==='left') return { start:anc.start, end:anc.end, mode:'expr' };
+        if (['ForInStatement','ForOfStatement'].includes(anc.type) && ak==='left') return { start:anc.start, end:anc.start, mode:'stmt' };
+        if (!['ObjectPattern','ArrayPattern','Property','RestElement','AssignmentPattern'].includes(anc.type)) break;
+      }
+    }
+    return { start:node.start, end:node.end, mode:'expr' };
+  };
+  const refuse=(name,node,hard=false)=>{
+    const pos=':'+at(node.start), loc=label(pos);
+    let why;
+    if (name==='import()') why=loc+` loads code from a string ('${name}'), which a bundle cannot capture`;
+    else if (HOSTS.includes(name) && !DOM.includes(name)) why=loc+` uses the page's '${name}' through the global object: a data module has no page`;
+    else if (DOM.includes(name)) why=loc+` uses the DOM's '${name}': a data module has no DOM`;
+    else if (name==='require') why=loc+' loads a module by a computed name, which a bundle cannot capture';
+    else why=loc+` uses Node's '${name}': a data module runs on Hermes and in the browser, which have no Node APIs`;
+    found.push(why);
+    if (sites) {
+      const span=markerSpan(node);
+      const warning=hard ? null : `${where(pos)} warning [portable-global] uses '${name}'${DOM.includes(name) || HOSTS.includes(name) ? ' (DOM)' : ' (Node)'}: a data module runs on Hermes and in the browser; guard browser/Node probes with typeof or try/catch`;
+      sites.push({ ...span, name, hard, why, warning });
+    }
   };
   const walk=(node,parent,key)=>{
     if (!node || typeof node!=='object') return;
@@ -472,24 +516,24 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
     if (['AssignmentExpression','AssignmentPattern'].includes(node.type)) destructured(node.left,node.right);
     if (node.type==='Identifier' && reference && free(node.name)) {
       const name=node.name;
-      const constant=name==='process' && parent?.type==='MemberExpression' && key==='object' && propertyName(parent)==='env' && grand?.type==='MemberExpression' && propertyName(grand)==='NODE_ENV';
       const literal=name==='require' && parent?.type==='CallExpression' && key==='callee'
         && ['Literal','TemplateLiteral'].includes(parent.arguments[0]?.type) && !parent.arguments[0].expressions?.length;
-      if ((DOM.includes(name) || NODE.includes(name)) && !constant && !literal && !guarded(name,path)) refuse(name,node);
+      if (name==='require' && !literal) refuse(name,node,true);
+      else if ((DOM.includes(name) || NODE.includes(name)) && name!=='require' && !guarded(name,path)) refuse(name,node,false);
     }
     else if (node.type==='Identifier' && reference && !(parent?.type==='VariableDeclarator' && key==='id')) {
       const name=binding(node.name)?.held;
-      if (name && !guarded(node.name,path) && !safe()) refuse(name,node);
+      if (name && !guarded(node.name,path) && !safe()) refuse(name,node,false);
     }
     if (['MemberExpression','JSXMemberExpression'].includes(node.type)) {
       const object=bare(node.object), name=propertyName(node);
       // Not under a `typeof` test, as an absent global is: the stand-in is a function, and the call throws.
       if (CODE.includes(name) && ['Identifier','JSXIdentifier'].includes(object?.type) && HOSTS.includes(object.name) && global(object.name)
         && !inert(parent,key,grand)) fromString(name,node);
-      if (member(node) && !guarded(name,path) && !safe()) refuse(name,node);
+      if (member(node) && !guarded(name,path) && !safe()) refuse(name,node,false);
     }
     // `import(x)` of a computed name, like a computed `require`.
-    if (node.type==='ImportExpression' && !(['Literal','TemplateLiteral'].includes(node.source?.type) && !node.source.expressions?.length)) refuse('import()',node);
+    if (node.type==='ImportExpression' && !(['Literal','TemplateLiteral'].includes(node.source?.type) && !node.source.expressions?.length)) refuse('import()',node,true);
     for (const k in node) if (k!=='parent' && node[k] && typeof node[k]==='object') {
       if (!Array.isArray(node[k])) path.push([node,k,undefined,scopes.length]);
       walk(node[k],node,k);
@@ -528,4 +572,79 @@ export function nodeNote(diagnostics) {
   const names=/Cannot find name '(?:require|process|Buffer|__dirname|__filename)'/.test(diagnostics);
   if (!modules.length && !names) return '';
   return `\nnote: ${modules.length ? `${modules.map(m=>`'${m}'`).join(', ')} ${modules.length>1 ? "are Node's built-ins" : "is Node's built-in"}` : "Node's globals are"}: a data module runs on Hermes and in the browser, which have no Node modules, so @types/node does not help; import a part of the package that needs none, or another package\n`;
+}
+
+const RESERVED=new Set(['default','delete','in','do','if','for','new','try','var','case','else','enum','eval','null','this','true','void','with','await','break','catch','class','const','false','super','throw','while','yield','export','import','public','return','static','switch','typeof','extends','finally','package','private','continue','debugger','function','arguments','interface','protected','implements','instanceof']);
+const IDENT=/^[$_A-Za-z][$_A-Za-z0-9]*$/;
+
+/** Virtual tree-shakeable stub for an unresolved Node built-in in a package (LLP 1195.000 D1.2). */
+export function virtualBuiltinModule(source, marker, isRequire, requireFn) {
+  if (isRequire) return `module.exports = /*#__PURE__*/ (function () { return ${marker}; });\n`;
+  const names=new Set();
+  try {
+    const mod=requireFn(source);
+    if (mod && (typeof mod==='object' || typeof mod==='function')) {
+      for (const key of Object.keys(mod)) if (IDENT.test(key) && !RESERVED.has(key)) names.add(key);
+    }
+  } catch { /* fallback to default export only */ }
+  const lines=[...names].map(n=>`export const ${n} = /*#__PURE__*/ (() => ${marker});`);
+  lines.push(`export default /*#__PURE__*/ (() => ${marker});`);
+  return lines.join('\n')+'\n';
+}
+
+/** Apply `import.meta.env` marker replacements (`reads`) and reversible `packageRefusals` wrappers (`sites`)
+ * cleanly, supporting nested or identical expression spans (LLP 1195.000 D1.1). */
+export function applyPackageMarkers(code, reads, sites, stray, pkgSites) {
+  if (!reads.length && !sites.length) return null;
+  const open=new Map(), close=new Map(), replace=new Map();
+  const push=(map,pos,entry)=>{ const list=map.get(pos); if (list) list.push(entry); else map.set(pos,[entry]); };
+  for (const {start,end,why} of reads) {
+    const marker=`__exact_env${stray.size.toString(36)}`;
+    stray.set(marker,why);
+    replace.set(start,{end,text:marker.padEnd(end-start)});
+  }
+  for (const site of sites) {
+    const marker=`__exact_pkg${site.hard ? 'ref' : 'warn'}${pkgSites.size.toString(36)}`;
+    pkgSites.set(marker,site);
+    if (site.mode==='stmt') {
+      push(open,site.start,{order:site.end,text:`void ${marker}; `});
+    } else if (site.mode==='shorthand') {
+      push(open,site.start,{order:site.end,text:`${site.key}: (void ${marker}, `});
+      push(close,site.end,{order:site.start,text:')'});
+    } else {
+      push(open,site.start,{order:site.end,text:`(void ${marker}, `});
+      push(close,site.end,{order:site.start,text:')'});
+    }
+  }
+  const points=[...new Set([...open.keys(),...close.keys(),...replace.keys()])].sort((a,b)=>a-b);
+  let out='', cursor=0;
+  for (const pos of points) {
+    if (pos<cursor) continue;
+    out+=code.slice(cursor,pos);
+    const closes=close.get(pos);
+    if (closes) { closes.sort((a,b)=>b.order-a.order); for (const c of closes) out+=c.text; }
+    const opens=open.get(pos);
+    if (opens) { opens.sort((a,b)=>b.order-a.order); for (const o of opens) out+=o.text; }
+    const rep=replace.get(pos);
+    if (rep) { out+=rep.text; cursor=rep.end; }
+    else cursor=pos;
+  }
+  return out+code.slice(cursor);
+}
+
+/** Collect surviving post-tree-shake refusals/warnings in `code` and strip reversible warning markers
+ * so no synthetic marker identifier leaks into emitted chunks (LLP 1195.000 D1.1, D1.2). */
+export function settlePackageMarkers(code, stray, pkgSites, nodeBuiltins, warned) {
+  const refusals=[];
+  for (const [marker,why] of stray) if (new RegExp(`\\b${marker}\\b`).test(code)) refusals.push(why);
+  for (const [marker,why] of nodeBuiltins) if (new RegExp(`\\b${marker}\\b`).test(code)) refusals.push(why);
+  for (const [marker,site] of pkgSites) {
+    if (!new RegExp(`\\b${marker}\\b`).test(code)) continue;
+    if (site.hard) refusals.push(site.why);
+    else if (site.warning) warned.add(site.warning);
+  }
+  const cleaned=code
+    .replace(/(?:\bvoid\s+)?\b__exact_pkgwarn[0-9a-z]+\s*,\s*/g,'')
+    .replace(/(?:\bvoid\s+)?\b__exact_pkgwarn[0-9a-z]+\s*;\s*/g,'');
+  return { refusals, code: cleaned!==code ? cleaned : null };
 }

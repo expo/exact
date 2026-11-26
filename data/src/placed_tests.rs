@@ -719,6 +719,7 @@ fn coalesced_retirements_let_go_what_retiring_each_in_order_does() {
                         args: args.clone(),
                         snapshot: Vec::new(),
                         clock: 0.0,
+                        epoch: 0.0,
                         reply,
                     };
                     let _ = coalesced.turn(job(Reply::new(|_| {})));

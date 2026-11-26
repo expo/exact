@@ -771,3 +771,52 @@ fn a_failed_repair_download_preserves_the_signed_floor_witness() {
     let refusal = Origin::of(&four).check(&mut reopened).unwrap_err();
     assert!(refusal.contains("below the accepted seq 6"), "{refusal}");
 }
+
+/// A launch that refused its selection at boot can still activate a newer
+/// bundle in place. That bundle's first pixel blesses it like any other
+/// generation: its boot count is cleared and it becomes the last good one,
+/// so one later failed launch does not demote it.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+)]
+fn a_bundle_activated_after_a_boot_refusal_is_blessed_by_its_first_pixel() {
+    let temp = Temp::new("refused-then-activated");
+    let mut origin = Origin::of(&Bundle::new(4, b"plan four"));
+    let mut store = open(&temp);
+    assert!(matches!(origin.check(&mut store), Ok(Check::Staged { .. })));
+
+    // This launch refuses seq 4 at boot and runs entry zero.
+    drop(store); // The preceding launch releases its exclusive store ownership.
+    let mut launch = open(&temp);
+    launch.boot_started().unwrap();
+    launch.entry_refused();
+
+    // A newer bundle is checked, activated in place, and reaches first pixel.
+    origin.serving(&Bundle::new(5, b"plan five"));
+    let Ok(Check::Staged { entry: five, .. }) = origin.check(&mut launch) else {
+        panic!("seq 5 should stage");
+    };
+    let candidate = launch
+        .prepare_activation()
+        .unwrap()
+        .expect("seq 5 is staged");
+    assert_eq!(&*candidate.plan, b"plan five");
+    launch.commit_activation(&candidate.generation).unwrap();
+    assert_eq!(launch.generation().entry.as_deref(), Some(five.as_str()));
+    launch.boot_started().unwrap();
+    launch.boot_succeeded(&launch.generation()).unwrap();
+    let record = std::fs::read_to_string(temp.path().join("record.json")).unwrap();
+    assert!(record.contains("\"failures\":0"), "{record}");
+    assert!(
+        record.contains(&format!("\"lastGood\":\"{five}\"")),
+        "{record}"
+    );
+
+    // One later launch dies before first pixel: one strike, not two.
+    drop(launch); // The preceding launch releases its exclusive store ownership.
+    assert_eq!(boot_and_die(&temp).as_deref(), Some(five.as_str()));
+    let store = open(&temp);
+    assert_eq!(store.select().entry.as_deref(), Some(five.as_str()));
+}

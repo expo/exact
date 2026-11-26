@@ -61,8 +61,9 @@ fn labels(family: &str) -> Vec<&'static str> {
     l.to_vec()
 }
 
-/// A registry pad as the interface's `Gamepad`; with `values`, its reading.
-fn shape(pad: &Pad, values: bool) -> Json {
+/// A registry pad as the interface's `Gamepad`; with `read` (the host's clock at the ask), its reading, stamped then,
+/// as on macOS and Android.
+fn shape(pad: &Pad, read: Option<f64>) -> Json {
     let family = pad.identity.family();
     let effects: Vec<&str> = if pad.rumble {
         vec!["dual-rumble"]
@@ -75,12 +76,13 @@ fn shape(pad: &Pad, values: bool) -> Json {
         "buttons": null, "axes": null, "timestamp": null,
         "windows": null, "linux": null,
     });
-    if values {
+    if let Some(now) = read {
         let r = &pad.reading;
         out["buttons"] = (r.buttons.iter())
             .map(|v| json!({ "pressed": *v >= 0.5, "touched": *v > 0., "value": v }))
             .collect();
         out["axes"] = json!(r.axes);
+        out["timestamp"] = json!(now);
     }
     match pad.identity.user_index {
         Some(slot) => out["windows"] = json!({ "userIndex": slot }),
@@ -110,10 +112,10 @@ impl Package for Gamepad {
             let mut was = told.lock().unwrap_or_else(|e| e.into_inner());
             let alike = |a: &Pad, b: &Pad| a.index == b.index && a.identity == b.identity;
             for gone in was.iter().filter(|p| !now.iter().any(|n| alike(n, p))) {
-                notifier.emit("gamepaddisconnected", json!([shape(gone, false)]));
+                notifier.emit("gamepaddisconnected", json!([shape(gone, None)]));
             }
             for came in now.iter().filter(|p| !was.iter().any(|w| alike(w, p))) {
-                notifier.emit("gamepadconnected", json!([shape(came, false)]));
+                notifier.emit("gamepadconnected", json!([shape(came, None)]));
             }
             *was = now;
             notifier.changed("gamepad.getGamepads");
@@ -128,8 +130,8 @@ impl Package for Gamepad {
         let named = index.filter(|i| pads.iter().any(|p| p.index == *i));
         match name {
             "getGamepads" => {
-                let values = !args["interval"].is_null();
-                let list: Vec<Json> = pads.iter().map(|p| shape(p, values)).collect();
+                let read = (!args["interval"].is_null()).then(|| self.context.now());
+                let list: Vec<Json> = pads.iter().map(|p| shape(p, read)).collect();
                 reply.send(json!({ "available": true, "gamepads": list, "current": current }))
             }
             "playEffect" => {
@@ -177,5 +179,27 @@ impl Package for Gamepad {
             "setLight" => reply.error("NotSupportedError", None),
             _ => reply.error("NotSupportedError", None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use exact_painted::pads::Identity;
+
+    /// A reading carries the time it was read, as on macOS and Android; a pad's coming and going carry none.
+    #[test]
+    fn a_reading_is_stamped_with_its_ask() {
+        let pad = Pad {
+            index: 0,
+            identity: Identity::default(),
+            reading: Default::default(),
+            rumble: false,
+        };
+        let read = shape(&pad, Some(1234.5));
+        assert_eq!(read["timestamp"], 1234.5);
+        assert_eq!(read["buttons"].as_array().map(Vec::len), Some(17));
+        let told = shape(&pad, None);
+        assert!(told["timestamp"].is_null() && told["buttons"].is_null());
     }
 }

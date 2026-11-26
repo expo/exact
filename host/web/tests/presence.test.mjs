@@ -273,6 +273,77 @@ check('a shrinking clip reveals children up to the shown box, then restores over
   expect(await evaluate('surface()')).toBeNull();
 });
 
+check('a native button keeps its laid-out size and moves by its centre, which a resize around its place does not restart', async () => {
+  const button = (left, width) => `position:absolute;left:${left}px;top:0;width:${width}px;height:44px;--exact-layout-transition:1000 0 linear`;
+  const shown = () => evaluate(`(r => [Math.round(r.left + r.width / 2), Math.round(r.width), [...document.getElementById('card').getAnimations()].length])(document.getElementById('card').getBoundingClientRect())`);
+  await fixture(`<button id="card" data-button-style="bordered" style="${button(0, 100)}"></button>`);
+  await style(button(100, 100)); // its centre moves from 50 to 150
+  await evaluate('seek(500)');
+  expect(await shown()).toEqual([100, 100, 1]);
+  // Half way it shows from 50 to 150: what it shows there takes the press, and its destination box does not
+  expect(await evaluate('[document.elementFromPoint(60, 20).id, document.elementFromPoint(190, 20).id]')).toEqual(['card', 'exact-root']);
+  await style(button(125, 50)); // the same centre, a smaller button: it goes on, at its new size
+  await evaluate('seek(500)');
+  expect(await shown()).toEqual([100, 50, 1]);
+  await evaluate('seek(750)');
+  expect(await shown()).toEqual([125, 50, 1]);
+  expect(await evaluate('surface()')).toBeNull();
+});
+
+check('a native button hidden during its move does not resume it when shown again', async () => {
+  const button = (left, display = 'block') => `position:absolute;left:${left}px;top:0;width:100px;height:44px;display:${display};--exact-layout-transition:1000 0 linear`;
+  const moves = () => evaluate(`document.getElementById('card').getAnimations().length`);
+  await fixture(`<button id="card" data-button-style="bordered" style="${button(0)}"></button>`);
+  await style(button(100));
+  await evaluate('seek(300)');
+  expect(await moves()).toBe(1);
+  await style(button(100, 'none'));
+  expect(await moves()).toBe(0);
+  await style(button(100));
+  expect(await moves()).toBe(0);
+});
+
+check('a batch that changes no tree measures no moving native button, which goes on', async () => {
+  const button = left => `position:absolute;left:${left}px;top:0;width:100px;height:44px;--exact-layout-transition:1000 0 linear`;
+  await fixture(`<button id="card" data-button-style="bordered" style="${button(0)}"></button>`);
+  await style(button(100));
+  await evaluate('seek(300)');
+  expect(await evaluate(`(() => {
+    let reads = 0;
+    const proto = Element.prototype, rect = proto.getBoundingClientRect, rects = proto.getClientRects, computed = window.getComputedStyle;
+    proto.getBoundingClientRect = function () { reads++; return rect.call(this); };
+    proto.getClientRects = function () { reads++; return rects.call(this); };
+    window.getComputedStyle = function (...args) { reads++; return computed.apply(this, args); };
+    try {
+      batch({ops:[{op:'at',ms:400}]});
+      return [reads, document.getElementById('card').getAnimations().length];
+    } finally { proto.getBoundingClientRect = rect; proto.getClientRects = rects; window.getComputedStyle = computed; }
+  })()`)).toEqual([0, 1]);
+});
+
+check('a moving native button inside an exit ghost stops when the ghost goes, with no batch after', async () => {
+  const button = left => `position:absolute;left:${left}px;top:0;width:100px;height:44px;--exact-layout-transition:20000 0 linear`;
+  await fixture(`<div id="card" style="${card};position:relative"><button id="tab" data-button-style="bordered" style="${button(0)}"></button></div>`);
+  await style(button(100), 'tab');
+  expect(await evaluate(`!!(globalThis.move = document.getElementById('tab').getAnimations()[0])`)).toBe(true);
+  await evaluate(`leave('pulse 100ms linear both'); seek(200)`);
+  await evaluate('new Promise(resolve => setTimeout(resolve, 50))');
+  expect(await evaluate(`[document.getElementById('card'), globalThis.move.playState]`)).toEqual([null, 'idle']);
+});
+
+check('a native button whose resizing, clipping parent is hidden ends its move, though the parent held a box for it', async () => {
+  const button = left => `position:absolute;left:${left}px;top:0;width:100px;height:44px;--exact-layout-transition:20000 0 linear`;
+  const parent = (height, display = 'block') => `${card.replace('40px', height)};position:relative;overflow:hidden;display:${display}`;
+  await fixture(`<div id="card" style="${parent('40px')}"><button id="tab" data-button-style="bordered" style="${button(0)}"></button></div>`);
+  await style(button(100), 'tab');
+  await style(parent('140px'));
+  expect(await evaluate(`[document.getElementById('tab').getAnimations().length, !!surface()]`)).toEqual([1, true]);
+  await style(parent('140px', 'none'));
+  expect(await evaluate(`document.getElementById('tab').getAnimations().length`)).toBe(0);
+  await style(parent('140px'));
+  expect(await evaluate(`document.getElementById('tab').getAnimations().length`)).toBe(0);
+});
+
 check('a resized box drops its surface when the paused move leaves the element', async () => {
   await fixture(`<div id="card" style="${card};overflow:hidden"><div id="body" style="height:100px;width:100px"></div></div>`);
   await style(card.replace('40px', '140px') + ';overflow:hidden');

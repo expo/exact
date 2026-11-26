@@ -207,6 +207,10 @@ impl<D: DataSource> Presenter<D> {
                 g.last = next;
             }
             if next == at {
+                if finished && id != PAGE {
+                    self.snap_motion_landed(id);
+                    self.dirty |= self.snap_probe_needed();
+                }
                 continue;
             }
             self.dirty = true;
@@ -219,6 +223,10 @@ impl<D: DataSource> Presenter<D> {
                 self.scroll.insert(id, next);
                 self.scroll_end_moved(id, scroll_end::Completion::Glide);
                 self.collection_scrolled_or_deferred(id, at);
+            }
+            if finished && id != PAGE {
+                self.snap_motion_landed(id);
+                self.dirty |= self.snap_probe_needed();
             }
         }
         // A list that landed reports where it is, no longer animating.

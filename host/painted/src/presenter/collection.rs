@@ -919,6 +919,12 @@ impl<D: DataSource> Presenter<D> {
         self.collection_scroll_turn(view, false, self.scroll_of(view) != before);
     }
 
+    /// The person moves `view` by a glide the presenter runs (a destination
+    /// tapped again): its earlier requests give way, as to any reader's move.
+    pub(super) fn collection_reader_moves(&mut self, view: ViewId) {
+        self.collection_scroll_turn(view, false, true);
+    }
+
     /// A wheel moved `view`: its collection turn now, or after the frame
     /// when turns are deferred.
     pub(super) fn collection_scrolled_or_deferred(&mut self, view: ViewId, before: (f32, f32)) {
@@ -1450,6 +1456,7 @@ impl<D: DataSource> Presenter<D> {
                 animating: gliding.is_some(),
                 ..CollectionFill::default()
             };
+            self.tell_covered(view, g.axis);
             match self.host.collection_feedback_filled(feedback, fill) {
                 Ok(true) => {
                     let after = self.sync_commit();

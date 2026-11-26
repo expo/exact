@@ -28,11 +28,11 @@ component NavLink
     group: bool
   view
     if item.route == current
-      link href=item.href aria-current="page" id=`${prefix}nav-${item.route}` testId=`${prefix}nav-${item.route}` class=Item flex=(group ? "0 1 auto" : "1") min-width=0 padding-left=(12 + item.depth * 14) padding-right=(group ? 0 : 12) background-color=(group ? "transparent" : "var(--color-background-selected)")
+      link href=item.href aria-current="page" id=`${prefix}nav-${item.route}` testId=`${prefix}nav-${item.route}` class=Item flex=1 min-width=0 padding-left=(12 + item.depth * 14) padding-right=(group ? 0 : 12) background-color=(group ? "transparent" : "var(--color-background-selected)")
         row
           text item.title font-size="var(--text-sm)" font-weight=(item.depth == 0 ? 500 : 400) line-height=1.4 color=(item.depth == 0 ? "var(--color-text-default)" : "var(--color-text-secondary)")
     else
-      link href=item.href id=`${prefix}nav-${item.route}` testId=`${prefix}nav-${item.route}` class=Item flex=(group ? "0 1 auto" : "1") min-width=0 padding-left=(12 + item.depth * 14) padding-right=(group ? 0 : 12)
+      link href=item.href id=`${prefix}nav-${item.route}` testId=`${prefix}nav-${item.route}` class=Item flex=1 min-width=0 padding-left=(12 + item.depth * 14) padding-right=(group ? 0 : 12)
         row
           text item.title font-size="var(--text-sm)" font-weight=(item.depth == 0 ? 500 : 400) line-height=1.4 color=(item.depth == 0 ? "var(--color-text-default)" : "var(--color-text-secondary)")
 

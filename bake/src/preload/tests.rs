@@ -132,6 +132,22 @@ fn the_manifest_order_survives_the_sorted_json_map() {
     assert!(code.find("z-last").unwrap() < code.find("a-first").unwrap());
 }
 
+/// Fetch refuses `CONNECT`, `TRACE` and `TRACK` in any case, as every host
+/// does at the request (`exact_executor::outcome::request_refusal`), so the
+/// bake refuses a preload that names one rather than bake one that never runs.
+#[test]
+fn fetch_and_preloads_refuse_the_same_forbidden_methods() {
+    for method in ["CONNECT", "TRACE", "TRACK", "trace", "Connect"] {
+        let error = entry(json!({"url":"https://api.example","method":method}));
+        assert!(
+            error
+                .as_ref()
+                .is_err_and(|e| e.starts_with("preload.feed.method:")),
+            "{method}: {error:?}"
+        );
+    }
+}
+
 #[test]
 fn fetch_and_preloads_use_the_same_forbidden_headers() {
     for name in [

@@ -193,6 +193,17 @@
                   : "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream"
               )
         );
+      if (env.blob) {
+        try {
+          var unwrapped = env.blob.unwrapRequest(url, init);
+          if (unwrapped) {
+            url = unwrapped.url;
+            init = unwrapped.init;
+          }
+        } catch (e) {
+          return Promise.reject(e);
+        }
+      }
       if (pageBase && BrowserRequest && url instanceof BrowserRequest) {
         var given = init || {}, options = Object.create(given);
         ["method", "headers", "body", "signal", "cache", "redirect"].forEach(function (name) {
@@ -262,7 +273,7 @@
       var raw = init ? init.body : undefined,
         extracted;
       try {
-        extracted = binary.requestBody(raw, method, headers);
+        extracted = binary.requestBody(raw, method, headers, env.blob);
       } catch (e) {
         return refusedWith(e);
       }

@@ -1,3 +1,4 @@
+import AVFoundation
 import ExactPackage
 import Foundation
 
@@ -83,6 +84,80 @@ private struct AnalyzerStopTest {
         let settle = Date(timeIntervalSinceNow: 0.1)
         while Date() < settle { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) }
         guard owner.activeLeases == 0 else { fail("late task re-acquired lease: \(owner.activeLeases)") }
+
+        // 4. AnalyzerEngine.conform follows format changes, drains stream boundaries, skips empty buffers,
+        // and consumes small inputs even when the converter holds buffered output.
+        if #available(macOS 26.0, iOS 26.0, *) {
+            let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+            let f48 = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+            let f44 = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+            let f24 = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24000, channels: 2, interleaved: true)!
+
+            func makeBuffer(_ format: AVAudioFormat, frames: AVAudioFrameCount, value: Float) -> AVAudioPCMBuffer {
+                let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(frames, 1))!
+                b.frameLength = frames
+                for audio in UnsafeMutableAudioBufferListPointer(b.mutableAudioBufferList) {
+                    if let data = audio.mData {
+                        let floats = data.assumingMemoryBound(to: Float.self)
+                        for i in 0..<(Int(audio.mDataByteSize) / MemoryLayout<Float>.size) { floats[i] = value }
+                    }
+                }
+                return b
+            }
+            func samples(_ buffers: [AVAudioPCMBuffer]) -> [Float] {
+                buffers.flatMap { b -> [Float] in
+                    guard let ptr = b.floatChannelData?[0] else { return [] }
+                    return Array(UnsafeBufferPointer(start: ptr, count: Int(b.frameLength)))
+                }
+            }
+
+            // Empty input does not corrupt a fresh converter.
+            var converter = AVAudioConverter(from: f48, to: target)
+            var emptyOut: [AVAudioPCMBuffer] = []
+            AnalyzerEngine.conform(makeBuffer(f48, frames: 0, value: 0.5), to: target, using: &converter) { emptyOut.append($0) }
+            guard emptyOut.isEmpty else { fail("empty buffer produced output") }
+
+            // 48 kHz (+0.5) -> target passthrough (-0.5) -> 48 kHz (-0.25): entering passthrough drains the
+            // old converter and clears it, so returning to 48 kHz never replays positive samples from before.
+            var firstOut: [AVAudioPCMBuffer] = []
+            AnalyzerEngine.conform(makeBuffer(f48, frames: 4800, value: 0.5), to: target, using: &converter) { firstOut.append($0) }
+            let firstFrames = firstOut.reduce(0) { $0 + Int($1.frameLength) }
+            guard firstFrames > 1000, firstOut.allSatisfy({ $0.format == target }) else {
+                fail("initial 48 kHz conversion produced unexpected frame count \(firstFrames)")
+            }
+
+            // Tiny input after large input still gets consumed (converter does not drop it on buffered output).
+            var tinyOut: [AVAudioPCMBuffer] = []
+            AnalyzerEngine.conform(makeBuffer(f48, frames: 3, value: 0.5), to: target, using: &converter) { tinyOut.append($0) }
+            guard !tinyOut.isEmpty else { fail("tiny buffer after buffered input produced nothing") }
+
+            let passthrough = makeBuffer(target, frames: 160, value: -0.5)
+            var passOut: [AVAudioPCMBuffer] = []
+            AnalyzerEngine.conform(passthrough, to: target, using: &converter) { passOut.append($0) }
+            guard converter == nil, passOut.last === passthrough else {
+                fail("passthrough did not clear converter or emit passthrough buffer last")
+            }
+
+            var resumedOut: [AVAudioPCMBuffer] = []
+            AnalyzerEngine.conform(makeBuffer(f48, frames: 4800, value: -0.25), to: target, using: &converter) { resumedOut.append($0) }
+            let resumedSamples = samples(resumedOut)
+            guard !resumedSamples.isEmpty, resumedSamples.allSatisfy({ $0 <= 0.01 }) else {
+                fail("resumed 48 kHz converter replayed stale positive samples: max=\(resumedSamples.max() ?? 0)")
+            }
+
+            // Mid-stream format changes (44.1 kHz stereo, 24 kHz interleaved) drain the previous converter and update.
+            for (label, format, frames, val) in [
+                ("reopened 44.1kHz stereo", f44, AVAudioFrameCount(4410), Float(0.25)),
+                ("reopened 24kHz interleaved", f24, AVAudioFrameCount(2400), Float(-0.25)),
+            ] {
+                var out: [AVAudioPCMBuffer] = []
+                AnalyzerEngine.conform(makeBuffer(format, frames: frames, value: val), to: target, using: &converter) { out.append($0) }
+                let totalFrames = out.reduce(0) { $0 + Int($1.frameLength) }
+                guard totalFrames > 500, out.allSatisfy({ $0.format == target }), converter?.inputFormat == format else {
+                    fail("failed format transition to \(label): frames=\(totalFrames)")
+                }
+            }
+        }
         print("analyzer stop+abort ok")
     }
 

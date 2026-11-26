@@ -90,7 +90,7 @@ const before = Date.parse('2026-10-08T23:59:30Z');
 check('the app starts under clock.install, and runFor and fastForward fire its timers', async () => {
   const { page, until, errors, close } = await open(async clock => { await clock.install({ time: before }); await clock.pauseAt(before); });
   try {
-    await until('result', '2020|1970-01-02|refused|refused'); // an explicit date formats; an omitted one is still refused
+    await until('result', '2020|1970-01-02|10/8/2026|5'); // explicit dates format; omitted date reads the virtualized fake clock
     await until('day', '2026-10-08');
     await until('ticks', '0');
     await page.clock.runFor(61_000);
@@ -105,7 +105,7 @@ check('the app starts under clock.install, and runFor and fastForward fire its t
 check('the app starts under setFixedTime', async () => {
   const { until, errors, close } = await open(clock => clock.setFixedTime(before));
   try {
-    await until('result', '2020|1970-01-02|refused|refused');
+    await until('result', '2020|1970-01-02|10/8/2026|5');
     await until('day', '2026-10-08');
     expect(errors).toEqual([]);
   } finally { await close(); }
@@ -113,24 +113,26 @@ check('the app starts under setFixedTime', async () => {
 
 // The wasm target's module realm under the same fake: the executor's prelude
 // (js/src/prelude.js, evaluated in that realm's iframe, which the fake covers
-// too) guards the engine's DateTimeFormat, and puts it in place of the fake's,
-// whose `format()` would answer an omitted date from the fake clock.
-check("the module realm's prelude installs its guards under clock.install", async () => {
+// too) virtualizes Date and DateTimeFormat over the host clock door (op 30),
+// rather than reading Playwright's fake clock directly (LLP 1195.000 D2.1).
+check("the module realm's prelude installs its virtual clock under clock.install", async () => {
   browser ??= await suiteBrowser();
   const context = await browser.newContext(), page = await context.newPage();
   try {
     await page.clock.install({ time: before });
     await page.goto('data:text/html,<p>realm</p>');
     const answers = await page.evaluate(source => {
-      const attempt = f => { try { return String(f()); } catch (error) { return error.message.replace(/ is unavailable in data sources.*/, ' refused'); } };
+      const attempt = f => { try { return String(f()); } catch (error) { return error.message; } };
       return [attempt(() => { (0, eval)(source); return 'loaded'; }),
         attempt(() => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric' }).format(Date.UTC(2020, 5, 1))),
-        attempt(() => new Date(86_400_000).toISOString().slice(0, 10)), attempt(() => new Date()), attempt(() => Date.now()),
-        attempt(() => new Intl.DateTimeFormat('en-US').format()), attempt(() => new Intl.DateTimeFormat('en-US').formatToParts())];
-    }, // A door that answers the prelude's load-time ask for a local listener (LLP 1133.005): a page has none.
-    "globalThis.__exact_host = (op, name) => (op === 12 && name === 'listen' ? '' : undefined);\n"
+        attempt(() => new Date(86_400_000).toISOString().slice(0, 10)),
+        attempt(() => new Date().toISOString().slice(0, 10)),
+        attempt(() => Date.now()),
+        attempt(() => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric' }).format()),
+        attempt(() => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric' }).formatToParts().map(p => p.value).join(''))];
+    },
+    "globalThis.__exact_host = (op, name) => (op === 12 && name === 'listen' ? '' : op === 30 ? '1767225600000,0' : undefined);\n"
       + readFileSync(resolve(ROOT, 'js/src/binary.js'), 'utf8') + '\n' + modulePrelude(ROOT));
-    expect(answers).toEqual(['loaded', '2020', '1970-01-02', 'new Date() refused', 'Date.now() refused',
-      'Intl.DateTimeFormat.format() refused', 'Intl.DateTimeFormat.formatToParts() refused']);
+    expect(answers).toEqual(['loaded', '2020', '1970-01-02', '2026-01-01', '1767225600000', '2026', '2026']);
   } finally { await context.close(); }
 }, 60_000);

@@ -129,8 +129,10 @@ export async function prepare(payload, admitted, id = nextId++) {
   const frame = document.createElement('iframe'); frame.hidden = true;
   frame.setAttribute('aria-hidden', 'true'); document.body.append(frame);
   const win = frame.contentWindow;
-  let context = null, initializationError = null, disposed = false, tail = Promise.resolve();
+  let context = null, initializationError = null, disposed = false, tail = Promise.resolve(), moduleClock = false, moduleEntropy = false;
   const seed = agentSeed(), stream = seed === null ? null : agentStream(seed, 'typescript');
+  const randomStream = seed === null ? null : agentStream(seed, 'ts-random');
+  const randomInitStream = seed === null ? null : agentStream(seed, 'ts-init');
   let storage;
   // The module's journal (LLP 1097 D8): the runtime's own lines (a failed
   // storage operation, an unhandled rejection) and its `console`, which the
@@ -158,8 +160,25 @@ export async function prepare(payload, admitted, id = nextId++) {
     if (op === 16) { const t = Number(name), m = requestMaps.get(t); requestMaps.delete(t); m?.delete(t); return; }
     // The runner's clock as the turn was dispatched: when a timer armed now is due; none outside a turn.
     if (op === 21) return context?.clock === undefined ? undefined : String(context.clock);
-    // The prelude asks at load whether this host has a local listener (LLP 1133.005): a page never does.
+    // The prelude asks at load whether this host has a local listener (LLP 1133.005), is baking, or is dev.
     if (op === 12 && name === 'listen') return '';
+    if (op === 12 && (name === 'bake' || name === 'dev')) return undefined;
+    // Virtualized clock & Math.random() (LLP 1195.000 D2): allowed at module init too.
+    if (op === 30) {
+      moduleClock = true;
+      if (context) context.clockRead = true;
+      const epoch = context?.epoch !== undefined ? context.epoch : (seed !== null ? 1767225600000 : Date.now());
+      return `${epoch},${context?.clock ?? 0}`;
+    }
+    if (op === 31) {
+      const s = name === 'init' ? randomInitStream : randomStream;
+      return s ? hex(s(7)) : undefined;
+    }
+    if (op === 8 && name === 'ambient') {
+      moduleEntropy = true;
+      if (context) context.entropy = true;
+      return;
+    }
     if (!context) throw new Error('host call outside an answer');
     if (op === 6) {
     // A page module answers `native.later` on the page; nothing here can answer at once.
@@ -214,12 +233,12 @@ export async function prepare(payload, admitted, id = nextId++) {
     // A cell belongs to the answer that accepted the call. The adapter runs
     // later, when the operation is issued, which may be a background round.
     bindAnswerStorage(win, storage, () => context.owner);
-    // Disable accidental browser I/O before the module captures globals: a
-    // function, so `new WebSocket(url)` refuses by name too, as the JS target's
-    // ts-fetch.js does. The prelude refuses the clock and every timer but an
-    // answer's own (time.js `timers`), by name, as Hermes does.
+    // Remove browser-only I/O constructors so `typeof WebSocket === "undefined"`
+    // matches Hermes and the web JS target (LLP 1195.000 D1.4).
     for (const key of ['XMLHttpRequest', 'WebSocket', 'EventSource']) {
-      Object.defineProperty(win, key, { value: function () { throw new Error(`${key} is unavailable in data sources`); }, configurable: false });
+      for (let o = win; o && o !== win.Object.prototype; o = win.Object.getPrototypeOf(o)) {
+        if (win.Object.getOwnPropertyDescriptor(o, key)?.configurable) delete o[key];
+      }
     }
     refuseCodeFromStrings(win);
     // A LAN dev page has no `crypto.subtle`: the realm's SHA-256 digest is
@@ -281,7 +300,7 @@ export async function prepare(payload, admitted, id = nextId++) {
       return false;
     });
     const finish = (answer, request) => {
-      const result = {...answer, reads:context.reads, writes:context.writes, externalRead:context.externalRead,entropy:context.entropy,topics:context.topics, leaseWrites:context.leaseWrites, secretEffect:context.secretEffect};
+      const result = {...answer, reads:context.reads, writes:context.writes, externalRead:context.externalRead,entropy:context.entropy,topics:context.topics, leaseWrites:context.leaseWrites, secretEffect:context.secretEffect, ...(context.clockRead ? {clockRead:true} : {}), ...(moduleClock ? {moduleClock:true} : {}), ...(moduleEntropy ? {moduleEntropy:true} : {})};
       if (answer.tag === 1) requestMaps.delete(answer.ticket);
       const reported = answer.tag === 1 ? context.early.get(answer.ticket) : null;
       for (const drop of context.early.values()) if (drop !== reported) drop();
@@ -400,7 +419,7 @@ export async function prepare(payload, admitted, id = nextId++) {
     };
     const begin = request => {
       if (disposed) throw new Error('module environment disposed');
-      context = {owner:{},store:new Map(request.store),grants:new Set(request.grants),reads:[],writes:[],externalRead:false,entropy:false,topics:[],requests:new Map(),early:new Map(),clock:request.clock};
+      context = {owner:{},store:new Map(request.store),grants:new Set(request.grants),reads:[],writes:[],externalRead:false,entropy:false,clockRead:false,topics:[],requests:new Map(),early:new Map(),clock:request.clock,epoch:request.epoch};
       if (request.op === 'answer') return JSON.parse(win.__exact_call(request.source,JSON.stringify(request.args)));
       const parked = pending.get(key(request));
       if (!parked) throw new Error('reply for an answer not in flight');
@@ -604,7 +623,7 @@ export function call(request) {
   if (request.op === 'dispatch') {
     const turn = turns.get(request.token);
     if (!turn || turn.id !== request.id) return { error: 'browser continuation is no longer live' };
-    turn.request.store = request.store; turn.request.grants = request.grants; turn.request.clock = request.clock;
+    turn.request.store = request.store; turn.request.grants = request.grants; turn.request.clock = request.clock; turn.request.epoch = request.epoch;
     return { ok: true };
   }
   if (request.op === 'discard') {
@@ -724,6 +743,7 @@ export async function run(token, deliver) {
       delete result.leaseWrites;
       for (const field of ['reads', 'writes', 'topics']) result[field] = [...carried[field], ...(result[field] ?? [])];
       result.externalRead ||= carried.externalRead; result.entropy ||= carried.entropy;
+      if (result.clockRead || carried.clockRead) result.clockRead = true;
       if (result.secret !== undefined) {
         // An answer holds one lease at a time: the completed one ends before the next is asked for.
         if (held && result.secretComplete) {

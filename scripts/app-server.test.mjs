@@ -721,11 +721,11 @@ test.each(['127.0.0.1', '::1'])('shutdown keeps storage and ownership until the 
     await new Promise(done=>setImmediate(done));
     try {
       assert.equal(stopped, false, 'a live listener prevents shutdown completion');
-      assert.equal(readFileSync(resolve(dir, '.exact/test/p4790/db.sqlite'), 'utf8'), 'held');
-      assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), true);
+      assert.equal(readFileSync(resolve(dir, '.exact/test/p' + port + '/db.sqlite'), 'utf8'), 'held');
+      assert.equal(existsSync(resolve(dir, '.exact/test/p' + port + '/owner')), true);
       assert.equal(given, 0);
     } finally {probe.stop(true); await stopping;}
-    assert.equal(existsSync(resolve(dir, '.exact/test/p4790/owner')), false);
+    assert.equal(existsSync(resolve(dir, '.exact/test/p' + port + '/owner')), false);
     assert.equal(given, 1);
   `);
 });

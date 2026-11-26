@@ -61,7 +61,19 @@ extension Runtime {
     }
 
     package func replaced(_ batch: Batch) -> Batch {
-        if batch.error == nil && !batch.pending && !batch.busy && !batch.held { completions.replace() }
+        var batch = batch
+        if batch.error == nil && !batch.pending && !batch.busy && !batch.held {
+            completions.replace()
+            // An in-place replacement (`replacesTree`) preserves the tree and
+            // navigation's `heardSplit`, so keep its subscription (`read` just
+            // refreshed `split` from the new runner). A full reset clears both.
+            if !batch.replacesTree {
+                splitAsked = nil
+                splitReadJson = nil
+                batch.split = nil
+                batch.splitChanged = false
+            }
+        }
         return batch
     }
 }

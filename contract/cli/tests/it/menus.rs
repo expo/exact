@@ -909,3 +909,480 @@ fn a_menu_order_is_one_of_three_words_on_its_trigger() {
     ));
     assert!(message.contains("menuOrder"), "{message}");
 }
+
+#[test]
+fn computed_alertdialog_role_checks_shape_and_preserves_non_alert_dialog() {
+    // Exact #1876 repro: dynamic conditional role reaching "alertdialog" on a laid-out dialog.
+    let (id, message) = refused(
+        "dialog id=\"sheet\" role=(busy ? \"alertdialog\" : \"dialog\") aria-label=\"Upload failed\"\n  view width=40 height=5\n  text \"Your video didn't upload.\"\n  button commandfor=\"sheet\" command=\"close\"\n    text \"OK\"",
+    );
+    assert_eq!(id, "lower-alertdialog", "{message}");
+    assert!(message.contains("a `view` row"), "{message}");
+
+    // Component prop forwarding: alert=true refuses laid-out dialog; alert=false compiles cleanly.
+    let component_base = r#"component App
+  view
+    column
+      Sheet(alert=ALERT)
+component Sheet
+  props
+    alert: bool
+  view
+    dialog id="sheet" role=(alert ? "alertdialog" : "dialog") aria-label="Upload failed"
+      view width=40 height=5
+      text "Body"
+      button commandfor="sheet" command="close"
+        text "OK"
+"#;
+    let err = contract::compile(&component_base.replace("ALERT", "true")).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "{err}");
+    assert!(
+        contract::compile(&component_base.replace("ALERT", "false")).is_ok(),
+        "alert=false folds away alertdialog"
+    );
+
+    // Derive, fn, state assignment, match, and template reaching "alertdialog" are all refused.
+    for (label, src) in [
+        (
+            "derive",
+            "component App\n  state a = false\n  derive r = a ? \"alertdialog\" : \"dialog\"\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "fn",
+            "fn pickRole(a: bool): string = a ? \"alertdialog\" : \"dialog\"\ncomponent App\n  state a = false\n  view\n    dialog id=\"d\" role=pickRole(a)\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "state-assign",
+            "component App\n  state r = \"dialog\"\n  action escalate\n    r = \"alertdialog\"\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "match",
+            "component App\n  state err: option<string> = none\n  view\n    dialog id=\"d\" role=(match err { case some(m) => \"alertdialog\", case none => \"dialog\" })\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "template",
+            "component App\n  state prefix = \"alert\"\n  view\n    dialog id=\"d\" role=`${prefix}dialog`\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+    ] {
+        let err = contract::compile(src).unwrap_err();
+        assert_eq!(err.id, "lower-alertdialog", "{label}: {err}");
+    }
+
+    // Valid alert confirmation with dynamic role compiles and does not imply closedby,
+    // while an inlined prop that folds to Always implies closedby="closerequest".
+    let r = boot(&app(
+        "dialog id=\"c\" testId=\"c\" role=(busy ? \"alertdialog\" : \"dialog\") aria-label=\"Sure?\"\n  text \"Cannot undo.\"\n  button press=go commandfor=\"c\" command=\"close\"\n    text \"Delete\"\n  button commandfor=\"c\" command=\"close\"\n    text \"Cancel\"",
+    ));
+    assert_eq!(node(&r, "c").props.str(PropId::Closedby), None);
+
+    let always_confirm = r#"component App
+  view
+    column
+      Ask(alert=true)
+component Ask
+  props
+    alert: bool
+  action go
+    showModal("c")
+  view
+    dialog id="c" testId="c" role=(alert ? "alertdialog" : "dialog") aria-label="Sure?"
+      text "Cannot undo."
+      button commandfor="c" command="close"
+        text "OK"
+"#;
+    let r = boot(always_confirm);
+    assert_eq!(
+        node(&r, "c").props.str(PropId::Closedby),
+        Some("closerequest")
+    );
+
+    // Non-alert templates, unreachable state assigns, view match/for shadowing,
+    // nested fn calls, and aliased `some(...)` matches are resolved precisely.
+    for (label, src) in [
+        (
+            "non-alert-template",
+            "component App\n  state busy = false\n  view\n    dialog id=\"d\" role=`${busy ? \"dia\" : \"dia\"}log`\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "dead-state-assign",
+            "component App\n  state r = \"dialog\"\n  action dead\n    if false\n      r = \"alertdialog\"\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "view-match-false",
+            "component App\n  view\n    column\n      match some(false)\n        case some(alert)\n          dialog id=\"d\" role=(alert ? \"alertdialog\" : \"dialog\")\n            view\n            button commandfor=\"d\" command=\"close\"\n              text \"OK\"\n        case none\n          view\n",
+        ),
+        (
+            "view-for-shadow",
+            "component App\n  derive r = \"alertdialog\"\n  view\n    column\n      for r in [\"dialog\"] key=r\n        dialog id=\"d\" role=r\n          view\n          button commandfor=\"d\" command=\"close\"\n            text \"OK\"\n",
+        ),
+    ] {
+        if let Err(err) = contract::compile(src) {
+            panic!("{label} should compile: {err}");
+        }
+    }
+
+    for (label, src) in [
+        (
+            "view-match-alert",
+            "component App\n  view\n    column\n      match some(\"alertdialog\")\n        case some(r)\n          dialog id=\"d\" role=r\n            view\n            button commandfor=\"d\" command=\"close\"\n              text \"OK\"\n        case none\n          view\n",
+        ),
+        (
+            "nested-fn-call",
+            "fn id(x: string): string = x\ncomponent App\n  view\n    dialog id=\"d\" role=id(id(\"alertdialog\"))\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+        (
+            "aliased-some-match",
+            "component App\n  derive opt = some(\"alertdialog\")\n  view\n    dialog id=\"d\" role=(match opt { case some(r) => r, case none => \"dialog\" })\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n",
+        ),
+    ] {
+        let err = contract::compile(src).unwrap_err();
+        assert_eq!(err.id, "lower-alertdialog", "{label}: {err}");
+    }
+
+    // Lazy `let` bindings in actions resolve through chained locals and ignore
+    // unrelated bindings; mutual state cycles do not poison cached values.
+    let chained_let_alert = "component App\n  state other = \"dialog\"\n  state r = \"dialog\"\n  action update\n    let unused = other\n    let a = \"alertdialog\"\n    let b = a\n    r = b\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n";
+    let err = contract::compile(chained_let_alert).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "chained-let-alert: {err}");
+
+    let chained_let_dialog = "component App\n  state other = \"alertdialog\"\n  state r = \"dialog\"\n  action update\n    let unused = other\n    let a = \"dialog\"\n    let b = a\n    r = b\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n";
+    if let Err(err) = contract::compile(chained_let_dialog) {
+        panic!("chained-let-dialog should compile: {err}");
+    }
+
+    let cyclic_states = "component App\n  state a = \"dialog\"\n  state b = \"dialog\"\n  action flip\n    a = b\n    b = a\n  action escalate\n    b = \"alertdialog\"\n  view\n    column\n      dialog id=\"d1\" role=a\n        view\n        button commandfor=\"d1\" command=\"close\"\n          text \"OK\"\n      dialog id=\"d2\" role=b\n        view\n        button commandfor=\"d2\" command=\"close\"\n          text \"OK\"\n";
+    let err = contract::compile(cyclic_states).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "cyclic-states: {err}");
+}
+
+#[test]
+fn large_nested_match_app_with_many_states_and_actions_lowers_quickly() {
+    // Regression test for #1922: 50 nested match routes, 40 states, 60 actions
+    // with interdependent guards, ordinary role attributes, plus both literal
+    // and computed dialog roles must compile without exponential role scans.
+    use std::fmt::Write;
+    let mut src = String::from("component App\n");
+    for i in 0..40 {
+        writeln!(src, "  state s{i}: option<string> = none").unwrap();
+    }
+    writeln!(src, "  state confirm = false").unwrap();
+    for i in 0..60 {
+        let a = i % 40;
+        let b = (i + 1) % 40;
+        let c = (i + 2) % 40;
+        writeln!(src, "  action act{i}(v: option<string>)").unwrap();
+        writeln!(src, "    let unused = s{b}").unwrap();
+        writeln!(src, "    if s{c} == none").unwrap();
+        writeln!(src, "      s{a} = v").unwrap();
+        writeln!(src, "    match s{b}").unwrap();
+        writeln!(src, "      case some(x)").unwrap();
+        writeln!(src, "        s{c} = some(x)").unwrap();
+        writeln!(src, "      case none").unwrap();
+        writeln!(src, "        s{c} = none").unwrap();
+    }
+    writeln!(src, "  action toggleConfirm").unwrap();
+    writeln!(src, "    confirm = !confirm").unwrap();
+    writeln!(src, "  view").unwrap();
+    writeln!(src, "    column role=\"tablist\"").unwrap();
+    // 50 routes nested across match blocks with ordinary role attributes.
+    for i in 0..50 {
+        let s = i % 40;
+        let t = (i + 7) % 40;
+        writeln!(src, "      match s{s}").unwrap();
+        writeln!(src, "        case some(r{i})").unwrap();
+        writeln!(src, "          match s{t}").unwrap();
+        writeln!(src, "            case some(sub{i})").unwrap();
+        writeln!(src, "              column role=\"menu\"").unwrap();
+        writeln!(
+            src,
+            "                button role=\"tab\" press=toggleConfirm"
+        )
+        .unwrap();
+        writeln!(src, "                  text r{i}").unwrap();
+        writeln!(src, "                text sub{i} role=\"alert\"").unwrap();
+        writeln!(src, "            case none").unwrap();
+        writeln!(src, "              view").unwrap();
+        writeln!(src, "        case none").unwrap();
+        writeln!(src, "          view").unwrap();
+    }
+    // Literal dialog role and computed alertdialog role inside nested matches.
+    writeln!(src, "      match s0").unwrap();
+    writeln!(src, "        case some(outer)").unwrap();
+    writeln!(src, "          match s1").unwrap();
+    writeln!(src, "            case some(inner)").unwrap();
+    writeln!(src, "              column").unwrap();
+    writeln!(src, "                dialog id=\"plain\" role=\"dialog\"").unwrap();
+    writeln!(src, "                  view").unwrap();
+    writeln!(src, "                  text outer").unwrap();
+    writeln!(
+        src,
+        "                  button commandfor=\"plain\" command=\"close\""
+    )
+    .unwrap();
+    writeln!(src, "                    text inner").unwrap();
+    writeln!(
+        src,
+        "                dialog id=\"ask\" role=(confirm ? \"alertdialog\" : \"dialog\")"
+    )
+    .unwrap();
+    writeln!(src, "                  text \"Sure?\"").unwrap();
+    writeln!(
+        src,
+        "                  button press=toggleConfirm commandfor=\"ask\" command=\"close\""
+    )
+    .unwrap();
+    writeln!(src, "                    text \"Yes\"").unwrap();
+    writeln!(
+        src,
+        "                  button commandfor=\"ask\" command=\"close\""
+    )
+    .unwrap();
+    writeln!(src, "                    text \"Cancel\"").unwrap();
+    writeln!(src, "            case none").unwrap();
+    writeln!(src, "              view").unwrap();
+    writeln!(src, "        case none").unwrap();
+    writeln!(src, "          view").unwrap();
+
+    let start = std::time::Instant::now();
+    contract::compile(&src).expect("large nested match app should compile cleanly");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed.as_secs() < 15,
+        "large nested match app took {elapsed:?} to compile"
+    );
+
+    // Turning the computed dialog into a laid-out dialog still catches lower-alertdialog fast.
+    let bad = src.replace(
+        "                dialog id=\"ask\" role=(confirm ? \"alertdialog\" : \"dialog\")\n                  text \"Sure?\"",
+        "                dialog id=\"ask\" role=(confirm ? \"alertdialog\" : \"dialog\")\n                  view\n                  text \"Sure?\"",
+    );
+    let err = contract::compile(&bad).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "{err}");
+
+    // Adversarial graphs from #1922 review: dense mutual state cycles, deep
+    // 8-way derive template DAGs, >32 distinct role values, >32 chained action
+    // locals, >17 nested view match bindings, and late alert_font specialization.
+    let mut clique = String::from("component App\n");
+    for i in 0..12 {
+        writeln!(clique, "  state s{i} = \"dialog\"").unwrap();
+    }
+    for i in 0..12 {
+        for j in 0..12 {
+            if i != j {
+                writeln!(clique, "  action e{i}_{j}\n    s{i} = s{j}").unwrap();
+            }
+        }
+    }
+    writeln!(
+        clique,
+        "  view\n    dialog id=\"d\" role=s0\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\""
+    )
+    .unwrap();
+    let t = std::time::Instant::now();
+    contract::compile(&clique).expect("12-state cyclic clique should compile");
+    assert!(t.elapsed().as_secs() < 5, "clique took {:?}", t.elapsed());
+
+    let mut dag = String::from("component App\n  derive d0 = \"x\"\n");
+    for i in 1..=20 {
+        let p = i - 1;
+        writeln!(
+            dag,
+            "  derive d{i} = `${{d{p}}}${{d{p}}}${{d{p}}}${{d{p}}}${{d{p}}}${{d{p}}}${{d{p}}}${{d{p}}}`"
+        )
+        .unwrap();
+    }
+    writeln!(
+        dag,
+        "  view\n    dialog id=\"d\" role=d20\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\""
+    )
+    .unwrap();
+    let t = std::time::Instant::now();
+    contract::compile(&dag).expect("20-deep 8-way template DAG should bound string growth");
+    assert!(t.elapsed().as_secs() < 5, "dag took {:?}", t.elapsed());
+
+    // >32 distinct values still retain reachable "alertdialog".
+    let mut saturated = String::from("component App\n  state r = \"dialog\"\n");
+    for i in 0..40 {
+        writeln!(saturated, "  action a{i}\n    r = \"role{i}\"").unwrap();
+    }
+    writeln!(saturated, "  action escalate\n    r = \"alertdialog\"").unwrap();
+    writeln!(
+        saturated,
+        "  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\""
+    )
+    .unwrap();
+    let err = contract::compile(&saturated).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "saturated: {err}");
+
+    // Deep chains of action locals and enclosing view match bindings do not hit depth truncation.
+    let mut deep_lets = String::from(
+        "component App\n  state r = \"dialog\"\n  action set\n    let v0 = \"alertdialog\"\n",
+    );
+    for i in 1..=40 {
+        writeln!(deep_lets, "    let v{i} = v{}", i - 1).unwrap();
+    }
+    writeln!(
+        deep_lets,
+        "    r = v40\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\""
+    )
+    .unwrap();
+    let err = contract::compile(&deep_lets).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "deep-lets: {err}");
+
+    let mut deep_match =
+        String::from("component App\n  view\n    column\n      match some(\"alertdialog\")\n");
+    for i in 0..20 {
+        let indent = "  ".repeat(i * 2 + 4);
+        writeln!(deep_match, "{indent}case some(v{i})").unwrap();
+        if i + 1 < 20 {
+            writeln!(deep_match, "{indent}  match some(v{i})").unwrap();
+        } else {
+            writeln!(deep_match, "{indent}  dialog id=\"d\" role=v{i}").unwrap();
+            writeln!(deep_match, "{indent}    view").unwrap();
+            writeln!(
+                deep_match,
+                "{indent}    button commandfor=\"d\" command=\"close\""
+            )
+            .unwrap();
+            writeln!(deep_match, "{indent}      text \"OK\"").unwrap();
+        }
+    }
+    for i in (0..20).rev() {
+        let indent = "  ".repeat(i * 2 + 4);
+        writeln!(deep_match, "{indent}case none\n{indent}  view").unwrap();
+    }
+    let err = contract::compile(&deep_match).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "deep-match: {err}");
+
+    // A later specialization of a component whose role reaches "alertdialog" still emits lower-alert-font.
+    let specialized_warning = r#"component App
+  view
+    column
+      Ask(alert=false)
+      Ask(alert=true)
+component Ask
+  props
+    alert: bool
+  view
+    dialog id="c" role=(alert ? "alertdialog" : "dialog") font-family="serif"
+      text "Sure?"
+      button commandfor="c" command="close"
+        text "OK"
+"#;
+    let (compiled, warnings) = contract::compile_warned(specialized_warning);
+    compiled.expect("specialized warning app should compile");
+    assert!(
+        warnings.iter().any(|w| w.id == "lower-alert-font"),
+        "expected lower-alert-font on second specialization, got: {warnings:?}"
+    );
+
+    // One shared action assigning many independently read states stays linear (no quadratic re-walks).
+    let mut shared_action = String::from("component App\n");
+    for i in 0..400 {
+        writeln!(shared_action, "  state s{i} = \"a\"").unwrap();
+    }
+    writeln!(shared_action, "  action bulk").unwrap();
+    for i in 0..400 {
+        writeln!(shared_action, "    s{i} = \"b\"").unwrap();
+    }
+    writeln!(shared_action, "  view\n    column").unwrap();
+    for i in 0..400 {
+        writeln!(
+            shared_action,
+            "      dialog id=\"d{i}\" role=s{i}\n        view\n        button commandfor=\"d{i}\" command=\"close\"\n          text \"OK\""
+        )
+        .unwrap();
+    }
+    let t = std::time::Instant::now();
+    contract::compile(&shared_action).expect("shared bulk action should compile");
+    assert!(
+        t.elapsed().as_secs() < 5,
+        "shared bulk action took {:?}",
+        t.elapsed()
+    );
+
+    // Nested template overflow retains short alertdialog fragments and stays monotone.
+    let long_x = "x".repeat(124);
+    let nested_tpl = format!(
+        "component App\n  state e = \"\"\n  action grow\n    e = \"{long_x}\"\n  view\n    dialog id=\"d\" role=`${{`alert${{e}}`}}${{`dialog${{e}}`}}`\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n"
+    );
+    let err = contract::compile(&nested_tpl).unwrap_err();
+    assert_eq!(
+        err.id, "lower-alertdialog",
+        "nested-template overflow: {err}"
+    );
+
+    // Widening nested template alternatives past saturation still catches reachable "alertdialog".
+    let mut wide_tpl =
+        String::from("component App\n  state p = \"alert\"\n  state q = \"dialog\"\n");
+    for i in 0..40 {
+        writeln!(wide_tpl, "  action p{i}\n    p = \"p{i}\"").unwrap();
+        writeln!(wide_tpl, "  action q{i}\n    q = \"q{i}\"").unwrap();
+    }
+    writeln!(
+        wide_tpl,
+        "  view\n    dialog id=\"d\" role=`${{`${{p}}`}}${{`${{q}}`}}`\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\""
+    )
+    .unwrap();
+    let err = contract::compile(&wide_tpl).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "wide-template: {err}");
+
+    // Long distinct constant strings (>128 bytes), both quoted and backtick literals, stay distinguishable.
+    let long_a = format!("{}a", "x".repeat(129));
+    let long_b = format!("{}b", "x".repeat(129));
+    for quote in ['"', '`'] {
+        let long_lit = format!(
+            "component App\n  derive a = {quote}{long_a}{quote}\n  derive b = {quote}{long_b}{quote}\n  view\n    dialog id=\"d\" role=(a == b ? \"alertdialog\" : \"dialog\")\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n"
+        );
+        contract::compile(&long_lit).expect("distinct 130-char constants must not falsely equal");
+    }
+
+    // Shared chained locals across many independently displayed states stay linear (cached on RoleCache).
+    let mut shared_lets = String::from("component App\n");
+    for i in 0..800 {
+        writeln!(shared_lets, "  state s{i} = \"a\"").unwrap();
+    }
+    writeln!(shared_lets, "  action chain\n    let v0 = \"b\"").unwrap();
+    for i in 1..800 {
+        writeln!(shared_lets, "    let v{i} = v{}", i - 1).unwrap();
+    }
+    for i in 0..800 {
+        writeln!(shared_lets, "    s{i} = v799").unwrap();
+    }
+    writeln!(shared_lets, "  view\n    column").unwrap();
+    for i in 0..800 {
+        writeln!(
+            shared_lets,
+            "      dialog id=\"d{i}\" role=s{i}\n        view\n        button commandfor=\"d{i}\" command=\"close\"\n          text \"OK\""
+        )
+        .unwrap();
+    }
+    let t = std::time::Instant::now();
+    contract::compile(&shared_lets).expect("shared let chain should compile linearly");
+    assert!(
+        t.elapsed().as_secs() < 5,
+        "shared let chain took {:?}",
+        t.elapsed()
+    );
+
+    // Expression-budget exhaustion (>16,384 eval steps) fails closed instead of silently accepting an invalid alert.
+    let huge_parts = "${s}".repeat(16_384);
+    let huge_cond = format!(
+        "component App\n  state s = \"\"\n  view\n    dialog id=\"d\" role=(`{huge_parts}` == \"\" ? \"alertdialog\" : \"dialog\")\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\"\n"
+    );
+    let err = contract::compile(&huge_cond).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "expr-budget exhaustion: {err}");
+
+    // Many setter actions (>16,384) still reach a late "alertdialog" setter.
+    let mut many_setters = String::from("component App\n  state r = \"dialog\"\n  action bulk\n");
+    for i in 0..17_000 {
+        writeln!(many_setters, "    r = \"v{}\"", i % 10).unwrap();
+    }
+    writeln!(
+        many_setters,
+        "    r = \"alertdialog\"\n  view\n    dialog id=\"d\" role=r\n      view\n      button commandfor=\"d\" command=\"close\"\n        text \"OK\""
+    )
+    .unwrap();
+    let err = contract::compile(&many_setters).unwrap_err();
+    assert_eq!(err.id, "lower-alertdialog", "many-setters: {err}");
+}

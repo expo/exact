@@ -1360,3 +1360,22 @@ the same retained roots and link refusals as `open_file`. Closing that
 descriptor drops none of the process's POSIX locks on the file, so a drag's
 copy helper process reopens it (`/proc/self/fd`) and the app's SQLite keeps
 its locks on a database dragged out (LLP 1094.000 D13).
+
+## Local patch 55, omitting `Content-Length` on bodiless portable HTTP methods
+
+`send()` in `transport/rustls_http.rs` takes `Option<&[u8]>` and sends `()`
+instead of `&[][..]` when no body is present on a method other than `POST`,
+`PUT`, or `PATCH`, or when `GET`/`HEAD` has an empty slice. Explicit empty
+bodies on methods such as `DELETE` and `OPTIONS` still send `Content-Length: 0`,
+matching RFC 9110 §8.6 and Fetch §4.6. Replay on refresh (expo/exact#1934).
+
+## Local patch 56, URL setters are the `url` crate's quirks setters
+
+`stdlib/url.rs`'s `set()` calls `url::quirks` for every field, the crate's
+URL Standard setters with their state overrides, checked against WPT's
+`setters_tests.json`. The hand-written host, port and pathname setters ignored
+`host = 'example.com/stuff'`, accepted a hostname with a port, dropped a lone
+`?` or `#`, and emptied the host of `sc://test:12/`, which panicked inside the
+crate and, with `panic = "abort"`, ended the app. A refusal still leaves the
+URL unchanged and only `href` throws. `url.rs` tests the WPT cases that
+differed. Replay on a refresh unless upstream calls `url::quirks` itself.

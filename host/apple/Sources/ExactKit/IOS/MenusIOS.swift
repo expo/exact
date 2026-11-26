@@ -754,9 +754,8 @@ package final class MenuHost {
         }
         return waiting
     }
-    /// After one closes: what shows in Exact's views no more is covered
-    /// again, after this turn, unless it has stopped being a box of the top
-    /// layer (the host gave it back for good).
+    /// After one closes: what shows in Exact's views no more is covered again,
+    /// after this turn, unless it stopped being a top-layer box.
     package func coverClosed() {
         guard !laidOut.isEmpty, !coverPending else { return }
         coverPending = true
@@ -765,14 +764,15 @@ package final class MenuHost {
     private func coverClosedNow() {
         coverPending = false
         guard let presenter, let session = presenter.session else { return }
-        var covers: [(UInt32, HostCover?)] = []
-        for id in laidOut {
-            guard let node = presenter.views[id] else { laidOut.remove(id); continue }
-            guard !showsInViews(node) else { continue }
-            laidOut.remove(id)
-            if node.props["popover"] != nil || isDialog(node) { covers.append((id, .whole)) }
+        session.whenIdle(bound: true) { [weak self, weak presenter, weak session] in
+            guard let self, let presenter, let session else { return }
+            let covers: [(UInt32, HostCover?)] = laidOut.compactMap { id in
+                guard let node = presenter.views[id] else { self.laidOut.remove(id); return nil }
+                guard !self.showsInViews(node) else { return nil }; self.laidOut.remove(id)
+                return (node.props["popover"] != nil || self.isDialog(node)) ? (id, .whole) : nil
+            }
+            if !covers.isEmpty { session.apply(session.runtime.covers(covers)) }
         }
-        if !covers.isEmpty { session.apply(session.runtime.covers(covers)) }
     }
     private func showsInViews(_ node: NodeView) -> Bool {
         if sheets.owns(node) || agentOpen.values.contains(where: { $0.popover === node }) { return true }

@@ -68,8 +68,21 @@ async function scriptModuleTags(dist, base, factoryTags) {
   } catch { return null; } finally { clearTimeout(timer); }
 }
 
+/** The `Bun.WebView` backend used to read a DOM-dependent module roster.
+ * Off macOS, pass `--no-sandbox` (and `--disable-dev-shm-usage` on Linux) so
+ * Chromium starts on CI runners, containers and root build environments. */
+export function webModuleBackend(chrome, platform = process.platform) {
+  if (platform === 'darwin') return 'webkit';
+  if (chrome.unavailable) throw new Error(chrome.unavailable);
+  return {
+    type: 'chrome',
+    path: chrome.executable,
+    argv: ['--no-sandbox', ...(platform === 'linux' ? ['--disable-dev-shm-usage'] : [])],
+  };
+}
+
 /** Read the table in the staged page when its initialization needs a browser. */
-export async function webModuleTags(dist, base, required, release) {
+export async function webModuleTags(dist, base, required, release, { platform = process.platform } = {}) {
   const entry = resolve(dist, 'modules/index.js');
   if (!existsSync(entry)) return [];
   let view, server, timer;
@@ -87,13 +100,12 @@ export async function webModuleTags(dist, base, required, release) {
         'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'",
       } });
     } });
-    let backend = 'webkit';
-    if (process.platform !== 'darwin') {
+    let chrome = null;
+    if (platform !== 'darwin') {
       const { chromium } = await import('../../scripts/agent-launch.mjs');
-      const chrome = chromium();
-      if (chrome.unavailable) throw new Error(chrome.unavailable);
-      backend = { type: 'chrome', path: chrome.executable };
+      chrome = chromium();
     }
+    const backend = webModuleBackend(chrome, platform);
     view = new Bun.WebView({ backend });
     const read = async () => {
       await view.navigate(new URL(base, server.url).href);

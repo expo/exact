@@ -56,5 +56,26 @@ final class ScrollportBarsMacTests: XCTestCase {
         ScrollportBars.set([3], in: p)
         XCTAssertTrue(bar.superview is ScrollportHolder, "on the scrollport again")
     }
+
+    /// A scroller's kept child list goes with its view: once the scroller is destroyed, none is held for it.
+    func testAScrollersChildListGoesWithIt() throws {
+        _ = NSApplication.shared
+        let p = Presenter()
+        p.viewport.frame = NSRect(x: 0, y: 0, width: 300, height: 400)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 3, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "children", "id": 2, "ids": [3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 400], ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 300, "h": 300],
+        ]))
+        let held = { ScrollportBars.states.object(forKey: p)?.childLists.values.compactMap { $0.parent?.id } ?? [] }
+        XCTAssertEqual(held(), [2], "the scroller's list kept")
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": []], ["op": "destroy", "id": 3], ["op": "destroy", "id": 2]]))
+        XCTAssertNil(p.views[2])
+        // The next children placed drop it, as its view may outlive it
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": []]]))
+        XCTAssertEqual(held(), [], "gone with its node")
+    }
 }
 #endif

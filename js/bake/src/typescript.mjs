@@ -18,7 +18,7 @@ import { checkPreloadBackend, checkerOutput, declaredSettings, envReads, inlineS
 import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
 export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
-import { compilerOptions, builtin, nodeNote, bare, lineColumn, packageRefusals, propertyName, walkRuntime, moduleSpecifiers } from './__exact_portable.mjs';
+import { compilerOptions, builtin, nodeNote, bare, lineColumn, packageRefusals, propertyName, walkRuntime, moduleSpecifiers, virtualBuiltinModule, applyPackageMarkers, settlePackageMarkers } from './__exact_portable.mjs';
 
 import { freezeGrants, grantsInitializer, moduleMetadata, nativeModuleEntry, recordedConstants, staticFacts } from './__exact_facts.mjs';
 export { moduleBinding, compilerOptions, nodeNote, staticFacts };
@@ -642,8 +642,9 @@ export const dataBundle=(stage)=>({...bundleOptions, transform:{...bundleOptions
  * is refused by file and line, into `refusals` when given, else thrown. */
 export function capturedSources(stage, refusals=null, discovery=false) {
   stage=realpathSync.native(stage);
-  const files=new Map(), roots=new Map(), edges=new Map(), stray=new Map(), area=join(stage,'node_modules','.packages');
-  // Each site that runs code from a string, once (`packageRefusals`): written beside the stage at the build's end.
+  const files=new Map(), roots=new Map(), edges=new Map(), stray=new Map(), pkgSites=new Map(), nodeBuiltins=new Map(), builtinIds=new Map(), area=join(stage,'node_modules','.packages');
+  const nodeRequire=createRequire(import.meta.url);
+  // Each site that runs code from a string or surviving package DOM/Node global: written beside the stage.
   const warned=new Set();
   let total=0;
   const resolution=new Map();
@@ -743,7 +744,16 @@ export function capturedSources(stage, refusals=null, discovery=false) {
       const real=await resolving(place).catch(() => null);
       const who=label(importer);
       if (!real || real.external) {
-        if (builtin(source)) throw new Error(`${who} imports Node's built-in '${source}': a data module runs on Hermes and in the browser, which have no Node modules; import a part of the package that needs none, or another package`);
+        if (builtin(source)) {
+          const why=`${who} imports Node's built-in '${source}': a data module runs on Hermes and in the browser, which have no Node modules; import a part of the package that needs none, or another package`;
+          if (!from) throw new Error(why);
+          // Defer unresolved Node built-ins in packages past tree-shaking (LLP 1195.000 D1.2).
+          const marker=`__exact_node${nodeBuiltins.size.toString(36)}`, vid=`\0exact-builtin:${nodeBuiltins.size}:${kind}:${source}`;
+          nodeBuiltins.set(marker,why);
+          builtinIds.set(vid,{source,marker,isRequire:kind==='require'});
+          record(null);
+          return { id:vid, moduleSideEffects:false };
+        }
         throw new Error(`${who} imports '${source}', which is not installed`);
       }
       // A `browser` field's `false`: Rolldown's empty module.
@@ -753,35 +763,31 @@ export function capturedSources(stage, refusals=null, discovery=false) {
       return { ...real, id };
     },
     load(id) {
+      const stub=builtinIds.get(id);
+      if (stub) return virtualBuiltinModule(stub.source,stub.marker,stub.isRequire,nodeRequire);
       id=physicalId(id);
       if (!files.has(id) && !id.startsWith('\0rolldown/empty.js')) assertCapturedModule(stage, id);
       return null;
     },
     transform(code, id) {
-      if (discovery) return null;
+      if (discovery || builtinIds.has(id)) return null;
       id=physicalId(id);
       const parse=(c,o)=>this.parse(c,o), js=/\.[cm]?js$/.test(id) && within(id,stage), inPackage=files.has(id);
       const reads=envReads(id,code,parse,(at)=>label(id,at),inPackage);
-      // The app's own JavaScript is checked as package code is, and for the clock as the app's TypeScript is. Every other
-      // module that runs, the app's TypeScript and a package's TypeScript or JSX, is checked only for code from a string.
-      const fromStrings=[], other=!js && within(id,stage) && /\.[cm]?[jt]sx?$/.test(id) && !/\.d\.[cm]?ts$/.test(id);
+      const fromStrings=[], sites=[], other=!js && within(id,stage) && /\.[cm]?[jt]sx?$/.test(id) && !/\.d\.[cm]?ts$/.test(id);
       if (other) packageRefusals(code,(at)=>label(id,at),parse,fromStrings,/\.[cm]?tsx$/.test(id) ? 'tsx' : /\.jsx$/.test(id) ? 'jsx' : 'ts',(at)=>place(id,at));
-      report([...(inPackage ? [] : ambientRefusals(stage,id,code,parse)), ...(inPackage ? [] : reads.map(r=>r.why)), ...(js ? packageRefusals(code,(at)=>label(id,at),parse,fromStrings,'js',(at)=>place(id,at)) : [])]);
+      const pkgRefused=js ? packageRefusals(code,(at)=>label(id,at),parse,fromStrings,'js',(at)=>place(id,at),inPackage ? sites : null) : [];
+      report([...(inPackage ? [] : ambientRefusals(stage,id,code,parse)), ...(inPackage ? [] : reads.map(r=>r.why)), ...(inPackage ? [] : pkgRefused)]);
       for (const why of fromStrings) warned.add(why);
-      if (!inPackage || !reads.length) return null;
-      // A package's read of a setting is a read only if the bundle keeps it: each becomes a global of the same length,
-      // which tree-shaking drops with the code around it, and `renderChunk` refuses any the output still holds. A
-      // global's read may throw, so the bundle keeps at least the code the read would have kept.
-      for (const {start,end,why} of reads) {
-        const marker=`__exact_env${stray.size.toString(36)}`;
-        stray.set(marker,why);
-        code=code.slice(0,start)+marker.padEnd(end-start)+code.slice(end);
-      }
-      return {code,map:null};
+      if (!inPackage) return null;
+      const patched=applyPackageMarkers(code,reads,sites,stray,pkgSites);
+      return patched===null ? null : {code:patched,map:null};
     },
     renderChunk(code) {
-      report([...stray].filter(([marker])=>new RegExp(`\\b${marker}\\b`).test(code)).map(([,why])=>why));
-      return null;
+      const settled=settlePackageMarkers(code,stray,pkgSites,nodeBuiltins,warned);
+      writeFileSync(resolve(stage,CODE_WARNINGS),JSON.stringify([...warned].sort()));
+      report(settled.refusals);
+      return settled.code===null ? null : {code:settled.code,map:null};
     },
     buildEnd() {
       const listed=[...files.values()].map(({real,package:{key,root},sha256})=>[key,slash(relative(root,real)),real,sha256])
@@ -857,33 +863,22 @@ export function replayCaptured(stage, allowed=[]) {
   };
 }
 
-// Time and seeds are source arguments (LLP 1027.000): every executor refuses the clock, randomness and every
-// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/time.js,
-// js/src/crypto.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
-// build, by file and line, so a test that runs the module under Bun, which has no such guard, cannot hide it.
-const ambient=(api)=>api+' is unavailable in data sources; pass time or a random seed as an argument';
+// Non-answer timers (`setInterval`, `requestAnimationFrame`, `requestIdleCallback`) stay refused in Exact2
+// (LLP 1195.000 D2.8, D6); clock and `Math.random()` refusals are retired in favor of virtualized builtins.
 const timers=(api)=>api+' is unavailable in data sources: an answer waits with setTimeout; pass time as an argument';
 const TIMERS=['setInterval','requestAnimationFrame','requestIdleCallback'];
 const GLOBALS=['globalThis','self','window','global'];
-// The global `name`: the bare identifier, or a global object's property.
 const ambientGlobal=(node,name,local)=>{
   node=bare(node);
   if (node?.type==='Identifier') return node.name===name && !local.has(name);
   return propertyName(node)===name
     && bare(node.object)?.type==='Identifier' && GLOBALS.includes(bare(node.object).name) && !local.has(bare(node.object).name);
 };
-const member=(node,object,property,local)=>{ node=bare(node); return propertyName(node)===property && ambientGlobal(node.object,object,local); };
 function refusal(node,local) {
   if (node.type==='CallExpression') {
-    const callee=node.callee;
-    if (member(callee,'Date','now',local)) return ambient('Date.now()');
-    if (member(callee,'performance','now',local)) return ambient('performance.now()');
-    if (member(callee,'Math','random',local)) return 'Math.random() is unavailable in data sources; seed from crypto.getRandomValues in a source (docs/recipes/random-and-shuffle.md), or pass a seed as an argument; a roll in the view needs no source (docs/recipes/random-rolls.md)';
-    if (ambientGlobal(callee,'Date',local)) return ambient('Date()');
-    const timer=TIMERS.find(name=>ambientGlobal(callee,name,local));
+    const timer=TIMERS.find(name=>ambientGlobal(node.callee,name,local));
     if (timer) return timers(timer+'()');
   }
-  if (node.type==='NewExpression' && ambientGlobal(node.callee,'Date',local) && !node.arguments.length) return ambient('new Date()');
   return null;
 }
 /** The direct uses of the global clock, randomness and timers where no enclosing

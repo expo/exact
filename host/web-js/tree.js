@@ -312,15 +312,47 @@ function watchViews() {
 }
 export const mapped = (v, map, clear) =>
   typeof v === 'string' && !v.trim() ? (clear === undefined ? map(null) : clear) : map(v);
+function splitCssValues(text) {
+  const parts = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i <= text.length; i++) {
+    const c = text[i];
+    if (c === '(') { if (start < 0) start = i; depth++; }
+    else if (c === ')') {
+      if (--depth < 0) return null;
+      if (depth === 0 && start >= 0) { parts.push(text.slice(start, i + 1)); start = -1; }
+    } else if ((c === undefined || /\s/.test(c)) && depth === 0) {
+      if (start >= 0) { parts.push(text.slice(start, i)); start = -1; }
+    } else if (start < 0) start = i;
+  }
+  return depth === 0 ? parts : null;
+}
+function cssSupports(prop, text) {
+  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' ? CSS.supports(prop, text) : false;
+}
+export function translateParts(v) {
+  const text = String(v ?? '').trim();
+  if (!text || /^(?:none|unset|initial|revert|revert-layer)$/i.test(text) || !cssSupports('translate', text)) return null;
+  const parts = splitCssValues(text.replace(/\/\*[\s\S]*?\*\//g, ' ').trim());
+  return parts && parts.length >= 1 && parts.length <= 3 ? parts : null;
+}
+export function scaleAxis(v, axis) {
+  const text = String(v ?? '').trim();
+  if (!text || /^(?:none|unset|initial|revert|revert-layer)$/i.test(text) || !cssSupports('scale', text)) return '1';
+  const parts = splitCssValues(text.replace(/\/\*[\s\S]*?\*\//g, ' ').trim());
+  if (!parts || parts.length < 1 || parts.length > 3) return '1';
+  const n = parts[axis] ?? parts[0];
+  return n.endsWith('%') ? parseFloat(n) / 100 : n;
+}
 // Both line-height and its inheritance marker read this binding. Journal a refused value once per change.
 export function lineHeight(e, value) {
   const t = typeof value === 'string' && value.trim();
   // Theme and metric names are resolved by the next projection. A CSS value
   // the browser accepts still has to fit the kernel's line-height grammar.
-  const length = t && /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(px|rem|em|ch|lh|[sld]?v[wh]|vmin|vmax)$/i.exec(t);
+  const length = t && /^([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?)(px|rem|em|ch|lh|[sld]?v[wh]|vmin|vmax)$/i.exec(t);
   const accepted = length && Number(length[1]) >= 0 && Number.isFinite(Math.fround(Number(length[1]))) &&
     (length[2].toLowerCase() !== 'px' || length[2] === 'px');
-  if (t && (!Number.isNaN(Number(t)) || (CSS.supports('line-height', t) && !accepted && !/^(?:normal|unset|inherit)$/i.test(t) && !t.startsWith('var(')))) {
+  if (t && (!Number.isNaN(Number(t)) || (cssSupports('line-height', t) && !accepted && !/^(?:normal|unset|inherit)$/i.test(t) && !t.startsWith('var(')))) {
     if (value !== e.$badLeading) invalidStyle(e, 'line-height', value);
     e.$badLeading = value;
     return 'unset';
@@ -452,8 +484,15 @@ export function Sr(e, prop, unit, f) {
           v == null
             ? v
             : String(v).replace(/url\(\s*["']?#([^"')\s]+)["']?\s*\)/g, (m, name) => {
+                const findId = (root, target) => {
+                  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+                    return root.querySelector(`[data-exact-id="${CSS.escape(target)}"]`);
+                  for (const el of root.getElementsByTagName('*'))
+                    if (el.getAttribute('data-exact-id') === target) return el;
+                  return null;
+                };
                 for (let a = e.parentElement; a; a = a.parentElement) {
-                  const c = a.querySelector(`[data-exact-id="${CSS.escape(name)}"]`);
+                  const c = findId(a, name);
                   if (c) return `url(#${c.id})`;
                 }
                 missing = true;

@@ -380,7 +380,8 @@ impl<D: DataSource> Runner<D> {
             let Some(state) = row.state.as_ref().filter(|s| !s.placeholder) else {
                 continue;
             };
-            let skip = row.pending || row.entropy_reader || row.store_reader;
+            let (clock, entropy) = self.resource_ambient_taint(r);
+            let skip = row.pending || entropy || clock || row.store_reader;
             let id = exact_plan::ResourcesId(o.site as u32);
             if skip
                 || dated.get(o.site) == Some(&true)

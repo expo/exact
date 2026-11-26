@@ -225,7 +225,9 @@ export function exercise(source: string): string {
     const marked=new URL('https://example.test/??a=1&b=2'), own=new URLSearchParams('??a=1');
     marked.searchParams.set('b','3');own.append('c','2');
     marks.push(marked.searchParams.get('?a'),marked.searchParams.has('a'),marked.href,own.get('?a'),String(own));
-    return JSON.stringify({seen,visits,steps,views,marks,first,linked,href:url.href,same:params===url.searchParams,entries:Array.from(params),bad:URL.canParse('/x'),parse:URL.parse('not a url'),nul:new URLSearchParams([['\0','\0']]).get('\0')});
+    // A view serializes its list, not its URL's query as the URL parser encoded it
+    const spaced=new URL('https://example.test/?a=b c&d&&e=~/').searchParams, serialized=[String(spaced),String(new URLSearchParams(spaced))];
+    return JSON.stringify({seen,visits,steps,views,marks,serialized,first,linked,href:url.href,same:params===url.searchParams,entries:Array.from(params),bad:URL.canParse('/x'),parse:URL.parse('not a url'),nul:new URLSearchParams([['\0','\0']]).get('\0')});
   }
   if(source==='headersWork') {
     // Iterating 4,000 unchanged headers three ways, within the test's turn budget

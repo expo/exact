@@ -311,9 +311,9 @@ impl<D: DataSource> Runner<D> {
             }
             (_, outcome) => outcome,
         };
-        self.store.set_clock_ms(self.now_ms);
-        let (reads_before, revision_before) = (self.store.reads(), self.store.revision());
-        let draws_before = self.store.entropy_draws();
+        self.sync_store_clock();
+        let obs_before = self.store.observations();
+        let revision_before = self.store.revision();
         let parsed = if Self::activity_send(&p.source) {
             Self::activity_reply(&self.plan, ty, outcome).map(Some)
         } else if self.plan.module_named(&p.source).is_some() {
@@ -357,9 +357,12 @@ impl<D: DataSource> Runner<D> {
         if let Target::Resource(i) = p.target {
             // A read in a later turn (after an `await`) makes a store reader
             // as one in the first does (LLP 1146 §2.3).
-            if self.store.reads() > reads_before {
-                let contents = self.note_reads(i, reads_before, draws_before);
-                self.module_work.reply_reader = Some((i, contents));
+            if self.store.reads() > obs_before.0 || self.store.clock_reads() > obs_before.2 {
+                let store_read = self.store.reads() > obs_before.0;
+                let contents = self.note_reads(i, obs_before);
+                if store_read {
+                    self.module_work.reply_reader = Some((i, contents));
+                }
             }
             for topic in self.store.take_topics() {
                 if !self.resources[i].watching.contains(&topic) {

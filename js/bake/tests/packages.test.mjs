@@ -545,3 +545,48 @@ export const exchange = (subscription: PushSubscription) => getExpoPushTokenAsyn
     fixture.close();
   }
 });
+
+test('LLP 1195.000 D1: package refusals defer past tree-shaking, strip warning markers, and keep hard refusals', async () => {
+  const fixture = linkedApp();
+  const { app, stage, put } = fixture;
+  try {
+    const sdk = join(app, 'node_modules/iso-sdk');
+    put(join(sdk, 'package.json'), JSON.stringify({ name: 'iso-sdk', version: '1.2.3', type: 'module', main: './index.js', types: './index.d.ts' }));
+    put(join(sdk, 'index.d.ts'), 'export declare const safe: () => string; export declare const liveDom: () => unknown; export declare const liveNode: () => unknown; export declare const liveDyn: (x: string) => unknown;\n');
+    put(join(sdk, 'index.js'), [
+      "import { readFileSync } from 'node:fs';",
+      "export function deadDom() { return document.body; }",
+      "export function deadNode() { return readFileSync('/etc/hosts'); }",
+      "export function deadDyn(x) { return import(x); }",
+      "export function safe() {",
+      "  let cached = null;",
+      "  try { cached = localStorage.getItem('k'); } catch {}",
+      "  return String(process.env.DEBUG ?? process.versions.node ?? process.release.name ?? cached ?? 'ok');",
+      "}",
+      "export function liveDom() { const obj = { document }; return obj.document.title + globalThis.alert(); }",
+      "export function liveNode() { return readFileSync('/etc/hosts'); }",
+      "export function liveDyn(x) { return import(x); }",
+      "",
+    ].join('\n'));
+    // 1. Only safe() is imported: dead DOM, dead node:fs, and dead import(x) tree-shake cleanly with zero warnings.
+    put(join(stage, 'app.ts'), "import { safe } from 'iso-sdk'; export const out = safe();\n");
+    const safeCode = await bundle(stage);
+    expect(safeCode).not.toMatch(/__exact_pkg|__exact_node/);
+    expect(JSON.parse(readFileSync(join(stage, '__exact_code_warnings.json'), 'utf8'))).toEqual([]);
+    // 2. Live DOM reference in node_modules emits a [portable-global] warning, builds cleanly, and strips all markers.
+    put(join(stage, 'app.ts'), "import { liveDom } from 'iso-sdk'; export const out = liveDom();\n");
+    const domCode = await bundle(stage);
+    expect(domCode).not.toMatch(/__exact_pkg/);
+    const domWarnings = JSON.parse(readFileSync(join(stage, '__exact_code_warnings.json'), 'utf8'));
+    expect(domWarnings.some(w => w.includes("iso-sdk@1.2.3/index.js:10:") && w.includes("warning [portable-global] uses 'document'"))).toBe(true);
+    expect(domWarnings.some(w => w.includes("iso-sdk@1.2.3/index.js:10:") && w.includes("warning [portable-global] uses 'alert'"))).toBe(true);
+    // 3. Surviving unresolved node:fs import still fails the build loudly.
+    put(join(stage, 'app.ts'), "import { liveNode } from 'iso-sdk'; export const out = liveNode();\n");
+    await expect(bundle(stage)).rejects.toThrow("imports Node's built-in 'node:fs'");
+    // 4. Surviving dynamic import(x) still fails the build loudly.
+    put(join(stage, 'app.ts'), "import { liveDyn } from 'iso-sdk'; export const out = liveDyn('x');\n");
+    await expect(bundle(stage)).rejects.toThrow("loads code from a string ('import()')");
+  } finally {
+    fixture.close();
+  }
+});

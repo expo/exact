@@ -95,6 +95,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         self.inner.render_web();
     }
 
+    fn ambient_taint(&self, source: &str) -> (bool, bool) {
+        self.inner.ambient_taint(source)
+    }
+
     fn configure_storage(
         &mut self,
         _: std::path::PathBuf,

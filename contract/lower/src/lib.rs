@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 mod alert_parts;
+mod alert_role;
 pub mod anatomy;
 mod aspect_fit;
 mod atoms;
@@ -119,7 +120,7 @@ pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
 pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, SourceOutput, Written};
 pub use states::PRESS_OPACITY_TO;
 pub use swipe_rows::expand_row_deletes;
-pub use theme::vocab as forma_vocab;
+pub use theme::{names_tokens_outside_views, vocab as forma_vocab};
 
 /// The base scale's names (LLP 1121 stage 11, the lead's ruling 2).
 pub const BASE_SCALE: [&str; 9] = theme::packages::BASE;
@@ -335,6 +336,10 @@ pub(crate) struct Lowerer<'a> {
     /// Where a native button may not be, from the nearest ancestor that says.
     pub(crate) button_context: Option<&'static str>,
     pub(crate) guards: Vec<Expr>,
+    /// Enclosing view `match`/`for` bindings (`Some(subject)` for `match some(x)`, `None` for `for`).
+    pub(crate) view_bindings: Vec<(String, Option<Expr>)>,
+    /// Memoized `alertdialog` role evaluation for root `state`s/`derive`s and state assigners.
+    pub(crate) role_cache: alert_role::RoleCache<'a>,
     /// Which menu container, if any, supplies the element being lowered as a row.
     menu_parent: Option<menu_rows::Parent>,
     /// Where the element being lowered sits relative to a navigation root.
@@ -503,6 +508,8 @@ fn lower_with_sites(
         parent_horizontal_flex: Some(false),
         button_context: None,
         guards: Vec::new(),
+        view_bindings: Vec::new(),
+        role_cache: alert_role::RoleCache::default(),
         menu_parent: None,
         nav_place: Default::default(),
         host_transforms: Default::default(),
@@ -1094,8 +1101,16 @@ impl<'a> Lowerer<'a> {
                     sites.region(*tag);
                 }
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
-                self.under_repeat(n.scoped_child_lists()[0].1, |l| {
-                    l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
+                self.under_view_binding(var, None, |l| {
+                    let shadow = |l: &mut Self| {
+                        l.under_repeat(n.scoped_child_lists()[0].1, |l| {
+                            l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
+                        })
+                    };
+                    match index.as_deref() {
+                        Some(idx) => l.under_view_binding(idx, None, shadow),
+                        None => shadow(l),
+                    }
                 })
             }
             Node::Match {
@@ -1116,8 +1131,10 @@ impl<'a> Lowerer<'a> {
                 let mut inner = scope.clone();
                 inner.push_some_of(name, subject_ty);
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
-                self.under_bindings(n.scoped_child_lists()[0].1, |l| {
-                    l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
+                self.under_view_binding(name, Some(subject), |l| {
+                    l.under_bindings(n.scoped_child_lists()[0].1, |l| {
+                        l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
+                    })
                 })?;
                 let mut none_scope = scope.clone();
                 none_scope.push_none();
@@ -1473,21 +1490,4 @@ impl<'a> Lowerer<'a> {
         }
         Ok(())
     }
-}
-
-/// @ref LLP 1121 D7, D12 — whether an app can name a design token outside its
-/// views, so its plan keeps every token (or its design's `exports`) for the
-/// bindings: the one test for "an app with generated bindings". It has a
-/// data module (an `app.ts` or a Rust data crate beside it, or a source of
-/// the seam it reads, not one the runner answers) or a native module (a
-/// custom element its views show, or modules or hatches its `app.json`
-/// declares). The driver finds what is on disk (`DesignSource::bindable`).
-pub fn names_tokens_outside_views(file: &File, root: &contract_types::ComponentTypes) -> bool {
-    file.design.as_ref().is_some_and(|d| d.bindable)
-        || file.package_designs.iter().any(|d| d.bindable)
-        || root
-            .sources
-            .keys()
-            .any(|s| !exact_plan::runner_owned_source(s))
-        || !native::module_tags(file).is_empty()
 }

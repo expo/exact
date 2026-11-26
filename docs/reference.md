@@ -2767,7 +2767,7 @@ or `open({host, seed: 42, locale: "fr-CA", timeZone: "America/Toronto", epoch: "
 a test file writes them as launch lines (`epoch "2026-09-21T14:13:20Z"`, `time-zone "America/Toronto"`,
 [authored tests](contract-grammar.md#authored-tests)), which override the flags.
 
-<a id="mac-iframe-magnification"></a>
+### Enlarge an iframe on macOS
 
 On macOS, `scale` enlarges an `iframe` after WebKit lays out the guest. Use it to
 keep line breaks during a transform. Size the parent to reserve the space. A
@@ -2831,6 +2831,8 @@ iOS and other hosts ignore the word.
 On macOS the first displayed frame after a resize or zoom remains unknown to Exact.
 A WebKit snapshot completes when its image is ready, even in a hidden window.
 [Apple’s snapshot API](https://developer.apple.com/documentation/webkit/wksnapshotconfiguration/afterscreenupdates)
+
+### Drive and attach to a running app
 
 On the web (same-origin frames), macOS and iOS, `tap live at 40 80` presses
 40 points right and 80 down from the top left of the iframe named `live`.
@@ -3122,7 +3124,9 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `DecompressionStream`, `CompressionStream` | WHATWG Compression's `"deflate"`, `"deflate-raw"` and `"gzip"`, worked by native code in the turn that writes each chunk: 8 MB of JSON inflates from 1.4 MB in about 25 ms of that turn's budget, and writing it in slices with `await scheduler.yield()` between spreads it over turns of their own. Its errors are the standard's `TypeError`s: corrupt data, data after the end, input that ends before its end at `close()`, a chunk that is not an `ArrayBuffer` or view. One stream may span many writes: Discord's `zlib-stream` (one zlib stream across a socket's messages, each ending in a sync flush) inflates message by message, each write's output queued once it settles; keep a `read()` pending, as a write waits for one |
 | `TextEncoder`, `TextDecoder` | `TextEncoder` emits UTF-8. Hermes 0.4's built-in WHATWG decoder keeps the browser-style encoding labels, including UTF-8 and UTF-16LE/BE, plus `fatal`, streaming and `ignoreBOM` behavior |
 | `URL`, `URLSearchParams`, `atob`, `btoa` | |
-| `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.subtle` | Inside an answer. Under the driver every host draws a repeatable stream from the launch seed (`agent --seed <n>`, 1 unless given), so every launch at one seed draws the same bytes, and `logs` says so at the first draw (the internal wasm web target draws it unsaid); a server that remembers a client by an id drawn here meets the same client again. A native drive of the real device (`EXACT_DEVICE=real`) draws the system's. `subtle` digests (SHA-256/384/512) and ECDSA P-256 keys (LLP 1069.005), and refuses the rest by name |
+| `Blob`, `File`, `FormData`, `Request`, `Event`, `EventTarget`, `CustomEvent` | Available on every executor (LLP 1195.000 D5 P0a, `typescriptRuntime` 19). `File.lastModified` reads the virtualized clock. `Blob`, `File`, and `FormData` (RFC 7578 multipart) are accepted as `fetch` and `Response` bodies, and `Response` provides `blob()` and `bytes()`. `Request` wraps URL, method, headers, body, redirect, cache, and signal for `fetch()` |
+| `process` | Minimal frozen shim `{ env: { NODE_ENV }, versions: {}, release: {} }` for isomorphic packages (LLP 1195.000 D1.3) |
+| `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.subtle` | `getRandomValues` and `randomUUID` run inside an answer. Under the driver every host draws a repeatable stream from the launch seed (`agent --seed <n>`, 1 unless given), so every launch at one seed draws the same bytes, and `logs` says so at the first draw; a native drive of the real device (`EXACT_DEVICE=real`) draws the system's. `subtle` supports SHA-256/384/512 `digest`, ECDSA P-256 (`generateKey`, `sign`, `verify`, `importKey`/`exportKey` JWK, kept keys), `HMAC` (SHA-256/384/512), `AES-GCM` (128/256, 12-byte IV, 128-bit tag), `PBKDF2`, `HKDF`, `RSASSA-PKCS1-v1_5` (`verify`, SPKI/JWK), and `Ed25519` (`raw`/`spki`/`pkcs8`/`jwk`) (LLP 1069.005, LLP 1195.000 D5 P0b, `typescriptRuntime` 19), and refuses the rest by name |
 | `AbortController`, `AbortSignal` | `AbortSignal.timeout(ms)` is an answer's timer (below) |
 | `setTimeout`, `clearTimeout` | Inside an answer, on the app's clock (below) |
 | `queueMicrotask`, `Promise` | |
@@ -3379,28 +3383,34 @@ A poll loop (`for (;;) { await sleep(5000); … }`) belongs in a Contract
 `task`, not in an answer: an answer that always has a timer armed never
 settles, so every `clock settle` stops at its bound and says `settled: false`.
 
+Ambient clock and randomness in a data module (LLP 1195.000 D2): `Date.now()`,
+`new Date()`, `Date()`, `performance.now()`, omitted-argument
+`Intl.DateTimeFormat`, and `Math.random()` read the host's deterministic clock
+(`epochAtZero + clock_ms` for wall time; `clock_ms` for `performance.now()`)
+and an isolated `--seed` substream (`ts-random` / `ts-init`, separate from
+`crypto.randomUUID()`) under the driver or platform CSPRNG in production.
+Resources that read the ambient clock or draw ambient randomness are excluded
+from launch bake, excluded from SSR response caching (`keep = 0`), refused in
+`render=build`, and emit a once-per-resource `[ambient-clock]` journal warning
+pointing to `exactTime()` for reactive or SSR-safe time. Under Bun unit tests,
+pass `--preload ./scripts/test-clock-preload.mjs` (`EXACT_TEST_EPOCH`,
+`EXACT_TEST_SEED`, `EXACT_TEST_TIME_ZONE`).
+
 Not in a data module, by design (LLP 1027.000): `setInterval`,
-`requestAnimationFrame`, `performance.now()`, `Date.now()`, `new Date()`
-without a value and `Math.random()`: time and seeds are source arguments.
-Every executor refuses them by name, with the same message, on first use:
-Hermes, the web's module realm, and the web build, whose bundler gives the
-app's own modules guarded `Date`, `Math`, `Intl`, timers and `performance` in
-place of the page's (LLP 1027.000 D3), so an app that reads the clock fails in
-the web loop as it would on a device. The type check cannot see the difference, but every
-build refuses a direct use in a module `app.ts` reaches, by file and line
-(`logic.ts:2:28: Date.now() is unavailable in data sources; …`), so a test that
-runs the module under Bun, which has no such guard, cannot hide it.
-Literal bracket access such as `Date['now']()` and `globalThis['setInterval']()`
-gets the same diagnostic as dot access, including in the web build's summary.
-Aliases and dynamic property keys still reach the runtime guard. In a running
-session, a refused TypeScript answer fails its resource and keeps its last value
-or placeholder; the typed input or action still commits. `failure(x).code` is
-`error` for the module's own error, unless its nonempty `reason` supplies a domain code. A failed send ends unsent, retains its previous
-result and runs no `then`, including when queued. The journal names the failure.
-Module initialization, bake and replacement validation still refuse failures.
-Development JS builds name a derive
-whose value fails its type check and report failed resource/source dependencies
-that it read.
+`requestAnimationFrame`, and `requestIdleCallback` (use `setTimeout` inside an
+answer or a Contract `task`). Every build refuses direct and literal-bracket
+calls to those timers in `app.ts` by file and line, and every executor refuses
+them at runtime. `XMLHttpRequest`, `WebSocket`, and `EventSource` are absent
+(`typeof WebSocket === "undefined"`) on every executor; use `fetch()` with
+`exactStream`. In a running session, a refused TypeScript answer fails its
+resource and keeps its last value or placeholder; the typed input or action
+still commits. `failure(x).code` is `error` for the module's own error, unless
+its nonempty `reason` supplies a domain code. A failed send ends unsent,
+retains its previous result and runs no `then`, including when queued. The
+journal names the failure. Module initialization, bake and replacement
+validation still refuse failures. Development JS builds name a derive whose
+value fails its type check and report failed resource/source dependencies that
+it read.
 ES2024's resizable `ArrayBuffer`, shared memory and the RegExp `v` flag are not
 in Hermes, so they are not in the library.
 

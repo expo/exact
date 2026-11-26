@@ -3279,7 +3279,12 @@ the virtual clock).
   control's, whatever button declares it. A chord's key is one character,
   a named key, or F1–F35; the paste chord (⌘V, Control+V off the Mac) is a
   chord like any other, so a button declaring it takes the driver's `type
-  … paste` too and the paste never lands. On iPadOS a hardware keyboard's
+  … paste` too and the paste never lands. A key that types no Latin letter
+  (Russian's с, Greek's ψ, ㅠ under Korean 2-Set) also takes the chord of the
+  key the US layout puts in its place, as browsers match it: under such a
+  layout Control+C copies in a field and a button declaring Control+K takes
+  the K key. A Latin letter is the key wherever it is (AZERTY's A, German's
+  ö). On iPadOS a hardware keyboard's
   F13–F24 reach `key` handlers but no shortcut (UIKit's key commands name
   F1–F12 only); the driver's reach both, as everywhere.
   `Mod` is the primary modifier in any modifier position. It means `Meta`

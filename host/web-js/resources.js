@@ -326,6 +326,7 @@ export function res(
         t,
         (p, o) => {
           if (t.call?.seen?.read || p.store) r.store = t.read = true;
+          if (t.call?.clockRead || p.clock) r.clock = true;
           if (p.req) {
             // A request its reply asks for is the same answer's, asked by the same origin.
             const req = { ...p.req, forced: t.forced, origin: t.req?.origin };
@@ -368,6 +369,7 @@ export function res(
         'it keeps its last value',
         (error, code, reason) => {
           if (t.call?.seen?.read || t.read || data.threwRead?.()) r.store = true;
+          if (t.call?.clockRead || data.threwClock?.()) r.clock = true;
           r.ticket = null;
           r.failed = t.args;
           r.error = error;
@@ -462,6 +464,7 @@ export function res(
         } catch (e) {
           // a failed ask watched what it read, the shown answer's topics kept
           if (data.threwRead?.()) r.store = true;
+          if (data.threwClock?.()) r.clock = true;
           for (const t of data.threwWatches?.() ?? []) (r.watches ??= new Set()).add(t);
           if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
           if (e.refuse && !reconciling) throw new Failed(`resource ${name}: ${e.message}`);
@@ -471,6 +474,7 @@ export function res(
         }
         // a fresh answer's topics replace the last's (LLP 1016.002 D2), a later turn's joining them
         if (ans && ans.store) r.store = true;
+        if (ans && ans.clock) r.clock = true;
         r.watches = ans?.watches;
         if (ans && 'v' in ans) {
           // a placeholder answered as it is asked shows in no frame

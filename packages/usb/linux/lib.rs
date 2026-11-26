@@ -325,6 +325,21 @@ impl Usb {
     }
 }
 
+/// Whether the device a connection opened is still plugged in: its sysfs directory names the same node, which a
+/// device plugged in again does not (its `devnum` is new).
+fn present(d: &Device) -> bool {
+    format!("/dev/bus/usb/{:03}/{:03}", dec(&d.sys.join("busnum")), dec(&d.sys.join("devnum"))) == d.node
+}
+
+/// `usbConnection`'s answer, as the web's: a close leaves the device connected, and an unplug ends both.
+fn connection_state(c: Option<&Connection>, claimed: Vec<u32>) -> Json {
+    let Some(c) = c.filter(|c| present(&c.device)) else {
+        return json!({ "open": false, "connected": false, "configuration": null, "claimed": [] });
+    };
+    let claimed = if c.open { claimed } else { Vec::new() };
+    json!({ "open": c.open, "connected": true, "configuration": configured(&c.device.sys), "claimed": claimed })
+}
+
 /// A transfer's buffer: `length` bytes to read, or the bytes to write, at most `most` either way; else the call's
 /// `TypeError`, before anything the size of `length` is allocated. A control transfer's `wLength` is 16 bits, so its
 /// `most` is 65,535, as macOS has it.
@@ -411,10 +426,13 @@ impl Package for Usb {
                     }
                 }
             }
-            "usbConnection" => match self.handle(args) {
-                Ok((h, c, o)) => json!({ "open": true, "connected": true, "configuration": configured(&c.device.sys), "claimed": o.claims.iter().filter(|(_, c)| **c == h).map(|(n, _)| *n).collect::<Vec<_>>() }),
-                Err(_) => json!({ "open": false, "connected": false, "configuration": null, "claimed": [] }),
-            },
+            "usbConnection" => {
+                let h = args["connection"].as_str().unwrap_or_default();
+                let c = self.connections.get(h);
+                let claims = c.and_then(|c| self.opens.get(&c.device.id)).map(|o| &o.claims);
+                let claimed: Vec<u32> = (claims.into_iter().flatten()).filter(|(_, c)| c.as_str() == h).map(|(n, _)| *n).collect();
+                connection_state(c, claimed)
+            }
             "selectConfiguration" => self.uint(args, SETCONFIGURATION, args["configurationValue"].as_u64().unwrap_or(1) as u32),
             "claimInterface" => {
                 let n = args["interfaceNumber"].as_u64().unwrap_or(0) as u32;
@@ -535,5 +553,29 @@ mod tests {
         let write = |bytes: usize| buffer(&json!({ "data": base64(&vec![7u8; bytes]) }), false, 65535, "transfer");
         assert_eq!(write(65535).map(|b| b.len()), Ok(65535));
         assert_eq!(write(65536).unwrap_err()["error"], "TypeError");
+    }
+
+    /// A closed connection's device reads connected while it stays plugged in; once unplugged, or plugged in again
+    /// as another node, the connection reads neither open nor connected.
+    #[test]
+    fn a_connection_reads_its_device_plugged_in_or_not() {
+        let dir = std::env::temp_dir().join(format!("exact-usb-connection-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (file, text) in [("busnum", "1\n"), ("devnum", "5\n"), ("bConfigurationValue", "1\n")] {
+            std::fs::write(dir.join(file), text).unwrap();
+        }
+        let device = Device { id: "2341:0043@1-2".into(), node: "/dev/bus/usb/001/005".into(), sys: dir.clone(), record: json!({}) };
+        let mut c = Connection { device, open: true };
+        let state = |c: &Connection| connection_state(Some(c), vec![0]);
+        assert_eq!(state(&c), json!({ "open": true, "connected": true, "configuration": 1, "claimed": [0] }));
+        c.open = false;
+        assert_eq!(state(&c), json!({ "open": false, "connected": true, "configuration": 1, "claimed": [] }));
+        c.open = true;
+        std::fs::write(dir.join("devnum"), "6\n").unwrap();
+        let gone = json!({ "open": false, "connected": false, "configuration": null, "claimed": [] });
+        assert_eq!(state(&c), gone, "plugged in again as another node");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(state(&c), gone, "unplugged");
+        assert_eq!(connection_state(None, Vec::new()), gone);
     }
 }

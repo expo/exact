@@ -127,6 +127,9 @@ final class SplitHost {
     /// Each root route's prior list: the runner decides whether it may keep
     /// its column with no actionable rows, including static empty content.
     private var kept: [UInt32: UInt32] = [:]
+    /// The split rule the last applied batch carried (`Batch.split`), so
+    /// main does not wait on the owner to read it (LLP 1072 T2).
+    private var heardSplit: HeardSplit?
     /// Each route that is a row's detail, with that row's press and the
     /// route's location when it became so. A route that moved since is
     /// still where its stack's pane begins, with no row.
@@ -231,6 +234,7 @@ final class SplitHost {
         for entry in held.values { entry.route.removeFromSuperview() }
         placeholder?.removeFromSuperview()
         held.removeAll(); rowOf.removeAll(); seen.removeAll(); kept.removeAll(); ended.removeAll()
+        heardSplit = nil
         shown = nil; pressing = nil; lastDetail = nil; selected = nil; placeholder = nil; veiled = nil
         mark(nil)
         controller?.split(false, width: nil, empty: false)
@@ -238,12 +242,39 @@ final class SplitHost {
 
     private static func sheet(_ route: NodeView) -> Bool { NavigationRules.presents(route.props["navigationPresentation"]) }
 
-    /// Read the runner's rule every batch: layout-only style changes can
-    /// leave the wire's frames and paint unchanged. Only the prior list's
-    /// identity is kept; its eligibility and any explicit width are fresh.
+    /// A batch's split rule (`Batch.split`), as navigation projects it: the
+    /// newest the runtime made is the one main keeps (LLP 1072 T2).
+    func hearSplit(_ batch: Batch) {
+        guard let read = batch.split, read.sequence > heardSplit?.read.sequence ?? 0 else { return }
+        heardSplit = heardSplit?.read.json == read.json ? heardSplit.map { HeardSplit(read, rule: $0.rule) } : HeardSplit(read)
+    }
+
+    /// The runner's rule for `list`, from the last applied batch that could
+    /// change it (`Batch.split`), so main does not wait on the owner for it
+    /// (LLP 1072 T2). A stack no batch has answered for yet (a new root route
+    /// or retained list), or a row press asking `pressWrites`, asks the runner;
+    /// later batches carry it.
     private func ask(_ list: NodeView) -> StackSplit? {
-        let answer = presenter.session?.runtime.stackSplit(list.id, retaining: kept[list.id], pressed: pressing)
+        guard let session = presenter.session else { return nil }
+        let retained = kept[list.id] ?? 0
+        let answer: StackSplit?
+        if pressing != nil {
+            answer = session.runtime.stackSplit(list.id, retaining: kept[list.id], pressed: pressing)
+        } else if let heard = heardSplit, heard.read.view == list.id,
+                  heard.read.retained == retained || (retained != 0 && heard.rule?.list == retained) || (retained == 0 && heard.rule == nil) {
+            answer = heard.rule
+        } else {
+            guard let read = session.runtime.on(busy: nil, {
+                session.runtime.readSplit(list.id, retained: retained, sequence: session.runtime.sequence.newest)
+            }) else { return nil }
+            heardSplit = HeardSplit(read)
+            answer = heardSplit?.rule
+        }
+        let nextRetained = answer?.list ?? 0
         kept[list.id] = answer?.list
+        if pressing == nil, let heard = heardSplit, heard.read.view == list.id, nextRetained != heard.read.retained {
+            session.runtime.retainSplit(list.id, from: heard.read.retained, to: nextRetained)
+        }
         return answer
     }
 

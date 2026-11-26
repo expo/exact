@@ -232,9 +232,8 @@ pub struct Presenter<D: DataSource> {
     pub(crate) host: Host<D>,
     /// The scroller the last wheel moved.
     last_wheel: Option<ViewId>,
-    /// Per snapping scroller, where its wheel would have put it unsnapped and
-    /// where it put it (`snap.rs`).
-    wheel_free: BTreeMap<ViewId, snap::WheelFree>,
+    /// Per snapping scroller, an unsettled fine-tick wheel gesture (`snap.rs`).
+    wheel_snap: BTreeMap<ViewId, snap::WheelSnap>,
     /// The snap geometry each scroller last had a chance to settle in.
     snap_layout: snap::Layouts,
     /// The display's clock while it owns time, given to every host (`clock.rs`)
@@ -652,7 +651,7 @@ impl<D: DataSource> Presenter<D> {
         brush.canvases.drawings = host.canvas_snapshots().clone();
         let mut p = Presenter {
             last_wheel: None,
-            wheel_free: BTreeMap::new(),
+            wheel_snap: BTreeMap::new(),
             snap_layout: Default::default(),
             host,
             executor,
@@ -1189,6 +1188,7 @@ impl<D: DataSource> Presenter<D> {
                 self.window_focus = None;
             }
             self.scroll_end.forget(*id);
+            self.wheel_snap.remove(id);
             self.dirty |= self.scroll.remove(id).is_some();
         }
         self.renew_scroll_anchors(&renewed);
@@ -1461,6 +1461,7 @@ impl<D: DataSource> Presenter<D> {
         }
         self.tick_arrange(self.host.now());
         self.tick_field_drag(self.host.now());
+        self.settle_wheel_snaps();
         self.step_glides(now_ms);
         self.step_zooms(now_ms);
         if let Some(error) = self.deliver_scroll_ends() {

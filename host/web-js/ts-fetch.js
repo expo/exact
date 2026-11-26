@@ -29,8 +29,9 @@ export function fetchReply(promise, call = currentContext()) {
 // A response's body reads and clones in the module's promise domain, without changing the page's Response prototype:
 // the four Hermes's Response has (js/src/binary.js).
 export function responseFor(response) {
-  if (response instanceof Response) for (const name of ['arrayBuffer', 'json', 'text', 'clone']) {
+  if (response instanceof Response) for (const name of ['arrayBuffer', 'json', 'text', 'blob', 'bytes', 'clone']) {
     const read = response[name];
+    if (typeof read !== 'function') continue;
     response[name] = function (...args) {
       const value = read.apply(this, args);
       return name == 'clone' ? responseFor(value) : AnswerPromise.resolve(value);
@@ -250,7 +251,7 @@ export const files = { appId: null };
 // `mapperCall`: the pending mapper invocation, in every turn of that call: ts-stream.js sets it for the
 // synchronous part, and the bundle's async helper puts it back at each step of an async function the call made
 // (ts-data.js `__exact_async_context`), as Hermes's prelude carries a mapper's `currentCall`.
-export const answering = { call: null, untraced: new Set(), sockets: false, mapper: null, mapperCall: null, loose: () => {}, heldReply: () => {}, ordinary, page: null, entropy: null, later: null }; // the hooks: held.js's, set by the page's entry; `ordinary` for ts-data.js; `page`, the runtime's clock, journal, `drive` and `time`, set by ts-data.js
+export const answering = { call: null, untraced: new Set(), sockets: false, mapper: null, mapperCall: null, loose: () => {}, heldReply: () => {}, ordinary, page: null, entropy: null, random: null, randomInit: null, epoch: null, onClockRead: null, moduleClock: false, moduleEntropy: false, later: null }; // the hooks: held.js's, set by the page's entry; `ordinary` for ts-data.js; `page`, the runtime's clock, journal, `drive` and `time`, set by ts-data.js
 // Entropy in a promise reaction belongs to its pending call. The page keeps its own Promise and prototype.
 // Storage delivered after an answer ends belongs to background work (LLP 1097 D2), and so does a promise that
 // follows it or that background work settles (a combinator over storage), as a Hermes drain runs both in the
@@ -301,12 +302,11 @@ function stream(input, init, redirect, protocols) {
   return new Promise(() => {});
 }
 
-// Time and seeds are source arguments (LLP 1027.000 D3): the app's modules see
-// these in place of the page's Date, Math, Intl, timers and performance, each
-// refusing what Hermes refuses with Hermes's words (js/src/time.js, crypto.js), so an
-// app that reads the clock fails on the web as it would on a device. An
-// explicit date, UTC arithmetic and an explicit timestamp's formatting work.
-const refuse = api => { throw new Error(`${api} is unavailable in data sources; pass time or a random seed as an argument`); };
+// Virtualized clock and Math.random() (LLP 1195.000 D2): data sources read the
+// host's deterministic clock (`epoch + clock_ms` for wall time; `clock_ms` for
+// monotonic `performance.now()`) and isolated `--seed` substream (`ts-random` /
+// `ts-init`) under agent/test or platform CSPRNG in production. Timers other
+// than `setTimeout` remain refused.
 const noTimers = api => () => { throw new Error(`${api} is unavailable in data sources: an answer waits with setTimeout; pass time as an argument`); };
 // An answer's own timers (LLP 1027.000 D1 as amended 2026-10-28), with Hermes's rules (js/src/time.js `timers`).
 // Each is an entry of the page's clock (the driver's under the agent, whose `clock +N` and `clock settle` fire it)
@@ -473,23 +473,84 @@ const GuardedAbortSignal = PageAbortSignal && new Proxy(PageAbortSignal, { get(t
 // prototype is or inherits the real one, with no `format` accessor of its own):
 // a guard over the fake would find no getter and the page would not start.
 const NativeDate = globalThis.Date.prototype.constructor, NativeMath = globalThis.Math, NativeIntl = globalThis.Intl, construct = Reflect.construct;
+const AGENT_EPOCH = 1767225600000;
+let cachedAgentEpoch;
+function agentEpoch() {
+  if (cachedAgentEpoch !== undefined) return cachedAgentEpoch;
+  cachedAgentEpoch = null;
+  try {
+    const href = globalThis.performance?.getEntriesByType?.('navigation')[0]?.name ?? globalThis.location?.href;
+    if (!href) return null;
+    const params = new URL(href).searchParams;
+    if (!['', '1'].includes(params.get('agent'))) return null;
+    const raw = params.get('epoch');
+    const n = raw == null ? AGENT_EPOCH : Number(raw);
+    cachedAgentEpoch = Number.isSafeInteger(n) && n >= 0 ? n : AGENT_EPOCH;
+  } catch {}
+  return cachedAgentEpoch;
+}
+function readWallClock(api) {
+  if (overlaying.on) throw inOverlay(api);
+  answering.moduleClock = true;
+  answering.onClockRead?.();
+  globalThis.__exactClock?.();
+  if (globalThis.__exactRender) return Math.floor(answering.page ? answering.page.clock.now : 0);
+  const page = answering.page;
+  if (page && !page.clock.agent) page.time();
+  const elapsed = page ? page.clock.now : 0;
+  if (answering.epoch) return Math.floor(answering.epoch(elapsed) + elapsed);
+  const ae = agentEpoch();
+  if (ae !== null) return Math.floor(ae + elapsed);
+  // Read the page's Date.now() so test fake clocks (Playwright clock.install / setFixedTime) apply too.
+  return Math.floor(globalThis.Date.now());
+}
+function readPerfNow() {
+  if (overlaying.on) throw inOverlay('performance.now()');
+  answering.moduleClock = true;
+  answering.onClockRead?.();
+  globalThis.__exactClock?.();
+  const page = answering.page;
+  if (page && !page.clock.agent) page.time();
+  return page ? page.clock.now : 0;
+}
+// 53 uniform bits from 7 bytes, matching js/src/crypto.js `randomFloat`.
+function randomFloat(b) {
+  const hi = ((b[0] << 16) | (b[1] << 8) | b[2]) & 0x1fffff;
+  const lo = ((b[3] << 24) | (b[4] << 16) | (b[5] << 8) | b[6]) >>> 0;
+  return (hi * 4294967296 + lo) / 9007199254740992;
+}
+function nextRandom() {
+  if (overlaying.on) throw inOverlay('Math.random()');
+  answering.moduleEntropy = true;
+  globalThis.__exactAmbientEntropy?.();
+  const stream = answering.page ? answering.random : answering.randomInit;
+  if (stream) {
+    if (!stream.said) {
+      stream.said = true;
+      answering.page?.journal.push(`crypto: the driver seeds this launch's randomness (seed ${stream.seed}), so each launch at that seed draws the same bytes; --seed <n> draws others (LLP 1069.005 D2b)`);
+    }
+    return randomFloat(stream(7));
+  }
+  const b = new Uint8Array(7);
+  globalThis.crypto.getRandomValues(b);
+  return randomFloat(b);
+}
 // A function, not a Proxy of the page's Date: its instances' prototype says
-// `constructor` is this one, so `new (new Date(0).constructor)()` refuses too.
+// `constructor` is this one, so `new (new Date(0).constructor)()` reads the
+// virtualized clock too.
 function GuardedDate(...args) {
-  if (!new.target) return refuse('Date()');
-  if (!args.length) return refuse('new Date()');
+  if (!new.target) return new NativeDate(readWallClock('Date()')).toString();
+  if (!args.length) return construct(NativeDate, [readWallClock('new Date()')], new.target);
   return construct(NativeDate, args, new.target);
 }
 GuardedDate.prototype = Object.create(NativeDate.prototype, { constructor: { value: GuardedDate, writable: true, configurable: true } });
 Object.defineProperties(GuardedDate, {
-  now: { value: () => refuse('Date.now()') }, UTC: { value: NativeDate.UTC }, parse: { value: NativeDate.parse },
+  now: { value: () => readWallClock('Date.now()') }, UTC: { value: NativeDate.UTC }, parse: { value: NativeDate.parse },
   name: { value: 'Date' }, [Symbol.hasInstance]: { value: v => v instanceof NativeDate },
 });
 const GuardedMath = Object.freeze(Object.create(Object.getPrototypeOf(NativeMath), Object.fromEntries(Reflect.ownKeys(NativeMath).map(k => [k,
-  k === 'random' ? { value: () => { throw new Error('Math.random() is unavailable in data sources; seed from crypto.getRandomValues in a source (docs/recipes/random-and-shuffle.md), or pass a seed as an argument; a roll in the view needs no source (docs/recipes/random-rolls.md)'); } }
-    : Object.getOwnPropertyDescriptor(NativeMath, k)]))));
-// Intl.DateTimeFormat defaults an omitted date to the clock: its `format` and
-// `formatToParts` refuse one, through any alias the app can reach.
+  k === 'random' ? { value: nextRandom } : Object.getOwnPropertyDescriptor(NativeMath, k)]))));
+// Intl.DateTimeFormat defaults an omitted date to the virtualized clock.
 let formatProto = NativeIntl.DateTimeFormat.prototype;
 while (!Object.getOwnPropertyDescriptor(formatProto, 'format')?.get) formatProto = Object.getPrototypeOf(formatProto);
 const NativeFormat = formatProto.constructor, nativeFormat = Object.getOwnPropertyDescriptor(formatProto, 'format').get;
@@ -499,18 +560,12 @@ DateTimeFormat.prototype = Object.create(NativeFormat.prototype, {
   constructor: { value: DateTimeFormat, writable: true, configurable: true },
   format: { configurable: true, get() {
     const f = nativeFormat.call(this);
-    if (!formats.has(f)) formats.set(f, (...args) => args[0] === undefined ? refuse('Intl.DateTimeFormat.format()') : f(...args));
+    if (!formats.has(f)) formats.set(f, (...args) => args[0] === undefined ? f(readWallClock('Intl.DateTimeFormat.format()')) : f(...args));
     return formats.get(f);
   } },
-  formatToParts: { configurable: true, writable: true, value(...args) { return args[0] === undefined ? refuse('Intl.DateTimeFormat.formatToParts()') : nativeParts.apply(this, args); } },
+  formatToParts: { configurable: true, writable: true, value(...args) { return args[0] === undefined ? nativeParts.call(this, readWallClock('Intl.DateTimeFormat.formatToParts()')) : nativeParts.apply(this, args); } },
 });
 Object.setPrototypeOf(DateTimeFormat, NativeFormat);
-// A data module does no I/O of its own (LLP 1016.000 D3, D7: its socket
-// belongs to a resource opened by `fetch` with `exactStream`): the page's
-// XMLHttpRequest, WebSocket and EventSource refuse, as the wasm target's realm
-// refuses them (host/web/module-glue.js), so no independent socket or origin
-// is reached past the grants.
-const noIo = api => function () { throw new Error(`${api} is unavailable in data sources`); };
 // `scheduler.yield()` (LLP 1141.001 D10): the browser's where it has one, else
 // a task posted on a MessageChannel, which no timer clamp delays. The page has
 // no turn budget; a yield here lets it paint and answer input mid-walk.
@@ -531,10 +586,15 @@ const noEval = { eval(source) { return codeFromString(source); } }.eval;
 Object.defineProperty(NoFunction, 'prototype', { value: globalThis.Function.prototype });
 // Fixed, so no `delete` or write uncovers the inherited one.
 for (const f of [NoFunction, noEval]) Object.defineProperty(f, 'constructor', { value: NoFunction, writable: false, configurable: false });
+// Minimal frozen `process` shim for isomorphic npm packages (LLP 1195.000 D1.3).
+const minimalProcess = Object.freeze({
+  env: Object.freeze({ NODE_ENV: globalThis.__exactProduction === false ? 'development' : 'production' }),
+  versions: Object.freeze({}),
+  release: Object.freeze({}),
+});
 const guarded = {
   exactHost() { answerOnly('exactHost()'); return 'web'; },
-  Date: GuardedDate, Math: GuardedMath, Function: NoFunction, eval: noEval,
-  XMLHttpRequest: noIo('XMLHttpRequest'), WebSocket: noIo('WebSocket'), EventSource: noIo('EventSource'),
+  Date: GuardedDate, Math: GuardedMath, Function: NoFunction, eval: noEval, process: minimalProcess,
   Intl: Object.freeze(Object.create(NativeIntl, { DateTimeFormat: { value: DateTimeFormat } })),
   setTimeout(callback, delay, ...args) {
     if (typeof callback !== 'function') throw new TypeError('setTimeout(): the callback must be a function; a string of code is never run');
@@ -544,7 +604,7 @@ const guarded = {
   setInterval: noTimers('setInterval()'), AbortSignal: GuardedAbortSignal,
   requestAnimationFrame: noTimers('requestAnimationFrame()'), requestIdleCallback: noTimers('requestIdleCallback()'),
   clearInterval() {}, cancelAnimationFrame() {}, cancelIdleCallback() {},
-  performance: Object.freeze({ now: () => refuse('performance.now()') }),
+  performance: Object.freeze({ now: readPerfNow }),
   scheduler: Object.freeze({
     yield: () => owned(overlaying.on ? Promise.reject(inOverlay('scheduler.yield()')) : pageYield()),
     postTask() { throw new Error('scheduler.postTask() is unavailable in data sources; split long work with await scheduler.yield()'); },
@@ -560,7 +620,9 @@ const guarded = {
       const v = target[name];
       return typeof v !== 'function' ? v : (...a) => new AnswerPromise(resolve => {
         const api = `crypto.subtle.${String(name)}()`;
-        if (name === 'generateKey' || name === 'sign') answerOnly(api); else if (overlaying.on) throw inOverlay(api);
+        const alg = String(typeof a[0] === 'string' ? a[0] : a[0]?.name ?? '').toUpperCase();
+        if (name === 'generateKey' || (name === 'sign' && !['HMAC', 'ED25519', 'RSASSA-PKCS1-V1_5'].includes(alg))) answerOnly(api);
+        else if (overlaying.on) throw inOverlay(api);
         resolve(ordinary(() => v.apply(target, a)));
       });
     } }),
@@ -600,7 +662,7 @@ function seeded(n) {
   return stream(n);
 }
 export const { Date, Math, Intl, setTimeout, setInterval, requestAnimationFrame, requestIdleCallback, clearTimeout, clearInterval,
-  cancelAnimationFrame, cancelIdleCallback, performance, scheduler, queueMicrotask, XMLHttpRequest, WebSocket, EventSource, crypto, exactHost } = guarded;
+  cancelAnimationFrame, cancelIdleCallback, performance, scheduler, queueMicrotask, process, crypto, exactHost } = guarded;
 // Not a binding of this module's own: its `fetch` keeps the page's `AbortSignal.timeout` for `exactTimeout`.
 export { GuardedAbortSignal as AbortSignal, ModuleResponse as Response };
 // By name, since no binding of this module may be named `Function` or `eval` here; a module imports `eval` under
@@ -617,7 +679,7 @@ const methods = new WeakMap();
 // portable; it is no security boundary (LLP 1027 D5): the module runs in the
 // page's realm, and its code is the app author's.
 const ABSENT = new Set(['window', 'self', 'frames', 'parent', 'top', 'opener', 'document', 'navigator', 'location', 'history', 'localStorage', 'sessionStorage',
-  'indexedDB', 'HTMLElement', 'Element', 'getComputedStyle', 'customElements', 'alert', 'process', 'Buffer', 'global']);
+  'indexedDB', 'HTMLElement', 'Element', 'getComputedStyle', 'customElements', 'alert', 'Buffer', 'global', 'XMLHttpRequest', 'WebSocket', 'EventSource']);
 export const absent = undefined;
 // Over a target of its own, not the page's global object, whose
 // non-configurable properties (`window`, `document`, `top`) a proxy over it

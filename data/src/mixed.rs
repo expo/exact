@@ -512,6 +512,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         }
         let mut local = Store::new(&grants, envelope::snapshot(store, &grants));
         local.set_clock_ms(store.clock_ms());
+        local.set_epoch_at_zero(store.epoch_at_zero());
         let result = match recorded {
             Recorded::WorkerTurn { .. } => unreachable!("a worker turn belongs to a worker"),
             Recorded::Answer {
@@ -594,6 +595,14 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     fn render_web(&mut self) {
         self.javascript.render_web();
         self.rust.render_web();
+    }
+
+    fn ambient_taint(&self, source: &str) -> (bool, bool) {
+        match self.owner(source) {
+            Ok(true) => self.rust.ambient_taint(source),
+            Ok(false) => self.javascript.ambient_taint(source),
+            Err(_) => (false, false),
+        }
     }
 
     fn take_logs(&mut self) -> Vec<String> {

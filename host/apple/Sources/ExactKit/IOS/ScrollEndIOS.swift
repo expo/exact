@@ -21,7 +21,22 @@ extension NodeView {
     }
     package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         guard scrollView === self.scrollView, presenter?.elementScrolls.cutting !== scrollView else { return }
+        let authored = authoredScrollAnimating
         followingEndAnimated = false; authoredScrollAnimating = false
+        if let after = afterScrollAnimation {
+            afterScrollAnimation = nil
+            if let next = after() {
+                // UIKit starts no new animation from inside the callback that ends one (`CollectionHost.animationEnded`):
+                // the scroll goes on next turn, and this end is that one's. A reader who took the list meanwhile ends it.
+                authoredScrollAnimating = authored
+                DispatchQueue.main.async { [weak self, weak scrollView] in
+                    guard let self, let scrollView, scrollView === self.scrollView, !scrollView.scrollsItself else { return }
+                    if scrollView.contentOffset != next { scrollView.setContentOffset(next, animated: true) }
+                    else { self.scrollViewDidEndScrollingAnimation(scrollView) }
+                }
+                return
+            }
+        }
         presenter?.elementScrolls.revealEnded(scrollView)
         // A smooth correction's driver ends its own motion (`OffsetDriver`);
         // a UIKit animation's end is not its end.
@@ -36,6 +51,7 @@ extension NodeView {
         let maximum = max(-sv.adjustedContentInset.top, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
         anchoredScrollTop = maximum
         guard sv.contentOffset.y >= maximum - 80, abs(sv.contentOffset.y - maximum) > 0.5, !authorOwnsScroll(sv) else { return false }
+        afterScrollAnimation = nil
         sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: maximum), in: sv), animated: true)
         return true
     }

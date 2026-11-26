@@ -195,6 +195,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
 
     private val fields = HashMap<Int, Field>()
     private val byView = HashMap<View, Field>()
+    private val fieldVis = android.graphics.RectF()
     private val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
     /** The reader is changing a field itself (a value exact2 told, a focus it asked for): nothing to tell back. */
     private var quiet = false
@@ -273,6 +274,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
     fun adopted(by: ExactView) {
         view = by
         away = false
+        by.nativeOrigins.tracksFields = fields.isNotEmpty()
         for (f in fields.values) f.dirty = true
     }
 
@@ -340,6 +342,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             i = end
         }
         if (fields.size > seen.size) for (f in fields.values.filter { !seen.contains(it.id) }) release(f)
+        view?.nativeOrigins?.tracksFields = fields.isNotEmpty()
         if (wanted != 0) fields[wanted]?.let { focus(it.id) }
         if (log && fields.size != had) Log.i(TAG, "fields: ${w[0]} told, $had held before, ${(System.nanoTime() - began) / 1000} us")
     }
@@ -639,14 +642,19 @@ internal class Fields(context: Context) : FrameLayout(context) {
             f.text.translationX = 0f; f.text.translationY = 0f
             return
         }
-        val g = if (f.group != 0) view?.group(f.group) else null
-        f.atX = (f.x + (g?.translationX ?: 0f)).roundToInt().toFloat()
-        f.atY = (f.y + (g?.translationY ?: 0f)).roundToInt().toFloat()
+        val gx = if (f.group != 0) view?.groupOffsetX(f.group) ?: 0f else 0f
+        val gy = if (f.group != 0) view?.groupOffsetY(f.group) ?: 0f else 0f
+        f.atX = (f.x + gx).roundToInt().toFloat()
+        f.atY = (f.y + gy).roundToInt().toFloat()
         // The port is the field's box within its clip: Android gives a drag to the frontmost view under it that takes
         // drags, and looks no further than that view's children, so a port larger than its field would keep a drag
         // from the fields under it (LLP 1094.001 D5)
         var left = f.atX; var top = f.atY; var right = f.atX + f.w; var bottom = f.atY + f.h
-        if (f.clipW >= 0f) {
+        if (f.group != 0 && view?.hasParentGroup(f.group) == true &&
+            view?.fieldVisible(f.node, f.w.toFloat(), f.h.toFloat(), fieldVis) == true) {
+            if (fieldVis.isEmpty) { left = 0f; top = 0f; right = 0f; bottom = 0f }
+            else { left = fieldVis.left; top = fieldVis.top; right = fieldVis.right; bottom = fieldVis.bottom }
+        } else if (f.clipW >= 0f) {
             left = max(left, f.clipX); top = max(top, f.clipY)
             right = min(right, f.clipX + f.clipW); bottom = min(bottom, f.clipY + f.clipH)
         }

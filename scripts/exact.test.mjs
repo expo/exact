@@ -1494,7 +1494,7 @@ test('exact new names setup --check for each native platform the app names, whos
   const named = /^Before the first macos build: bun (.+? setup --check --platform macos) names/m.exec(made.stdout);
   const checked = spawnSync('/bin/sh', ['-c', `${shellPath(process.execPath)} ${named[1]}`], { cwd: resolve(dir, 'with-native'), encoding: 'utf8', timeout: 120_000 });
   assert.doesNotMatch(checked.stderr, /Usage: exact setup/);
-  assert.match(checked.stdout, /\bXcode\b|\bmacOS\b/);
+  if (process.platform === 'darwin') assert.match(checked.stdout, /\bXcode\b|\bmacOS\b/); else assert.match(checked.stderr, /macos needs a Mac with Xcode/);
   const plain = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'web-only')], { encoding: 'utf8', timeout: 120_000 });
   assert.doesNotMatch(plain.stdout, /Before the first/);
 }); }, 240_000);

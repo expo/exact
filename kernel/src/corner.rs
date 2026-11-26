@@ -244,18 +244,26 @@ fn corner_points(corner: Corner, ra: f32, rd: f32, out: &mut Vec<(f32, f32)>) {
         Corner::Superellipse(k) if k == f32::NEG_INFINITY => {
             out.extend([(0.0, rd), (ra, rd), (ra, 0.0)])
         }
+        // A negative K is the concave mirror of -K across the corner's chord
+        // (CSS Borders 4 §3.7: `scoop` is a concave quarter-ellipse), not
+        // the curve of exponent 2^K, which cuts deeper.
+        Corner::Superellipse(k) if k < 0.0 => {
+            let from = out.len();
+            corner_points(Corner::Superellipse(-k), ra, rd, out);
+            for (a, d) in &mut out[from..] {
+                (*a, *d) = (ra - ra * *d / rd, rd - rd * *a / ra);
+            }
+        }
         Corner::Superellipse(k) => {
             // X^p + Y^p = 1 about the corner box's inner point, p = 2^K, as
             // the point (ra - ra X, rd - rd Y). One half is sampled, small X
-            // up to the diagonal, spaced so X^p is even when p < 1 (where
-            // the curve meets the edges steeply); the other is its mirror.
+            // up to the diagonal; the other is its mirror.
             let p = 2f32.powf(k);
             let n = ((ra.max(rd) * 0.5).ceil() as usize).clamp(6, 48);
             let diagonal = 0.5f32.powf(1.0 / p);
-            let q = if p < 1.0 { 1.0 / p } else { 1.0 };
             let half: Vec<(f32, f32)> = (0..=n)
                 .map(|i| {
-                    let x = diagonal * (i as f32 / n as f32).powf(q);
+                    let x = diagonal * i as f32 / n as f32;
                     let y = (1.0 - x.powf(p)).max(0.0).powf(1.0 / p);
                     (x, y)
                 })

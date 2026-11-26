@@ -36,6 +36,32 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         XCTAssertNotNil(element(ungrouped, "inside"))
     }
 
+    /// A native view's accessibility element with a non-finite frame (infinite,
+    /// NaN, or overflowing coordinate rounding) is reported without a frame
+    /// instead of crashing JSONSerialization.
+    func testNonFiniteAccessibilityFramesAreOmittedInsteadOfCrashingJson() throws {
+        let p = try fixture()
+        let drawn = UIView(frame: CGRect(x: 200, y: 0, width: 60, height: 60))
+        let cases: [(String, CGRect)] = [
+            ("Infinite", CGRect(x: -1e38, y: -1e38, width: CGFloat.infinity, height: .infinity)),
+            ("NaN", CGRect(x: CGFloat.nan, y: 0, width: 60, height: 60)),
+            ("Overflow", CGRect(x: -1e308, y: 0, width: 60, height: 60)),
+        ]
+        drawn.accessibilityElements = cases.map { name, rect in
+            let element = UIAccessibilityElement(accessibilityContainer: drawn)
+            element.accessibilityLabel = name
+            element.accessibilityFrame = rect
+            return element
+        }
+        try XCTUnwrap(p.views[4]).addSubview(drawn)
+        let ax = p.axElements(roots: [p.viewport])
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: ax))
+        for (name, _) in cases {
+            let found = try XCTUnwrap(elements(ax).first { $0["name"] as? String == name }, name)
+            XCTAssertNil(found["frame"], name)
+        }
+    }
+
     func testLabelledImagesExposeTheirTraitAndDecorativeImagesStayHidden() throws {
         let p = try fixture()
         let image = NodeView(id: 20, kind: "image", presenter: p)

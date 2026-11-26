@@ -1,36 +1,116 @@
-// What a data module has of time, for prelude.js: no clock to read
-// (`refuseClock`), and an answer's own timers on the runner's clock
-// (`timers`). prelude.js takes `__exact_time` and deletes it.
+// What a data module has of time, for prelude.js: virtualized clock reads
+// (`virtualClock`, LLP 1195.000 D2) over the host's epoch + runner clock with
+// bake UTC pinning, and an answer's own timers on the runner's clock (`timers`).
+// prelude.js takes `__exact_time` and deletes it.
 (function (global) {
   "use strict";
-  function refuseAmbient(api) {
-    throw new Error(api + " is unavailable in data sources; pass time or a random seed as an argument");
-  }
   function fixed(object, name, value) {
     Object.defineProperty(object, name, { value: value, writable: false, configurable: false });
   }
-  // LLP 1027.000: time and seeds are source arguments, so bake and cache
-  // see them. This VM belongs to one module; no page/guest globals change.
-  // Install before the app can capture an alias, including Date's prototype
-  // constructor. Keep explicit-value Date construction and UTC arithmetic.
-  // `tracker`: Hermes's, natively, where intl.js follows.
-  function refuseClock(tracker) {
-    // The engine's own Date, through its prototype: a browser realm under a
-    // page's fake clock (Playwright's `clock.install`) has a fake `Date` that
-    // keeps the real prototype.
+  function parseClockPair(raw) {
+    if (typeof raw !== "string" || !raw) return [0, 0];
+    var comma = raw.indexOf(",");
+    if (comma < 0) return [0, Number(raw) || 0];
+    var epoch = Number(raw.slice(0, comma)),
+      clock = Number(raw.slice(comma + 1));
+    return [epoch === epoch ? epoch : 0, clock === clock ? clock : 0];
+  }
+  var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function pad2(n) {
+    return n < 10 ? "0" + n : String(n);
+  }
+  function pad4(y) {
+    var sign = y < 0 ? "-" : "",
+      a = Math.abs(y),
+      s = String(a);
+    while (s.length < 4) s = "0" + s;
+    return sign + s;
+  }
+  // Pin native Date local-timezone methods and omitted-zone Intl.DateTimeFormat
+  // to UTC during bake so build-machine timezone never leaks (LLP 1195.000 D2.6).
+  function pinBakeUtc(NativeDate) {
+    var proto = NativeDate.prototype;
+    var getTime = proto.getTime;
+    function checkDate(self) {
+      return getTime.call(self);
+    }
+    function utcDateStr(self) {
+      var t = checkDate(self);
+      if (t !== t) return "Invalid Date";
+      return (
+        DAYS[proto.getUTCDay.call(self)] +
+        " " +
+        MONTHS[proto.getUTCMonth.call(self)] +
+        " " +
+        pad2(proto.getUTCDate.call(self)) +
+        " " +
+        pad4(proto.getUTCFullYear.call(self))
+      );
+    }
+    function utcTimeStr(self) {
+      var t = checkDate(self);
+      if (t !== t) return "Invalid Date";
+      return (
+        pad2(proto.getUTCHours.call(self)) +
+        ":" +
+        pad2(proto.getUTCMinutes.call(self)) +
+        ":" +
+        pad2(proto.getUTCSeconds.call(self)) +
+        " GMT+0000 (Coordinated Universal Time)"
+      );
+    }
+    proto.getTimezoneOffset = function getTimezoneOffset() {
+      var t = checkDate(this);
+      return t !== t ? NaN : 0;
+    };
+    proto.getFullYear = proto.getUTCFullYear;
+    proto.getMonth = proto.getUTCMonth;
+    proto.getDate = proto.getUTCDate;
+    proto.getDay = proto.getUTCDay;
+    proto.getHours = proto.getUTCHours;
+    proto.getMinutes = proto.getUTCMinutes;
+    proto.getSeconds = proto.getUTCSeconds;
+    proto.getMilliseconds = proto.getUTCMilliseconds;
+    proto.toDateString = function toDateString() {
+      return utcDateStr(this);
+    };
+    proto.toTimeString = function toTimeString() {
+      return utcTimeStr(this);
+    };
+    proto.toString = function toString() {
+      var t = checkDate(this);
+      return t !== t ? "Invalid Date" : utcDateStr(this) + " " + utcTimeStr(this);
+    };
+  }
+  // LLP 1195.000 D2: virtualize Date.now(), new Date(), Date(), performance.now(),
+  // and omitted-date Intl.DateTimeFormat over Exact's deterministic host clock
+  // (epochAtZero + runner_clock_ms), marking runtime clock taint on every read.
+  function virtualClock(tracker, readClock, isBake, inOverlay) {
     var NativeDate = global.Date.prototype.constructor,
       construct = Reflect.construct;
+    if (isBake) pinBakeUtc(NativeDate);
+    function wallNow(api) {
+      if (inOverlay && inOverlay()) throw new Error(api + " is unavailable in an overlay");
+      var pair = parseClockPair(readClock("wall"));
+      return Math.floor(pair[0] + pair[1]);
+    }
+    function perfNow() {
+      if (inOverlay && inOverlay()) throw new Error("performance.now() is unavailable in an overlay");
+      var pair = parseClockPair(readClock("perf"));
+      return pair[1];
+    }
     var InputDate = new Proxy(NativeDate, {
       apply: function () {
-        return refuseAmbient("Date()");
+        return new NativeDate(wallNow("Date()")).toString();
       },
       construct: function (target, args, newTarget) {
-        if (!args.length) return refuseAmbient("new Date()");
+        if (!args.length) return construct(target, [wallNow("new Date()")], newTarget);
         return construct(target, args, newTarget);
       },
     });
-    fixed(NativeDate, "now", function () {
-      return refuseAmbient("Date.now()");
+    fixed(NativeDate, "now", function now() {
+      return wallNow("Date.now()");
     });
     fixed(NativeDate.prototype, "constructor", InputDate);
     fixed(global, "Date", InputDate);
@@ -38,19 +118,10 @@
       global,
       "performance",
       Object.freeze({
-        now: function () {
-          return refuseAmbient("performance.now()");
-        },
+        now: perfNow,
       })
     );
-    // Intl's formatting methods also default an omitted/undefined date to
-    // machine time. Guard the prototype before an app can capture its bound
-    // format getter or formatToParts method; explicit timestamps still use
-    // the engine's locale/timezone implementation unchanged.
     if (global.Intl && global.Intl.DateTimeFormat) {
-      // The engine's prototype, the one with the `format` accessor: a fake
-      // clock's DateTimeFormat only inherits it, and answers an omitted date
-      // from its clock, so the engine's constructor takes its place.
       var dateFormat = global.Intl.DateTimeFormat.prototype,
         engineFormat = dateFormat;
       while (engineFormat && !(Object.getOwnPropertyDescriptor(engineFormat, "format") || {}).get)
@@ -59,13 +130,29 @@
         dateFormat = engineFormat;
         global.Intl.DateTimeFormat = engineFormat.constructor;
       }
+      if (isBake) {
+        var BaseDTF = global.Intl.DateTimeFormat;
+        var argsInUTC = function (args) {
+          var locales = args[0],
+            options = args[1];
+          if (options === null || (options && options.timeZone !== undefined)) return args;
+          return [locales, Object.create(Object(options), { timeZone: { value: "UTC", enumerable: true } })];
+        };
+        global.Intl.DateTimeFormat = new Proxy(BaseDTF, {
+          apply: function (target, receiver, args) {
+            return Reflect.apply(target, receiver, argsInUTC(args));
+          },
+          construct: function (target, args, derived) {
+            return Reflect.construct(target, argsInUTC(args), derived);
+          },
+        });
+      }
       var getFormat = Object.getOwnPropertyDescriptor(dateFormat, "format").get,
         formats = new WeakMap(),
         apply = Reflect.apply,
         engineOf = function (f) {
           return f;
         };
-      // Natively intl.js follows, whose formatters share an engine formatter (`engineOf` finds it).
       if (tracker)
         Object.defineProperty(global, "__exact_dates", {
           configurable: true,
@@ -76,25 +163,24 @@
             },
           },
         });
-      function explicitFormat(fn, name) {
+      function virtualFormat(fn, name) {
         return new Proxy(fn, {
           apply: function (target, receiver, args) {
-            if (args[0] === undefined) return refuseAmbient("Intl.DateTimeFormat." + name + "()");
-            return apply(target, engineOf(receiver), args);
+            var nextArgs = args[0] === undefined ? [wallNow("Intl.DateTimeFormat." + name + "()")] : args;
+            return apply(target, engineOf(receiver), nextArgs);
           },
         });
       }
       Object.defineProperty(dateFormat, "format", {
         configurable: false,
         get: function () {
-          // a function for each object, as each has its own bound format
           var native = getFormat.call(engineOf(this));
-          if (!formats.has(this)) formats.set(this, explicitFormat(native, "format"));
+          if (!formats.has(this)) formats.set(this, virtualFormat(native, "format"));
           return formats.get(this);
         },
       });
       if (typeof dateFormat.formatToParts === "function") {
-        fixed(dateFormat, "formatToParts", explicitFormat(dateFormat.formatToParts, "formatToParts"));
+        fixed(dateFormat, "formatToParts", virtualFormat(dateFormat.formatToParts, "formatToParts"));
       }
     }
   }
@@ -268,5 +354,5 @@
       },
     };
   }
-  global.__exact_time = Object.freeze({ refuseClock: refuseClock, timers: timers });
+  global.__exact_time = Object.freeze({ virtualClock: virtualClock, timers: timers });
 })(globalThis);

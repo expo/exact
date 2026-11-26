@@ -644,10 +644,12 @@ fn auth(ceiling: &str, platform: &str, compat: &Compat) -> Result<Value, String>
         .filter_map(|c| c.strip_prefix("https://"))
         .filter_map(|rest| rest.split('/').next())
         .filter(|host| {
-            !matches!(
-                host.split(':').next(),
-                Some("localhost" | "127.0.0.1" | "[::1]")
-            )
+            // The host less its port; an IPv6 literal's own colons are inside `[]`.
+            let name = match host.split_once(']') {
+                Some((literal, _)) => &host[..=literal.len()],
+                None => host.split(':').next().unwrap_or(host),
+            };
+            !matches!(name, "localhost" | "127.0.0.1" | "[::1]")
         })
         .map(|host| format!("webcredentials:{host}"))
         .collect();

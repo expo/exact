@@ -60,6 +60,7 @@ mod abort;
 mod background;
 mod compression;
 mod crypto;
+mod crypto_subtle;
 mod door;
 mod engine;
 mod launch;
@@ -297,10 +298,20 @@ struct HostState {
     /// Under the agent, the repeatable stream `crypto` draws from instead
     /// of the OS (LLP 1069.005 D2b); this instance's, from its start.
     agent: Option<exact_data::crypto::AgentStream>,
+    /// Isolated `--seed` substreams for `Math.random()` inside answers and at
+    /// module init (LLP 1195.000 D2.3, D2.5) so SDK jitter never shifts crypto draws.
+    agent_random: Option<exact_data::crypto::AgentStream>,
+    agent_random_init: Option<exact_data::crypto::AgentStream>,
+    /// Launch wall-clock epoch at `clock_ms == 0` (LLP 1195.000 D2.1).
+    epoch_at_zero: f64,
+    /// Persistent module-sticky taint latched on any ambient clock or
+    /// `Math.random()` read, even at module init (LLP 1195.000 D2.5).
+    module_tainted_clock: bool,
+    module_tainted_entropy: bool,
     /// Its seed, until the journal has said the first draw is seeded.
     agent_unsaid: Option<u64>,
-    /// `CryptoKey`s by handle, never on the heap (LLP 1069.005 D1b).
-    keys: HashMap<u64, exact_data::crypto::EcKey>,
+    /// `CryptoKey`s by handle, never on the heap (LLP 1069.005 D1b, LLP 1195.000 D5 P0b).
+    keys: HashMap<u64, crypto_subtle::NativeKey>,
     next_key: u64,
     /// `DecompressionStream`s' and `CompressionStream`s' contexts by handle,
     /// from the keys' counter, and what the last write yielded
@@ -530,6 +541,22 @@ impl Module {
     pub fn with_agent_seed(mut self, seed: Option<u64>) -> Module {
         self.agent_seed = seed;
         self.host.agent = seed.map(|s| exact_data::crypto::AgentStream::new(s, "typescript"));
+        self.host.agent_random = seed.map(|s| exact_data::crypto::AgentStream::new(s, "ts-random"));
+        self.host.agent_random_init =
+            seed.map(|s| exact_data::crypto::AgentStream::new(s, "ts-init"));
+        self.host.epoch_at_zero = if self.host.baking {
+            0.0
+        } else if seed.is_some() {
+            std::env::var("EXACT_AGENT_EPOCH")
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .unwrap_or(1_767_225_600_000.0)
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_millis() as f64)
+        };
         self.host.agent_unsaid = seed;
         self
     }
@@ -691,6 +718,7 @@ impl Module {
         // The bake's module never draws the agent's stream (LLP 1069.005 D2b).
         let mut module = Self::new(bytecode, "", "").with_agent_seed(None);
         module.host.baking = true;
+        module.host.epoch_at_zero = 0.0;
         let engine = module.load_engine()?;
         module.app_id = engine.string("appId")?;
         module.grants = engine.string("grants")?;

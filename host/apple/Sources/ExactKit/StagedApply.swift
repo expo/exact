@@ -230,6 +230,7 @@ extension StagePlan {
     func disjoint(_ other: Batch) -> Bool {
         if other.rootTabs != nil, batch.rootTabs != nil { return false }
         if other.routeInspectors != nil, batch.routeInspectors != nil { return false }
+        if other.splitChanged { return false }
         if let theirs = other.controlReads, theirs.contains(where: { structural.contains($0.key) || reads[$0.key]?.isDisjoint(with: $0.value.parts) == false }) { return false }
         for op in other.ops {
             switch op.op {
@@ -257,6 +258,8 @@ extension StagePlan {
     /// a newer sample shows at once.
     func withheld(_ other: Batch, committed: (UInt32) -> NodeStyle?) -> Batch {
         var shown = other
+        shown.split = nil
+        shown.splitChanged = false
         for i in shown.ops.indices where shown.ops[i].op == .style {
             guard let mine = styles[shown.ops[i].id] else { continue }
             let before = committed(shown.ops[i].id) ?? [:]
@@ -380,6 +383,7 @@ extension ExactSession {
             return scheduled ? .full : nil
         }
         if case .advance = published { return .unlessEmpty }
+        if case .covers = published { return .unlessEmpty }
         #if os(macOS)
         if !hasEarlierBatch(than: batch.sequence), batch.hasStoreEffects || batch.layoutProvisional || batch.replacesTree {
             if case .reply = published { return .appKitEvent }
@@ -657,6 +661,7 @@ struct BatchFootprint {
         for (id, read) in batch.controlReads ?? [:] { written[id, default: []].formUnion(read.parts) }
         if batch.routeInspectors != nil { written[.max, default: []].insert("routeInspectors") }
         if batch.rootTabs != nil { written[.max, default: []].insert("rootTabs") }
+        if batch.splitChanged { written[.max, default: []].insert("split") }
         for op in batch.ops {
             if op.op == .style { styled.insert(op.id); if sampling { paints.insert(op.id) } }
             if Self.structuralOps.contains(op.op) { movable = false; continue }

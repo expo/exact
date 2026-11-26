@@ -57,6 +57,13 @@ impl DataSource for Module {
         self.host.launch.clear();
     }
 
+    fn ambient_taint(&self, _: &str) -> (bool, bool) {
+        (
+            self.host.module_tainted_clock,
+            self.host.module_tainted_entropy,
+        )
+    }
+
     fn take_logs(&mut self) -> Vec<String> {
         self.journal_lines()
     }

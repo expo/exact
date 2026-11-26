@@ -490,11 +490,16 @@ final class Writer {
     /// One buffer, on the recorder's queue. Its time is the frames written,
     /// so a pause leaves no gap in the file.
     func append(_ buffer: AVAudioPCMBuffer) {
-        guard let buffer = conformed(buffer) else {
+        guard buffer.frameLength > 0 else { return }
+        guard let converted = conformed(buffer) else {
             let why = "a buffer of \(Writer.describe(buffer.format)) did not convert to \(Writer.describe(format))"
             backupFailure = why
             return fail(why)
         }
+        for chunk in converted where chunk.frameLength > 0 { writeChunk(chunk) }
+    }
+
+    private func writeChunk(_ buffer: AVAudioPCMBuffer) {
         if let file {
             do { try file.write(from: buffer) } catch { fail(Writer.code(error)) }
             return
@@ -520,19 +525,66 @@ final class Writer {
 
     static func describe(_ f: AVAudioFormat) -> String { "\(Int(f.sampleRate)) Hz, \(f.channelCount) ch" }
 
-    /// `buffer` in the file's format.
-    private func conformed(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        if buffer.format == format { return buffer }
-        if converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: format) }
-        guard let converter else { return nil }
-        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate).rounded(.up)) + 1
-        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
-        var given = false
-        let status = converter.convert(to: out, error: nil) { _, state in
-            if given { state.pointee = .noDataNow; return nil }
-            given = true; state.pointee = .haveData; return buffer
+    /// `buffer` in the file's format, draining any prior converter at a format boundary
+    /// and looping until `buffer` is fully consumed.
+    private func conformed(_ buffer: AVAudioPCMBuffer) -> [AVAudioPCMBuffer]? {
+        guard buffer.format.sampleRate > 0, format.sampleRate > 0 else { return nil }
+        var chunks: [AVAudioPCMBuffer] = []
+        if let previous = converter,
+           buffer.format == format || previous.inputFormat != buffer.format || previous.outputFormat != format {
+            drainConverter(previous, into: &chunks)
+            converter = nil
         }
-        return status == .error ? nil : out
+        if buffer.format == format {
+            chunks.append(buffer)
+            return chunks
+        }
+        if converter == nil { converter = AVAudioConverter(from: buffer.format, to: format) }
+        guard let active = converter else { return nil }
+        let capacity = max(AVAudioFrameCount((Double(buffer.frameLength) * format.sampleRate / buffer.format.sampleRate).rounded(.up)) + 64, 256)
+        var given = false
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
+            var error: NSError?
+            let status = active.convert(to: out, error: &error) { _, state in
+                if given { state.pointee = .noDataNow; return nil }
+                given = true; state.pointee = .haveData; return buffer
+            }
+            if status == .error || error != nil {
+                converter = nil
+                return nil
+            }
+            if out.frameLength > 0 { chunks.append(out) }
+            switch status {
+            case .haveData:
+                if out.frameLength == 0 && given { return chunks }
+            case .inputRanDry:
+                return chunks
+            case .endOfStream:
+                converter = nil
+                return chunks
+            case .error:
+                converter = nil
+                return nil
+            @unknown default:
+                return chunks
+            }
+        }
+    }
+
+    private func drainConverter(_ active: AVAudioConverter, into chunks: inout [AVAudioPCMBuffer]) {
+        let capacity: AVAudioFrameCount = 1024
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var error: NSError?
+            let status = active.convert(to: out, error: &error) { _, state in
+                state.pointee = .endOfStream
+                return nil
+            }
+            if status == .error || error != nil { return }
+            if out.frameLength > 0 { chunks.append(out) }
+            if status != .haveData || out.frameLength == 0 { return }
+        }
     }
 
     private func sample(_ buffer: AVAudioPCMBuffer) -> CMSampleBuffer? {

@@ -785,9 +785,9 @@ test('trusted browser modifier events retain both sides and reach following keys
     const tail=state.events.slice(16);
     expect(tail.map(e=>[e.type,e.code??null,e.ctrl])).toEqual([
       ['keydown','ControlLeft',true],['keydown','ControlRight',true],['keyup','ControlLeft',true],
-      // Chrome opens a context menu at the press on macOS and at the release elsewhere.
+      // Chrome opens a context menu at the press on macOS and Linux and at the release on Windows.
       ['keydown','Digit1',true],['keyup','Digit1',true],['pointerdown',null,true],
-      ...(process.platform==='darwin'?[['contextmenu',null,true],['pointerup',null,true]]:[['pointerup',null,true],['contextmenu',null,true]]),
+      ...(process.platform==='win32'?[['pointerup',null,true],['contextmenu',null,true]]:[['contextmenu',null,true],['pointerup',null,true]]),
       ['keyup','ControlRight',false],['keydown','Digit2',false],['keyup','Digit2',false],
     ]);
     expect(tail.every(e=>e.trusted)).toBe(true);

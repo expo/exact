@@ -1005,6 +1005,46 @@ component App
   } finally { await app.close(); }
 }, 30000);
 
+// A native button whose bound `display` hides it during its move: the JS target's batch for that commit holds no op of
+// presence's, and the move ends with the button's box, so showing it again resumes nothing. The move is held at its
+// midpoint, so it cannot end by itself.
+test('a native button hidden during its move does not resume it when shown again', async () => {
+  const { page, close } = await exitApp('chromium', `component App
+  state far = false
+  state shown = true
+  action go
+    far = not far
+  action toggle
+    shown = not shown
+  view
+    column position="relative" width=400 height=200
+      button "Go" press=go testId="go"
+      button "Toggle" press=toggle testId="toggle"
+      button "Tab" testId="tab" position="absolute" top=100 left=(far ? "200px" : "0px") width=100 height=44 display=(shown ? "flex" : "none") -exact-layout-transition="20000ms linear"
+`);
+  try {
+    const tab = '[data-testid="tab"]';
+    expect(await page.evaluate(tab => document.querySelector(tab).matches('button[data-button-style]'), tab)).toBe(true);
+    await page.evaluate(tab => {
+      document.querySelector('[data-testid="go"]').click();
+    }, tab);
+    await page.waitForFunction(tab => document.querySelector(tab).getAnimations().length === 1, tab);
+    await page.evaluate(tab => {
+      const move = globalThis.move = document.querySelector(tab).getAnimations()[0];
+      move.pause();
+      move.currentTime = 10000;
+      document.querySelector('[data-testid="toggle"]').click();
+    }, tab);
+    await page.waitForFunction(tab => getComputedStyle(document.querySelector(tab)).display === 'none', tab);
+    expect(await page.evaluate(tab => [globalThis.move.playState, document.querySelector(tab).getAnimations().length], tab)).toEqual(['idle', 0]);
+    await page.evaluate(() => document.querySelector('[data-testid="toggle"]').click());
+    await page.waitForFunction(tab => getComputedStyle(document.querySelector(tab)).display !== 'none', tab);
+    expect(await page.evaluate(tab => document.querySelector(tab).getAnimations().length, tab)).toBe(0);
+  } finally {
+    await close();
+  }
+}, 120000);
+
 /** `source` compiled to the JS target and opened in `engine` with presence loaded. `drop(button)` presses `button`,
  * reports the exit animations that start, then finishes them; `close()` removes the page, server and app. */
 async function exitApp(engine, source, pageOptions, countProbes = false) {

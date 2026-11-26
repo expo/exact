@@ -182,9 +182,10 @@ fn read_text(path: &str) -> Option<String> {
         .map(|s| s.trim().to_owned())
 }
 
-/// The serial ports sysfs lists: each tty with a device behind it, named by its USB product where it has one.
-fn sysfs_ports() -> Vec<Port> {
-    let Ok(entries) = std::fs::read_dir("/sys/class/tty") else {
+/// The serial ports sysfs lists under `root` (`/sys/class/tty`): each tty with a device behind it, named by its USB
+/// product where it has one.
+fn sysfs_ports(root: &std::path::Path) -> Vec<Port> {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -201,10 +202,11 @@ fn sysfs_ports() -> Vec<Port> {
                 .and_then(|v| u64::from_str_radix(&v, 16).ok())
         };
         let product = usb.and_then(|u| read_text(&u.join("product").to_string_lossy()));
-        // A legacy 8250 port with no device answering is listed by the kernel too; it has no driver behind it.
+        // The 8250 driver registers `nr_uarts` ports (32 on Ubuntu's kernels) whether a UART answers or not; one
+        // where none does reads `type` 0, `PORT_UNKNOWN` (include/uapi/linux/serial.h), the type TIOCGSERIAL
+        // answers, which sysfs shows (Documentation/ABI/testing/sysfs-tty).
         if usb.is_none()
-            && tty.starts_with("ttyS")
-            && !real.to_string_lossy().contains("serial8250")
+            && read_text(&entry.path().join("type").to_string_lossy()).as_deref() == Some("0")
         {
             continue;
         }
@@ -250,7 +252,7 @@ fn injected() -> Vec<Port> {
 }
 
 fn ports() -> Vec<Port> {
-    let mut all = sysfs_ports();
+    let mut all = sysfs_ports(std::path::Path::new("/sys/class/tty"));
     all.extend(injected());
     all
 }
@@ -780,6 +782,40 @@ impl Package for Serial {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 8250 driver's ports with no UART behind them are not offered, on either sysfs layout: the old one, where
+    /// they hang off the `serial8250` platform device and a PC's real ports off ACPI's `pnp0`, and the serial core's
+    /// on newer kernels, where every port, real or not, hangs off `serial8250`.
+    #[test]
+    fn only_the_8250_ports_with_a_uart_are_offered() {
+        let root = std::env::temp_dir().join(format!("exact-serial-sysfs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let tty = |name: &str, device: &str, kind: Option<&str>| {
+            let dir = root.join("class/tty").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::create_dir_all(root.join(device)).unwrap();
+            std::os::unix::fs::symlink(root.join(device), dir.join("device")).unwrap();
+            if let Some(kind) = kind {
+                std::fs::write(dir.join("type"), format!("{kind}\n")).unwrap();
+            }
+        };
+        let names = || {
+            let ports = sysfs_ports(&root.join("class/tty"));
+            ports.into_iter().map(|p| p.name).collect::<Vec<_>>()
+        };
+        tty("ttyS0", "devices/pnp0/00:04", Some("4"));
+        tty("ttyS1", "devices/platform/serial8250", Some("0"));
+        let core = "devices/platform/serial8250/serial8250:0/serial8250:0";
+        tty("ttyS2", &format!("{core}.2"), Some("4"));
+        tty("ttyS3", &format!("{core}.3"), Some("0"));
+        std::fs::create_dir_all(root.join("devices/usb1/1-1")).unwrap();
+        std::fs::write(root.join("devices/usb1/1-1/idVendor"), "2341\n").unwrap();
+        std::fs::write(root.join("devices/usb1/1-1/idProduct"), "0043\n").unwrap();
+        std::fs::write(root.join("devices/usb1/1-1/product"), "Arduino Uno\n").unwrap();
+        tty("ttyACM0", "devices/usb1/1-1/1-1:1.0", None);
+        assert_eq!(names(), ["Arduino Uno", "ttyS0", "ttyS2"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     /// Bytes that arrive after `close` stay in the port for its next reader: the closed stream gains none.
     #[test]

@@ -105,6 +105,13 @@ impl exact_runner::DataSourceWrapper for Seeded {
             None => self.module.query(source, args),
         }
     }
+    fn ambient_taint(&self, source: &str) -> (bool, bool) {
+        if self.seeds(source) {
+            (false, false)
+        } else {
+            self.module.ambient_taint(source)
+        }
+    }
     fn answer(
         &mut self,
         store: &mut Store,

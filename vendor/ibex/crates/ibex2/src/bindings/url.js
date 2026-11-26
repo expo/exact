@@ -149,6 +149,14 @@
     return p.query;
   }
 
+  // The list's serialization. A view's query is its URL's, as the URL parser
+  // encoded it (`?a=b c&d` keeps `a=b%20c&d`); the list it holds serializes
+  // as application/x-www-form-urlencoded (`a=b+c&d=`), so a view's string is
+  // its query parsed and serialized again.
+  function serialized(p) {
+    return p.url ? sp.normalize(query(p)) : p.query;
+  }
+
   function write(p, next) {
     if (p.url) {
       // The spec's "update steps": the owner's search becomes the serialization,
@@ -191,7 +199,7 @@
       return;
     }
     if (init instanceof URLSearchParams) {
-      p.query = query(own(init));
+      p.query = serialized(own(init));
       return;
     }
     if (typeof init !== "object") {
@@ -252,7 +260,7 @@
     write(p, sp.sort(query(p)));
   };
   proto.toString = function () {
-    return query(own(this));
+    return serialized(own(this));
   };
   Object.defineProperty(proto, "size", {
     configurable: true,

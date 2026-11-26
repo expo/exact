@@ -590,6 +590,12 @@ data_source! {
     /// 1153.002 D2). Called before activation; a wrapper passes it on.
     fn render_web(&mut self) {}
 
+    /// Whether the module serving `source` has latched ambient clock or
+    /// `Math.random()` taint (`(clock, entropy)`; LLP 1195.000 D2.5).
+    fn ambient_taint(&self, _source: &str) -> (bool, bool) {
+        (false, false)
+    }
+
     /// Host-selected application directories. Configuration records paths only;
     /// implementations must defer opening storage until after first pixel.
     fn configure_storage(

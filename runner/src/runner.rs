@@ -1040,37 +1040,8 @@ impl<D: DataSource> Runner<D> {
         runner.carry_modes(carried.map_or(&[], |c| &c.modes));
         runner.ask_kept_scheme();
         runner.derives = vec![None; runner.plan.derives.len()];
-        // Resources: carry only the same named source and a value that still fits the declared shape; a carried value can refuse nothing.
-        let carried_resources = (0..runner.plan.resources.len())
-            .map(|i| {
-                let name = runner.plan.str(runner.plan.resources[i].name);
-                let source = runner.plan.str(runner.plan.resources[i].source);
-                carried
-                    .filter(|_| same_logic)
-                    .and_then(|c| {
-                        c.resources
-                            .iter()
-                            .find(|(n, s, _, _)| n == name && s == source)
-                    })
-                    .filter(|(_, _, _, value)| runner.check_shape(i, value).is_ok())
-                    .map(|(_, _, args, value)| ResourceState {
-                        inspection_generation: 0,
-                        args: args.clone(),
-                        value: crate::held::Held::new(value.clone()),
-                        store_revision: runner.store.revision(),
-                        placeholder: false,
-                        kept_seed: false,
-                        from_page: false,
-                        answered_for: None,
-                        asleep: false,
-                        slept: false,
-                        origin: 0,
-                    })
-            })
-            .collect::<Vec<_>>();
-        for (row, state) in runner.resources.iter_mut().zip(carried_resources) {
-            row.state = state;
-        }
+        runner.sync_store_clock();
+        runner.adopt_carried_resources(carried, same_logic);
         // @ref LLP 1016.000 D10 — the uploads asked, carried by resource,
         // source and arguments whatever the data module; a launch starts with none.
         runner.carry_uploads_in(carried.map_or(&[][..], |c| &c.uploads));

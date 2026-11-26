@@ -15,7 +15,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
-import { createDocument, esc } from './dom.js';
+import { createCSS, createDocument, esc } from './dom.js';
 import { cachingFetch, directives, FRESH } from './http-cache.mjs';
 import { canonical, matchPattern, mountedHref, withBase } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
@@ -118,6 +118,21 @@ const utcIntl = new vm.Script(`{
     apply: (target, receiver, args) => Reflect.apply(target, receiver, argsInUTC(args)),
     construct: (target, args, derived) => Reflect.construct(target, argsInUTC(args), derived),
   });
+}`);
+// Pin Date.prototype local getters and stringifiers to UTC inside each render realm
+// so render=build never leaks the build machine's timezone (LLP 1195.000 D2.6).
+const utcDate = new vm.Script(`{
+  const p = Date.prototype, gt = p.getTime;
+  const D = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const p2 = n => n < 10 ? '0' + n : String(n), p4 = y => (y < 0 ? '-' : '') + String(Math.abs(y)).padStart(4, '0');
+  const ds = d => Number.isNaN(gt.call(d)) ? 'Invalid Date' : D[p.getUTCDay.call(d)] + ' ' + M[p.getUTCMonth.call(d)] + ' ' + p2(p.getUTCDate.call(d)) + ' ' + p4(p.getUTCFullYear.call(d));
+  const ts = d => Number.isNaN(gt.call(d)) ? 'Invalid Date' : p2(p.getUTCHours.call(d)) + ':' + p2(p.getUTCMinutes.call(d)) + ':' + p2(p.getUTCSeconds.call(d)) + ' GMT+0000 (Coordinated Universal Time)';
+  p.getTimezoneOffset = function getTimezoneOffset() { return Number.isNaN(gt.call(this)) ? NaN : 0; };
+  p.getFullYear = p.getUTCFullYear; p.getMonth = p.getUTCMonth; p.getDate = p.getUTCDate; p.getDay = p.getUTCDay;
+  p.getHours = p.getUTCHours; p.getMinutes = p.getUTCMinutes; p.getSeconds = p.getUTCSeconds; p.getMilliseconds = p.getUTCMilliseconds;
+  p.toDateString = function toDateString() { return ds(this); };
+  p.toTimeString = function toTimeString() { return ts(this); };
+  p.toString = function toString() { return Number.isNaN(gt.call(this)) ? 'Invalid Date' : ds(this) + ' ' + ts(this); };
 }`);
 
 /** An undeclared route's activation (LLP 1048.007 D1), as the render host
@@ -236,10 +251,11 @@ export function renderer(dist, { closed = false, buildOrigin, read = path => rea
     Object.assign(document, { visibilityState: 'visible', hasFocus: () => true, baseURI: `http://render.invalid${base}` });
     const location = { pathname: '/', search: '', href: 'http://render.invalid/', origin: 'http://render.invalid' };
     // What the render read that another render may not read alike: how long its answers stay fresh for any reader
-    // (http-cache.mjs `FRESH`), and whether a source drew a random number (its only other reading the clock and
-    // `Math.random` refuse, ts-fetch.js) — so how long its page may be given again (`keep`), and whether it may be
-    // shared at all (`drew`).
-    const read = { fresh: Infinity, random: false }, prefers = new Set();
+    // (http-cache.mjs `FRESH`), whether a source drew randomness (`random`/`moduleRandom`), and whether a source read
+    // the ambient clock (`clock`/`moduleClock`, LLP 1195.000 D2.4) — so how long its page may be given again (`keep`),
+    // and whether it may be shared or written by render=build at all.
+    const read = { fresh: Infinity, random: false, clock: false, moduleClock: false, moduleRandom: false }, prefers = new Set();
+    let loaded = false;
     const noted = response => { read.fresh = Math.min(read.fresh, response?.[FRESH] ?? 0); return response; };
     // A call the platform refuses drew nothing
     const drew = f => (...args) => { const drawn = f(...args); read.random = true; return drawn; };
@@ -372,9 +388,13 @@ export function renderer(dist, { closed = false, buildOrigin, read = path => rea
         return salted(name, a) ? made.then(result => { read.random = true; return result; }) : made;
       } }), getRandomValues: view => { const filled = crypto.getRandomValues(view); if (filled.byteLength > 0) read.random = true; return filled; },
       randomUUID: drew(() => crypto.randomUUID()) },
-      WebAssembly, atob, btoa, Event: class {}, CustomEvent: class {}, __exactRender: true, __files: files,
+      WebAssembly, atob, btoa, CSS: createCSS(), Event: class {}, CustomEvent: class {}, __exactRender: true, __files: files,
       // A draw a Rust module reports (rust-data.js)
       __exactDrew: () => { read.random = true; },
+      // Ambient clock and Math.random() reads from ts-fetch.js (LLP 1195.000 D2.4):
+      // reads during bundle evaluation latch module-wide taint across the reset below.
+      __exactClock: () => { if (loaded) read.clock = true; else read.moduleClock = true; },
+      __exactAmbientEntropy: () => { if (loaded) read.random = true; else read.moduleRandom = true; },
       ...(closed ? { __exactMarkdown: new Map() } : {}),
       __exactMarkdownBuilt: JSON.parse(builtMarkdown(shell, seen)),
     }, { codeGeneration: { strings: false } });
@@ -383,9 +403,11 @@ export function renderer(dist, { closed = false, buildOrigin, read = path => rea
     if (!process.listeners('unhandledRejection').includes(unhandledRejection)) process.on('unhandledRejection', unhandledRejection);
     for (const prototype of realmPrototypes.runInContext(ctx)) rejectionOwners.set(prototype, failedCallback);
     utcIntl.runInContext(ctx);
+    utcDate.runInContext(ctx);
     try { script.runInContext(ctx); } catch (error) { dispose(); throw error; }
-    // What loading the bundle read is every render's alike.
-    Object.assign(read, { fresh: Infinity, random: false });
+    loaded = true;
+    // Reset per-render observations while preserving module-level ambient taint (LLP 1195.000 D2.4).
+    Object.assign(read, { fresh: Infinity, random: false, clock: false });
     const at = (path) => {
       const explicit = URL.canParse(path) ? new URL(path) : null;
       if (explicit && !['https:', 'http:'].includes(explicit.protocol)) throw new TypeError('render needs a page path or an absolute HTTP(S) URL');
@@ -468,8 +490,9 @@ export function renderer(dist, { closed = false, buildOrigin, read = path => rea
         // random and read no clock or reader's device (the plan's `kept`), from TypeScript sources alone, is the page
         // another render would make until the first of those answers goes stale: it may be given again until then, for
         // at most 60 s (LLP 1048.007 D8).
-        const keep = status === 200 && settled && !out.failed?.length && out.activation?.kept === false && !out.rust && !read.random && read.fresh > 0 && read.fresh < Infinity ? Math.min(read.fresh, 60000) : 0;
-        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, drew: read.random, robots: out.robots, origin: out.origin };
+        const drew = read.random || read.moduleRandom, clocked = read.clock || read.moduleClock;
+        const keep = status === 200 && settled && !out.failed?.length && out.activation?.kept === false && !out.rust && !drew && !clocked && read.fresh > 0 && read.fresh < Infinity ? Math.min(read.fresh, 60000) : 0;
+        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, drew, clocked, robots: out.robots, origin: out.origin };
       } finally { made.dispose(); }
     } };
   }
@@ -548,7 +571,7 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
     headers['content-encoding'] = 'br';
     return { status, headers, body: brotliCompressSync(html, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }) };
   };
-  const shared = page => page.policy === 'cached' && !page.drew;
+  const shared = page => page.policy === 'cached' && !page.drew && !page.clocked;
   return async function page(location, header) {
     // Laid out for the reader's viewport (LLP 1048.006), and kept per viewport.
     const viewport = viewportOf(header), key = `${location} ${JSON.stringify(viewport)}`;
@@ -712,11 +735,12 @@ if (import.meta.main) {
       let origin = null;
       for (const [i, p] of pages.entries()) {
         const page = await render(withBase(p.location, buildBase(dist)));
-        // Write no page whose render drew randomness, which every reader of a page made at build would share (LLP 1048.000
-        // D7, LLP 1069.005 D2)
-        if (page.drew) {
+        // Write no page whose render drew randomness or read the ambient clock (LLP 1048.000 D7, LLP 1069.005 D2, LLP 1195.000 D2.4)
+        if (page.drew || page.clocked) {
           failed = true;
-          console.error(`${p.location}: route \`${pageRoute(p, routes)?.name}\` is render=build, but its render drew randomness, and a page made at build would give every reader the same random values (LLP 1069.005 D2). Declare the route render=request, rendered for each request, or render=client, rendered in the browser`);
+          const why = page.drew && page.clocked ? 'drew randomness and read the ambient clock'
+            : page.drew ? 'drew randomness' : 'read the ambient clock';
+          console.error(`${p.location}: route \`${pageRoute(p, routes)?.name}\` is render=build, but its render ${why}, and a page made at build would bake a build-time value for every reader (LLP 1195.000 D2.4). Declare the route render=request, rendered for each request, or render=client, rendered in the browser`);
           continue;
         }
         docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });

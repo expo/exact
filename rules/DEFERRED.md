@@ -31,6 +31,19 @@ for synchronous OPFS selects IndexedDB. On either store, opening a path held by
 another connection follows D10's ten-second Web Lock wait. A timeout returns
 `Unavailable`/`EBUSY` and never switches stores.
 
+**Lifting JS restrictions — Stage 1 (Charlie, 2026-11-26, "Q1-5 recs are ok. 2. accept as is, start impl").**
+LLP 1195.000. Moves npm package global checks past tree-shaking (warning on surviving
+DOM/Node globals while keeping hard refusals on `.node` addons, surviving unresolved
+`node:*` imports, and dynamic `require`/`import`), adds a minimal frozen `process` shim,
+harmonizes `typeof WebSocket === "undefined"` across web and Hermes, virtualizes
+`Date`/`performance.now()`/`Math.random()` over the host clock and isolated `--seed`
+substreams with dedicated `clock_reader` and module-sticky bake/SSR taint (hard-refusing
+`render=build`, warning once per ambient-clock app resource), and ships `Blob`, `File`,
+`FormData`, `Request`, `Event`/`EventTarget`/`CustomEvent`, and `crypto.subtle`
+(HMAC, AES-GCM, PBKDF2, HKDF, RSASSA-PKCS1-v1_5 verify, Ed25519) on Hermes in one
+`typescriptRuntime` bump (19). Still out on Exact2: actor-owned `WebSocket`/`EventSource`/
+`setInterval` (reserved for Exact3 LLP 1192) and global `Buffer`.
+
 **iPad split views (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** LLP 1127 D19. An iPad tab splits only when its first route says `navigationSplit="split"`. The untabbed directory default stays automatic. Column counts, display mode, split behaviour, compact column, column width controls and a split event wait for an app that needs them. A presented route as the root of a split is deferred.
 
 **Expanded (James, 2026-11-24: "We can make the ruling"):** `swipe=action`

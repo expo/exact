@@ -348,7 +348,7 @@ impl<D: DataSource> Runner<D> {
             effects: false,
         };
         let answer = self.as_cause(cause, |r| {
-            r.store.set_clock_ms(r.now_ms);
+            r.sync_store_clock();
             (r.data).answer(&mut r.store, &run.source, std::slice::from_ref(&run.args))
         });
         self.tool_step(run, answer);
@@ -568,7 +568,7 @@ impl<D: DataSource> Runner<D> {
         };
         let answer = self.as_cause(run.cause, |r| {
             let args = std::slice::from_ref(&run.args);
-            r.store.set_clock_ms(r.now_ms);
+            r.sync_store_clock();
             (r.data).parse_tool(
                 run.fetch,
                 run.continuation,

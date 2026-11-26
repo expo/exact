@@ -48,13 +48,13 @@ final class SplitItemsMacTests: XCTestCase {
               text "Other"
     """
 
-    private func boot() throws -> (ExactSession, ExactSidebarController) {
+    private func boot(_ source: String? = nil) throws -> (ExactSession, ExactSidebarController) {
         _ = NSApplication.shared
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let contract = dir.appendingPathComponent("app.contract"), plan = dir.appendingPathComponent("app.plan")
-        try app.write(to: contract, atomically: true, encoding: .utf8)
+        try (source ?? app).write(to: contract, atomically: true, encoding: .utf8)
         let compiler = Process(), said = Pipe()
         compiler.executableURL = URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_CONTRACT"]))
         compiler.arguments = ["build", contract.path, "-o", plan.path]
@@ -97,10 +97,31 @@ final class SplitItemsMacTests: XCTestCase {
             XCTAssertTrue(split.pageItem.automaticallyAdjustsSafeAreaInsets, "the route's true")
             XCTAssertFalse(split.detailItem.automaticallyAdjustsSafeAreaInsets, "nothing splits: AppKit's default")
         }
-        // Unsaid, each is AppKit's default again
+        // Unsaid, each is AppKit's default again; and a property Exact never owned stays its owner's
+        if #available(macOS 26, *) { split.detailItem.automaticallyAdjustsSafeAreaInsets = true }
         session.presenter.press(try node("toggle").id)
         settle("the defaults back") { sidebar.allowsFullHeightLayout && inspector.allowsFullHeightLayout }
-        if #available(macOS 26, *) { XCTAssertFalse(split.pageItem.automaticallyAdjustsSafeAreaInsets) }
+        if #available(macOS 26, *) {
+            XCTAssertFalse(split.pageItem.automaticallyAdjustsSafeAreaInsets)
+            XCTAssertTrue(split.detailItem.automaticallyAdjustsSafeAreaInsets, "the window's owner's, untouched")
+        }
+    }
+
+    /// An inspector that goes gives back the element it showed as an accessory, to its route.
+    func testAnInspectorThatGoesGivesBackItsAccessory() throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("AppKit's split item accessories are macOS 26's") }
+        let source = app
+            .replacingOccurrences(of: #"aside width=200 testId="inspector" navigationSplitItemFullHeight=(shown ? "false" : "true")"#,
+                                  with: #"aside width=200 testId="inspector" visibility=(shown ? "visible" : "hidden") navigationSplitItemTopAccessory="tools""#)
+            .replacingOccurrences(of: #" navigationSplitItemTopAccessory=(shown ? "tools" : "")"#, with: "")
+        let (session, split) = try boot(source)
+        let tools = try node("tools")
+        settle("the inspector shows its accessory") { split.inspectorItem?.topAlignedAccessoryViewControllers.count == 1 }
+        XCTAssertTrue(session.presenter.blocks.owns(tools))
+        session.presenter.press(try node("toggle").id)
+        settle("the inspector goes") { split.inspectorItem == nil }
+        XCTAssertFalse(session.presenter.blocks.owns(tools), "given back")
+        XCTAssertTrue(tools.isDescendant(of: try node("route-home")), "back in its route")
     }
 
     func testAnAccessoryIsTheElementItsItemNames() throws {
@@ -121,6 +142,114 @@ final class SplitItemsMacTests: XCTestCase {
         XCTAssertFalse(session.presenter.blocks.owns(tools))
         XCTAssertFalse(tools.isDescendant(of: accessory.view))
         XCTAssertTrue(tools.isDescendant(of: try node("route-home")), "back in its route")
+    }
+
+    /// Inside a callback the owner waits on, no runtime call can run (LLP 1072 T5): a Mac navigation resync keeps the
+    /// split by the rule the last batch carried (`Batch.split`, LLP 1072 T2), asking the owner nothing (#1375).
+    func testASyncInsideARunnerCallbackKeepsTheMacSplitItHeard() throws {
+        let source = """
+        routes nav
+          library "/"
+            book "/book/:id"
+        component App
+          state side = false
+          state note = "A"
+          action follow(url: string)
+            nav = go(nav, url)
+          action back
+            nav = back(nav)
+          action flip
+            side = !side
+          action flipWithText
+            side = !side
+            note = note == "A" ? "B" : "A"
+          view
+            main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+              for e in stack(nav) key=e.id
+                column navigationKey=`${e.id}` position="absolute" inset=0
+                  if e.name == "library"
+                    button press=flip testId="flip"
+                      text "Flip"
+                    button press=flipWithText testId="flip-text"
+                      text "Flip with text"
+                    text note width=60 height=20 testId="note"
+                    list testId="books" appearance="none" width=100 height=100 display="flex" flex-direction=(side ? "row" : "column")
+                      link href=path("book", "a") display="block" width=50 height=50 testId="row-a"
+                        text "Book a"
+                  if e.name == "book"
+                    text "Detail"
+        """
+        let (session, _) = try boot(source)
+        let split = session.presenter.navigationHost.split
+        let listID = try node("books").id
+        XCTAssertTrue(split.active)
+        XCTAssertEqual(split.shown?.table, listID)
+
+        // Ensure the retained list update reached the owner, then resync from inside an owner callback (T5 busy).
+        Owner.shared.sync {}
+        Owner.shared.sync {
+            Owner.shared.callMain {
+                session.presenter.navigationHost.resync()
+            }
+        }
+        XCTAssertTrue(split.active, "the heard split rule answers without waiting on the owner")
+        XCTAssertEqual(split.shown?.table, listID)
+
+        // A layout-only empty-ops commit (turning the list sideways) carries the updated rule in `Batch.split`,
+        // even when perf measurement (`seq`) is off as in production builds.
+        session.presenter.press(try node("flip").id)
+        XCTAssertNil(session.newestApplied?.seq, "test runs unmeasured so seq is nil")
+        XCTAssertFalse(split.active, "an empty-ops layout commit updates the heard split rule")
+        Owner.shared.sync {
+            Owner.shared.callMain {
+                session.presenter.navigationHost.resync()
+            }
+        }
+        XCTAssertFalse(split.active)
+
+        // Flip back to column, then verify a mixed commit (layout-only direction change plus an unrelated fixed-size
+        // text update) still refreshes the split rule even though its wire ops are non-empty text ops.
+        session.presenter.press(try node("flip").id)
+        XCTAssertTrue(split.active)
+        session.presenter.press(try node("flip-text").id)
+        XCTAssertFalse(session.newestApplied?.ops.isEmpty ?? true, "fixed-size text change emits non-empty ops")
+        XCTAssertFalse(split.active, "mixed text + layout-only direction commit still refreshes Batch.split")
+
+        // Flip back to column, then verify that a newer batch still carrying retained=0 for the same split list
+        // (produced before async `retainSplit` reached the owner) does not force a synchronous owner wait.
+        session.presenter.press(try node("flip").id)
+        XCTAssertTrue(split.active)
+        if let current = session.newestApplied?.split {
+            var staleRetained = wireBatch([])
+            staleRetained.split = SplitRead(view: current.view, retained: 0, json: current.json, sequence: current.sequence + 100)
+            split.hearSplit(staleRetained)
+        }
+        Owner.shared.sync {
+            Owner.shared.callMain {
+                session.presenter.navigationHost.resync()
+            }
+        }
+        XCTAssertTrue(split.active, "an already-produced retained=0 snapshot for the same list keeps the split without waiting")
+
+        // Reload semantics on Runtime.replaced(_:): an in-place replacement (`replacesTree`) preserves the
+        // subscription and carried split; a full reset clears both so navigation resubscribes cleanly.
+        let sample = try XCTUnwrap(session.newestApplied?.split)
+        var inPlace = wireBatch([])
+        inPlace.replacesTree = true
+        inPlace.split = sample
+        inPlace.splitChanged = true
+        let kept = session.runtime.replaced(inPlace)
+        XCTAssertNotNil(kept.split, "in-place reload keeps the replacement batch's split snapshot")
+        XCTAssertNotNil(session.runtime.splitAsked, "in-place reload keeps splitAsked subscribed for later commits")
+
+        var fullReset = wireBatch([])
+        fullReset.replacesTree = false
+        fullReset.split = sample
+        fullReset.splitChanged = true
+        let cleared = session.runtime.replaced(fullReset)
+        XCTAssertNil(cleared.split, "full-reset reload drops the carried split snapshot")
+        XCTAssertFalse(cleared.splitChanged)
+        XCTAssertNil(session.runtime.splitAsked, "full-reset reload clears splitAsked")
     }
 }
 #endif

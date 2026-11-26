@@ -95,7 +95,7 @@ export function webHostFiles(...groups) {
 /** The data module realm's prelude (LLP 1027 D1a): these scripts, in this order, after module-binary.js, as
  * js/build.rs joins them natively. The realm evaluates them as one script, `module-prelude.js`, whose hash the
  * served page's CSP names; each file is a script of its own whose prelude.js takes the parts the others leave. */
-export const MODULE_PRELUDE = ['time.js', 'crypto.js', 'module-work.js', 'fetch.js', 'auth.js', 'store.js', 'storage.js', 'reply.js', 'errors.js', 'prelude.js'].map(f => 'js/src/' + f);
+export const MODULE_PRELUDE = ['time.js', 'crypto.js', 'blob.js', 'module-work.js', 'fetch.js', 'auth.js', 'store.js', 'storage.js', 'reply.js', 'errors.js', 'prelude.js'].map(f => 'js/src/' + f);
 /** `module-prelude.js`'s text, from the repository at `root`. */
 export const modulePrelude = root => MODULE_PRELUDE.map(f => readFileSync(resolve(root, f), 'utf8')).join('\n');
 

@@ -26,6 +26,15 @@
   function fixed(object, name, value) {
     Object.defineProperty(object, name, { value: value, writable: false, configurable: false });
   }
+  fixed(
+    global,
+    "process",
+    Object.freeze({
+      env: Object.freeze({ NODE_ENV: host(12, "dev", "") === "1" ? "development" : "production" }),
+      versions: Object.freeze({}),
+      release: Object.freeze({}),
+    })
+  );
   // The prelude's parts, each a script of its own evaluated just before this one
   // (time.js, crypto.js, module-work.js, fetch.js, auth.js, store.js, storage.js,
   // reply.js; host/web-js/glue.mjs `MODULE_PRELUDE`), each given what it needs of
@@ -34,7 +43,16 @@
   var time = global.__exact_time;
   delete global.__exact_time;
   var tracker = global.HermesInternal;
-  time.refuseClock(tracker);
+  time.virtualClock(
+    tracker,
+    function (kind) {
+      return host(30, kind || "wall", "");
+    },
+    host(12, "bake", "") === "1",
+    function () {
+      return overlaying;
+    }
+  );
   // What the runtime itself says through `console`: natively a line that is
   // not the app's, so no host writes it to the platform's log
   // (js/src/console.js, LLP 1027.009 D1); in a browser realm, its console.
@@ -192,12 +210,21 @@
     overlaying: function () {
       return overlaying;
     },
+    initializing: function () {
+      return initializing;
+    },
     inOverlay: inOverlay,
     store: function () {
       return store;
     },
   });
   delete global.__exact_crypto;
+  // Blob, File, FormData, Request (blob.js, LLP 1195.000 D5 P0a) — after virtualClock.
+  var blobHelpers = global.__exact_blob
+    ? global.__exact_blob({ DateNow: function () { return global.Date.now(); }, copyBytes: copyBytes })
+    : null;
+  delete global.__exact_blob;
+  if (global.__exact_set_blob_clone) { global.__exact_set_blob_clone(blobHelpers && blobHelpers.cloneBlob); delete global.__exact_set_blob_clone; }
   // --- fetch: a request the host runs; a Promise for its reply (fetch.js) --
   // Native ids survive runtime retirement and are shared across modules.
   var nextLocalId = 1;
@@ -375,7 +402,7 @@
       },
     })
   );
-  var responses = binary.responses(),
+  var responses = binary.responses(blobHelpers),
     Response = responses.Response,
     hostReply = responses.reply;
 
@@ -417,6 +444,7 @@
     bytesDoor: bytesDoor,
     sockets: sockets,
     Response: Response,
+    blob: blobHelpers,
     FetchError: FetchError,
     conflict: SOCKET_AND_FETCH,
     errors: errors,

@@ -512,7 +512,9 @@ impl Kernel {
     /// placed in. That is its parent, except for the root of a virtualized
     /// list's row: its wrapper (the node carrying `listItemKey`) exists only
     /// to position it, so the row is placed in the list content and a wrapper
-    /// moving is the row moving. `None` too while it or an ancestor is
+    /// moving is the row moving. A native button's is its centre with no size:
+    /// the platform draws its chrome at its laid-out size, so only its place
+    /// moves (LLP 1069.011 D6). `None` too while it or an ancestor is
     /// `display: none`: it has no box, and one shown again is first seen, as
     /// CSS starts no transition from `display: none`.
     pub fn layout_box(&self, key: NodeKey) -> Option<Value> {
@@ -540,12 +542,13 @@ impl Kernel {
         let parent = parent.filter(|_| self.host_block(node.id).is_none());
         let (px, py) = parent.map_or((0.0, 0.0), |p| (p.frame.x, p.frame.y));
         let f = node.frame;
-        Some(Value::four(
-            (f.x - px) as f64,
-            (f.y - py) as f64,
-            f.width as f64,
-            f.height as f64,
-        ))
+        let (x, y) = ((f.x - px) as f64, (f.y - py) as f64);
+        let (w, h) = (f.width as f64, f.height as f64);
+        Some(if arena.is_native_button(key.index) {
+            Value::four(x + w / 2.0, y + h / 2.0, 0.0, 0.0)
+        } else {
+            Value::four(x, y, w, h)
+        })
     }
 
     /// The border sides a node paints in `currentcolor` (CSS's initial

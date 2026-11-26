@@ -568,6 +568,17 @@ export function install(data, rustSources = null, modules = null) {
   // What an answer's timers run on (ts-fetch.js `arm`). Set once the app's module has run: a draw from then on
   // outside an answer is refused as outside one, not as during initialization (ts-fetch.js `answerOnly`).
   answering.page = { clock: rt.clock, journal: rt.journal, drive: rt.drive, time: rt.time };
+  const clockWarned = new Set();
+  // LLP 1195.000 D2.4 / Q2: mark clock-reading calls and warn once per app resource.
+  answering.onClockRead = () => {
+    const c = answering.call ?? answering.promiseCall;
+    if (!c) return;
+    c.clockRead = true;
+    if (!c.mutation && !globalThis.__exactRender && !clockWarned.has(c.name)) {
+      clockWarned.add(c.name);
+      rt.journal.push(`t=${rt.clock.now} [ambient-clock] resource ${c.name} read ambient Date/performance.now; its value is not baked and does not auto-refresh when the clock ticks — pass exactTime() for reactive or SSR-safe time`);
+    }
+  };
   data.appId = appId;
   bodyFiles.appId = appId ?? null; // `exactBodyFrom`'s store (ts-fetch.js)
   data.grants = setAppGrantSet(tsGrantSet);
@@ -597,7 +608,7 @@ export function install(data, rustSources = null, modules = null) {
   // paint (rt.js `painted`), whether or not anything asks `later`.
   load = modules && (() => rt.painted().then(modules));
   if (modules && typeof requestAnimationFrame === 'function') pageModule().catch(e => rt.journal.push(`t=${rt.clock.now} native: ${e.message}`));
-  let asking = '', thrown = null, threwRead = false, threwWatches = null;
+  let asking = '', thrown = null, threwRead = false, threwClock = false, threwWatches = null;
   // The answer an async function was called under, put back around each of
   // its steps by the bundle's async helper (js/bake/src/typescript.mjs
   // `asyncContextHelper`, LLP 1133.002 D14), as Hermes's prelude does with
@@ -639,7 +650,7 @@ export function install(data, rustSources = null, modules = null) {
     // The store as the module sees it (LLP 1018): a read marks the answer.
     const seen = createSecretFacade(store, tsGrantSet, kept);
     // A call that read the store and then threw read it too: its resource is a store reader (LLP 1146 §2.3).
-    threwRead = false; threwWatches = null;
+    threwRead = false; threwClock = false; threwWatches = null;
     try { return answerWith(name, args, target, mutation, types, params, result, seen, forced); } catch (e) { threwRead = !!seen.read; throw e; }
   };
   const answerWith = (name, args, target, mutation, types, params, result, seen, forced) => {
@@ -658,7 +669,7 @@ export function install(data, rustSources = null, modules = null) {
     };
     let r;
     thrown = null;
-    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; threwWatches = call.watches; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
+    try { r = source.answer(name, args.map((a, i) => named(a, params[i])), seen, globalThis.__exactRender ? renderStorage(call) : storage, modules ? native : null); } catch (e) { call.settled = true; threwClock = !!call.clockRead || answering.moduleClock; threwWatches = call.watches; if (!mutation) thrown = effectsOf(true); throw e; } finally { call.turn = false; asking = ''; watching = null; answering.call = null; }
     const shaped = types ? v => checked(name, v, result) : v => v;
     // A stream's answer has replied once it returns (LLP 1016.000): what runs on is background work.
     // Socket operations go out only with a value given now: not with a
@@ -668,8 +679,9 @@ export function install(data, rustSources = null, modules = null) {
       throw new Error(SOCKET_AND_FETCH);
     }
     const effects = effectsOf(!mutation || !!(r && typeof r.then === 'function'));
+    const clocked = !!call.clockRead || answering.moduleClock;
     // An upload's request identity: the same request for newer arguments keeps it (rt.js, LLP 1016.000 D10).
-    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects, watches: call.watches, madeBy: call }; }
+    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, clock: clocked, effects, watches: call.watches, madeBy: call }; }
     if (r && typeof r.then === 'function') {
       pendingAnswers++;
       call.seen = seen; // a read after an `await` makes a store reader too: rt.js looks when the answer lands (LLP 1146 §2.3)
@@ -692,10 +704,10 @@ export function install(data, rustSources = null, modules = null) {
       call.flight = true;
       const stood = Object.assign(() => { call.stood = true; for (const go of call.waiting ?? []) go(); call.waiting = null; },
         { refused: why => { call.stood = false; for (const go of call.waiting ?? []) go.refused(why); call.waiting = null; call.unsent = []; } });
-      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call, watches: call.watches, madeBy: call };
+      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, clock: clocked, effects: [...(effects ?? []), stood], call, watches: call.watches, madeBy: call };
     }
     call.settled = true; dropTimers(call); answering.untraced.delete(call);
-    return { v: conv(shaped(r), result, target_), store: seen.read, effects, watches: call.watches, madeBy: call };
+    return { v: conv(shaped(r), result, target_), store: seen.read, clock: clocked, effects, watches: call.watches, madeBy: call };
   };
   // Beside a Rust source (LLP 1027.002, LLP 1153.003 D2): a source the crate's RUST_SOURCES lists is the Rust
   // module's, not ready until it loads (rust-data.js), and this module answers every other, as `exact_data::Mixed`
@@ -738,6 +750,7 @@ export function install(data, rustSources = null, modules = null) {
   // A resource's source that sent and then threw: what it sent, which rt.js `ask` queues with the commit.
   data.thrown = () => { const t = thrown ?? []; thrown = null; return t; };
   data.threwRead = () => { const read = threwRead; threwRead = false; return read; };
+  data.threwClock = () => { const clocked = threwClock; threwClock = false; return clocked; };
   // What a call that threw watched: its resource watches it too, as the runner's failed ask does.
   data.threwWatches = () => { const w = threwWatches; threwWatches = null; return w; };
   for (const f of data.q.splice(0)) f();

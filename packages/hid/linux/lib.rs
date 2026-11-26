@@ -105,6 +105,8 @@ fn pad(c: &Collection) -> bool {
 struct Device {
     id: String,
     path: String,
+    /// The bus from `HID_ID` (`BUS_USB` 3, `BUS_BLUETOOTH` 5: include/uapi/linux/input.h).
+    bus: u64,
     vendor: u64,
     product: u64,
     name: String,
@@ -133,7 +135,7 @@ fn devices() -> Vec<Device> {
             continue;
         }
         let id = format!("{}:{:04x}:{:04x}@{}", ids.first().copied().unwrap_or(0), ids.get(1).copied().unwrap_or(0), ids.get(2).copied().unwrap_or(0), field("HID_PHYS="));
-        out.push(Device { id, path: format!("/dev/{node}"), vendor: ids.get(1).copied().unwrap_or(0), product: ids.get(2).copied().unwrap_or(0), name: field("HID_NAME="), collections: cs });
+        out.push(Device { id, path: format!("/dev/{node}"), bus: ids.first().copied().unwrap_or(0), vendor: ids.get(1).copied().unwrap_or(0), product: ids.get(2).copied().unwrap_or(0), name: field("HID_NAME="), collections: cs });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
@@ -267,6 +269,15 @@ fn read_loop(file: Arc<File>, wake: UnixStream, log: Arc<Mutex<Log>>, stop: Arc<
             }
         }
     }
+}
+
+/// A feature report as `receiveFeatureReport` answers it, from the bytes `HIDIOCGFEATURE` read: a numbered report
+/// keeps its id first, as WebHID's does, and an unnumbered one is its data alone. USB and I2C lead an unnumbered
+/// report with a 0 (`usbhid_get_raw_report`, `i2c_hid_get_raw_report`); Bluetooth does not (`hidp_get_raw_report`,
+/// and BlueZ's `bt_uhid_get_report_reply` for LE).
+fn feature_report(read: &[u8], id: u8, bus: u64) -> &[u8] {
+    const BUS_BLUETOOTH: u64 = 5;
+    if id == 0 && bus != BUS_BLUETOOTH { read.get(1..).unwrap_or_default() } else { read }
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -430,7 +441,7 @@ impl Package for Hid {
                             if n < 0 {
                                 json!({ "error": "NotAllowedError", "message": std::io::Error::last_os_error().to_string() })
                             } else {
-                                json!({ "data": base64(&buf[..n as usize]) })
+                                json!({ "data": base64(feature_report(&buf[..n as usize], id, c.device.bus)) })
                             }
                         }
                     }
@@ -465,7 +476,7 @@ mod tests {
     use super::*;
 
     fn device() -> Device {
-        Device { id: String::new(), path: String::new(), vendor: 0, product: 0, name: String::new(), collections: Vec::new() }
+        Device { id: String::new(), path: String::new(), bus: 0, vendor: 0, product: 0, name: String::new(), collections: Vec::new() }
     }
 
     /// A close keeps the log for the connection's last reads and leaves the device connected; only the reader seeing
@@ -486,5 +497,15 @@ mod tests {
         log.lock().unwrap().gone = true;
         assert_eq!(c.state(), json!({ "open": false, "connected": false }));
         assert_eq!(c.reports(&all)["interrupted"], json!(true));
+    }
+
+    /// `receiveFeatureReport` answers as the web does: a numbered report with its id first, an unnumbered one
+    /// without the 0 the system leads it with.
+    #[test]
+    fn a_feature_report_keeps_its_id_only_when_it_has_one() {
+        assert_eq!(feature_report(&[1, 0x63, 0xff], 1, 3), [1, 0x63, 0xff]);
+        assert_eq!(feature_report(&[0, 0x63, 0xff], 0, 3), [0x63, 0xff]);
+        assert_eq!(feature_report(&[], 0, 3), [0u8; 0]);
+        assert_eq!(feature_report(&[0x63, 0xff], 0, 5), [0x63, 0xff], "Bluetooth leads with no 0");
     }
 }

@@ -614,6 +614,7 @@ extension NodeView {
             e.anchoredScrollTop = nil; e.retainedScrollTop = nil; e.lastScrollEvent = []
             e.readingAnchors.removeAll(); e.activeReadingAnchor = nil; e.scrollAnchor = nil
             e.pendingScrollTop = nil; e.pendingScrollLeft = nil
+            e.afterScrollAnimation = nil; e.lastScrollAsk = 0
         }
     }
     /// Taken for `newID`: a fresh view's state, before its create ops, and
@@ -625,6 +626,7 @@ extension NodeView {
         id = newID
         incarnation = NodePool.issue()
         scrollEnd?.reset()
+        if let e = extras { e.afterScrollAnimation = nil; e.lastScrollAsk = 0 }
         #if os(iOS)
         extras?.reportingPinch?.resetForRecycle()
         extras?.reportingIndirectPinch?.resetForRecycle()

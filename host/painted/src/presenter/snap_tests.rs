@@ -258,7 +258,7 @@ fn a_flick_reaches_at_least_the_next_position_from_where_its_drag_began() {
 }
 
 #[test]
-fn a_wheel_notch_moves_a_snap_one_position_and_finer_ticks_add_up() {
+fn a_wheel_notch_moves_at_once_and_finer_ticks_scroll_freely_then_settle() {
     let mut p = boot(SNAPPERS);
     let rail = id(&p, "rail");
     let mut seen = Vec::new();
@@ -268,19 +268,346 @@ fn a_wheel_notch_moves_a_snap_one_position_and_finer_ticks_add_up() {
     }
     // A notch a position, the `always` card at 550 included; the last at the end.
     assert_eq!(seen, [250., 550., 800., 800.]);
-    // Ticks finer than a notch add up to one before it moves.
+    // Finer ticks scroll freely and settle once the wheel goes quiet.
     p.scroll_to(rail, (0., 0.));
+    let start = p.host.now();
     let mut seen = Vec::new();
-    for _ in 0..8 {
+    for i in 0..8 {
+        p.advance(start + i as f64 * 10.);
         p.wheel(rail, 5., 0.).unwrap();
         seen.push(p.scroll_of(rail).0);
     }
-    assert_eq!(seen, [0., 0., 0., 0., 0., 0., 0., 250.]);
-    // A scroll from elsewhere starts the sum over from where it put it, and
+    assert_eq!(seen, [5., 10., 15., 20., 25., 30., 35., 40.]);
+    let due = p.wake_due_ms().expect("quiet settle timer armed");
+    assert_eq!(due, start + 70. + 100.);
+    // A fast frame (>= notch) mid-gesture keeps scrolling freely until quiet.
+    p.advance(start + 90.);
+    p.wheel(rail, 48., 0.).unwrap();
+    assert_eq!(p.scroll_of(rail).0, 88.);
+    p.advance(start + 190.);
+    assert_eq!(p.scroll_of(rail).0, 250.);
+    // A scroll from elsewhere starts over from where it put it, and
     // a notch back goes to the position before it.
     p.scroll_to(rail, (500., 0.));
     p.wheel(rail, -40., 0.).unwrap();
     assert_eq!(p.scroll_of(rail).0, 250.);
+}
+
+#[test]
+fn fine_wheel_ticks_settle_by_proximity_reversal_glide_and_scrollend() {
+    let source = r#"component App
+  state ends = 0
+  state wide = false
+  action ended
+    ends = ends + 1
+  action toggle
+    wide = !wide
+  view
+    column width=400 height=900
+      button testId="toggle" press=toggle width=(wide ? 120 : 100) height=20
+      scroll testId="near" width=400 height=400 scroll-snap-type="y" scrollend=ended
+        column
+          for i in [0, 1, 2, 3, 4] key=i
+            view width=400 height=400 flex-shrink=0 scroll-snap-align="start"
+      scroll testId="pager" width=400 height=400 scroll-snap-type="y mandatory" scrollend=ended
+        column
+          for i in [0, 1, 2, 3, 4] key=i
+            view width=400 height=400 flex-shrink=0 scroll-snap-align="start"
+"#;
+    let mut p = boot(source);
+    let (near, pager) = (id(&p, "near"), id(&p, "pager"));
+    let mut t = p.host.now();
+
+    // Proximity: 60 fine ticks (240 pt) scroll freely and stay free outside 1/3 port.
+    for _ in 0..60 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(near, 0., 4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(near).1, 240.);
+    if !cfg!(windows) {
+        assert_eq!(
+            p.host.runner().slot("ends"),
+            Some(&exact_runner::Value::Number(0.))
+        );
+    }
+    t += 100.;
+    p.advance(t);
+    assert_eq!(p.scroll_of(near).1, 240.);
+    if !cfg!(windows) {
+        assert_eq!(
+            p.host.runner().slot("ends"),
+            Some(&exact_runner::Value::Number(1.))
+        );
+    }
+
+    // Proximity: scrolling to 300 (within 400/3 of 400) settles to 400.
+    p.scroll_to(near, (0., 0.));
+    for _ in 0..75 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(near, 0., 4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(near).1, 300.);
+    t += 100.;
+    p.advance(t);
+    assert_eq!(p.scroll_of(near).1, 400.);
+
+    // Proximity: slow 1-line mouse notches (16 pt, >100 ms apart) advance without snapping back.
+    p.scroll_to(near, (0., 0.));
+    let mut slow = Vec::new();
+    for _ in 0..6 {
+        t += 200.;
+        p.advance(t);
+        p.wheel(near, 0., 16.).unwrap();
+        t += 100.;
+        p.advance(t);
+        slow.push(p.scroll_of(near).1);
+    }
+    assert_eq!(slow, [16., 32., 48., 64., 80., 96.]);
+
+    // Mandatory: 60 fine ticks (240 pt) settle once to 400 and hold resnap until quiet.
+    for _ in 0..60 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(pager, 0., 4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(pager).1, 240.);
+    p.tap(id(&p, "toggle")).unwrap();
+    p.frame();
+    assert_eq!(
+        p.scroll_of(pager).1,
+        240.,
+        "layout commit must not snap mid-gesture"
+    );
+    let ends_before = p.host.runner().slot("ends").cloned();
+    t += 100.;
+    p.advance(t);
+    assert_eq!(p.scroll_of(pager).1, 400.);
+    if !cfg!(windows) {
+        let Some(exact_runner::Value::Number(before)) = ends_before else {
+            panic!()
+        };
+        assert_eq!(
+            p.host.runner().slot("ends"),
+            Some(&exact_runner::Value::Number(before + 1.)),
+            "exactly one scrollend after settle"
+        );
+    }
+
+    // Mandatory: reversing direction back toward start cancels forward flick.
+    p.scroll_to(pager, (0., 0.));
+    for _ in 0..15 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(pager, 0., 4.).unwrap();
+    }
+    for _ in 0..13 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(pager, 0., -4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(pager).1, 8.);
+    t += 100.;
+    p.advance(t);
+    assert_eq!(p.scroll_of(pager).1, 0.);
+
+    // Live clock: settle glides smoothly and a new wheel tick catches the glide
+    // without emitting an extra scrollend.
+    let clock = std::rc::Rc::new(std::cell::Cell::new(t + 5000.));
+    let reader = clock.clone();
+    p.set_live_clock(Some(std::rc::Rc::new(move || reader.get())));
+    p.scroll_to(pager, (0., 0.));
+    // Idle live clock: wheel_now uses live time even without a prior advance().
+    let mut live_t = t + 5000.;
+    for _ in 0..30 {
+        live_t += 8.;
+        clock.set(live_t);
+        p.wheel(pager, 0., 4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(pager).1, 120.);
+    let due = p.wheel_snap_due().unwrap();
+    assert!(
+        (due - (live_t + 100.)).abs() < 0.01,
+        "due uses live clock: {due} vs {}",
+        live_t + 100.
+    );
+    p.advance(live_t + 50.);
+    assert_eq!(
+        p.scroll_of(pager).1,
+        120.,
+        "does not settle before quiet window"
+    );
+    let ends_before_glide = p.host.runner().slot("ends").cloned();
+    live_t += 100.;
+    clock.set(live_t);
+    p.advance(live_t);
+    assert!(p.needs_animation_frame(), "settle started a smooth glide");
+    p.tick(live_t + 150.);
+    let mid = p.scroll_of(pager).1;
+    assert!(mid > 120. && mid < 400., "gliding smoothly: {mid}");
+    // Catching the glide with a fine wheel tick stops it immediately without a premature scrollend.
+    live_t += 160.;
+    clock.set(live_t);
+    p.wheel(pager, 0., -4.).unwrap();
+    assert!(!p.gliding(pager));
+    assert!((p.scroll_of(pager).1 - (mid - 4.)).abs() < 0.01);
+    if !cfg!(windows) {
+        assert_eq!(
+            p.host.runner().slot("ends"),
+            ends_before_glide.as_ref(),
+            "catching glide emits no premature scrollend"
+        );
+    }
+    // After quiet + glide finishes, exactly one scrollend fires for the combined gesture.
+    live_t += 100.;
+    clock.set(live_t);
+    p.advance(live_t);
+    live_t += 400.;
+    clock.set(live_t);
+    p.tick(live_t);
+    p.advance(live_t);
+    if !cfg!(windows) {
+        let Some(exact_runner::Value::Number(before)) = ends_before_glide else {
+            panic!()
+        };
+        assert_eq!(
+            p.host.runner().slot("ends"),
+            Some(&exact_runner::Value::Number(before + 1.)),
+            "exactly one scrollend after caught glide settles"
+        );
+    }
+}
+
+#[test]
+fn fine_wheel_snap_edge_cases_perpendicular_resize_and_preemption() {
+    let mut p = boot(
+        r#"component App
+  state ends = 0
+  state h = 400
+  action ended
+    ends = ends + 1
+  action resize_pages
+    h = 500
+  view
+    column width=400 height=600
+      button testId="grow" press=resize_pages
+        text "grow"
+      scroll testId="pager" width=400 height=400 overflow-x="scroll" overflow-y="scroll" scroll-snap-type="y mandatory" scrollend=ended
+        column width=800
+          for i in [0, 1, 2] key=i
+            view width=800 height=h flex-shrink=0 scroll-snap-align="start"
+"#,
+    );
+    let pager = id(&p, "pager");
+    let mut t = p.host.now();
+
+    // 1. Perpendicular unsnapped X tick preserves the open Y snap gesture.
+    for _ in 0..30 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(pager, 0., 4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(pager), (0., 120.));
+    t += 8.;
+    p.advance(t);
+    p.wheel(pager, 20., 0.).unwrap();
+    assert_eq!(p.scroll_of(pager), (20., 120.));
+    assert!(
+        p.wheel_snap_pending(pager),
+        "X tick on unsnapped axis keeps Y snap pending"
+    );
+    t += 100.;
+    p.advance(t);
+    assert_eq!(p.scroll_of(pager), (20., 400.));
+
+    // 2. No-move settle updates snap_layout so a later layout change follows the chosen page.
+    p.scroll_to(pager, (0., 400.));
+    p.frame();
+    // Fine ticks away and back to 400 (net target == at == 400).
+    for _ in 0..5 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(pager, 0., 4.).unwrap();
+    }
+    for _ in 0..5 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(pager, 0., -4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(pager).1, 400.);
+    t += 100.;
+    p.advance(t);
+    assert!(!p.wheel_snap_pending(pager));
+    assert_eq!(p.scroll_of(pager).1, 400.);
+    // Growing pages to 500 follows page 1 -> 500.
+    p.tap(id(&p, "grow")).unwrap();
+    present(&mut p);
+    assert_eq!(p.scroll_of(pager).1, 500.);
+
+    // 3. Pointer hold / reader hold preempts pending wheel snap so settle does not yank it.
+    p.scroll_to(pager, (0., 0.));
+    present(&mut p);
+    let y = p.box_of(pager).unwrap().rect.1 + 20.;
+    p.reader_under(50., y, 1.);
+    assert!(p.reader_knows(pager));
+    for _ in 0..30 {
+        t += 8.;
+        p.advance(t);
+        p.wheel(pager, 0., 4.).unwrap();
+    }
+    assert_eq!(p.scroll_of(pager).1, 120.);
+    p.reader_drag_began(pager);
+    assert!(!p.wheel_snap_pending(pager));
+    t += 200.;
+    p.advance(t);
+    assert_eq!(
+        p.scroll_of(pager).1,
+        120.,
+        "reader hold preempted wheel settle"
+    );
+    p.reader_drag_ended(pager, (0., 0.), None, false);
+
+    // 4. Resize during a live-clock settle glide holds scrollend until resnap lands.
+    let clock = std::rc::Rc::new(std::cell::Cell::new(t));
+    let reader = clock.clone();
+    p.set_live_clock(Some(std::rc::Rc::new(move || reader.get())));
+    p.scroll_to(pager, (0., 0.));
+    p.advance(t);
+    for _ in 0..40 {
+        t += 8.;
+        clock.set(t);
+        p.wheel(pager, 0., 4.).unwrap();
+    }
+    let ends_before = p.host.runner().slot("ends").cloned();
+    t += 100.;
+    clock.set(t);
+    p.advance(t);
+    assert!(p.gliding(pager));
+    // Resize height during glide: page 1 moves from 500 to 500 (or viewport resize invalidates stamp).
+    p.resize(400., 500.);
+    t += 400.;
+    clock.set(t);
+    p.tick(t);
+    assert!(!p.gliding(pager));
+    if !cfg!(windows) {
+        // Resnap is pending until the resized frame paints.
+        if p.snap_resnap_pending(pager) {
+            p.advance(t);
+            assert_eq!(p.host.runner().slot("ends"), ends_before.as_ref());
+        }
+    }
+    present(&mut p);
+    p.advance(t);
+    if !cfg!(windows) {
+        let Some(exact_runner::Value::Number(before)) = ends_before else {
+            panic!()
+        };
+        assert_eq!(
+            p.host.runner().slot("ends"),
+            Some(&exact_runner::Value::Number(before + 1.))
+        );
+    }
 }
 
 #[test]

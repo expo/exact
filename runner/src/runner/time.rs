@@ -84,7 +84,14 @@ impl<D: DataSource> Runner<D> {
             |r| &mut r.time,
             time,
             SOURCE,
-            |r, _, readers| {
+            |r, _, mut readers| {
+                r.store.set_epoch_at_zero(r.time.epoch_at_zero);
+                // Re-ask ambient clock readers alongside exactTime readers (LLP 1195.000 D2.2).
+                for i in 0..r.resources.len() {
+                    if r.resource_ambient_taint(i).0 && !readers.contains(&i) {
+                        readers.push(i);
+                    }
+                }
                 if readers.is_empty() && !r.live_times.is_empty() {
                     r.tick_live_times()
                 } else {

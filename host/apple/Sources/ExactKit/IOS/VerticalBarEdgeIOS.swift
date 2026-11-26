@@ -4,7 +4,7 @@ import UIKit
 extension UITraitCollection {
     /// Whether the system places a vertical bar here (the iPhone Duo):
     /// UIKit 27.1's `verticalBarEdge` other than `.unspecified` (raw 0).
-    var placesVerticalBar: Bool { (rawVerticalBarEdge ?? 0) != 0 }
+    package var placesVerticalBar: Bool { (rawVerticalBarEdge ?? 0) != 0 }
 
     /// UIKit 27.1's `verticalBarEdge` as the kernel's `VerticalBarEdge` takes it: 0 unspecified,
     /// 1 leading, 2 trailing, the system's preferred edge whether or not the bar shows; `nil`

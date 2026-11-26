@@ -1187,7 +1187,7 @@ pub fn bake_with_warnings<D: DataSource>(
     }
     let mut b = PlanBuilder::from_plan(plan);
     let pending: Vec<String> = runner.pending().into_iter().map(|(n, _)| n).collect();
-    let dated = runner.resources_reading_clock();
+    let dated = runner.resources_tainted_for_bake();
     // A resource over a list compiles nothing: its elements are the
     // launch's to ask (LLP 1017.000 P4c), and they follow the plan's rows.
     for i in 0..runner.declared_resources().len() {

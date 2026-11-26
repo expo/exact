@@ -133,3 +133,37 @@ fn the_inner_edge_takes_the_radii_less_the_border() {
     ));
     assert_eq!(pts[0], (4.0, 2.0 + 14.0));
 }
+
+#[test]
+fn a_scoop_is_the_round_corner_turned_inside_out() {
+    // Chrome 157 draws `border-radius: 40px; corner-shape: scoop` as a
+    // quarter circle about the corner point (CSS Borders 4 §3.7: a concave
+    // quarter-ellipse); Exact's crossed the diagonal at 30 px, not 28.3.
+    let top_left = |word: &str| {
+        let shape = CornerShape::check(word).unwrap();
+        points(&outline(
+            (0.0, 0.0, 200.0, 100.0),
+            [(40.0, 40.0); 4],
+            &shape,
+        ))
+        .into_iter()
+        .take_while(|&(x, y)| x <= 40.0 && y <= 40.0)
+        .collect::<Vec<_>>()
+    };
+    for (x, y) in top_left("scoop") {
+        assert!((x.hypot(y) - 40.0).abs() < 0.01, "({x}, {y})");
+    }
+    // Every concave curve mirrors its convex one across the chord: each
+    // point (a, d) of `superellipse(-k)` is (40 - d, 40 - a) of k's.
+    for k in ["0.5", "1", "2"] {
+        let convex = top_left(&format!("superellipse({k})"));
+        let concave = top_left(&format!("superellipse(-{k})"));
+        assert_eq!(convex.len(), concave.len(), "{k}");
+        for (&(x, y), &(cx, cy)) in convex.iter().zip(&concave) {
+            assert!(
+                (cx - (40.0 - y)).abs() < 1e-3 && (cy - (40.0 - x)).abs() < 1e-3,
+                "{k}"
+            );
+        }
+    }
+}

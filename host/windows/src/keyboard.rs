@@ -229,6 +229,73 @@ mod tests {
         assert_eq!(value, "name@example.comx");
     }
 
+    /// Control chords on a layout that types no Latin letter, as winit 0.30
+    /// reports Russian's keys with Control down (KeyC is "с", its text "с"
+    /// too, measured through `SendInput` on Windows 11): the field's editing
+    /// chords and a button's declared chord take the key the US layout puts
+    /// there, as Windows' own controls and the web's shortcuts do, and the
+    /// `key` handlers hear the layout's letter.
+    #[test]
+    fn a_control_chord_on_a_non_latin_layout_takes_its_us_key() {
+        let plan = contract::compile(
+            "component App\n  state keys = \"\"\n  state found = 0\n  action heard(value: string)\n    keys = `${keys}[${value}]`\n  action find\n    found = found + 1\n  view\n    column\n      input testId=\"field\" value=\"привет\" key=heard width=200 height=40\n      button press=find aria-keyshortcuts=\"Control+K\" testId=\"find\"\n        text \"Find\"\n",
+        )
+        .unwrap()
+        .encode();
+        let (mut p, warning) = Presenter::boot_with(
+            &plan,
+            (),
+            (240., 120.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(warning.is_none());
+        let clipboard = Rc::new(RefCell::new("untouched".to_string()));
+        p.set_clipboard(Box::new(Memory(clipboard.clone())));
+        let k = p.host().kernel();
+        let field = k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id;
+        p.tap(field).unwrap();
+        let value = |p: &mut Presenter<()>| {
+            let tree = p.access_tree().0;
+            tree.into_iter().find(|n| n.view == field).unwrap().value
+        };
+        reconcile(
+            Some(KeyModifiers {
+                ctrl: true,
+                ..Default::default()
+            }),
+            [[false; 2], [true, false], [false; 2], [false; 2]],
+            |code, down| p.hold_modifier(code, down),
+        );
+        let chord = |p: &mut Presenter<()>, code: &str, key: &str| {
+            press(p, (code, key), Some(key), true, false);
+            press(p, (code, key), None, false, false);
+        };
+        // Select all, then copy.
+        chord(&mut p, "KeyA", "ф");
+        chord(&mut p, "KeyC", "с");
+        assert_eq!(clipboard.borrow().as_str(), "привет");
+        // Cut, then paste twice.
+        chord(&mut p, "KeyX", "ч");
+        assert_eq!(value(&mut p), "");
+        chord(&mut p, "KeyV", "м");
+        chord(&mut p, "KeyV", "м");
+        assert_eq!(value(&mut p), "приветпривет");
+        // Undo the second paste.
+        chord(&mut p, "KeyZ", "я");
+        assert_eq!(value(&mut p), "привет");
+        // The button that declares Control+K takes Control and the key K is on.
+        chord(&mut p, "KeyK", "л");
+        let runner = p.host().runner();
+        assert_eq!(runner.slot("found"), Some(&exact_runner::Value::Number(1.)));
+        assert_eq!(
+            runner.slot("keys"),
+            Some(&exact_runner::Value::str("[ф][с][ч][м][м][я]"))
+        );
+    }
+
     /// A dead key then Space, a letter it does not combine with, and one it
     /// does, as winit reports them on US-International.
     #[test]

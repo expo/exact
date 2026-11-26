@@ -2092,6 +2092,7 @@ dependencies = [
  "ibex2-sqlite",
  "libc",
  "miniz_oxide 0.8.9",
+ "ring",
  "rusqlite",
  "serde_json",
  "sha2 0.10.9",
