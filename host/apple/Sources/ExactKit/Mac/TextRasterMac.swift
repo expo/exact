@@ -302,13 +302,16 @@ extension NodeView {
     /// paragraphs too large to paint at once. HDR text is never small: only a
     /// raster's layers follow `dynamic-range-limit` (LLP 1100 D8).
     var textIsSmall: Bool {
+        belowTextRasterThreshold && !(isParagraph && paragraphHeadroom(drawing: true) > 1)
+    }
+
+    var belowTextRasterThreshold: Bool {
         // The page's scale (the window's backing, the page zoom), not
         // `pixelScale`: this is a threshold asked of every visible paragraph
         // on every text refresh, where the walk to the window that
         // `pixelScale` takes was the costliest question.
         let scale = window.map { $0.backingScaleFactor * (presenter?.viewport.magnification ?? 1) } ?? 2
-        guard bounds.width * bounds.height * scale * scale < TextRasterizer.minPixels else { return false }
-        return !(isParagraph && paragraphHeadroom(drawing: true) > 1)
+        return bounds.width * bounds.height * scale * scale < TextRasterizer.minPixels
     }
 
     /// Whether the pump still owes this paragraph pixels.

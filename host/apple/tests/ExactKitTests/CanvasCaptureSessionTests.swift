@@ -12,6 +12,45 @@ import ImageIO
 final class CanvasCaptureSessionTests: XCTestCase {
     override class func setUp() { super.setUp(); ExactSurfaces.install() }
 
+    #if os(macOS)
+    func testMovingAGroupIntoTheCanvasAdmitsItsSmallText() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "canvas-text-ancestry")
+        let presenter = session.presenter
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 150),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = presenter.viewport
+        defer { window.close(); session.destroy() }
+        presenter.apply(batchFixture(ops: [
+            ["op": "create", "id": 1, "kind": "box"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Label"]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 200, "h": 150],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 50, "h": 20]
+        ], timers: false, motion: false, clock: nil, error: nil))
+        let parent = try XCTUnwrap(presenter.views[1]), node = try XCTUnwrap(presenter.views[2])
+        let holder = NSView(frame: parent.bounds)
+        parent.addSubview(holder)
+        holder.addSubview(node)
+        func admitted() -> Bool {
+            presenter.textViewport.candidates(in: presenter, reach: Presenter.textRasterReach).contains { $0.node === node }
+        }
+        XCTAssertFalse(admitted())
+        let canvas = NodeView(id: 3, kind: "canvas", presenter: presenter)
+        canvas.frame = parent.bounds
+        parent.addSubview(canvas)
+        let overlay = try XCTUnwrap(canvas.overlay)
+        overlay.addSubview(holder)
+        XCTAssertTrue(node.canvasAbove === canvas)
+        XCTAssertTrue(admitted())
+        parent.addSubview(holder)
+        XCTAssertNil(node.canvasAbove)
+        XCTAssertFalse(admitted())
+    }
+    #endif
+
     func testACaptureIncludesTheActionsDrawingAndResize() throws {
         #if os(iOS)
         guard hostedWindowScene() != nil else { throw missing("scene", "a capture uses the session's window") }

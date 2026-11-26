@@ -73,7 +73,9 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// Its button went down as a Control-click's context click (X85).
     var contextClicked = false
     var cachedTextSpec: Spec? { didSet { cachedTextHeadroom = nil } }
-    var cachedTextHeadroom: Float?
+    var cachedTextHeadroom: Float? { didSet {
+        if cachedTextHeadroom == nil || oldValue != cachedTextHeadroom { presenter?.textViewport.changed(self) }
+    } }
     var proseMarker: CATextLayer?
     var textLayoutValid = false
     /// The node whose `accent-color` this view last read as its tint, nil for the system's (NodeColorMac.swift).
@@ -1276,6 +1278,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package override func viewDidMoveToSuperview() {
         pressMoves &+= 1
         super.viewDidMoveToSuperview()
+        if Self.canvasOverlays.count > 0 { presenter?.textViewport.ancestryChanged(self) }
         overflowClipGeometryChanged()
         if superview == nil { boxFilter?.remove() } else if boxFilter != nil { renderFilter() }
         paintOrderMoved()
@@ -1303,6 +1306,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         let changed = newSize != frame.size
         super.setFrameSize(newSize)
         guard changed else { return }
+        presenter?.textViewport.geometryChanged(self)
         overflowClipGeometryChanged()
         if let row = superview as? NodeView, row.style["appearance"] != nil { row.needsLayout = true } // its bezel (FormRowsMac.swift)
         if focusVisible { noteFocusRingMaskChanged() } // the ring follows the box
@@ -1315,16 +1319,15 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if layerBoxEligible && (hasBoxPaint || kind == "image") { needsDisplay = true }
     }
 
-    package func fitScroll() {
-        guard let scroll, let document = scroll.documentView else { return }
-        let visible = scroll.contentView.bounds.size, origin = scroll.kernelDocumentOrigin, o = grid?.origin ?? .zero, s = presenter?.gridScale ?? 1
-        var size = CGSize(width: max(PixelGrid.length(content.width, from: o, vertical: false, scale: s) - origin.x, visible.width), height: max(PixelGrid.length(content.height, from: o, vertical: true, scale: s) - origin.y, visible.height)) // ending where its last edge is drawn (`PixelGridMac.swift`)
-        if let height = presenter?.tables.feeds[id]?.sectionDocumentHeight { size.height = max(size.height, height) }
-        if case let size = scroll.zoom?.child?.grid?.layout.size ?? size, document.frame.size != size { document.setFrameSize(size) }
+    package override func setBoundsSize(_ newSize: NSSize) {
+        let changed = bounds.size != newSize
+        super.setBoundsSize(newSize)
+        if changed { presenter?.textViewport.geometryChanged(self) }
     }
 
     package override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        presenter?.textViewport.geometryChanged(self)
         // A plain container's detachment moves no NodeView's superview.
         pressMoves &+= 1
         if window == nil { holdPresenter?.mouseChain.bubbledPress?.cancel(in: self) }

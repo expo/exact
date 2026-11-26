@@ -81,7 +81,7 @@ package final class Presenter {
     func topLayerChanged() {
         selection.clear()
         selection.structureChanged()
-        textViewportIndex = nil
+        textViewport.geometry = nil
         refreshVisibleText()
     }
     /// Scroll containers: the only views with a position to keep across a batch.
@@ -114,7 +114,7 @@ package final class Presenter {
     lazy package var reorders: any ReorderHosting = ReorderLink.make?(self) ?? NoReorders()
     private var scrollObserver: NSObjectProtocol?
     private var visibleText: [UInt32: NSRect] = [:]
-    private var textViewportIndex: TextViewportIndex?
+    let textViewport = TextViewport()
     /// The native menu arm (LLP 1021 D3).
     package lazy var menus = MenuHost(presenter: self)
     package lazy var dialogs = DialogHost(self)
@@ -278,12 +278,11 @@ package final class Presenter {
         // Bounds notifications can arrive while a batch is still changing the
         // hierarchy. Query its final geometry once the outermost batch ends.
         guard !applying else { return false }
-        if textViewportIndex == nil { textViewportIndex = TextViewportIndex(selection.shownParagraphs) }
         var next: [UInt32: NSRect] = [:]
         var waiting: [(CGFloat, NodeView)] = []
         var rasters: [NodeView] = []
         // The backing-store band lies inside the raster reach, so both use the same distance order.
-        let ranked = textViewportIndex!.candidates(reach: Self.textRasterReach)
+        let ranked = textViewport.candidates(in: self, reach: Self.textRasterReach)
         let candidates = ranked.map(\.node)
         var readersDeferred = false
         for node in candidates {
@@ -707,7 +706,7 @@ package final class Presenter {
         videoVisibility?.reset()
         selection.structureChanged(); selection.clear() // a selection of the retired tree, unreported
         visibleText.removeAll()
-        textViewportIndex = nil
+        textViewport.geometry = nil
         stopPump()
         listTravel.removeAll()
         listFillCosts.removeAll()
@@ -1156,7 +1155,8 @@ package final class Presenter {
         if Self.onlySnapshots(batch) { tables.sync(batch); positionContexts(); return }
         var reparented = Set<UInt32>()
         let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .renew, .style].contains($0.op) }
-        if structureChanged { selection.structureChanged() }
+        let checkingTextOrder = structureChanged && !batch.ops.contains { [.children, .roots, .destroy, .create, .renew].contains($0.op) }
+        if structureChanged { selection.structureChanged(checkingTextOrder: checkingTextOrder) }
         // A batch carries the control state it changes (`Batch.controlReads`); one without it has its faces read again.
         if let reads = batch.controlReads { controls.took(reads) } else if batch.controls { controls.facesChanged() }
         // The staged batch's reveal holds the ops preparation left; what it made joins the table and its hosts now.
@@ -1285,11 +1285,11 @@ package final class Presenter {
         if !pendingTips.isEmpty { settleTips() }
         if !keepFit || !viewport.hasCurrentDocumentFit {
             if !batch.ops.isEmpty || batch.rootTabs != nil || batch.routeInspectors != nil || batch.controls || batch.layoutProvisional || stage != nil {
-                textViewportIndex = nil
+                textViewport.geometry = nil
             }
             fitDocument()
         } else if batch.ops.contains(where: { $0.property != "opacity" && selection.mayMoveParagraph($0.id) }) {
-            textViewportIndex = nil
+            textViewport.geometry = nil
         }
         // The page's canvas colour is the first root's background — what
         // shows beyond a document shorter than the viewport, as a browser
@@ -1333,7 +1333,7 @@ package final class Presenter {
         shortcuts.sync()
         presentTips()
         statusItems.sync()
-        if structureChanged { selection.structureChanged() }
+        if structureChanged { selection.structureChanged(checkingTextOrder: checkingTextOrder) }
         // The key-view loop is read only by a key event (Tab): it is marked
         // stale here and rebuilt when one arrives (`flushKeyViewLoop`), not
         // walked over every mounted node on every batch of a scroll.

@@ -10,10 +10,16 @@ import AppKit
 final class PresentedText: TextPresentation {
     #if os(macOS)
     var readerParagraphs: [UInt32: RegionReaderParagraph] = [:] {
-        didSet { readerLock.lock(); readerViews = Set(readerParagraphs.keys); readerLock.unlock() }
+        didSet {
+            let views = Set(readerParagraphs.keys)
+            readerLock.lock()
+            if readerViews != views { readerGeneration &+= 1; readerViews = views }
+            readerLock.unlock()
+        }
     }
     private let readerLock = NSLock()
-    private var readerViews = Set<UInt32>()
+    private(set) var readerViews = Set<UInt32>()
+    private(set) var readerGeneration: UInt64 = 0
     /// Whether a reader paragraph is held for `view`: readable off main.
     func readerHolds(_ view: UInt32) -> Bool {
         readerLock.lock(); defer { readerLock.unlock() }
@@ -267,6 +273,9 @@ extension TextEngine {
     var platformControlName: NSData { get { presented.platformControlName } set { presented.platformControlName = newValue } }
     #if os(macOS)
     var readerParagraphs: [UInt32: RegionReaderParagraph] { get { presented.readerParagraphs } set { presented.readerParagraphs = newValue } }
+    /// Reader registration and the viewport pump both run on the main thread.
+    var readerGeneration: UInt64 { presented.readerGeneration }
+    var readerViews: Set<UInt32> { presented.readerViews }
     func readerHolds(_ view: UInt32) -> Bool { presented.readerHolds(view) }
     #endif
 }

@@ -1263,14 +1263,19 @@ extension Presenter {
     /// The node holding the focus: itself, its field (through its editor on
     /// AppKit) or its text area.
     package var focusedNode: NodeView? {
-        views.values.filter { node in
-            #if os(macOS)
-            guard let responder = node.window?.firstResponder else { return false }
-            return keyTarget(responder) === node
-            #else
-            return node.isFirstResponder || node.field?.isFirstResponder == true || node.textArea?.isFirstResponder == true
-            #endif
-        }.min(by: { $0.id < $1.id })
+        #if os(macOS)
+        // Each window keeps its first responder when it resigns key. Two
+        // windows can therefore name a node in this session at the same time.
+        return NSApplication.shared.windows.lazy.compactMap { window -> NodeView? in
+            guard let node = self.keyTarget(window.firstResponder), node.window === window,
+                  self.views[node.id] === node else { return nil }
+            return node
+        }.min { $0.id < $1.id }
+        #else
+        return views.values.filter { node in
+            node.isFirstResponder || node.field?.isFirstResponder == true || node.textArea?.isFirstResponder == true
+        }.min { $0.id < $1.id }
+        #endif
     }
     func focusPlace(tree json: String) -> FocusPlace? {
         focusedNode.flatMap { FocusTree(json)?.place(of: $0.id) }

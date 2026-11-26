@@ -1,5 +1,7 @@
 # Queue
 
+- On `fable/mac-move-cost-1762-c` (#1762), keep the Mac focus test and replace the text viewport's incremental admission. One worker among 1,000 labels still costs 1,001 ID reads per query. Zooming 16,000 labels into worker range took 55–101 ms to insert individually and 5–8 ms to build in bulk on an M5 Max under load. A paint-only edit also walks the unchanged paragraph order.
+- The #1762 redraw candidates are on `fable/mac-move-cost-1762` and `fable/mac-move-cost-1762-b` (`37de09bd1`). The latter left stale language-dependent, selected and viewport-gradient paint. Its backing-scale and viewport-edge pixel checks, including ten consecutive fresh-draw comparisons, still need to pass under AU2.
 - Under heavy build load, `cargo test -p exact-kernel --test it` took 6.77 s in `svg_scene::bounds::a_use_box_stops_at_the_expansion_limit` and hit its 5 s wall-clock limit. The expansion assertion passed, and the full binary passed with four test threads.
 - The wire digest's production-source cutoff matches a literal newline-delimited `#[cfg(test)]`. Adding a space after the attribute in `kernel/src/wire/codec.rs` includes the snapshot literal itself in the hash. Exercise that case when revisiting the digest.
 - Correct the generated documentation for `StyleId::enum_names` in `kernel/build.rs`. A numeric keyword row such as `ListInsetsContentToSafeArea` returns its schema words although the comment says it returns an empty list.

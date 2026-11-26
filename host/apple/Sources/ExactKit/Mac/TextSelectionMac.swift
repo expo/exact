@@ -42,8 +42,9 @@ package final class TextSelection {
     /// The text view AppKit's menu for the selection is asked of (`systemMenu`).
     var menuText: SelectionMenuText?
 
-    func structureChanged() {
+    func structureChanged(checkingTextOrder: Bool = false) {
         shown = nil; ordered = nil
+        presenter?.textViewport.reset(checkingOrder: checkingTextOrder)
         indices.removeAll(keepingCapacity: true)
         positions.removeAll(keepingCapacity: true)
         if allListText {

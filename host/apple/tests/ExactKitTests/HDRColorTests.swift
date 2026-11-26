@@ -7,6 +7,11 @@ import IOSurface
 #endif
 #if os(macOS)
 import AppKit
+
+private final class TextScaleWindow: NSWindow {
+    var scaleForTest: CGFloat?
+    override var backingScaleFactor: CGFloat { scaleForTest ?? super.backingScaleFactor }
+}
 #endif
 @testable import ExactKit
 @testable import ExactGradients
@@ -385,7 +390,7 @@ final class HDRColorTests: XCTestCase {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "text-small-hdr")
         let presenter = session.presenter
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+        let window = TextScaleWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = presenter.viewport
@@ -408,6 +413,36 @@ final class HDRColorTests: XCTestCase {
         XCTAssertFalse(sdr.rastersText)
         XCTAssertTrue(ink.rastersText, "HDR ink")
         XCTAssertTrue(shadow.rastersText, "an HDR shadow")
+        func scheduled() -> Set<UInt32> { Set(presenter.textViewport.candidates(in: presenter, reach: Presenter.textRasterReach).map { $0.node.id }) }
+        XCTAssertEqual(scheduled(), [ink.id, shadow.id])
+        XCTAssertEqual(presenter.selection.shownParagraphs.map(\.id), [sdr.id, ink.id, shadow.id])
+        let size = sdr.frame.size
+        sdr.setFrameSize(NSSize(width: 300, height: 100))
+        XCTAssertTrue(scheduled().contains(sdr.id))
+        sdr.setFrameSize(size)
+        XCTAssertFalse(scheduled().contains(sdr.id))
+        presenter.viewport.maxMagnification = 5
+        presenter.viewport.setMagnification(5, centeredAt: .zero)
+        XCTAssertFalse(sdr.textIsSmall, "the label now exceeds the worker threshold at zoom \(presenter.viewport.magnification)")
+        XCTAssertTrue(scheduled().contains(sdr.id), "page zoom crosses the worker's pixel threshold")
+        XCTAssertTrue(presenter.textRasters.ensure(sdr, urgent: true))
+        XCTAssertNotNil(sdr.textRaster)
+        presenter.viewport.magnification = 1
+        XCTAssertFalse(scheduled().contains(sdr.id))
+        XCTAssertNil(sdr.textRaster, "AppKit now paints this label directly")
+        window.scaleForTest = 5
+        sdr.viewDidChangeBackingProperties()
+        XCTAssertTrue(scheduled().contains(sdr.id))
+        window.scaleForTest = nil
+        sdr.viewDidChangeBackingProperties()
+        XCTAssertFalse(scheduled().contains(sdr.id))
+
+        ink.frame = NSRect(x: 0, y: -180, width: 500, height: 50)
+        presenter.textViewport.geometry = nil
+        func inkIsVisible() -> Bool { presenter.textViewport.candidates(in: presenter, reach: 0).contains { $0.node === ink } }
+        XCTAssertFalse(inkIsVisible())
+        ink.setFrameSize(NSSize(width: 500, height: 220))
+        XCTAssertTrue(inkIsVisible(), "the resized paragraph now overlaps the scrollport")
         XCTAssertTrue(presenter.textRasters.ensure(shadow, urgent: true))
         let layer = try XCTUnwrap(shadow.textRasterOverflowLayer)
         XCTAssertNotNil(layer.textCast, "the shadow's own layer")

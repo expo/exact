@@ -38,6 +38,40 @@ final class FocusFixupMacTests: XCTestCase {
         p.flushKeyViewLoop()
         return p
     }
+
+    func testMultipleWindowsKeepTheirFirstRespondersWhenTheyResignKey() throws {
+        let p = try fixture(navigation: true)
+        let first = try XCTUnwrap(p.views[2]), next = try XCTUnwrap(p.views[3]), other = try XCTUnwrap(p.views[4])
+        let panel = NSWindow(contentRect: window.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        panel.contentView?.addSubview(other)
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(p.keyView(of: first)))
+        XCTAssertTrue(panel.makeFirstResponder(p.keyView(of: other)))
+        panel.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.firstResponder === p.keyView(of: first))
+        XCTAssertTrue(p.focusedNode === first)
+        XCTAssertTrue(window.makeFirstResponder(p.keyView(of: next)))
+        XCTAssertTrue(p.focusedNode === next)
+        p.apply(wireBatch([["op": "destroy", "id": 3]]))
+        XCTAssertTrue(p.focusedNode === other)
+        XCTAssertTrue(panel.makeFirstResponder(nil))
+        XCTAssertNil(p.focusedNode)
+
+        final class Responder: NSView {
+            var walks = 0
+            override var acceptsFirstResponder: Bool { true }
+            override var superview: NSView? { walks += 1; return super.superview }
+        }
+        let responder = Responder(frame: .zero)
+        window.contentView?.addSubview(responder)
+        XCTAssertTrue(window.makeFirstResponder(responder))
+        responder.walks = 0
+        XCTAssertNil(p.focusedNode)
+        XCTAssertEqual(responder.walks, 1, "one walk from the window’s responder")
+    }
+
     private func tab(_ p: Presenter, back: Bool = false) throws {
         let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: back ? .shift : [], timestamp: 0,
                                                   windowNumber: window.windowNumber, context: nil, characters: "\t",
