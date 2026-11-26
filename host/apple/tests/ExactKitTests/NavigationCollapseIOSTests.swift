@@ -928,6 +928,21 @@ final class NavigationCollapseIOSTests: XCTestCase {
         XCTAssertGreaterThan(sv.adjustedContentInset.top, 0, "inset under the bar")
     }
 
+    /// A route's `head`, its last child, takes no space: the scroller above it is still the route's last in flow, which
+    /// runs under the bottom band with UIKit's inset (the kernel's chain and the host's `bottomScroller` alike), as
+    /// Landscapes' sidebar list does under its floating search
+    func testARoutesHeadIsNoBoxForItsBottomScroller() throws {
+        let session = try booted("EXACT_COVER_SCROLL_PLAN", label: "cover-head")
+        let route = try node(session, "route-home"), scroll = try node(session, "home-scroll")
+        XCTAssertTrue(route.childNodes.contains { $0.kind == "head" }, "the route ends with its head")
+        let window = try XCTUnwrap(self.window), host = try XCTUnwrap(window.rootViewController)
+        host.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 0)
+        host.view.layoutIfNeeded()
+        let sv = try XCTUnwrap(scroll.scroll)
+        until("the scroller runs under the foot") { sv.convert(sv.bounds, to: window).maxY >= window.bounds.maxY - 0.5 }
+        XCTAssertGreaterThan(sv.adjustedContentInset.bottom, 0, "UIKit insets its content above the foot")
+    }
+
     func testAPoppingRouteKeepsItsSideClearanceUntilItLeavesTheWindow() throws {
         for left in [false, true] {
             let (session, nav, route) = try pushed("tall")

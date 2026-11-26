@@ -394,6 +394,69 @@ fn a_popover_after_the_scroller_leaves_it_the_bottom_edge() {
     );
 }
 
+/// A `head` written after a route's bottom-edge scroller, as a route names
+/// itself for Back's history menu, takes no box: the scroller keeps the
+/// bottom edge and the route pads nothing of its bottom bar.
+#[test]
+fn a_head_after_the_scroller_leaves_it_the_bottom_edge() {
+    let mut k = Kernel::with_monospace();
+    let mut ops = vec![];
+    // 1 the root; 2 the route the bars cover; 3 its scroller; 4 its head.
+    for (id, node_type) in [
+        (1, NodeType::View),
+        (2, NodeType::View),
+        (3, NodeType::View),
+        (4, NodeType::Head),
+    ] {
+        ops.push(Op::CreateView { id, node_type });
+    }
+    let column = [
+        (StyleId::Display, StyleValue::Text("flex".into())),
+        (StyleId::FlexDirection, StyleValue::Text("column".into())),
+    ];
+    ops.push(style(
+        1,
+        &[
+            column[0].clone(),
+            column[1].clone(),
+            (StyleId::Height, StyleValue::Number(844.0)),
+        ],
+    ));
+    ops.push(style(
+        2,
+        &[
+            column[0].clone(),
+            column[1].clone(),
+            (StyleId::FlexGrow, StyleValue::Number(1.0)),
+        ],
+    ));
+    ops.push(style(
+        3,
+        &[
+            (StyleId::FlexGrow, StyleValue::Number(1.0)),
+            (StyleId::MinHeight, StyleValue::Number(0.0)),
+            (StyleId::OverflowY, StyleValue::Text("scroll".into())),
+        ],
+    ));
+    ops.push(Op::SetChildren {
+        id: 1,
+        children: vec![2],
+    });
+    ops.push(Op::SetChildren {
+        id: 2,
+        children: vec![3, 4],
+    });
+    ops.push(Op::AttachRoot { id: 1 });
+    k.apply(0, 1, &ops).unwrap();
+    k.set_host_cover(2, Some(HostCover::Edges([0.0, 0.0, 83.0, 0.0])))
+        .unwrap();
+    k.set_host_cover(3, Some(HostCover::Inset([0.0, 83.0])))
+        .unwrap();
+    k.compute_layout(1, Offer::definite(390.0, 844.0)).unwrap();
+    let f = k.node(3).unwrap().frame;
+    assert_eq!(f.y + f.height, 844.0, "the scroller runs under the bar");
+}
+
 /// A popover is laid out in the viewport, a block of its own (stage 14 B):
 /// its parent's cover neither offsets nor trims it, before or after the
 /// cover changes. A host places it.

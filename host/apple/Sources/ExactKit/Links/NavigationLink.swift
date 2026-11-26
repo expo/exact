@@ -108,6 +108,8 @@ package enum RouteGeometry {
     /// the scroller, leave the scroller its route's top and bottom edges. A
     /// dialog given back to layout to show in Exact's views counts as laid out.
     package static func inFlow(_ v: NodeView) -> Bool {
+        // A head is the document's metadata: no box (LLP 1048.003 D1)
+        if v.kind == "head" { return false }
         // A popover lays out absolute (`layoutPosition`), unless sticky; a
         // sticky one is in flow while laid out, as a dialog is (`MenuHost.layOut`).
         let dialog = v.props["semanticTag"] == "dialog" || v.props["popover"] != nil

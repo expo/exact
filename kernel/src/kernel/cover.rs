@@ -303,6 +303,8 @@ fn scroller_insets_bottom(arena: &NodeArena, slot: u32) -> bool {
         let flowing = |&&c: &&u32| {
             let s = arena.style(c);
             s.display != crate::Display::None
+                // A head is the document's metadata: no box (LLP 1048.003 D1).
+                && !arena.node_type(c).is_metadata()
                 // A popover is out of flow, open or closed (`style::top_layer`).
                 && crate::style::top_layer::layout_position(arena, c) != crate::PositionType::Absolute
                 && !arena.cover(c).is_some_and(HostCover::replaces)

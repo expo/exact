@@ -38,3 +38,5 @@ component CoverScroll
           scroll id=(e.name == "picker" ? "picker-scroll" : "home-scroll") testId=(e.name == "picker" ? "picker-scroll" : "home-scroll") flex=1 min-height=0
             text "home top" testId="home-top"
             column height=1600
+          // The route's name for Back's history menu, its last child: it takes no space (NavigationCollapseIOSTests)
+          head title="Cover"
