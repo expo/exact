@@ -251,14 +251,17 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// (`ModalController.paintSurface`: UIKit's glass at a partial detent, LLP 1141.001 D3). What
     /// is behind the sheet is not, and dimming belongs to UIKit's presentation. A full-screen route
     /// that paints its own background is clear, as its presentation is (`NodeView.paintsOverPage`):
-    /// the route paints it once, over the page.
+    /// the route paints it once, over the page. The route UIKit shows as the split's sidebar is clear
+    /// where its author wrote no ground, over the sidebar the split's column paints (LLP 1127 D7).
     func paintBackdrop() {
         guard isViewLoaded else { return }
         let view = surface
         // The route's view takes its accent as its tint, which its backdrop in the tint is resolved by
         assign(view, \.tintColor, node.ownAccent)
         let modal = NavigationRules.sheetLike(node.props["navigationPresentation"])
-        let overPage = node.paintsOverPage
+        // The sidebar's route on no ground its author wrote is on UIKit's sidebar, which the split's column paints
+        // (LLP 1127 D7): clear, so the detail under the sidebar shows through it
+        let overPage = node.paintsOverPage || !node.wrote("background_color") && host?.presenter.navigation.showsAsSidebar(view) == true
         let key = overPage ? []
             : modal ? [ownBackdrop(dark: false), ownBackdrop(dark: true)]
             : [backdrop(dark: false), backdrop(dark: true)]

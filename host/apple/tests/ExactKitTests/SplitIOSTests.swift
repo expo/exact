@@ -672,7 +672,10 @@ final class SplitIOSTests: XCTestCase {
 
     /// LLP 1127 D7: beside its detail the list is UIKit's sidebar list, with
     /// no disclosure chevron, and the row whose detail shows stays selected,
-    /// again as the split expands; collapsed, it is the authored list.
+    /// again as the split expands; collapsed, it is the authored list. Beside
+    /// its detail, neither the list nor its route paints the ground the
+    /// compiler gave it: the sidebar is UIKit's, which the split's column
+    /// paints, so the detail under it shows through as in a hand-built split.
     func testBesideItsDetailTheListIsUIKitsSidebarList() throws {
         let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
         let agent = Agent(session: session)
@@ -683,6 +686,10 @@ final class SplitIOSTests: XCTestCase {
         until("the list is laid out") { host.lists[books] != nil }
         let list = try XCTUnwrap(host.lists[books])
         XCTAssertTrue(list.sidebar, "beside the detail, UIKit's sidebar list")
+        let route = try XCTUnwrap(split.list.stackRoutes.first as? RouteController)
+        let painted = { (color: UIColor?) in (color?.resolvedColor(with: route.traitCollection).cgColor.alpha ?? 0) > 0 }
+        let bare = { list.owner.layer.backgroundColor == nil && !painted(route.surface.backgroundColor) }
+        until("beside the detail, no ground of its own") { bare() }
         let cell = { list.source.indexPath(for: rowA).flatMap { list.collection.cellForItem(at: $0) as? UICollectionViewListCell } }
         XCTAssertEqual(try XCTUnwrap(cell()).accessories.count, 0, "a sidebar's row draws no chevron")
         let selected = { (list.collection.indexPathsForSelectedItems ?? []).compactMap { list.source.itemIdentifier(for: $0) } }
@@ -691,8 +698,10 @@ final class SplitIOSTests: XCTestCase {
         until("book a is the detail, its row selected") { has(session, "book-a") && selected() == [rowA] && !agent.nativeInFlight() }
         window?.traitOverrides.horizontalSizeClass = .compact
         until("collapsed, the authored list") { split.controller.isCollapsed && !list.sidebar && !agent.nativeInFlight() }
+        until("collapsed, the list's and the route's grounds") { list.owner.layer.backgroundColor != nil && painted(route.surface.backgroundColor) }
         window?.traitOverrides.horizontalSizeClass = .regular
         until("expanded again, its row selected again") { !split.controller.isCollapsed && list.sidebar && selected() == [rowA] && !agent.nativeInFlight() }
+        XCTAssertTrue(bare(), "and no ground of its own again")
         XCTAssertEqual(try XCTUnwrap(cell()).accessories.count, 0)
         XCTAssertNil(agent.back()["error"], "Back from the detail's base clears it (LLP 1127 D4)")
         until("nothing selected at the list") { split.shown.count == 1 && selected() == [] && !agent.nativeInFlight() }

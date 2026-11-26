@@ -676,6 +676,16 @@ extension NodeView {
         return false
         #endif
     }
+    /// Whether this is a grouped list UIKit shows as the split's sidebar, on the ground the compiler gave it (`list_rows`,
+    /// LLP 1115.000 D2), its author having said none: that ground is UIKit's sidebar's, which the split's column paints
+    /// (LLP 1127 D7), so the detail under the sidebar shows through it as through a hand-built split's.
+    package var groundIsSidebars: Bool {
+        #if os(iOS)
+        groupedOwner && !wrote("background_color") && presenter?.navigation.showsAsSidebar(self) == true
+        #else
+        false
+        #endif
+    }
     /// Whether this is a full-screen route whose author wrote its background
     /// (a colour, or an image; `transparent` and an explicit clear, `""` or
     /// `unset`, included: LLP 1115.000 D2). Its presentation and

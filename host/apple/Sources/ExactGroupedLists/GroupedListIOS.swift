@@ -749,6 +749,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         let writes = owner.wrote("background_color"), flipped = followSidebar()
         let restyled = next.style != previous.style || rethemed || writes != writesGround || flipped
         writesGround = writes
+        // Beside its detail, the list's ground is UIKit's sidebar's (`groundIsSidebars`); collapsed, its own again
+        if flipped { owner.applyBoxLayer() }
         model = next
         rows = Dictionary(next.sections.flatMap { $0.rows }.map { ($0.view, $0) }, uniquingKeysWith: { a, _ in a })
         #if os(iOS)
@@ -1001,7 +1003,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         let left = meets(box.minX, port.minX) && port.minX > whole.minX ? whole.minX : box.minX
         let right = meets(box.maxX, port.maxX) && port.maxX < whole.maxX ? whole.maxX : box.maxX
         let reach = CGRect(x: left, y: top, width: right - left, height: bottom - top)
-        guard reach != box, !owner.isHidden else { skirt?.isHidden = true; return }
+        guard reach != box, !owner.isHidden, !owner.groundIsSidebars else { skirt?.isHidden = true; return }
         let view = skirt ?? {
             let made = UIView()
             made.isUserInteractionEnabled = false
