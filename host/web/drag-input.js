@@ -30,9 +30,17 @@ export function lightDomDragPath(event) {
 export const pressedAt = (down, event, target) => atPoint(down, event) && target.contains(down.target) ? down.target : null;
 
 /** The light-DOM elements a drag that began at `target` passed through: as the press it began from recorded them,
- * when it went down on `target` itself, else as the drag's own dispatch path has them. */
+ * when it went down on `target` itself through the same nodes, by way of a slot, that the drag's dispatch path names;
+ * else as the drag's own path has them. A listener can move a node between the dispatch path's taking and its reading,
+ * which a slot's detour is read through, so a press path taken before a `dragstart` listener ran outlasts one moved
+ * then, and one taken after a `pointerdown` listener moved it gives way to the drag's. */
 export function dragPathFrom(down, event, target) {
-  return down?.path?.length && pressedAt(down, event, target) === target ? down.path : lightDomDragPath(event);
+  const press = down?.image;
+  const raw = event.composedPath?.() ?? [];
+  const from = raw.indexOf(target);
+  const same = press && from >= 0 && pressedAt(down, event, target) === target && raw.length - from === press.raw.length
+    && press.raw.every((node, i) => raw[from + i] === node) && press.raw.some((node) => node.localName === 'slot');
+  return same ? press.path : lightDomDragPath(event);
 }
 
 /** The most recent press still held where a drag at `target` began. */
@@ -99,10 +107,11 @@ export function observeDragInput(root, signal, input = { held: new Map() }, chan
       if (press || mouse) return;
     }
     const type = event.type === 'mousedown' ? 'mouse' : event.pointerType || 'mouse';
-    // Its light path is taken now, before a `dragstart` listener can move what it passes through: `composedPath()`
-    // keeps its order when a node moves, but not the parents it was ordered by
+    // An image's paths are taken now, before a `dragstart` listener can move what they pass through (`dragPathFrom`)
+    const raw = target.localName === 'img' ? event.composedPath?.() ?? [] : [];
+    const image = raw.includes(target) ? { raw: raw.slice(raw.indexOf(target)), path: lightDomDragPath(event) } : null;
     const press = { type, down: event, target, x: event.clientX, y: event.clientY, mouse: type === 'mouse',
-      field: target.closest(DRAG_FIELDS), sawMouseDown: event.type === 'mousedown', path: lightDomDragPath(event) };
+      field: target.closest(DRAG_FIELDS), sawMouseDown: event.type === 'mousedown', image };
     // Keep the most recent down last, including when a new press replaces the same pointer type.
     held.delete(type);
     held.set(type, press);
