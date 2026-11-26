@@ -209,7 +209,8 @@ fn a_negative_resolved_padding_is_zero_on_either_axis() {
 
 /// @ref LLP 1123 D14 — a claimed list reports its reached scrollport as its port, its insets in its padding before and
 /// after the content, and the range that gives: a 100-point list reaching 40 before and 60 after with insets of 40 and
-/// 100 is a 200-point port with padding 40 and 100, and 40 more of range; on either axis.
+/// 100 is a 200-point port with padding 40 and 100, and 40 more of range; on either axis. A negative inset is a negative
+/// padding, which the runner's feedback takes.
 #[test]
 fn a_claimed_list_reports_its_reached_port_and_its_insets_as_padding() {
     struct Rows;
@@ -251,5 +252,28 @@ fn a_claimed_list_reports_its_reached_port_and_its_insets_as_padding() {
         // The insets add 140 to the range and the reach takes 100 off it
         assert_eq!(claimed.max, plain.max + 40., "{list}");
         assert_eq!(claimed.port_cross(), plain.port_cross(), "the cross axis as laid out");
+        // A negative inset is a negative padding, which the runner takes: the range starts 10 past the first row
+        let mut negative = claim;
+        negative.insets = negative.insets.map(|_| 0.);
+        negative.insets[if list.contains("flex") { 3 } else { 0 }] = -10.;
+        let g = geometry(host.kernel(), &snapshot, 400., Some(negative)).unwrap();
+        assert_eq!(g.padding, [-10., 0.], "{list}");
+        let feedback = CollectionFeedback {
+            view: snapshot.view,
+            revision: snapshot.revision,
+            scroll_sequence: 1,
+            offset: (0. - g.origin).max(-g.origin),
+            port_main: g.main(),
+            port_cross: g.port_cross(),
+            cross: g.cross,
+            padding: g.padding,
+            measurements: vec![],
+            focus_view: None,
+            interaction_view: None,
+        };
+        assert_eq!(feedback.offset, 10.);
+        let mut host = host;
+        host.collection_feedback_filled(feedback, CollectionFill::default())
+            .unwrap_or_else(|e| panic!("{list}: {e:?}"));
     }
 }

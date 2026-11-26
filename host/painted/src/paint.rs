@@ -992,13 +992,22 @@ impl Painter {
             visible,
             projective: None,
             affine: Some((ts, (x, y, w, h))),
-            // A reaching box takes the hits in its reached frame; what reads its geometry keeps its laid-out box
-            hit: (walk.hit_space.is_some() || p.claimed()).then(|| HitGeometry {
-                shape_clips: Vec::new(),
-                rect: bbox(hit_ts, p.port_reached(p.reached((x, y, w, h)))),
-                clip: hit_clip,
-                affine: Some((hit_ts, p.port_reached(p.reached((x, y, w, h))))),
-                projective: None,
+            // A reaching box takes the hits in its reached frame, snapped outward as it is painted; what reads its
+            // geometry keeps its laid-out box
+            hit: (walk.hit_space.is_some() || p.claimed()).then(|| {
+                let reached = p.port_reached(grid::outward(
+                    p.reached((x, y, w, h)),
+                    p.reach,
+                    ts,
+                    self.scale,
+                ));
+                HitGeometry {
+                    shape_clips: Vec::new(),
+                    rect: bbox(hit_ts, reached),
+                    clip: hit_clip,
+                    affine: Some((hit_ts, reached)),
+                    projective: None,
+                }
             }),
             unpress: if p.press == 1. {
                 Transform::identity()

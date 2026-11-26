@@ -6,7 +6,7 @@ use super::*;
 use crate::presenter::top::SurfacePainter;
 use exact_kernel::HostCover;
 use exact_runner::{DataError, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Shelf's data, as much as its screens read: a library of two books, no
@@ -627,6 +627,35 @@ fn the_top_bar_takes_its_on_scroll_colour_and_a_retapped_tab_scrolls_to_the_top(
     assert_eq!(p.scroll_of(list), (0.0, 300.0));
 }
 
+/// Material's destination tapped again returns its list to the top as a
+/// scroll the person sees, as Compose's `animateScrollToItem(0)` does: a
+/// glide on the display's clock, not a cut.
+#[test]
+fn a_retapped_tab_glides_its_list_to_the_top_on_the_displays_clock() {
+    let (mut p, _) = barred(APP);
+    let wall = Rc::new(Cell::new(0.0));
+    let read = wall.clone();
+    p.set_live_clock(Some(Rc::new(move || read.get())));
+    let list = id(&p, "list");
+    p.scroll_to(list, (0.0, 300.0));
+    touch(&mut p, BOTTOM, Some("tab-home"));
+    assert_eq!(
+        p.scroll_of(list),
+        (0.0, 300.0),
+        "it starts from where the list was"
+    );
+    assert!(p.needs_animation_frame());
+    for at in [100.0, 150.0] {
+        wall.set(at);
+        p.tick(at);
+        let y = p.scroll_of(list).1;
+        assert!(y > 0.0 && y < 300.0, "{at}: {y}");
+    }
+    wall.set(320.0);
+    p.tick(320.0);
+    assert_eq!(p.scroll_of(list), (0.0, 0.0));
+}
+
 #[test]
 fn a_keyboard_covers_the_navigation_bar_and_the_page_ends_at_the_keyboard() {
     let (mut p, _) = barred(APP);
@@ -982,6 +1011,8 @@ component App
       scrollIntoView("feed", target, block="start")
   action aim(n: number)
     target = n
+  action far
+    scrollIntoView("feed", 45, block="start", behavior="smooth")
   action unload
     loaded = false
   action aside
@@ -1005,6 +1036,8 @@ component App
                         box height=100
                   button press=aim(-1) testId="aim-nothing" height=1
                     text "aim"
+                  button press=far testId="far" height=1
+                    text "far"
                   button press=aim(30) testId="aim-row" height=1
                     text "aim row"
                   button press=unload testId="unload" height=1
@@ -1080,6 +1113,40 @@ fn a_reselected_tabs_scroll_to_the_top_gives_way_to_a_request_its_press_made() {
         p.scroll_of(feed).1,
         0.0,
         "a list the press made the screen's, which asked for nothing there"
+    );
+}
+
+/// A destination tapped again glides its list to the top as the reader's
+/// move of it: a smooth request still under way from before the tap gives
+/// way, and its corrections do not take the list back.
+#[test]
+fn a_retapped_tabs_glide_ends_a_request_still_under_way() {
+    let (mut p, _) = barred(REQUESTING_TABS);
+    settle(&mut p);
+    tap(&mut p, "aim-nothing").unwrap();
+    let wall = Rc::new(Cell::new(0.0));
+    let read = wall.clone();
+    p.set_live_clock(Some(Rc::new(move || read.get())));
+    let feed = id(&p, "feed");
+    tap(&mut p, "far").unwrap();
+    for at in [16.0, 32.0, 48.0] {
+        wall.set(at);
+        p.tick(at);
+    }
+    let under_way = p.scroll_of(feed).1;
+    assert!(under_way > 0.0, "the request is under way: {under_way}");
+    touch(&mut p, BOTTOM, Some("tab-home"));
+    let mut at = 48.0;
+    while at < 2000.0 {
+        at += 16.0;
+        wall.set(at);
+        p.tick(at);
+        let _ = p.advance(at);
+    }
+    assert_eq!(
+        p.scroll_of(feed),
+        (0.0, 0.0),
+        "at the top, the request given way"
     );
 }
 

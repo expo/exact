@@ -222,12 +222,13 @@ final class NodeExtras {
     /// A `scrollZoom` written and not yet applied (`ScrollZoomIOS.swift`).
     var pendingZoom: Double?
     var pendingScrollTransfer = false
-    /// A collapsing title's scroller (LLP 1075.003 Stage 3): its expanded
-    /// title's inset, where `scrollTop` 0 rests; 0 for every other scroller.
+    var afterScrollAnimation: (() -> CGPoint?)?
+    var lastScrollAsk: UInt64 = 0
     package var controlRide: CGFloat = 0
+    /// A scroller under a route's bar (LLP 1075.003 Stage 3): the inset where
+    /// `scrollTop` 0 lays its content out, with a large title open, as it last
+    /// rested at its top; 0 for every other scroller.
     package var scrollOrigin: CGFloat = 0
-    /// …and the smallest inset it has had: its title collapsed.
-    package var scrollCollapsed: CGFloat = 0
     /// What the style last said of the scroll view's indicators and deceleration.
     weak var nativeScrollView: UIScrollView?
     weak var nativeScrollDelegate: (any UIScrollViewDelegate)?
@@ -526,7 +527,18 @@ extension NodeView {
 extension NodeView {
     package var controlRide: CGFloat { get { extras?.controlRide ?? 0 } set { if newValue != 0 || extras != nil { more.controlRide = newValue } } }
     package var scrollOrigin: CGFloat { get { extras?.scrollOrigin ?? 0 } set { if newValue != 0 || extras != nil { more.scrollOrigin = newValue } } }
-    package var scrollCollapsed: CGFloat { get { extras?.scrollCollapsed ?? 0 } set { if newValue != 0 || extras != nil { more.scrollCollapsed = newValue } } }
+    /// Asked when UIKit's scroll animation on its scroller ends (`scrollViewDidEndScrollingAnimation`), once: where
+    /// the scroll goes on to, or nil where it ends. A drag, a reveal or another write drops it.
+    package var afterScrollAnimation: (() -> CGPoint?)? { get { extras?.afterScrollAnimation } set { if newValue != nil || extras != nil { more.afterScrollAnimation = newValue } } }
+    /// When the app last asked its scroller to move, on the presenter's count (`scrollAskCount`): a `scrollTop` or
+    /// `scrollLeft` write, or a `scrollIntoView` of something inside it. A host default that would move it gives way
+    /// to an ask made after the press it answers began (LLP 1070.000 §2.6).
+    package var lastScrollAsk: UInt64 { extras?.lastScrollAsk ?? 0 }
+    func askedToScroll() {
+        guard let presenter else { return }
+        presenter.scrollAskCount &+= 1
+        more.lastScrollAsk = presenter.scrollAskCount
+    }
     var scrollWritten: String? { get { extras?.scrollWritten } set { if newValue != nil || extras != nil { more.scrollWritten = newValue } } }
     package var hatchReusable: Bool { get { extras?.hatchReusable ?? false } set { if newValue || extras != nil { more.hatchReusable = newValue } } }
     package var navigationPaint: NavigationPaintRole { get { extras?.navigationPaint ?? .sibling } set { if newValue != .sibling || extras != nil { more.navigationPaint = newValue } } }

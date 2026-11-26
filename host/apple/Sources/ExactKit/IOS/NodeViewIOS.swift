@@ -730,16 +730,20 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         followingEndAnimated = false; authoredScrollAnimating = false; pageIfPager(scrollView)
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
-        retainedScrollTop = nil; dropCarriedScroll()
+        retainedScrollTop = nil; dropCarriedScroll(); afterScrollAnimation = nil
         if handlers.contains("scrolldragstart") { presenter?.scrollDrag(id, nil) }
         #if os(iOS)
         if swipeOwner { presenter?.swipeActions.paintedBegan(self) }
         #endif
     }
 
+    /// The host is putting a scroller somewhere and back in one turn to read where UIKit lays it out (a tab's
+    /// reselect finding the top with the bar open): nothing here hears those offsets, which nothing draws.
+    package static var probingScroll = false
+
     /// A scroll under a canvas repaints it (LLP 1014 D4 c).
     package func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard scrollView === self.scrollView, let presenter else { return }
+        guard scrollView === self.scrollView, let presenter, !Self.probingScroll else { return }
         #if os(iOS)
         if (heightRecognizer as? SheetScrollGesture)?.correctOffset(in: scrollView) == true { return }
         #endif
@@ -1058,9 +1062,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     func applyProps(set: [String: String], clear: [String]) {
         if clear.contains("action") { cancelSurfaceControls() }
         if clear.contains("scrollLeft") { pendingScrollLeft = nil }
-        if let raw = set["scrollLeft"], let left = Double(raw), left.isFinite { pendingScrollLeft = left }
+        if let raw = set["scrollLeft"], let left = Double(raw), left.isFinite { pendingScrollLeft = left; askedToScroll() }
         if clear.contains("scrollTop") { pendingScrollTop = nil }
-        if let raw = set["scrollTop"], let top = Double(raw), top.isFinite { pendingScrollTop = top }
+        if let raw = set["scrollTop"], let top = Double(raw), top.isFinite { pendingScrollTop = top; askedToScroll() }
         if let raw = set["scrollZoom"], let zoom = Double(raw), zoom.isFinite, zoom > 0 { more.pendingZoom = zoom }
         // One assignment: `props` tells the presenter of each.
         var next = props

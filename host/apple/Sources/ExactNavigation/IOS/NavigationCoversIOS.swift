@@ -190,6 +190,17 @@ extension NavigationHost {
             .flatMap { child in kept.contains { $0.isDescendant(of: child) } ? covered(child, keeping: kept) : [child] }
     }
 
+    /// Whether the scroller rests at its top under the bar as UIKit lays it out now: nothing moving it (the reader, a
+    /// deceleration, an animation) and no refresh holding it open.
+    static func restsAtTop(_ sv: UIScrollView) -> Bool {
+        guard !sv.isTracking, !sv.isDragging, !sv.isDecelerating else { return false }
+        #if os(iOS)
+        if sv.refreshControl?.isRefreshing == true { return false }
+        #endif
+        if #available(iOS 17.4, tvOS 17.4, *), sv.isScrollAnimating { return false }
+        return abs(sv.contentOffset.y + sv.adjustedContentInset.top) < 0.5
+    }
+
     /// Whether `sv` is pulled past where its title's inset rests (`origin`),
     /// as to refresh. UIKit grows the scroller's safe area with the pull, and
     /// with the refresh control's room while it shows, and gives it back as
@@ -259,22 +270,24 @@ extension NavigationHost {
             let topPeers = arrangementScrollers(in: c, top: true), bottomPeers = arrangementScrollers(in: c, top: false)
             if settled, !search, let node = c.collapseScroll, let sv = c.collapseScrollView, sv === node.scrollView, sv.adjustedContentInset.top > 0 || barless {
                 let inset = sv.adjustedContentInset.top
-                if c.insetsBarless != barless { c.insetsBarless = barless; node.scrollCollapsed = 0 }
+                if c.insetsBarless != barless { c.insetsBarless = barless; node.scrollOrigin = 0 }
                 // tvOS has no large titles: every title is inline.
                 #if os(tvOS)
                 let inline = true
                 #else
                 let inline = c.navigationItem.largeTitleDisplayMode != .always || barless
                 #endif
-                if Self.stretched(sv, origin: node.scrollOrigin) {
+                if !inline, nav?.transitionCoordinator == nil, Self.restsAtTop(sv) {
+                    // A large title's inset, where CSS `scrollTop` 0 lays its content out: the one its scroller has at
+                    // rest at its top, the latest such, larger or smaller (UIKit lays the bar out anew at launch, on a
+                    // fold, as a filter moves into it, and a widest kept from before held the layout to a bar that
+                    // was gone). Before it first rests there, the one it has.
+                    node.scrollOrigin = inset
+                } else if Self.stretched(sv, origin: node.scrollOrigin) {
                     // Pulled past its top, as to refresh: no title's inset.
-                } else if inline {
+                } else if inline || node.scrollOrigin == 0 && nav?.transitionCoordinator == nil {
                     // An inline title does not collapse: its inset is the one it has.
-                    node.scrollOrigin = inset; node.scrollCollapsed = inset
-                } else if nav?.transitionCoordinator == nil {
-                    // A large title's widest and narrowest, at rest only.
-                    if inset > node.scrollOrigin { node.scrollOrigin = inset }
-                    if node.scrollCollapsed == 0 || inset < node.scrollCollapsed { node.scrollCollapsed = inset }
+                    node.scrollOrigin = inset
                 }
             }
             if settled {
@@ -316,8 +329,8 @@ extension NavigationHost {
             // A scroller UIKit insets lays its content out between those
             // insets (LLP 1116.000 D1.2): content that fills its height rests
             // under the bar and above the home indicator, and scrolling
-            // content still passes under both. A large title's inset is its
-            // widest, at rest (CSS scrollTop 0).
+            // content still passes under both. A large title's inset is the
+            // one it last had at rest at its top (CSS scrollTop 0).
             var insetNodes = [c.collapseScroll, c.edgeScroll].compactMap { $0 }
             for peer in topPeers + bottomPeers where !insetNodes.contains(where: { $0 === peer }) { insetNodes.append(peer) }
             for node in insetNodes where wanted[node.id] != .whole && wanted[node.id] != .bar && node.scrollView != nil {
@@ -333,9 +346,9 @@ extension NavigationHost {
                     let ownsTop = node === c.collapseScroll || peerTop
                     #if os(iOS)
                     if peerTop, let scroll = node.scrollView {
-                        if c.navigationItem.largeTitleDisplayMode == .always { node.scrollOrigin = max(node.scrollOrigin, scroll.adjustedContentInset.top) }
-                        else { node.scrollOrigin = scroll.adjustedContentInset.top }
-                        if node !== c.collapseScroll { node.scrollCollapsed = node.scrollOrigin }
+                        if c.navigationItem.largeTitleDisplayMode != .always || node.scrollOrigin == 0 || Self.restsAtTop(scroll) {
+                            node.scrollOrigin = scroll.adjustedContentInset.top
+                        }
                     }
                     #endif
                     // A band's part of the safe area is a UI inset over control bars, not layout (LLP 1131 D2).

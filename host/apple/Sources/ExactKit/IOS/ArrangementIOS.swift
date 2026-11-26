@@ -527,7 +527,7 @@ package final class ArrangementHost {
             }
             if let node, presenter.navigation.routeSurfaces.values.contains(where: { $0.collapseScroll === node || $0.edgeScroll === node }) { continue }
             if let node {
-                node.keepingScrollTop(of: scroll) { scroll.contentInsetAdjustmentBehavior = .never; node.scrollOrigin = 0; node.scrollCollapsed = 0 }
+                node.keepingScrollTop(of: scroll) { scroll.contentInsetAdjustmentBehavior = .never; node.scrollOrigin = 0 }
             } else {
                 let top = scroll.contentOffset.y + scroll.adjustedContentInset.top
                 scroll.contentInsetAdjustmentBehavior = .never
