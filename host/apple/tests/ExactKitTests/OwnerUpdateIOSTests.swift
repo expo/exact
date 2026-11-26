@@ -169,6 +169,28 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(update.keyboard, .unreported)
     }
 
+    /// D8 and D11: UIKit moves the root's margins one for one with Exact's contribution, which the update takes off, as
+    /// it does the band's.
+    func testTheRootsMarginsAreTheirsLessExactsContribution() throws {
+        let session = try fixture()
+        let (route, _) = try firstRoute(session)
+        let root = try XCTUnwrap(window?.rootViewController)
+        let before = try XCTUnwrap(OwnerUpdateIOS.sample(controller: root, view: root.view, session: nil).margins).root
+        let given = root.view.layoutMargins
+        let ledger = ContributionsIOS.of(root)
+        let identity = ContributionsIOS.Identity(node: route.node.id, operation: .additionalInsets)
+        ledger.set(identity, UIEdgeInsets(top: 0, left: 20, bottom: 10, right: 0), generation: 1)
+        let update = OwnerUpdateIOS.sample(controller: root, view: root.view, session: nil)
+        XCTAssertEqual(root.view.layoutMargins.left, given.left + 20, accuracy: 0.5, "UIKit moves the margin with the contribution")
+        XCTAssertEqual(root.view.layoutMargins.bottom, given.bottom + 10, accuracy: 0.5)
+        let after = try XCTUnwrap(update.margins).root
+        XCTAssertEqual(after.left, before.left, accuracy: 0.5, "the update takes it off")
+        XCTAssertEqual(after.bottom, before.bottom, accuracy: 0.5)
+        XCTAssertEqual(after.top, before.top, accuracy: 0.5)
+        ledger.set(identity, nil, generation: 2)
+        ledger.apply()
+    }
+
     func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
         // The window's root under Exact's write past its insets reads below 0, its margins with it
         let session = try fixture()
