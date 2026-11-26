@@ -1097,7 +1097,7 @@ export const classifications = [
   ]),
   group("picker results", ["one-shot"], "current picker/share request and its app file roots", "UI-owned",
     "host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
-    ["painted:host/painted/src/picker.rs", "AppFiles::of AppFiles::open_path agent cold_share copy_in dimensions file know_roots open open_known open_path place publish resolve roots scripted set_roots xdg_base"],
+    ["painted:host/painted/src/picker.rs", "AppFiles::of AppFiles::open_path agent cold_share copy_in dimensions file know_roots open open_known place publish resolve roots scripted set_roots xdg_base"],
   ]),
   group("presence storage", ["durable operation"], "app-scoped secret vault/backend and secret generation", "durable",
     "host/painted/src/presence_secrets.rs backend/on_keystore select the app vault; system_support.rs SecretSession seeds and remembers secret records. Stored secret state is separate from a session-owned presence check.", [
@@ -1273,7 +1273,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/scrollers.rs", "Presenter::claims_at Presenter::hidden_scrollers Presenter::module_ancestor Presenter::scroll_bounds_of Presenter::set_scroll_offset Presenter::touch_kept"],
     ["painted:host/painted/src/presenter/select.rs", "Presenter::menu_key Presenter::select_key Presenter::selected_row"],
     ["painted:host/painted/src/presenter/shortcuts.rs", "Presenter::shortcut"],
-    ["painted:host/painted/src/presenter/snap.rs", "Presenter::advance_snap_layout Presenter::remember_snap_layout Presenter::resnap_before_paint Presenter::changed_snap_ids Presenter::snap_input_busy Presenter::snap_busy Presenter::snap_motion_landed Presenter::snap_probe_needed Presenter::snap_requested"],
+    ["painted:host/painted/src/presenter/snap.rs", "Presenter::advance_snap_layout Presenter::remember_snap_layout Presenter::resnap_before_paint Presenter::changed_snap_ids Presenter::snap_input_busy Presenter::snap_motion_landed Presenter::snap_probe_needed Presenter::snap_requested"],
     ["painted:host/painted/src/presenter/stage/touch.rs", "Presenter::preview_target Presenter::settle_sheet Presenter::sheet_drag_directions Presenter::stage_up"],
     ["painted:host/painted/src/presenter/svg_hit.rs", "Presenter::drawn_in Presenter::svg_hit"],
     ["painted:host/painted/src/presenter/swipe.rs", "Presenter::begin_swipe"],

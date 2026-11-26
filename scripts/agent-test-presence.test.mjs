@@ -1,11 +1,17 @@
-import { test, expect } from 'bun:test';
+import { beforeAll, test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
+const root = fileURLToPath(new URL('..', import.meta.url));
+
+beforeAll(() => {
+  const built = spawnSync('cargo', ['build', '-q', '-p', 'contract', '--bin', 'contract'], { cwd: root, encoding: 'utf8' });
+  if (built.status !== 0) throw new Error(`building the Contract compiler failed:\n${built.stderr}`);
+}, 600_000);
+
 test('authored presence answers wait for a prompt and use the driver ticket path on every host', () => {
-  const root = fileURLToPath(new URL('..', import.meta.url));
   mkdirSync(join(root, 'target'), { recursive: true });
   const dir = mkdtempSync(join(root, 'target/presence-test-'));
   const file = join(dir, 'app.test.contract'), script = join(dir, 'check.mjs');
