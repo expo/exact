@@ -1207,7 +1207,7 @@ component StatsSections
             tid="goal-progress"
           )
       footer
-        text (finished >= lib.goal ? "Goal reached." : `${lib.goal - finished} to go.`) testId="goal-left"
+        text (finished >= lib.goal ? "Goal reached." : `${lib.goal - finished} to go.`) testId="goal-left" font-variant-numeric="tabular-nums"
 
 // The Home Screen icon, chosen as an app's Settings offer it: Shelf's own and
 // the alternates the build ships, each with its picture, the one shown checked.

@@ -29,10 +29,11 @@ test('no-tells finds literal colours and sizes, and lets roles and text styles b
 });
 
 // AGENTS.md "Numeric typography": a value that changes in place keeps its digits' widths.
-test("the yearly goal's count, which the steppers change in place, has tabular digits", () => {
-  const source = readFileSync(new URL('./app.contract', import.meta.url), 'utf8');
-  const goal = source.split('\n').find(line => /\btestId="goal"/.test(line));
-  expect(goal).toContain('font-variant-numeric="tabular-nums"');
+test("the yearly goal's count and the books to go, which the steppers change in place, have tabular digits", () => {
+  const lines = readFileSync(new URL('./app.contract', import.meta.url), 'utf8').split('\n');
+  for (const id of ['goal', 'goal-left']) {
+    expect(lines.find(line => line.includes(`testId="${id}"`))).toContain('font-variant-numeric="tabular-nums"');
+  }
 });
 
 // The store's rules, through the data module's own answers.
