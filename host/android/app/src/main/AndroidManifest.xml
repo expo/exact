@@ -32,6 +32,7 @@
         android:fullBackupContent="@xml/exact_backup" android:dataExtractionRules="@xml/exact_data_extraction">
         <meta-data android:name="dev.exact.audioSession" android:value="${audioSession}" />
         <profileable android:shell="true" />
+        <meta-data android:name="dev.exact.video_pip" android:value="${videoPictureInPicture}" />
         <meta-data android:name="dev.exact.development" android:value="${exactDevelopment}" />
         <!-- The changes the host takes in place (LLP 1115.001 D15.1), so that none of them makes the activity again:
              a rotation or a resize, night mode, font scale and bold text, the locale and its direction, the display's
@@ -39,7 +40,7 @@
              singleTop: a URL sent to the running app (a shortcut, a link) reaches this activity's onNewIntent rather
              than stacking a second one over it (LLP 1133.023 D15 item 3). -->
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
-            android:screenOrientation="${screenOrientation}"
+            android:screenOrientation="${screenOrientation}" android:supportsPictureInPicture="${videoPictureInPicture}"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|density|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

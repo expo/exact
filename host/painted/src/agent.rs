@@ -975,7 +975,9 @@ fn tree<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
                 let text = p.field_text(id);
                 row["props"]["value"] = exact_runner::agent::shown_value(node.props, &text).into();
             }
-            if row["type"] == "WebView" || row["type"] == "Video" {
+            if p.video_in_picture(id) {
+                row["pictureInPicture"] = serde_json::json!({ "presentation": "system" });
+            } else if row["type"] == "WebView" || row["type"] == "Video" {
                 row["unavailable"] = true.into();
             }
             // @ref LLP 1024 D1 — declared, but this host loads no module.

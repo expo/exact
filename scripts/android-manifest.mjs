@@ -547,5 +547,6 @@ export const systemWidgets = manifest => (manifest.widgets ?? []).filter(row => 
  * APK includes the player so a live edit can add video. A locked app links it only when its plan uses it. */
 export function androidLibraryArgs(app, bound, uses, env, liveVideo = false) {
   return [...composeArgs(uses, app.dir, bound, env), ...(uses.includes('video') || liveVideo ? ['-Pvideo=1'] : []),
+    ...(uses.includes('videoPictureInPicture') || liveVideo ? ['-PvideoPictureInPicture=1'] : []),
     ...(systemWidgets(app.manifest).length ? ['-Pwidgets=1'] : []), `-PcarAppService=${carAppService(bound)?.name ?? ''}`];
 }

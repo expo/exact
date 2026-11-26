@@ -63,6 +63,8 @@ class MediaPlayer(
     private val texture = TextureView(context).apply { isOpaque = false }
     private val subtitles = SubtitleView(context).apply { setUserDefaultStyle(); setUserDefaultTextSize() }
     private var controls: PlayerView? = null
+    private var floating: PlayerView? = null
+    private var pictureResized: ((android.util.Size) -> Unit)? = null
     /** The element is an `audio`: no picture, and a controller that stays shown (D12). */
     private var audio = false
     private val main = Handler(Looper.getMainLooper())
@@ -115,8 +117,8 @@ class MediaPlayer(
     private val exploring = AccessibilityManager.TouchExplorationStateChangeListener { explore() }
 
     override val view: View get() = frame
-    override val lendable: Boolean get() = controls == null
-    override val engaged: Boolean get() = !projection.paused && !eligible()
+    override val lendable: Boolean get() = controls == null && floating == null
+    override val engaged: Boolean get() = floating != null || !projection.paused && !eligible()
     override val backgroundPlayback: Boolean get() = playback != null
     override val controller: View? get() = controls
 
@@ -156,7 +158,7 @@ class MediaPlayer(
         generation = props.optInt("generation")
         // Full screen holds the player on the controller it was entered with.
         if (full.on && ((controls != null) != props.optBoolean("controls") || props.optBoolean("audio"))) full.leave()
-        presenter(props.optBoolean("controls"), props.optBoolean("audio"))
+        if (floating == null) presenter(props.optBoolean("controls"), props.optBoolean("audio"))
         fit = props.getString("fit")
         objectRect = props.optJSONArray("objectRect")?.takeIf { it.length() == 4 }?.let { rect ->
             FloatArray(4) { rect.optDouble(it).toFloat() }
@@ -304,11 +306,49 @@ class MediaPlayer(
         exo.seekTo((seconds * 1000).roundToLong().coerceAtLeast(0))
     }
 
+    override val pictureSize: android.util.Size? get() =
+        if (audio || released || error != null) null
+        else android.util.Size(videoW, videoH)
+
+    override val inPicture: Boolean get() = floating != null
+    override val pictureDisabled: Boolean get() = applied?.optBoolean("disablepictureinpicture") == true
+    override val pictureBounds: android.graphics.RectF get() {
+        val rect = Picture.rect(objectRect, boxW, boxH)
+        return android.graphics.RectF(rect.left, rect.top, rect.left + rect.width, rect.top + rect.height)
+    }
+
+    override fun floatPicture(resized: (android.util.Size) -> Unit): View {
+        pictureResized = resized
+        full.leave()
+        val view = PlayerView(frame.context).apply {
+            useController = false
+            setBackgroundColor(android.graphics.Color.BLACK)
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+        floating = view
+        val inline = controls
+        if (inline != null) PlayerView.switchTargetView(exo, inline, view)
+        else { exo.clearVideoTextureView(texture); view.player = exo }
+        if (resumes && eligible()) { resumes = false; play(Ask.RULE) }
+        pushState()
+        return view
+    }
+
+    override fun restorePicture() {
+        val view = floating ?: return
+        floating = null
+        pictureResized = null
+        val inline = controls
+        if (inline != null) PlayerView.switchTargetView(exo, view, inline) else { view.player = null; exo.setVideoTextureView(texture) }
+        applied?.let { presenter(it.optBoolean("controls"), it.optBoolean("audio")) }
+        shown(inView)
+        pushState()
+    }
     override fun hidden() = full.leave()
 
     override fun shown(inView: Boolean) {
         this.inView = inView
-        if (!eligible()) return
+        if (floating != null || !eligible()) return
         if (!inView && !projection.paused) { projection.pause(); exo.playWhenReady = false; releaseFocus(); resumes = true }
         else if (inView && resumes) { resumes = false; play(Ask.RULE) }
     }
@@ -541,6 +581,7 @@ class MediaPlayer(
         override fun onVideoSizeChanged(size: VideoSize) {
             if (size.width <= 0 || size.height <= 0) return
             videoW = (size.width * size.pixelWidthHeightRatio).toInt(); videoH = size.height
+            pictureResized?.invoke(android.util.Size(videoW, videoH))
             layoutPicture()
         }
 
@@ -625,6 +666,7 @@ class MediaPlayer(
             .put("generation", generation)
             .put("frameReady", frameReady)
             .put("fullscreen", full.on)
+            .put("pictureInPicture", floating != null)
             .put("error", error ?: JSONObject.NULL)
             .put("rendition", format?.let { JSONObject().put("width", it.width).put("height", it.height).put("bitrate", it.bitrate) } ?: JSONObject.NULL)
         unavailable?.let { state.put("unavailable", it) }

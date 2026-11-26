@@ -33,6 +33,14 @@ open class ExactActivity : Activity() {
     /** The `video` and `audio` elements' player ([VideoPlayer]), where the APK links one (LLP 1042.001 D2). */
     protected open val video: ((Context) -> VideoPlayer)? = null
     private var natives: Natives? = null
+    internal val picture by lazy { VideoPictureInPicture(this) }
+    internal fun floatPicture(target: MediaAllocation) {
+        natives?.floatPicture(target, picture) ?: target.tell("pictureinpictureerror", "no video player is mounted", "")
+    }
+    override fun onPictureInPictureModeChanged(active: Boolean, config: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(active, config)
+        picture.modeChanged(active)
+    }
     private val hostedModules by lazy { HostedModules(Extensions.withViews(modules)) }
 
     /** A signed update activated ([Requests]): the open videos and pages are opened from its assets again, and its
@@ -929,6 +937,7 @@ open class ExactActivity : Activity() {
     }
 
     override fun onDestroy() {
+        picture.ended()
         folds.stop()
         accessibility.removeAccessibilityStateChangeListener(accessWatch)
         requests.destroy()

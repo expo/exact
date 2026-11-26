@@ -224,6 +224,9 @@ pub struct Page {
     /// have them, Linux, Firefox and Safari do not). Save always works: a
     /// browser without its picker downloads.
     pub can_open_files: bool,
+    /// The native reader offers the URL video PiP command (LLP 1042 §9.3).
+    /// Android supplies this at boot, outside the packed page transition bits.
+    pub picture_in_picture_enabled: bool,
     /// An `iframe`'s `partition` is honoured: its guest is a top-level page
     /// with that partition's storage, so the app chooses its fallback before
     /// a frame mounts (Apple; never the web, LLP 1020.002 D1).
@@ -264,6 +267,7 @@ impl Default for Page {
             can_share_files: false,
             can_share_pictures: false,
             can_open_files: false,
+            picture_in_picture_enabled: false,
             iframe_partition: false,
             has_focus: true,
             navigation: 0,
@@ -292,6 +296,7 @@ impl Page {
             on_line: bits & 2 == 0,
             can_share: bits & 4 != 0,
             can_open_files: bits & 8 != 0,
+            picture_in_picture_enabled: false,
             has_focus: bits & 16 == 0,
             navigation: ((bits >> 5) & 3) as u8,
             frozen: bits & 128 != 0,
@@ -359,7 +364,7 @@ impl Page {
             "canShare" => Some(Value::Bool(self.can_share)),
             "canShareFiles" => Some(Value::Bool(self.can_share_files)),
             "canSharePictures" => Some(Value::Bool(self.can_share_pictures)),
-            "pictureInPictureEnabled" => Some(Value::Bool(false)),
+            "pictureInPictureEnabled" => Some(Value::Bool(self.picture_in_picture_enabled)),
             "canOpenFiles" => Some(Value::Bool(self.can_open_files)),
             "hasFocus" => Some(Value::Bool(self.has_focus)),
             "navigationType" => Some(Value::str(self.navigation_type())),

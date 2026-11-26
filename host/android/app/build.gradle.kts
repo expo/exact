@@ -85,6 +85,7 @@ android {
         ndk { abiFilters += providers.gradleProperty("abis").orElse("arm64-v8a").get().split(',') }
         manifestPlaceholders["audioSession"] = manifest["audio_session"] as String? ?: "ambient"
         manifestPlaceholders["appName"] = providers.gradleProperty("appName").get()
+        manifestPlaceholders["videoPictureInPicture"] = providers.gradleProperty("videoPictureInPicture").orNull == "1"
         manifestPlaceholders["screenOrientation"] = screenOrientation
         manifestPlaceholders["exactDevelopment"] = providers.gradleProperty("exactDevelopment").orNull == "1"
         // The launcher icon (`android:icon` and `android:roundIcon`) and the TV banner among the resources below, as

@@ -238,6 +238,7 @@ impl Painter {
             "poster": p.str(PropId::Poster).is_some_and(|s| !s.is_empty()),
             "preload": p.str(PropId::Preload),
             "controlslist": p.str(PropId::Controlslist),
+            "disablepictureinpicture": flag(PropId::Disablepictureinpicture),
             "volume": number(PropId::Volume),
             "playbackRate": number(PropId::PlaybackRate),
             "currentTime": number(PropId::CurrentTime),

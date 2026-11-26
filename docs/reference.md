@@ -2217,9 +2217,18 @@ A failed request reports its reason through `pictureinpictureerror`.
 | --- | --- |
 | Web JS | Reads `document.pictureInPictureEnabled`. Headed Chromium ran the Contract button, the element events, repeat entry, exit and removal with a bundled MP4. |
 | Web wasm | Reads false and reports a request error. |
+| Android reader | An enabled APK reads the device’s picture-in-picture feature. On API 35 and 36 emulators the button pinned the player. Expansion, system close, command exit and removal each delivered one leave. Rotation kept the activity pinned. |
 | iOS | Reads false and reports that the command is unavailable on iOS. AVKit’s control reports enter, leave and failure. Delegate callbacks passed on iOS 27.2 and 26.5 simulators. The iOS events have not been run on a physical iPhone. |
 | tvOS, macOS | Read false and report a platform-specific request error. The Mac’s ordinary video uses AVPlayerView’s built-in control. |
 | Painted Linux and Windows, terminal | Read false and report a request error. |
+
+Android supplies its system controls for expanding and closing the pinned
+activity. The existing player and its media session continue. Exact adds no
+remote actions or automatic entry. A release APK declares PiP support when
+its plan includes a video and a request command. An unlocked development
+APK also declares support so a live edit can add the command. The flag
+allows the activity to enter PiP when asked. An app that never requests
+it stays in its ordinary window.
 
 ## Over-the-air updates
 

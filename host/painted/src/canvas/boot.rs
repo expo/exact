@@ -179,6 +179,7 @@ fn reader_page(plan: &exact_plan::Plan) -> exact_runner::Page {
     let page = exact_runner::Page {
         can_share: true,
         can_share_files: true,
+        picture_in_picture_enabled: std::env::var("EXACT_ANDROID_VIDEO_PIP").as_deref() == Ok("1"),
         ..Default::default()
     };
     crate::presenter::with_partitions(page, plan, super::frame_partitions::kept)

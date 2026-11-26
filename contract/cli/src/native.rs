@@ -451,6 +451,9 @@ pub fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
         exact_kernel::NodeType::from_wire(node.node_type) == Some(exact_kernel::NodeType::Video)
     }) {
         uses.push("video");
+        if exact_runner::uses::uses_picture_in_picture(plan) {
+            uses.push("videoPictureInPicture");
+        }
     }
     uses
 }

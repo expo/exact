@@ -22,40 +22,6 @@ import java.io.File
 import kotlin.math.roundToInt
 
 /**
- * A `video` or `audio` element's player (LLP 1042.001 D3). An APK whose plan has one links Media3's
- * ([ExactActivity.video]); the reader itself names no player, so an APK without one carries none of its code. A
- * player is lent to a node's [MediaRecord]: the record outlives it and is where it starts.
- */
-interface VideoPlayer {
-    /** The view the reader hosts and records for the element's box; made once, kept with the player. */
-    val view: View
-    /** Whether a parked row's player may go to the spares: only an inline picture with no controller. */
-    val lendable: Boolean
-    /** Playing on its own account, not under Chrome's off-screen rule: it keeps its player out of view (D1). */
-    val engaged: Boolean
-    val backgroundPlayback: Boolean get() = false
-    /** The controller's view with `controls` (Media3's `PlayerView`), which reports itself to accessibility services
-     * at the node (D11); null without. */
-    val controller: View?
-    /** A loan begins: this player reports to [sink] until [release] or the next bind. */
-    fun bind(sink: MediaSink)
-    /** Every prop of the element as the painter names it, with `uri` (the resolved source) or `refused` (why it
-     * was refused) beside `src`, and the content box in device pixels. [from]: the record a loan starts from, given
-     * with the loan's first update. */
-    fun update(props: JSONObject, width: Int, height: Int, from: MediaRecord.Resume?)
-    /** Whether a row of the node is in view, for Chrome's rule for a muted autoplaying video (LLP 1042 §7 B). */
-    fun shown(inView: Boolean)
-    /** Its element is shown nowhere (a hidden `portal` mover, LLP 1013.002 D5): it leaves fullscreen. */
-    fun hidden() {}
-    /** What the record keeps of this loan. */
-    fun snapshot(): MediaRecord.Resume?
-    /** The activity stopped or the row was parked: pause as the stop does (D8) and give up the surface. */
-    fun stop()
-    /** The loan ends: no report follows. */
-    fun release()
-}
-
-/**
  * The platform elements of the stream (op 28: `video`, `iframe`, a native module's view). Each is a real Android view,
  * attached here at its device size so it runs as it would anywhere (a player's TextureView, a WebView, a MapLibre
  * map); this layout draws none of them. Each view's own drawing is recorded into its element's RenderNode, which the
@@ -664,7 +630,10 @@ class Natives internal constructor(
         if (hidden) {
             // Its size and view stay as they were shown, so showing it again only places the same player. A module's
             // view is invisible meanwhile, out of touch and accessibility, as iOS hides it.
-            if (!e.hidden && !e.parked) players[e.view]?.hidden()
+            if (!e.hidden && !e.parked) {
+                (context as? ExactActivity)?.picture?.removed(e.record?.allocation)
+                players[e.view]?.hidden()
+            }
             if (kind == 2 && !e.parked) e.view.visibility = View.INVISIBLE
             e.hidden = true
             if (!e.parked && e.props != props) apply(e, props)
@@ -817,6 +786,27 @@ class Natives internal constructor(
     /** Said once: the plan has a `video` this APK links no player for (LLP 1042.001 D2). */
     private var noPlayerSaid = false
 
+    internal fun floatPicture(target: MediaAllocation, host: VideoPictureInPicture) {
+        val e = elements[target.id]
+        val player = e?.view?.let(players::get)
+        if (e == null || e.record?.allocation != target || e.parked || e.hidden || e.audio || player == null) {
+            target.tell("pictureinpictureerror", "no loaded URL-backed video at this id", "")
+            return
+        }
+        val hint = android.graphics.Rect(0, 0, e.w, e.h)
+        val transform = android.graphics.Matrix()
+        if (origins?.transform(e.node, transform) == true) {
+            val bounds = player.pictureBounds ?: android.graphics.RectF(hint)
+            if (!bounds.intersect(android.graphics.RectF(hint))) bounds.setEmpty()
+            transform.mapRect(bounds)
+            bounds.roundOut(hint)
+            val location = IntArray(2)
+            getLocationInWindow(location)
+            hint.offset(location[0], location[1])
+        } else hint.setEmpty()
+        host.start(target, player, hint)
+    }
+
     private fun play(e: Element, inView: Boolean) {
         e.inView = inView
         if (inView == e.playing) return
@@ -879,7 +869,7 @@ class Natives internal constructor(
 
     fun stopMedia(allowBackground: Boolean = true) {
         for (e in elements.values.toList()) if (e.kind == 0 && !e.parked) {
-            if (allowBackground && handoff(e)) continue
+            if (allowBackground && (players[e.view]?.inPicture == true || handoff(e))) continue
             val player = players.remove(e.view) ?: continue
             if (e.started) { player.stop(); player.snapshot()?.let { e.record?.resume = it } }
             e.loan++
@@ -1404,6 +1394,7 @@ class Natives internal constructor(
         if (pooled(e)) held--
         val module = e.module?.let { modules[it] }
         if (e.kind == 0) {
+            (context as? ExactActivity)?.picture?.removed(e.record?.allocation)
             val player = players[e.view]
             // Out of view: the off-screen rule pauses it first, so the record says it resumes when seen (D1).
             if (player != null && e.started) { player.shown(false); player.stop(); keep(e) }

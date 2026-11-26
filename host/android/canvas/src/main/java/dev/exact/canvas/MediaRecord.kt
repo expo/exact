@@ -1,6 +1,7 @@
 package dev.exact.canvas
 
 import android.content.Context
+import android.view.View
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -186,4 +187,45 @@ interface MediaSink {
     fun state(json: String)
     /** The current source's first frame is in the view. */
     fun firstFrame()
+}
+
+/**
+ * A `video` or `audio` element's player (LLP 1042.001 D3). An APK whose plan has one links Media3's
+ * ([ExactActivity.video]); the reader itself names no player, so an APK without one carries none of its code. A
+ * player is lent to a node's [MediaRecord]: the record outlives it and is where it starts.
+ */
+interface VideoPlayer {
+    /** The view the reader hosts and records for the element's box; made once, kept with the player. */
+    val view: View
+    /** Whether a parked row's player may go to the spares: only an inline picture with no controller. */
+    val lendable: Boolean
+    /** Playing on its own account, not under Chrome's off-screen rule: it keeps its player out of view (D1). */
+    val engaged: Boolean
+    val backgroundPlayback: Boolean get() = false
+    /** The controller's view with `controls` (Media3's `PlayerView`), which reports itself to accessibility services
+     * at the node (D11); null without. */
+    val controller: View?
+    /** A loan begins: this player reports to [sink] until [release] or the next bind. */
+    val pictureSize: android.util.Size? get() = null
+    val pictureBounds: android.graphics.RectF? get() = null
+    val pictureDisabled: Boolean get() = false
+    val inPicture: Boolean get() = false
+    /** Show this loan's player in the pinned activity, then return it to the inline surface. */
+    fun floatPicture(resized: (android.util.Size) -> Unit): View? = null
+    fun restorePicture() {}
+    fun bind(sink: MediaSink)
+    /** Every prop of the element as the painter names it, with `uri` (the resolved source) or `refused` (why it
+     * was refused) beside `src`, and the content box in device pixels. [from]: the record a loan starts from, given
+     * with the loan's first update. */
+    fun update(props: JSONObject, width: Int, height: Int, from: MediaRecord.Resume?)
+    /** Whether a row of the node is in view, for Chrome's rule for a muted autoplaying video (LLP 1042 §7 B). */
+    fun shown(inView: Boolean)
+    /** Its element is shown nowhere (a hidden `portal` mover, LLP 1013.002 D5): it leaves fullscreen. */
+    fun hidden() {}
+    /** What the record keeps of this loan. */
+    fun snapshot(): MediaRecord.Resume?
+    /** The activity stopped or the row was parked: pause as the stop does (D8) and give up the surface. */
+    fun stop()
+    /** The loan ends: no report follows. */
+    fun release()
 }

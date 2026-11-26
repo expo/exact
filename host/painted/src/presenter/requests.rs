@@ -136,6 +136,8 @@ pub enum Request {
     /// activities the reader shows, never by this request's id, as Apple's
     /// arm answers (`host/apple/src/activities.rs`).
     Activity(String),
+    /// Pin the activity for a video allocation, or expand it.
+    VideoPictureInPicture(Option<(ViewId, exact_kernel::NodeKey, u64)>),
 }
 
 /// What a picker is opened with, each value as HTML writes it and empty
@@ -189,6 +191,7 @@ impl Request {
             Request::WindowTitle(_) => 22,
             Request::Drag(_) => 23,
             Request::Activity(_) => 24,
+            Request::VideoPictureInPicture(_) => 25,
         }
     }
 }
@@ -366,6 +369,17 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
             string(out, callback);
             string(out, state);
             out.push(i32::from(*logout));
+        }
+        Request::VideoPictureInPicture(target) => {
+            if let Some((id, key, session)) = target {
+                out.extend([
+                    *id as i32,
+                    key.index as i32,
+                    key.generation as i32,
+                    *session as i32,
+                    (*session >> 32) as i32,
+                ]);
+            }
         }
         Request::AuthEnd(id) => out.push(*id as i32),
         Request::Haptic(haptic) => out.push(*haptic as i32),
