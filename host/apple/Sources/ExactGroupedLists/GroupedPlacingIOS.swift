@@ -57,14 +57,15 @@ extension GroupedListView {
     /// None outside a window: UIKit gives a list's cells their margins as
     /// it shows them, and a cell laid out before that has a bare view's 8.
     func margins() -> [CGFloat]? {
-        guard collection.window != nil, let cell = collection.visibleCells.first as? UICollectionViewListCell,
+        guard collection.window != nil else { return nil }
+        collection.layoutIfNeeded()
+        guard let cell = collection.visibleCells.first as? UICollectionViewListCell,
               let path = collection.indexPath(for: cell),
               let frame = collection.layoutAttributesForItem(at: path)?.frame else { return nil }
         let m = cell.directionalLayoutMargins
         let rtl = cell.effectiveUserInterfaceLayoutDirection == .rightToLeft
         return [max(0, frame.minX - reach.left - horizontalPadding.left),
-                max(0, collection.bounds.width - frame.maxX - reach.right - horizontalPadding.right),
-                rtl ? m.trailing : m.leading, rtl ? m.leading : m.trailing]
+                rtl ? m.trailing : m.leading, rtl ? m.leading : m.trailing, frame.width]
     }
 
     /// Before a batch: the carried rows it must read at home go back. A
@@ -91,12 +92,13 @@ extension GroupedListView {
         for op in ops {
             if [.roots, .flight, .land, .exit].contains(op.op) { return restore() }
             if carried[op.id] != nil {
-                if op.op != .frame, let row = host.presenter.views[op.id] { alone.append(row) }
+                if op.op != .frame, op.op != .fieldContent, let row = host.presenter.views[op.id] { alone.append(row) }
                 continue
             }
             guard above.contains(op.id) else { continue }
             switch op.op {
             case .frame, .content, .children: continue
+            case .unknown where op.payload["op"] as? String == "block": continue
             case .props where op.props["inert"] == nil && !op.clear.contains("inert"): continue
             default: return restore()
             }

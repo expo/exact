@@ -242,7 +242,7 @@ extension Runtime {
             var bytes = Data(capacity: lists.count * 24)
             for (view, margins) in lists {
                 let lengths = (margins ?? [0, 0, 0, 0]).map { Float($0).bitPattern }
-                for word in [view, margins == nil ? 9 : 8] + lengths {
+                for word in [view, margins == nil ? 9 : 30] + lengths {
                     withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
                 }
             }

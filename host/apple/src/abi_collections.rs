@@ -63,6 +63,8 @@ impl<D: DataSource> Bridge<D> {
     /// Kind 7 forgets either placement. Kind 8 reports UIKit's grouped-list
     /// card and cell margins: f32 the card's left and right
     /// insets, then the cell's left and right margins; kind 9 clears them.
+    /// Kind 30 reports the card's left inset, the cell's left and right
+    /// margins, and the measured cell width in the same layout.
     /// Kind 12 reports scrollbar gutters in the right and bottom fields.
     /// Kind 14 shows a split's own placeholder (LLP 1116.006 D2,
     /// `Runner::show_split_placeholder`) and kind 15 hides it again; their
@@ -104,6 +106,15 @@ impl<D: DataSource> Bridge<D> {
                         Some(exact_kernel::GroupedMargins {
                             card: [edge(8), edge(12)],
                             cell: [edge(16), edge(20)],
+                            width: None,
+                        }),
+                    )),
+                    30 => margins.push((
+                        view,
+                        Some(exact_kernel::GroupedMargins {
+                            card: [edge(8), 0.0],
+                            cell: [edge(12), edge(16)],
+                            width: Some(edge(20)),
                         }),
                     )),
                     9 => margins.push((view, None)),

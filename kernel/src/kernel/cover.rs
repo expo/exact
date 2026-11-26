@@ -193,7 +193,7 @@ impl Kernel {
             .arena
             .slot_of(view)
             .ok_or(LayoutError::UnknownView(view))?;
-        let lengths = margins.map_or([0.0; 4], |m| [m.card[0], m.card[1], m.cell[0], m.cell[1]]);
+        let lengths = margins.map_or([0.0; 5], |m| [m.card[0], m.card[1], m.cell[0], m.cell[1], m.width.unwrap_or(0.0)]);
         if !lengths.iter().all(|l| l.is_finite() && *l >= 0.0) {
             return Err(LayoutError::InvalidIntrinsicSize(view).into());
         }

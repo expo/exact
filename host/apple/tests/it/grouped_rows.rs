@@ -55,6 +55,7 @@ fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
                             Some(GroupedMargins {
                                 card,
                                 cell: [16.0, 16.0],
+                                width: None,
                             }),
                         )],
                         &[],
