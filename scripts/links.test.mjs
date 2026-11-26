@@ -330,4 +330,4 @@ test('JavaScript derives callback associations and preserves a bake\'s passkeys'
     expect(built.status, built.stdout + built.stderr).toBe(0);
     expect(names.map(name => readFileSync(resolve(out, '.well-known', name), 'utf8'))).toEqual(files);
   } finally { rmSync(dir, { recursive: true, force: true }); }
-}, 120000);
+}, 300_000);

@@ -17,15 +17,14 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     env:
       # Bound linking and compile concurrency on the 16 GB hosted runner: GNU ld
       # linking many large test binaries in parallel exhausts runner memory and
       # kills the job (OOM exit 137 / lost communication). The two
       # CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_* variables apply only to Linux
-      # host builds (leaving wasm32 script-test builds unaffected);
-      # CARGO_PROFILE_DEV_DEBUG and CARGO_BUILD_JOBS apply to every Cargo build
-      # in this job.
+      # host builds; CARGO_PROFILE_DEV_DEBUG and CARGO_BUILD_JOBS apply to every
+      # Cargo build in this job.
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_BUILD_JOBS: "2"
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "clang"
@@ -37,6 +36,9 @@ jobs:
         # Toolchains the image ships and this job never uses.
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          for v in ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK_HOME ANDROID_NDK_LATEST_HOME ANDROID_NDK_ROOT; do
+            echo "$v=" >> "$GITHUB_ENV"
+          done
           df -h /
 
       - name: System packages
@@ -89,24 +91,97 @@ jobs:
           CARGO_TERM_COLOR: always
         run: cargo test --tests --no-fail-fast
 
+  scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "clang"
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          for v in ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK_HOME ANDROID_NDK_LATEST_HOME ANDROID_NDK_ROOT; do
+            echo "$v=" >> "$GITHUB_ENV"
+          done
+          df -h /
+
+      - name: System packages
+        timeout-minutes: 5
+        run: |
+          packages=(
+            pkg-config clang lld libudev-dev libinput-dev libdrm-dev libgbm-dev
+            libxkbcommon-dev libfontconfig1-dev libfreetype-dev libwayland-dev
+          )
+          fetch() {
+            local apt=(sudo timeout -k 5 "$1" apt-get -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5)
+            "${apt[@]}" update &&
+              "${apt[@]}" install -y --no-install-recommends --download-only "${packages[@]}"
+          }
+          if ! fetch 40; then
+            echo "::warning::The runner's first Ubuntu mirror was slow or failed; using the next ones."
+            sudo sed -i 1d /etc/apt/apt-mirrors.txt
+            fetch 80
+          fi
+          sudo apt-get install -y --no-install-recommends --no-download "${packages[@]}"
+
+      - name: Rust (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: scripts-shard-${{ matrix.shard }}
+          cache-on-failure: true
+
+      - name: Bun dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Hermes bundle
+        run: cargo run --manifest-path vendor/ibex/crates/hermes-lean-sys-installer/Cargo.toml -- --target x86_64-unknown-linux-gnu
+
       - uses: browser-actions/setup-chrome@v1
         id: chrome
-        if: ${{ !cancelled() }}
 
       - name: SDK
         # What the script tests build with (README): the web nightly with
-        # rust-src, wasm-bindgen and Binaryen. It runs after the Cargo tests,
-        # whose build leaves this runner no room for them. With CHROME set it
-        # downloads no Playwright Chromium.
-        if: ${{ !cancelled() }}
+        # rust-src, wasm-bindgen and Binaryen. With CHROME set it downloads no
+        # Playwright Chromium.
         env:
           CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: bun scripts/exact.mjs setup
 
       - name: script tests
-        # Runs after a failing Cargo test too: each reports its own failures.
         # Cargo writes no colour here: tests read its output.
-        if: ${{ !cancelled() }}
+        # package-libraries-link.test.mjs is excluded: it builds an external app
+        # and native libraries from scratch and documents running by name only.
         env:
           CHROME: ${{ steps.chrome.outputs.chrome-path }}
-        run: bun test ./scripts
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mapfile -t files < <(
+            bun -e '
+              import { readdirSync } from "node:fs";
+              const shard = Number(process.env.SHARD);
+              const all = readdirSync("scripts")
+                .filter(f => f.endsWith(".test.mjs") && f !== "package-libraries-link.test.mjs")
+                .sort()
+                .map(f => "./scripts/" + f);
+              for (const f of all.filter((_, i) => i % 2 === shard)) console.log(f);
+            '
+          )
+          if [[ " ${files[*]} " == *"./scripts/agent-test.test.mjs"* ]]; then
+            cargo build --profile host-dev -p caltrain-render
+          fi
+          echo "Running ${#files[@]} script test files (shard $SHARD)"
+          bun test "${files[@]}"

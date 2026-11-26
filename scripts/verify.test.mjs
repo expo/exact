@@ -1403,6 +1403,7 @@ test.each(['ios', 'windows'])('verify %s captures a fresh server after replay', 
     }}));
     const capture=()=>writeFileSync(dir+'/capture.json',JSON.stringify({rows,passes}));
     mock.module(at('../host/windows/build.mjs'),()=>({openOnDesktop:async()=>{capture();return {error:'captured'};}}));
+    mock.module(at('../host/apple/feel/probe.mjs'),()=>({recorderEnv:()=>({}),play:async()=>({}),finish:()=>({}),summary:()=>''}));
     mock.module(at('agent-check.mjs'),()=>({checkOp:async()=>({text:'check ios · light: no findings (text fits)',check:[{viewport:{w:390,h:844},scheme:'light',findings:[]}]})}));
     mock.module(at('agent.mjs'),()=>({open:async(o)=>{
       if(o.touch){capture();throw new Error('captured');}

@@ -230,16 +230,16 @@ test.skipIf(process.platform === 'win32')('an iOS, phone, Apple TV or iOS test b
       writeFileSync(resolve(bin, 'xcrun'), `#!/bin/sh\ncase "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios};; *) exec /usr/bin/xcrun "$@";; esac\n`, { mode: 0o755 });
       return spawnSync(process.execPath, ['host/apple/build.mjs', ...args, ...(args.some((a) => !a.startsWith('--')) ? [] : ['no-such-app'])], { encoding: 'utf8', env: { ...process.env, RUSTUP_TOOLCHAIN: 'stable', PATH: bin + delimiter + process.env.PATH } });
     };
-    const phone = build('aarch64-apple-ios-sim', '--device', 'hello'); // LLP 1156.006.000 D7: one list, once the app is known
+    const dev = process.platform === 'linux' ? ['--device', '--archive', resolve(bin, 'out.ipa'), '--unsigned'] : ['--device'];
+    const phone = build('aarch64-apple-ios-sim', ...dev, 'hello'); // LLP 1156.006.000 D7: one list, once the app is known
     assert.equal(phone.status, 1);
     assert.match(phone.stderr, new RegExp(`--device needs Rust's aarch64-apple-ios std, which the pinned toolchain lacks\\. Install it with \`rustup target add aarch64-apple-ios --toolchain ${PINNED_RUST}\``));
     assert.match(build('aarch64-apple-ios', '--ios', 'hello').stderr, new RegExp(`--ios needs Rust's ${iosTarget} std`));
-    assert.match(build('aarch64-apple-ios', '--tvos', '--device', 'hello').stderr, /--tvos needs Rust's aarch64-apple-tvos std/);
-    assert.match(build('aarch64-apple-ios', '--device').stderr, /no app at /);
+    assert.match(build('aarch64-apple-ios', '--tvos', ...dev, 'hello').stderr, /--tvos needs Rust's aarch64-apple-tvos std/);
+    assert.match(build('aarch64-apple-ios', ...dev, 'no-such-app').stderr, /no app at /);
     assert.match(build(iosTarget, '--ios').stderr, /no app at /);
     // The XCTest build (`--test --ios`) compiles for the simulator too.
-    const xctest = build('aarch64-apple-ios', '--test', '--ios');
-    assert.equal(xctest.status, 1);
+    const xctest = build('aarch64-apple-ios', '--test', '--ios'); assert.equal(xctest.status, 1);
     assert.match(xctest.stderr, new RegExp(`--ios needs Rust's ${iosTarget} std, which the pinned toolchain lacks`));
     assert.match(build(iosTarget, '--test', '--ios').stderr, /no app at /);
   } finally { rmSync(bin, { recursive: true, force: true }); }

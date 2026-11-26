@@ -34,7 +34,7 @@ export function recorder() {
   const b = spawnSync('xcrun', ['-sdk', 'iphonesimulator', 'clang', '-dynamiclib', '-fobjc-arc', '-O2', '-Wall', '-target', 'arm64-apple-ios17.0-simulator',
     '-framework', 'UIKit', '-framework', 'QuartzCore', '-framework', 'CoreGraphics', '-framework', 'Foundation',
     source, '-o', built, '-install_name', '@rpath/feel.dylib'], { encoding: 'utf8' });
-  if (b.status !== 0) { rmSync(built, { force: true }); throw new Error(`building the recorder failed: ${(b.stderr || b.stdout).trim().split('\n').slice(-3).join(' ')}`); }
+  if (b.status !== 0) { rmSync(built, { force: true }); throw new Error(`building the recorder failed: ${(b.stderr || b.stdout || b.error?.message || '').trim().split('\n').slice(-3).join(' ')}`); }
   renameSync(built, dylib);
   return dylib;
 }

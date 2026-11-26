@@ -26,6 +26,13 @@ test('identical deploy bakes reuse compilation and retain each run receipt', () 
   const inputs = {app:id, platform:'linux', store:{L:'A'}, trust:'production'};
   const compat = () => ({target, inputs, id:sha256(`exact2 compatibility id v1\n${canonicalBytes(inputs)}`).slice(0,32),
     embedded:{plan:{sha256:sha256(plan),bytes:plan.length},assets:[]}});
+  const savedFlags = [];
+  for (const key of Object.keys(process.env)) {
+    if (key === 'RUSTFLAGS' || /^CARGO_(ENCODED_RUSTFLAGS|BUILD_RUSTFLAGS|TARGET_.+_RUSTFLAGS)$/.test(key)) {
+      savedFlags.push([key, process.env[key]]);
+      delete process.env[key];
+    }
+  }
   try {
     write('Cargo.toml', '[workspace]\nmembers=["linux"]\nresolver="2"\n');
     write('linux/Cargo.toml', '[package]\nname="receipts-linux"\nversion="0.1.0"\nedition="2021"\n');
@@ -101,7 +108,10 @@ test('identical deploy bakes reuse compilation and retain each run receipt', () 
     writeFileSync(configured.products[0].path,'incomplete product');
     expect(()=>copyBake(app,join(dir,'run-corrupt'),configured,cache)).toThrow('product changed');
     expect(existsSync(join(dir,'run-corrupt','bake',`${stem}.build.json`))).toBe(false);
-  } finally { rmSync(dir,{recursive:true,force:true}); }
+  } finally {
+    for (const [key, value] of savedFlags) process.env[key] = value;
+    rmSync(dir,{recursive:true,force:true});
+  }
 }, 60_000);
 
 test('web deploys copy completed receipts and generated entries from a stable cache', () => {
