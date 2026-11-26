@@ -250,6 +250,53 @@ final class SearchScopeIOSTests: XCTestCase {
         }
     }
 
+    /// LLP 1070.000 §2.6: a reselect gives way to a scroll the tab's press asked of the list, a `scrollTop` write
+    /// here, which lands within the press; one whose press asked nothing goes to the top.
+    func testAReselectGivesWayToAScrollTopThePressWrote() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bar is a scene window's") }
+        let (session, route) = try fixture()
+        let host = session.presenter.navigationHost, list = try node(session, "list"), sv = try XCTUnwrap(list.scrollView)
+        let css = { sv.contentOffset.y + sv.adjustedContentInset.top }
+        let still = { !sv.isDecelerating && !Agent(session: session).nativeInFlight() }
+        until("the list is under the bar") { route.collapseScroll === list && sv.adjustedContentInset.top > 0 && still() }
+        list.pendingScrollTop = 600
+        list.applyPendingScroll()
+        until("the list is down") { abs(css() - 600) < 0.5 && still() }
+        let asks = session.presenter.scrollAskCount
+        list.applyProps(set: ["scrollTop": "200"], clear: []) // the press's write
+        list.applyPendingScroll()
+        host.scrollToTop(route, asks: asks)
+        // The reselect decides in the call: it starts no scroll
+        let animating: Bool = { if #available(iOS 17.4, *) { return sv.isScrollAnimating }; return false }()
+        XCTAssertFalse(animating, "no scroll to the top began")
+        XCTAssertEqual(css(), 200, accuracy: 0.5, "the press's write stands")
+        host.scrollToTop(route, asks: session.presenter.scrollAskCount)
+        until("a reselect whose press asked nothing goes to the top") { abs(css()) < 0.5 && still() }
+    }
+
+    /// A reselect whose bar changes in flight (a filter moving into it, a fold) comes to rest at the top under the
+    /// bar as it is when the scroll lands, not where the top was when it began.
+    func testAReselectRestsAtTheTopUnderTheBarAsItIsWhenItLands() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bar is a scene window's") }
+        let (session, route) = try fixture()
+        let host = session.presenter.navigationHost, list = try node(session, "list"), sv = try XCTUnwrap(list.scrollView)
+        let root = try XCTUnwrap(window?.rootViewController)
+        defer { root.additionalSafeAreaInsets = .zero }
+        let still = { !sv.isDecelerating && !Agent(session: session).nativeInFlight() }
+        until("the list is under the bar") { route.collapseScroll === list && sv.adjustedContentInset.top > 0 && still() }
+        let open = sv.adjustedContentInset.top
+        list.pendingScrollTop = 600
+        list.applyPendingScroll()
+        until("the list is down") { abs(sv.contentOffset.y + sv.adjustedContentInset.top - 600) < 0.5 && still() }
+        host.scrollToTop(route)
+        if #available(iOS 17.4, *) { XCTAssertTrue(sv.isScrollAnimating, "the reselect animates, and the bar moves in flight") }
+        root.additionalSafeAreaInsets = UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)
+        // How far the bar moves for the root's safe area is the device's (6 points under the iPhone Duo's vertical bar)
+        until("at its top under the lower bar") {
+            sv.adjustedContentInset.top > open + 0.5 && abs(sv.contentOffset.y + sv.adjustedContentInset.top) < 0.5 && still()
+        }
+    }
+
     /// LLP 1134, amended: under a vertical bar (an iPhone Duo) a filter after the search stays the page's, with no
     /// scope buttons: UIKit would count a scope bar shown there in no bar height, and leave it over the rows.
     func testUnderAVerticalBarAFilterAfterTheSearchStaysThePages() throws {
@@ -287,9 +334,14 @@ final class SearchScopeIOSTests: XCTestCase {
             let scope = route.search?.scopeControl.flatMap { $0.window == nil ? nil : $0.convert($0.bounds, to: nil).maxY } ?? 0
             return max(nav.navigationBar.convert(nav.navigationBar.bounds, to: nil).maxY, scope)
         }
+        let bar = try XCTUnwrap(route.search).controller.searchBar
         for width in [UIUserInterfaceSizeClass.regular, .compact] {
             window.traitOverrides.horizontalSizeClass = width
-            until("\(width.rawValue): the list rests at its top") { route.collapseScroll === list && sv.adjustedContentInset.top > 0 && settled() }
+            // The bars projected again for the width: the filter is the scope bar exactly where one fits
+            until("\(width.rawValue): the filter moved, and the list rests at its top") {
+                route.traitCollection.horizontalSizeClass == width && (bar.scopeButtonTitles != nil) == route.scopeBarFits
+                    && route.collapseScroll === list && sv.adjustedContentInset.top > 0 && settled()
+            }
             XCTAssertGreaterThanOrEqual(top.convert(top.bounds, to: nil).minY, barEnd() - 0.5, "\(width.rawValue): the first row is below the bar")
         }
     }

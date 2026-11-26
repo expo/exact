@@ -12,7 +12,7 @@ scope bar there. On the closed Duo the scope bar did show, but:
 A plain UIKit copy of Shelf's three tabs, built for the comparison and driven with the same
 real touches and hinge, behaved the same way. Under the Duo's vertical bar, UIKit counts a
 scope bar shown after the bar's layout in no bar height. The filter now stays in the page
-wherever the Duo places its vertical bar, and at regular width.
+wherever the Duo places its vertical bar, and at regular width unless the field is stacked.
 
 Discover's filter sat under the title, against it and the bar's edge, as UIKit draws a
 `largeSubtitleView`. Where the title shares its row with the bar's items (the Duo, open or
@@ -22,8 +22,9 @@ Right after launch on the open Duo, tapping Library's selected tab scrolled the 
 past its top. UIKit laid the bar out tall before it placed the vertical bar, and Exact kept
 that inset as the large title's open one. A first fix sampled any title under a vertical bar
 as inline. That broke the reselect on the closed Duo, where a search field or a subtitle view
-still collapses, and James found it the next round. Now a route that appears with its list at
-its top takes the inset it has there.
+still collapses, and James found it the next round: short of the top, then the field jumping
+open. Now the reselect finds, at the tap, where UIKit's status-bar tap would end (the list at
+its top, the title and the field open) and animates there; no inset kept from earlier stands in.
 
 The agent's frozen clock takes a reselect's unanimated path, and its fold is not the
 hinge's, so the overshoot and the 36 points showed only with real taps, the hinge and a

@@ -256,7 +256,6 @@ final class SubtitleSegments: NSObject {
         }
     }
 
-
     /// D2, amended 2026-11-25: where UIKit sets a large title in one row with the bar's items (`titleShareRow`: an
     /// iPhone Duo, regular width), the filter is the last trailing item, beside the title; elsewhere it is the
     /// subtitle views. The bar's projection keeps the item (`filterBarItems`).
@@ -337,7 +336,6 @@ extension RouteController {
         guard let node = collapseScroll, let sv = collapseScrollView, sv === node.scrollView else { return }
         node.retainScrollPosition(from: sv)
         node.scrollOrigin = 0
-        node.scrollCollapsed = 0
     }
 
     /// The width class changed (a fold, a turn): a filter the bar projects may move (LLP 1134 and 1135, amended
