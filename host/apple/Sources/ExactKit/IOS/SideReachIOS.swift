@@ -1,5 +1,6 @@
 // LLP 1188 D2: until LLP 1123's activation gives a scroller the kernel's reach, a route's vertical scroller whose edge
 // meets its route's side clearance reaches across that clearance, as a list UIKit draws does (`GroupedListView.sideReach`).
+// A row nested in it that scrolls sideways reaches as far.
 // Its scroll view then ends where a hand-built screen's does, and UIKit lays its vertical indicator out there. Its box,
 // its content and its CSS scroll position stay as they were. Activation deletes this file and what reads `sideInset`.
 #if os(iOS) || os(tvOS)
@@ -7,8 +8,7 @@ import UIKit
 
 extension Presenter {
     /// How far `v`, a scroller in `route`, reaches past its left and right edges (D13): across a side that the route
-    /// clears of the window's own safe area (not of what Exact or an app adds to a controller's, which UIKit keeps a
-    /// scroll view's indicator inside) and that its edge meets, where its author's `-exact-safe-area-reach` allows it.
+    /// clears of UIKit's own safe area (`platformSides`) and that its edge meets, where its author's `-exact-safe-area-reach` allows it.
     /// None where its content, or something it is drawn through, ends at that edge itself or would cut the strip off.
     /// A pane of the route is another owner, whose scrollers do not reach. tvOS's side clearance is overscan, not a bar's.
     func sideReach(of v: NodeView, in route: NodeView) -> UIEdgeInsets {
@@ -20,7 +20,7 @@ extension Presenter {
               max(scroll.contentSize.width, v.content.width) <= v.scrollFloorWidth(scroll) + 0.5,
               collections.snapshot(v.id)?.horizontal != true,
               case .edges(let clear)? = navigation.covers[route.id], clear.left > 0 || clear.right > 0,
-              let window = v.window?.safeAreaInsets else { return .zero }
+              let window = platformSides(of: route) else { return .zero }
         let box = v.convert(v.bounds, to: route), off = RouteGeometry.clearanceOff(route)
         let side = { (edge: UIRectEdge, bit: Int, clear: CGFloat, window: CGFloat, gap: CGFloat) -> CGFloat in
             off & bit == 0 && clear > 0 && abs(clear - window) < 0.5 && abs(gap - clear) < 0.5 && v.mayReach(edge) ? clear : 0
@@ -46,6 +46,23 @@ extension Presenter {
         }
         return Self.climb(from: v, to: route, passes) && passes(route, route) ? reach : .zero
         #endif
+    }
+
+    /// The side safe area UIKit itself gives `route`'s controller: the window's, and what UIKit's containers add (a split's
+    /// sidebar over its detail, which a hand-built detail's scroll view runs under), not what Exact or an app adds to a
+    /// controller's (`additionalSafeAreaInsets`, up its controllers), which UIKit keeps a scroll view's indicator inside.
+    func platformSides(of route: NodeView) -> UIEdgeInsets? {
+        guard let window = route.window else { return nil }
+        var sides = UIEdgeInsets(top: 0, left: window.safeAreaInsets.left, bottom: 0, right: window.safeAreaInsets.right)
+        guard let c = ViewPresentation.controller(for: route, layout: true), let view = c.viewIfLoaded else { return sides }
+        var added = UIEdgeInsets.zero
+        for p in sequence(first: c, next: { $0.parent }) {
+            added.left += p.additionalSafeAreaInsets.left
+            added.right += p.additionalSafeAreaInsets.right
+        }
+        sides.left = max(sides.left, view.safeAreaInsets.left - added.left)
+        sides.right = max(sides.right, view.safeAreaInsets.right - added.right)
+        return sides
     }
 
     /// How far `v`, a row that scrolls only sideways inside a route's vertical scroller, reaches past its left and right

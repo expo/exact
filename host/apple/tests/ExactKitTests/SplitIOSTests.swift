@@ -707,6 +707,26 @@ final class SplitIOSTests: XCTestCase {
         until("nothing selected at the list") { split.shown.count == 1 && selected() == [] && !agent.nativeInFlight() }
     }
 
+    /// A split's sidebar over its detail is a side UIKit gives the detail's route, which the route's scroller runs under
+    /// as a hand-built detail's scroll view does (LLP 1188 D2, `platformSides`); what an app adds to a controller's safe
+    /// area is not.
+    func testTheSidebarOverTheDetailIsASideUIKitGivesTheDetail() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let agent = Agent(session: session)
+        let split = try split(session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        try tap(session, "row-a")
+        until("book a is the detail") { split.shown.count == 2 && has(session, "book-a") && !agent.nativeInFlight() }
+        let route = try XCTUnwrap(split.detailRoutes.last as? RouteController)
+        let overlap = route.view.safeAreaInsets.left
+        try XCTSkipIf(overlap < 1, "the sidebar sits beside the detail here, not over it")
+        XCTAssertEqual(session.presenter.platformSides(of: route.node)?.left ?? 0, overlap, accuracy: 0.5)
+        route.additionalSafeAreaInsets.left = 10
+        route.view.layoutIfNeeded()
+        XCTAssertEqual(session.presenter.platformSides(of: route.node)?.left ?? 0, overlap, accuracy: 0.5, "what an app adds is not UIKit's")
+        route.additionalSafeAreaInsets.left = 0
+    }
+
     /// LLP 1127 D3, D7: beside its detail, the sidebar's selected row is the
     /// base's, whatever a row's press did or a push within the detail added:
     /// UIKit's selection on a row that changed no detail goes back to it once
