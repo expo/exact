@@ -293,6 +293,13 @@ pub struct Lift {
     pub url: String,
     /// Each file as the node names it, none when not offered.
     pub files: Vec<String>,
+    /// The generation whose shipped files `files` names, pinned at the lift
+    /// (LLP 1094.000 D3).
+    pub assets: crate::image::Assets,
+    /// The session's own files, which `files`' `app:/` entries are read
+    /// through, as the lift found them pinned (LLP 1094.000 D3).
+    #[cfg(target_os = "linux")]
+    pub app: Option<crate::picker::AppFiles>,
     /// The node's box, within its clip, cut from the frame last shown.
     pub picture: Option<LiftPicture>,
     /// The press, relative to the picture's top left.
@@ -419,6 +426,9 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             text: if offers.text { text } else { String::new() },
             url: if offers.url { url } else { String::new() },
             files: if offers.files { files } else { Vec::new() },
+            assets: self.assets.clone(),
+            #[cfg(target_os = "linux")]
+            app: self.host.app_files(),
             picture,
             hotspot,
         })

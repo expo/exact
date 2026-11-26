@@ -152,10 +152,17 @@ pub struct Analysis {}
 /// the app's root slot. @ref LLP 1038 D2/D3.
 pub fn check_routes_root(file: &File, root_file: bool) -> Result<(), AnalyzeError> {
     if let Some(routes) = &file.routes {
-        if !root_file || file.components.is_empty() {
+        if !root_file {
             return err(
                 "analyze-routes-not-root",
                 "`routes` belongs to the app's root file",
+                routes.span,
+            );
+        }
+        if file.components.is_empty() {
+            return err(
+                "analyze-routes-not-root",
+                "`routes` belongs in the app's root file beside a `component` declaration (importing a component with `use` alone does not define the root component)",
                 routes.span,
             );
         }
@@ -838,4 +845,23 @@ pub fn resource_clock_warnings(file: &File) -> Vec<AnalyzeError> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod routes_root_tests {
+    use super::*;
+
+    #[test]
+    fn root_routes_without_component_explains_use_import() {
+        let file = contract_syntax::parse("routes nav\n  home \"/\"\n").unwrap();
+        let err = check_routes_root(&file, true).unwrap_err();
+        assert_eq!(err.id, "analyze-routes-not-root", "{err:?}");
+        assert!(
+            err.message.contains("beside a `component` declaration"),
+            "{err:?}"
+        );
+        let imported = check_routes_root(&file, false).unwrap_err();
+        assert_eq!(imported.id, "analyze-routes-not-root");
+        assert_eq!(imported.message, "`routes` belongs to the app's root file");
+    }
 }

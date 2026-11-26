@@ -17,6 +17,35 @@ export const FOLD_FACTS = { posture: ['folded', 'continuous'], segments: ['<cols
 export const MIDI_FACTS = { 'midi.state': ['prompt', 'granted', 'denied', 'unavailable'], 'midi.inputs': ['<name,…>'], 'midi.outputs': ['<name,…>'] }; // `prefer`'s midi group (LLP 1125 §4): what a request finds under the agent — its state (granted unless named) and the ports, by name; a port named no longer is disconnected
 export const MODE_FACT = { mode: ['<axis>=<value>'] }; // `prefer`'s mode group (LLP 1121 D5, D13): the app's own modes, `setMode` for each pin; `prefers-color-scheme` stays as it is
 
+/** Parse a CLI `prefer` line into `{ [name]: value }`, honoring quoted strings such as `prefer safe-area "47 0 34 0"` (LLP 1156.008.000 D9.1). */
+export function parsePreferArgs(line) {
+  const tail = String(line).trim().replace(/^prefer(?:\s+|$)/, '');
+  if (!tail) return {};
+  if (/^extension\s+/.test(tail)) return { extension: tail.replace(/^extension\s+/, '') };
+  const tokens = [];
+  for (let i = 0; i < tail.length;) {
+    while (i < tail.length && /\s/.test(tail[i])) i++;
+    if (i >= tail.length) break;
+    const ch = tail[i];
+    if (ch === '"' || ch === "'") {
+      let word = '';
+      i++;
+      while (i < tail.length && tail[i] !== ch) {
+        if (tail[i] === '\\' && i + 1 < tail.length) word += tail[++i];
+        else word += tail[i];
+        i++;
+      }
+      if (tail[i] === ch) i++;
+      tokens.push(word);
+    } else {
+      let start = i;
+      while (i < tail.length && !/\s/.test(tail[i])) i++;
+      tokens.push(tail.slice(start, i));
+    }
+  }
+  return Object.fromEntries(tokens.flatMap((a, i) => (i % 2 ? [] : [[a, tokens[i + 1]]])));
+}
+
 /** The CLI's facts (`prefer <name> <value> …`) as the wire's three groups; an unknown fact or value is refused naming what is expected.
  * A fact answers to its near spellings (`color-scheme`, `colorScheme`, `reduced-motion` for the `prefers-` names): round 9, three builds. */
 export function preferGroups(facts) {

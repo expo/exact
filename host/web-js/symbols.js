@@ -10,6 +10,9 @@ import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbol
 // only when its plan draws a symbol or a tinted raster, binds an image's
 // source, or names an `app:/` file (below).
 import { After, PropHooks, Hooks, inflight, journal, clock, data, onEnd } from "./rt.js";
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 // The commit pass visits symbols, app:/ images and tinted rasters until their
 // scope ends, in place of document-wide queries (LLP 1071.001 A7).
 const Images = new Set();
@@ -21,7 +24,7 @@ Hooks.image = e => {
   else template(e, e.getAttribute("src"));
 };
 
-let Table = {}, All = null; // every role: not asked for, loading, or loaded (true)
+let Table = {}, rolesReady = false;
 let Pending = false;
 function schedule() {
   if (typeof window === "undefined" || globalThis.__exactRender) return refresh();
@@ -76,16 +79,17 @@ const draw = (e, name) => {
 };
 function everyRole() {
   inflight.n++;
-  All = import("./symbol-roles.js").then(m => {
-    Table = { ...m.default, ...Table }; All = true;
+  loadOnce(loads, "All", () => import("./symbol-roles.js").then(m => {
+    Table = { ...m.default, ...Table };
     for (const e of document.querySelectorAll("#exact-root img[data-symbol-source]")) draw(e, e.getAttribute("data-symbol-source").slice(7));
+    rolesReady = true;
     refresh();
-  }).finally(() => inflight.n--);
+  }), error => journal.push(`t=${clock.now} symbol roles: unavailable: ${error.message}`)).finally(() => inflight.n--);
 }
 // In forced colours the mask takes the parent's used foreground. Explicit inheritance
 // lets preserve-parent-color use that foreground while keeping the mask's background paint.
 // https://www.w3.org/TR/css-color-adjust-1/#forced-color-adjust-prop
-const STYLE = '@property --exact-tint{syntax:"<color>";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:var(--exact-symbol-position,center);mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}' +
+const STYLE = '@property --exact-tint{syntax:"<color>";inherits:false;initial-value:#000}:where(img[data-symbol-path]){--exact-tint:currentcolor}:where(img[data-symbol-file]){width:1em;height:1em;object-fit:contain}img[data-symbol-path]{background-color:var(--exact-tint)!important;mask-image:var(--exact-symbol-mask);mask-repeat:no-repeat;mask-position:var(--exact-symbol-position,center);mask-size:var(--exact-symbol-fit,contain);mask-origin:content-box;mask-clip:content-box}' +
   '@media (forced-colors:active){img[data-symbol-path]{color:inherit!important;forced-color-adjust:preserve-parent-color;background-color:currentColor!important}}';
 /** `table`: role → [path, filled], for sources a binding names. */
 export function symbols(table) {
@@ -106,7 +110,7 @@ export function symbols(table) {
     if (e.localName === "img" && v?.startsWith("data:") && v.length > DATA_LIMIT) { journal.push(`t=${clock.now} image refused: a data: source is over ${DATA_LIMIT} bytes`); e.removeAttribute("src"); return true; }
     if (e.localName !== "img" || !v?.startsWith("symbol:")) { template(e, v); return false; }
     template(e, null);
-    if (!Object.hasOwn(Table, v.slice(7)) && !All && !v.startsWith("symbol:icon|")) everyRole();
+    if (!Object.hasOwn(Table, v.slice(7)) && !loads.All && !v.startsWith("symbol:icon|")) everyRole();
     e.setAttribute("data-symbol-source", v); draw(e, v.slice(7));
     // Decorative unless its author named it (`alt`, `aria-label`), as the template writes it.
     if (!e.getAttribute("alt")) e.alt = "";
@@ -137,13 +141,13 @@ function unsymbol(e) {
 // one its data module kept in `app:/data` — shown as an object URL by the web
 // host's picker glue (`appURL`), as on the wasm host; counted in flight, so
 // `clock settle` waits for it. A literal source arrives as `data-app-src`.
-let Files = null;
+
 const DATA_LIMIT = 1024 * 1024;
 function appSource(e, v) {
   image(e); e.$app = v;
   if (e.getAttribute("data-app-src") !== v) e.setAttribute("data-app-src", v);
   inflight.n++;
-  (Files ??= import(new URL("./picker-glue.js", import.meta.url).href).then(() => globalThis.exact.appURL))
+  (loadOnce(loads, "Files", () => import(new URL("./picker-glue.js", import.meta.url).href).then(() => globalThis.exact.appURL)))
     .then(appURL => appURL(v, data.appId))
     .then(url => { if (e.$app === v && e.getAttribute("src") !== url) { if (url) e.setAttribute("src", url); else e.removeAttribute("src"); template(e, url || null); } })
     .catch(() => {}).finally(() => inflight.n--);
@@ -203,7 +207,7 @@ function refresh() {
   for (const { el, point, weight } of configs) {
     const path = el.getAttribute("data-symbol-path"), filled = el.hasAttribute("data-symbol-fill"), box = el.getAttribute("data-symbol-viewbox") || "0 0 24 24", source = el.getAttribute("data-symbol-source"), key = `${path}:${filled}:${point}:${weight}:${box}:${el.hasAttribute("data-symbol-nonzero")}:${source}`;
     // As the web host says it (glue.js `refreshSymbols`), once every role is here.
-    if (!path && All === true && !source?.startsWith("symbol:sf/") && source !== "symbol:" && el.symbolRefusal !== source) {
+    if (!path && rolesReady && !source?.startsWith("symbol:sf/") && source !== "symbol:" && el.symbolRefusal !== source) {
       journal.push(`t=${clock.now} image ${source} refused: unknown symbol role`); el.symbolRefusal = source;
     }
     if (el.symbolKey !== key) {

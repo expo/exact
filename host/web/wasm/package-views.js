@@ -4,13 +4,16 @@ import { packageViews } from '../../web-js/views.js';
 import { coversPath, rawGrantText } from '../navigation.js';
 import { storageKey, agentStorageRefusal } from '../storage-environment.js';
 import '../native-glue.js';
+import { loadOnce } from '../load-once.js';
 
 export function packageHost(views, bound, { host, generation, agentMode, now, foreground, changed }, options, development) {
+  const loads = {};
+
   const current = () => generation === host.incarnation;
   if (!current()) return { attach() {}, destroy() {} };
   if (host.packageViews) return host.packageViews.native;
   const clocked = [], topics = new Set(), timers = new Set();
-  let store, lastClock = now(), shown = foreground();
+  let lastClock = now(), shown = foreground();
   const services = packageServices();
   const fileStore = async (extension, operation, paths) => {
     if (!current()) throw new Error('package session ended');
@@ -20,7 +23,7 @@ export function packageHost(views, bound, { host, generation, agentMode, now, fo
     }
     const key = storageKey(globalThis.exact.compat.inputs.app);
     if (key == null) throw new Error(agentStorageRefusal);
-    return store ??= import('../storage-fs.js').then(m => m.createFileStore(key));
+    return loadOnce(loads, "store", () => import('../storage-fs.js').then(m => m.createFileStore(key)));
   };
   function after(ms, fn) {
     if (typeof fn !== 'function' || !current()) return () => {};
@@ -78,7 +81,7 @@ export function packageHost(views, bound, { host, generation, agentMode, now, fo
       for (const timer of timers) clearTimeout(timer.handle);
       timers.clear();
       notify(impl => impl?.destroy?.());
-      store?.then(s => s.close()).catch(e => options.log(e.message));
+      loads.store?.then(s => s.close()).catch(e => options.log(e.message));
     },
   };
   return native;

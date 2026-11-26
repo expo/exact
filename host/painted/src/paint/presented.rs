@@ -49,6 +49,9 @@ pub struct Presented {
     pub lowered: u8,
     /// Whether its `:hover` and `:focus-visible` looks hold (LLP 1121 D8).
     pub looks: [bool; 2],
+    /// How far the box reaches past its laid-out border box, top right bottom left (LLP 1123 D13,
+    /// `crate::safe_area`): its surface and its hits go that far; its children stay.
+    pub reach: [f32; 4],
 }
 
 impl Presented {
@@ -70,6 +73,7 @@ impl Presented {
         layout: [0.0; 4],
         lowered: 0,
         looks: [false; 2],
+        reach: [0.0; 4],
     };
 
     /// The committed style's values (what the engine starts from).
@@ -97,6 +101,7 @@ impl Presented {
             layout: Presented::IDENTITY.layout,
             lowered: 0,
             looks: [false; 2],
+            reach: [0.0; 4],
         }
     }
 
@@ -161,6 +166,12 @@ impl Presented {
     pub(super) fn surface(&self, (x, y, w, h): (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
         let [.., dw, dh] = self.layout;
         (x, y, (w + dw).max(0.0), (h + dh).max(0.0))
+    }
+
+    /// `rect` outset by the box's reach (LLP 1123 D13).
+    pub(super) fn reached(&self, (x, y, w, h): Rect4) -> Rect4 {
+        let [top, right, bottom, left] = self.reach;
+        (x - left, y - top, w + left + right, h + top + bottom)
     }
 }
 

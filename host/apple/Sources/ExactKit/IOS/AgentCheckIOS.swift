@@ -200,7 +200,7 @@ extension Agent {
         /// where it is translucent, and whose it is (nil: the page's). Nil where something the tree does not say for
         /// certain paints there — a picture, a material, a native control's or a list cell's own background, a view laid
         /// between that is not its ancestor — or nothing opaque is reached: the capture's pixels answer then.
-        func backing(_ v: UIView, _ b: CGRect) -> (bg: [Double], by: Int?)? {
+        func backing(_ v: UIView, _ b: CGRect) -> (bg: [Double], by: Int?, solid: Bool)? {
             let p = CGPoint(x: b.midX, y: b.midY)
             var layers: [[Double]] = [], by: Int?, first = true, child: UIView?, at: UIView? = v
             while let cur = at {
@@ -226,15 +226,16 @@ extension Agent {
                 if first { by = (cur as? NodeView).map { Int($0.id) }; first = false }
                 layers.append(c)
                 if c[3] >= 0.999 {
+                    let solid = by != nil && (layers.first?[3] ?? 0) >= 0.999
                     var bg = Array(layers.removeLast().prefix(3))
                     while let top = layers.popLast() { bg = (0..<3).map { top[$0] * top[3] + bg[$0] * (1 - top[3]) } }
-                    return (bg.map { $0.rounded() }, by)
+                    return (bg.map { $0.rounded() }, by, solid)
                 }
             }
             return nil
         }
         /// What lies over the middle of `v` (box `b` in the window) at rest, if anything else does.
-        func cover(_ v: UIView, _ b: CGRect) -> [String: Any]? {
+        func cover(_ v: UIView, _ b: CGRect, beneath: inout [String: Any]?) -> [String: Any]? {
             // Past the screen's top or bottom, or its scroller's, where nothing scrolls it in: a column taller than
             // the screen, a row past a scroller's end. Whatever is over that point covers nothing the scroller cut
             // away: a row past a tab's scroller, under the tab bar the agent paints there, was one (LLP 1116.003).
@@ -255,17 +256,22 @@ extension Agent {
                 let modal = alert.preferredStyle == .alert || (confirmation?.alert === alert && confirmation?.style == .sheet)
                 if modal || hit.isDescendant(of: alert.view) { return ["kind": "alert", "name": "a system alert"] }
             }
-            var owner: UIView? = hit, bar: UIView? = nil, barBox: CGRect? = nil
-            while let cur = owner, !(cur is NodeView) {
-                if cur.accessibilityIdentifier?.hasPrefix("exact.host.frame-health") == true { return nil }
-                if Agent.isBar(cur), let box = Agent.barBox(cur, holding: p) { bar = cur; barBox = box }
+            var owner: UIView? = hit, firstNode: NodeView? = nil, topNode: NodeView? = nil, bar: UIView? = nil, barBox: CGRect? = nil
+            while let cur = owner, firstNode == nil || !v.isDescendant(of: cur) {
+                if let n = cur as? NodeView {
+                    if firstNode == nil { firstNode = n }
+                    if !v.isDescendant(of: cur) { topNode = n }
+                } else if firstNode == nil {
+                    if cur.accessibilityIdentifier?.hasPrefix("exact.host.frame-health") == true { return nil }
+                    if Agent.isBar(cur), let box = Agent.barBox(cur, holding: p) { bar = cur; barBox = box }
+                }
                 owner = cur.superview
             }
             // The cover whole — a bar, the node the hit is part of, or a scroller's own view (its edge effect) —
             // is over the shown part's top half or its bottom half, and a scroller clears it by carrying the middle
             // past its far edge. The hit alone misjudged a navigation bar, whose title lies below the middle of a
             // row under the bar, as covering the row from below.
-            let own = (owner as? NodeView)?.scroll.map { hit.isDescendant(of: $0) } ?? false
+            let own = firstNode?.scroll.map { hit.isDescendant(of: $0) } ?? false
             // UIKit's edge effect under a bar (iOS 26's `ScrollEdgeEffectView`, as AgentNativeIOS.swift knows it), met above a
             // top bar's inner edge or below a bottom one's, where `visible` cuts what lies under the bar: it reaches far past
             // the bar (chat's transcript in landscape: 118 of its 128 points, from the screen's top over a bar 24 points
@@ -274,14 +280,17 @@ extension Agent {
                 .contains(where: { String(describing: Swift.type(of: $0)) == "ScrollEdgeEffectView" }) {
                 bar = bars.first { $0.box.minX <= p.x && p.x <= $0.box.maxX && ($0.top ? p.y < $0.box.maxY : p.y > $0.box.minY) }?.view
             }
-            let whole: UIView = bar ?? (own ? hit : owner ?? hit)
+            let whole: UIView = bar ?? (own ? hit : firstNode ?? hit)
+            if bar == nil, let top = topNode {
+                beneath = rect(top.convert(top.bounds, to: nil)).merging(["by": Int(top.id)]) { x, _ in x }
+            }
             let cb = barBox ?? whole.convert(whole.bounds, to: nil), side = bar != nil && cb.height > cb.width
             let above = side ? cb.midX < seen.midX : cb.midY < seen.midY
             if reachable(v, hit: hit, above: above, by: side ? (above ? cb.maxX - p.x : p.x - cb.minX) : above ? cb.maxY - p.y : p.y - cb.minY, across: side) { return nil }
             let sheet = presenter.surface(containing: hit).map { ($0.kind == .route || $0.kind == .dialog) && !v.isDescendant(of: $0.view) } ?? false
             let barName = bar.map { Agent.isFloatingBar($0) ? "UIKit's floating bar" : String(describing: Swift.type(of: $0)) }
             var c: [String: Any] = ["kind": barName != nil ? "bar" : sheet ? "sheet" : "node", "name": barName ?? String(describing: Swift.type(of: hit))]
-            if bar == nil, let n = owner as? NodeView { c["by"] = Int(n.id) }
+            if bar == nil, let n = firstNode { c["by"] = Int(n.id) }
             return c
         }
 
@@ -433,31 +442,38 @@ extension Agent {
         // and not each of its children.
         var targetEdges = [CGRect]()
         var visited = Set<ObjectIdentifier>()
-        func walk(_ v: UIView, alpha: CGFloat, held: Bool, out: Bool = false, parent: NodeView? = nil, presenting: Bool) {
+        func walk(_ v: UIView, alpha: CGFloat, held: Bool, out: Bool = false, parent: NodeView? = nil, presenting: Bool, layer: Int? = nil) {
             guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
             let box = v.convert(v.bounds, to: win)
             if !box.isEmpty, box.intersects(win.bounds) { targetEdges.append(box) }
             let observing = presenting || roots.contains(v)
             let a = alpha * v.alpha
             var heldBelow = held, outBelow = out
+            let layerBelow: Int? = layer ?? (v as? NodeView).flatMap { $0.props["popover"] != nil ? Int($0.id) : nil }
             if observing, let n = v as? NodeView {
                 guard !n.inert, !n.cssVisibilityHidden, !presenter.navigation.isInactiveRoute(containing: n), !unjudged.contains(ObjectIdentifier(n)) else { return }
                 let b = box
                 observeScroll(n, b)
                 if b.width > 0, b.height > 0, b.intersects(port) || b.intersects(win.bounds) {
                     var item: [String: Any] = rect(b).merging(["id": Int(n.id)]) { x, _ in x }
+                    if let layerBelow { item["layer"] = layerBelow }
                     let past = max(b.maxX - port.maxX, port.minX - b.minX)
                     if !held, past > 1, !pinned(n, upTo: scope) { item["outX"] = r2(past); heldBelow = true; outBelow = true }
                     else if !out, b.minX >= port.minX - 1, b.maxX <= port.maxX + 1, let parent, let s = spill(n, b, in: parent) { item["spill"] = s; outBelow = true }
                     if let parent, let padded = paddedWidth(n, in: parent) { item["padded"] = padded }
                     if n.isParagraph { paragraph(n, b, alpha: a, into: &item) }
-                    control(n, into: &item)
+                    control(n, b, into: &item)
                     // What lets touches through is no target, and a hit test passes through it to what lies under it, so
                     // cannot say what lies over it; in an announcement laid over the page (a toast) it lies there by design.
                     // The web's `through` and `overlay` (host/web-js/check.js).
                     let through = passesTouches(n)
                     if through, laidOverAsAnnouncement(n) { item["overlay"] = true }
-                    if !through, item["control"] != nil || item["text"] != nil, let c = cover(n, b), item["control"] != nil || c["kind"] as? String != "offscreen" { item["cover"] = c }
+                    if !through, item["control"] != nil || item["text"] != nil {
+                        var beneath: [String: Any]?
+                        let c = cover(n, b, beneath: &beneath)
+                        if let beneath { item["beneath"] = beneath }
+                        if let c, item["control"] != nil || c["kind"] as? String != "offscreen" { item["cover"] = c }
+                    }
                     if item["text"] == nil, item["control"] == nil { fill(n, b, alpha: a, faded: alpha < 0.999, into: &item) }
                     // A fill's presented part too: a card below the viewport, or past its scroller's edge, is not drawn, and the
                     // pixels there are the page's (LLP 1116.010 D2: trivia's Badge below the viewport was "a card that does not show").
@@ -467,13 +483,16 @@ extension Agent {
                 } else if n.isParagraph, b.width < 1, b.height > 0, b.minX >= port.minX - 1, b.minX <= port.maxX + 1, b.maxY > port.minY, b.minY < port.maxY {
                     // Text squeezed to no width (a flex item that may shrink to nothing beside siblings that will not): none of it shows.
                     var item: [String: Any] = rect(b).merging(["id": Int(n.id)]) { x, _ in x }
+                    if let layerBelow { item["layer"] = layerBelow }
                     paragraph(n, b, alpha: a, into: &item)
                     if item["text"] != nil { item["squeezed"] = true; items.append(item) }
                 } else if b.width > 0, b.height > 0, b.maxX > port.minX, b.minX < port.maxX {
                     // Off the screen: only a control out of reach (past its top or bottom, and nothing scrolls to it) is anything.
                     var item: [String: Any] = rect(b).merging(["id": Int(n.id)]) { x, _ in x }
-                    control(n, into: &item)
-                    if item["control"] != nil, let c = cover(n, b), c["kind"] as? String == "offscreen" { item["cover"] = c; items.append(item) }
+                    if let layerBelow { item["layer"] = layerBelow }
+                    control(n, b, into: &item)
+                    var ignored: [String: Any]?
+                    if item["control"] != nil, let c = cover(n, b, beneath: &ignored), c["kind"] as? String == "offscreen" { item["cover"] = c; items.append(item) }
                 }
                 // What scrolls sideways or clips keeps its children's overflow its own. A scroll view does so only where its
                 // author wrote its `overflow-x`: a vertical one's x is `auto` by CSS's rule, and UIKit neither pans nor shows
@@ -482,10 +501,10 @@ extension Agent {
                 let sideways = n.scroll == nil || n.style["written"]?.array?.contains(.string("overflow_x")) == true
                 if sideways && (n.scroll?.scrollsX == true || n.overflowClips || n.clipBox != nil) { heldBelow = true }
             } else if observing, let label = v as? UILabel {
-                nativeLabel(label, alpha: a, into: &items)
+                nativeLabel(label, alpha: a, layer: layerBelow, into: &items)
                 return
             } else if observing, v is UITextField || v is UITextView { return }
-            for s in v.subviews { walk(s, alpha: a, held: heldBelow, out: outBelow, parent: observing ? (v as? NodeView) ?? parent : nil, presenting: observing) }
+            for s in v.subviews { walk(s, alpha: a, held: heldBelow, out: outBelow, parent: observing ? (v as? NodeView) ?? parent : nil, presenting: observing, layer: layerBelow) }
         }
 
         func paragraph(_ n: NodeView, _ b: CGRect, alpha: CGFloat, into item: inout [String: Any]) {
@@ -496,6 +515,7 @@ extension Agent {
             if var fg = rgba(spec.color) { fg[3] = Double(r2(CGFloat(fg[3]) * alpha)); item["fg"] = fg }
             if let under = backing(n, b) {
                 item["bg"] = under.bg; item["on"] = under.by == Int(n.id) ? "own" : under.by.map { $0 as Any } ?? "page"
+                if under.solid { item["solid"] = true }
                 // On the accent's fill (LLP 1116.020 D7): the box that paints it follows the tint.
                 var at: UIView? = n
                 while let cur = at, under.by != nil {
@@ -558,7 +578,7 @@ extension Agent {
             }
         }
 
-        func control(_ n: NodeView, into item: inout [String: Any]) {
+        func control(_ n: NodeView, _ b: CGRect, into item: inout [String: Any]) {
             let native = n.subviews.first { $0 is UIControl && !($0 is UITextField) }
             guard n.takesPress || n.actsAsButton || n.field != nil || n.textArea != nil || native != nil else { return }
             item["control"] = n.field != nil || n.textArea != nil ? "field" : native.map { String(describing: Swift.type(of: $0)) } ?? (n.kind == "button" ? "button" : "press")
@@ -570,6 +590,10 @@ extension Agent {
             }
             item["sized"] = platform ? "platform" : "author"
             if n.disabled { item["disabled"] = true }
+            if item["on"] == nil, let under = backing(n, b) {
+                item["on"] = under.by == Int(n.id) ? "own" : under.by.map { $0 as Any } ?? "page"
+                if under.solid { item["solid"] = true }
+            }
         }
 
         /// What is presented of a text's or a control's box, where a clipping view above cuts it (the driver judges overlap on it).
@@ -613,14 +637,18 @@ extension Agent {
         }
 
         /// UIKit's own text: a native button's title, a segment's, a list cell's (a bar's is its own). Named by the node it stands for.
-        func nativeLabel(_ label: UILabel, alpha: CGFloat, into items: inout [[String: Any]]) {
+        func nativeLabel(_ label: UILabel, alpha: CGFloat, layer: Int?, into items: inout [[String: Any]]) {
             guard let raw = label.text ?? label.attributedText?.string, !raw.isEmpty, label.window != nil else { return }
             let b = label.convert(label.bounds, to: nil)
             guard b.width > 0, b.height > 0, b.intersects(port) else { return }
             let text = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             var item: [String: Any] = rect(b).merging(["text": text.count > 40 ? String(text.prefix(39)) + "…" : text, "clamp": true, "name": "UILabel"]) { x, _ in x }
+            if let layer { item["layer"] = layer }
             if var fg = rgba(label.textColor ?? .label, traits: label.traitCollection) { fg[3] = Double(r2(CGFloat(fg[3]) * alpha)); item["fg"] = fg }
-            if let under = backing(label, b) { item["bg"] = under.bg; item["on"] = under.by.map { $0 as Any } ?? "page" }
+            if let under = backing(label, b) {
+                item["bg"] = under.bg; item["on"] = under.by.map { $0 as Any } ?? "page"
+                if under.solid { item["solid"] = true }
+            }
             presented(label, b, into: &item)
             item["size"] = Double(label.font.pointSize)
             let weight = (label.font.fontDescriptor.object(forKey: .traits) as? [UIFontDescriptor.TraitKey: Any])?[.weight] as? CGFloat ?? 0

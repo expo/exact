@@ -16,6 +16,9 @@ import { inertAncestor, reportPlace, liveById } from './navigation.js';
 import { appGrantSet, coversPath } from './admission.js';
 import { httpUrlRefusal } from './url.js';
 import { receive, takes } from '../web/drag-in.js';
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const x = () => (globalThis.exact ??= {});
@@ -23,8 +26,8 @@ const x = () => (globalThis.exact ??= {});
 // The web host's glue, as glue.js installs it: `dispatch(view, kind,
 // payload)` in the runner's host event kinds — 26 a file input's picked
 // files, 1 `change` with a string, 27 HTML's `cancel`.
-let Glue = null, picked = 0;
-const glue = () => Glue ??= import(new URL('./picker-glue.js', import.meta.url).href).then(() => x().picker({
+let picked = 0;
+const glue = () => loadOnce(loads, "Glue", () => import(new URL('./picker-glue.js', import.meta.url).href).then(() => x().picker({
   appId: data.appId, log: say,
   pickedPath: async name => `app:/tmp/picked/${reportPlace().split('\0')[2]}-${++picked}.${extension(name)}`,
   dispatch(view, kind, payload) {
@@ -34,7 +37,7 @@ const glue = () => Glue ??= import(new URL('./picker-glue.js', import.meta.url).
     else if (kind === 27) el.dispatchEvent(new Event('cancel'));
     else el.dispatchEvent(new CustomEvent('change', { detail: payload }));
   },
-}));
+})));
 const counted = p => { inflight.n++; return Promise.resolve(p).finally(() => inflight.n--); };
 const extension = name => { const e = /\.([^.]*)$/.exec(name)?.[1]?.toLowerCase() ?? ''; return e && e.length <= 8 && /^[a-z0-9]+$/.test(e) ? e : 'bin'; };
 const byId = id => { const el = liveById(id); return el ? { el, view: viewId(el) } : null; };
@@ -206,9 +209,9 @@ Hosts.share = (title, text, url, files) => {
 // ---------------------------------------------------------------- the document pickers (file_pickers.rs)
 // What the person chooses becomes a `doc:/<n>/<name>` path the app reaches
 // through `storage.fs` (the glue's handles; storage-request.js routes it).
-let Docs = null;
+
 // An app granted `doc.keep` keeps what the person chooses (LLP 1069.010.000 D3).
-const docs = () => Docs ??= import(new URL('./documents-glue.js', import.meta.url).href).then(() => (x().documents.keeping(data.appId, appGrantSet()), x().documents.install({
+const docs = () => loadOnce(loads, "Docs", () => import(new URL('./documents-glue.js', import.meta.url).href).then(() => (x().documents.keeping(data.appId, appGrantSet()), x().documents.install({
   log: say, openFile: () => false,
   dispatch(view, kind, payload) {
     const el = Views.get(view);
@@ -216,7 +219,7 @@ const docs = () => Docs ??= import(new URL('./documents-glue.js', import.meta.ur
     if (kind === 27) el.dispatchEvent(new Event('cancel'));
     else el.dispatchEvent(new CustomEvent('change', { detail: payload }));
   },
-})));
+}))));
 // What a drag drops (DOM's `drop`; LLP 1094.001): files
 // and folders of any type, Chromium's handles asked for while the event
 // lasts (`getAsFileSystemHandle`), else a folder's entry or each File

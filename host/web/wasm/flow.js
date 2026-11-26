@@ -1,5 +1,7 @@
 import { host, loadAfterPaint, views, agentMode, log, now, followOffset, readOut, collections } from "../glue.js";
 import { send, applyBatch } from "./commit.js";
+import { loadOnce } from '../load-once.js';
+
 export function flowBatch(batch) {
   const op = batch.ops?.find((op) => op.op === "textflow");
   if (op) {
@@ -20,7 +22,7 @@ export function flowBatch(batch) {
   }
   // The ordinary ticker keeps the clock until the controller that replaces it is ready.
   const generation = host.incarnation;
-  const loading = loadAfterPaint("./textflow-glue.js", "createTextFlow").then(async (create) => {
+  loadOnce(host, 'flowLoading', () => loadAfterPaint('./textflow-glue.js', 'createTextFlow').then(async (create) => {
     if (generation !== host.incarnation) {
       return;
     }
@@ -57,13 +59,10 @@ export function flowBatch(batch) {
       waits: host.flowWaits,
       timer_tolerance_ms: host.flowTolerance
     });
-  });
-  // A failed load is not tried again until the next generation: a module that failed to import fails again from the
-  // module map. The ordinary ticker keeps the clock, or one starts now.
-  host.flowLoading = loading.catch((error) => {
+  }), (error) => {
     if (generation === host.incarnation) {
       log(`textflow module: ${error}`);
-      host.flowLoading = null;
+      // Keep the ordinary ticker until the next generation after a controller failure.
       host.flowFailed = true;
       startClock();
     }

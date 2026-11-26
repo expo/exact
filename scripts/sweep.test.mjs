@@ -669,3 +669,22 @@ test.skipIf(process.platform === 'win32')('clean leaves a shared target alone', 
     assert.deepEqual({ ...JSON.parse(run.stdout), error: undefined }, { version: 1, status: 'refused', dryRun: false, target: null, remove: [], kept: [], held: [], error: undefined });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test.skipIf(process.platform === 'win32')('a disabled noatime ledger reports once and stops respawning sweeps (LLP 1156.008.000 D10.4)', () => {
+  const t = target();
+  writeFileSync(resolve(t, '.exact-sweep.json'), JSON.stringify({ at: 1, disabled: 'noatime' }));
+  writeFileSync(resolve(t, '.exact-sweep.log'), 'noatime notice\n');
+  const spawned = spyOn(childProcess, 'spawn').mockImplementation(() => { throw new Error('must not respawn'); });
+  const stderr = [];
+  const write = spyOn(process.stderr, 'write').mockImplementation((chunk) => { stderr.push(String(chunk)); return true; });
+  try {
+    assert.equal(startSweep(t, Date.now()), undefined);
+    assert.equal(spawned.mock.calls.length, 0);
+    assert.ok(stderr.join('').includes('noatime notice'));
+    assert.equal(readFileSync(resolve(t, '.exact-sweep.log'), 'utf8'), '');
+    stderr.length = 0;
+    assert.equal(startSweep(t, Date.now() + 10_000_000), undefined);
+    assert.equal(spawned.mock.calls.length, 0);
+    assert.equal(stderr.length, 0);
+  } finally { write.mockRestore(); spawned.mockRestore(); rmSync(t, { recursive: true, force: true }); }
+});

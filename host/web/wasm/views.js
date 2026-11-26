@@ -4,6 +4,8 @@ import { picker, track, iframeLoading, localAssetURL, host, agentMode, pageFacts
 import { resolveShortcuts, pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, fieldText, replaceFieldText, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
 import { send } from "./commit.js";
 import { attach } from "./input.js";
+import { loadOnce } from '../load-once.js';
+
 export function appSource(el, name, value, then) {
   const p = picker().then((m) => m.appURL(value)).then((url) => {
     if (el[`exactApp-${name}`] !== value) {
@@ -59,7 +61,7 @@ export function syncMedia(el, set = {}, clear = []) {
   for (const name of clear) {
     delete el.exactMedia.props[name];
   }
-  host.mediaModule ??= new Promise((resolve) => requestAnimationFrame(() => resolve(loadAfterPaint("./media-glue.js", "installMedia"))));
+  loadOnce(host, "mediaModule", () => new Promise((resolve) => requestAnimationFrame(() => resolve(loadAfterPaint("./media-glue.js", "installMedia")))));
   const attach = Promise.all([host.mediaModule, moduleReady]).then(([install]) => {
     if (el.isConnected) {
       install(el, (payload) => {
@@ -116,7 +118,7 @@ export function nativeCreate(el, id) {
       return;
     }
   }
-  (host[pkg ? "packageNative" : "nativeHost"] ??= afterNativePaint().then(() => pkg
+  (loadOnce(host, pkg ? "packageNative" : "nativeHost", () => afterNativePaint().then(() => pkg
     ? loadAfterPaint("./packages/views.js", "wasmViewHost").then(bind => options => bind({
       host, generation, agentMode, now, foreground: () => !(pageFacts.bits() & 1), changed: topic => send(host.wasm.exact_changed(writeIn(topic)))
     }, options))
@@ -128,10 +130,8 @@ export function nativeCreate(el, id) {
         send(host.wasm.exact_dispatch(id, kind, text == null ? 0 : writeIn(text), now()));
       }
     }
-  }))).then((h) => h.attach(el), (e) => {
+  })))).then((h) => h.attach(el), (e) => {
     if (pkg && host.incarnation !== generation) return;
-    if (pkg) host.packageNative = null;
-    else host.nativeHost = null;
     st.state = st.missingFactory ? "error" : "unavailable";
     st.error = pkg ? `${st.missingFactory}: ${e?.message ?? e}` : st.missingFactory ?? String(e?.message ?? e);
     log(`native ${st.name} #${id}: ${st.state}: ${st.error}`);
@@ -143,7 +143,7 @@ export function listView(el, id, collection) {
     return;
   }
   lists.set(el, { id });
-  host.listSelectionLoading ??= new Promise((resolve) => requestAnimationFrame(() => resolve(loadAfterPaint("./list-selection.js", "installListSelection")))).then((install) => {
+  loadOnce(host, "listSelectionLoading", () => new Promise((resolve) => requestAnimationFrame(() => resolve(loadAfterPaint("./list-selection.js", "installListSelection")))).then((install) => {
     host.listSelection = install({
       root,
       lists,
@@ -155,7 +155,7 @@ export function listView(el, id, collection) {
       }
     });
     host.listSelection.sync();
-  }).catch(console.error);
+  }), console.error);
 }
 export function syncLists() {
   host.listSelection?.sync();
@@ -307,7 +307,7 @@ export function syncMarkup(el) {
     return;
   }
   markupPending.add(el);
-  (host.markupModule ??= moduleReady.then(() => loadAfterPaint("./markup-editor.js", "installMarkupEditor"))).then((install) => {
+  (loadOnce(host, "markupModule", () => moduleReady.then(() => loadAfterPaint("./markup-editor.js", "installMarkupEditor")))).then((install) => {
     const id = Number(el.dataset.view), live = (node) => views.get(id) === node && node.isConnected && !retiredViews.has(node);
     if (composing.has(el)) {
       return;
@@ -332,7 +332,10 @@ export function syncMarkup(el) {
         }
       }
     });
-  }).catch((error) => console.error("exact: Markdown editor:", error));
+  }).catch((error) => {
+    markupPending.delete(el);
+    console.error("exact: Markdown editor:", error);
+  });
 }
 // @ref LLP 1094.000 D6 — the first node that turns draggable loads the drag-out glue, which then hears every drag from
 // the app's live views. Until it listens, a node the app made draggable waits, written `false`, and a drag that begins
@@ -357,7 +360,7 @@ function waitingView(el) {
 export function loadDragOut() {
   if (host.dragOutTimer) return;
   const tries = host.dragOutTries ?? 0;
-  host.dragOutModule ??= loadAfterPaint(tries ? `./drag-out.js?try=${tries}` : "./drag-out.js", "listenDragOut").then((listen) => {
+  loadOnce(host, "dragOutModule", () => loadAfterPaint(tries ? `./drag-out.js?try=${tries}` : "./drag-out.js", "listenDragOut").then((listen) => {
     const controller = new AbortController(), live = new Set([...(host.dragOutWaiting ?? [])].filter(waitingView));
     try {
       listen(document, liveView, { signal: controller.signal, input: waitingInput, waiting: live });
@@ -372,8 +375,7 @@ export function loadDragOut() {
     host.dragOutListening = true;
     dragOutWait.abort();
     host.dragOutWaiting = null;
-  }).catch((e) => {
-    host.dragOutModule = null;
+  }), (e) => {
     host.dragOutTries = tries + 1;
     log(`drag-out module: ${e}`);
     host.dragOutTimer = setTimeout(() => {

@@ -88,6 +88,7 @@ ${rules}
 
 const waitingDragFixture = `
   import { downForDrag, dragPathFrom, elementOf, observeDragInput, pressedAt } from './drag-input.js';
+  import { loadOnce } from './load-once.js';
   const host = {}, views = new Map(), retiredViews = new WeakSet();
   // The listener loads only when a test says, from a module graph of its own, as its bundle is
   let loaded;
@@ -449,6 +450,8 @@ need('chromium', chromium().unavailable).each([
   ['a slot above the card is swapped at the press, and its fallback wrapper moves out of its slot as the drag begins',
     'reslot'],
   ['the image changes owner after the press through the same nodes, by way of a slot', 'owner'],
+  ['its image is slotted into a closed shadow root', 'closed'],
+  ['its image is slotted through a slot forwarded into a nested root', 'nested'],
 ])('chromium: a waiting card cancels its image drag after %s', async (_, change) => {
   const browser = await suiteBrowser('chromium');
   try {
@@ -482,6 +485,15 @@ need('chromium', chromium().unavailable).each([
           card.shadowRoot.append(wrapper);
           changed.push(wrapper.parentNode === card.shadowRoot);
         }, { capture: true, once: true });
+      } else if (change === 'closed') {
+        card.attachShadow({ mode: 'closed' }).append(slot());
+      } else if (change === 'nested') {
+        // The card's slot is the light DOM of an element in its shadow root, assigned to that element's own slot
+        const inner = document.createElement('div');
+        inner.attachShadow({ mode: 'open' }).append(slot());
+        inner.append(slot());
+        card.attachShadow({ mode: 'open' }).append(inner);
+        changed.push(image.assignedSlot.assignedSlot?.getRootNode() === inner.shadowRoot);
       } else {
         // A script's wrapper in the card's light DOM, assigned to the card's outer slot, holding the image in a slot
         // element of its own; once the press is heard the wrapper becomes the outer slot's fallback and the image the
@@ -505,8 +517,10 @@ need('chromium', chromium().unavailable).each([
       });
     }, change);
     await drag(page, '#picture', [0, 20]);
-    expect(await page.evaluate(() => window.changed)).toEqual(change === 'reslot' ? ['b', true] : [true]);
-    expect(await page.evaluate(() => window.imageDrag)).toEqual({ wrapperOnPath: true, cancelled: true });
+    expect(await page.evaluate(() => window.changed)).toEqual(
+      { reslot: ['b', true], owner: [true], closed: [], nested: [true] }[change]);
+    expect(await page.evaluate(() => window.imageDrag))
+      .toEqual({ wrapperOnPath: change === 'reslot' || change === 'owner', cancelled: true });
   } finally {
     await browser.close();
   }

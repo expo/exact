@@ -9,7 +9,7 @@ import { dirname, relative, resolve } from 'node:path';
 
 export const HOST_WEB_GLUE = [
   // Loaded after first paint: motion.js, a pan, `select`, text flow, rt.js `pr`, native.js, rt.js `geo`, media.js, sounds.js; wakelock.js imports wakelock-glue.js, orientationlock.js orientationlock-glue.js.
-  'frames.js', 'motion-glue.js', 'group-glue.js', 'input-glue.js', 'agent-input.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js',
+  'load-once.js', 'frames.js', 'motion-glue.js', 'group-glue.js', 'input-glue.js', 'agent-input.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js',
   'presence-glue.js', 'native-glue.js', 'geometry-glue.js', 'resize-glue.js', 'intersect-glue.js', 'media-glue.js',
   'sound-glue.js', 'midi-glue.js', 'prompt-glue.js', 'alert-message.js', 'wakelock-glue.js', 'orientationlock-glue.js', 'menu-rows.js',
   // Virtualized lists' browser half; animated images on the agent's clock (agent.js only); Canvas 2D's replayer.
@@ -62,7 +62,7 @@ export const localImports = text => text.replace(/(\b(?:from|import)\s*\(?\s*)([
 // A group's files import statically only from it or base (web-host-groups.test.mjs): base's documents-glue.js
 // reads storage-environment.js, so it ships in base, not only with storage.
 const WEB_HOST_GROUPS = {
-  base: ['glue.js', 'navigation.js', 'audio-session.js', 'frame-messages.js', 'frame-navigation.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js', 'input-glue.js', 'agent-input.js',
+  base: ['load-once.js', 'glue.js', 'navigation.js', 'audio-session.js', 'frame-messages.js', 'frame-navigation.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js', 'input-glue.js', 'agent-input.js',
     'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'drag-out.js', 'drag-in.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
     'motion-glue.js', 'group-glue.js', 'collection-glue.js', 'canvas2d-glue.js', 'presence-glue.js', 'picker-glue.js',
     'documents-glue.js', 'storage-environment.js', 'auth-glue.js', 'image-glue.js', 'geometry-glue.js', 'resize-glue.js', 'intersect-glue.js', 'sound-glue.js', 'midi-glue.js', 'prompt-glue.js', 'alert-message.js', 'wakelock-glue.js', 'orientationlock-glue.js', 'menu-rows.js', 'fragment.js'],
@@ -98,7 +98,6 @@ export function webHostFiles(...groups) {
 export const MODULE_PRELUDE = ['time.js', 'crypto.js', 'module-work.js', 'fetch.js', 'auth.js', 'store.js', 'storage.js', 'reply.js', 'errors.js', 'prelude.js'].map(f => 'js/src/' + f);
 /** `module-prelude.js`'s text, from the repository at `root`. */
 export const modulePrelude = root => MODULE_PRELUDE.map(f => readFileSync(resolve(root, f), 'utf8')).join('\n');
-
 
 /** The entry modules' static sources, for build invalidation. */
 export function hostModuleSources(root, entries = HOST_ENTRIES.map(name => 'host/web/' + name)) {

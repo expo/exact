@@ -140,3 +140,38 @@ test('a rule\'s findings whose remedies are on two pages are two groups', () => 
   expect(out.filter((x) => /^  \S+ ×\d+$/.test(x))).toEqual(['  hinge ×3', '  hinge ×2']);
   expect(out[1]).toContain('save'); expect(out[4]).toContain('next');
 });
+
+test('items in distinct popover layers or hidden behind opaque sibling bars do not overlap (LLP 1156.008.000 D8.3)', () => {
+  const overlaps = (items) => judge({ viewport: OPEN, owners: [OPEN], items }, null, { host: 'ios' })
+    .filter((f) => f.kind === 'overlap');
+  // Open popover item over base-layer control and text (partially crossing): different layers, no overlap.
+  expect(overlaps([
+    control(1, 100, 100, 120, 44),
+    text(2, 105, 110, 100, 20),
+    control(3, 140, 110, 120, 44, { layer: 50 }),
+    text(4, 145, 115, 100, 20, { layer: 50 }),
+  ])).toEqual([]);
+  // Two controls inside the same popover layer still collide.
+  expect(overlaps([
+    control(3, 100, 100, 120, 44, { layer: 50 }),
+    control(4, 110, 105, 120, 44, { layer: 50 }),
+  ])).toHaveLength(1);
+  // Scroll row control hidden behind an opaque authored tab bar: no overlap (boxes partially cross so neither holds the other).
+  const bar = { by: 90, x: 0, y: 580, w: 951, h: 89 };
+  expect(overlaps([
+    control(10, 20, 595, 100, 44, { on: 90, solid: true }),
+    control(20, 60, 595, 200, 44, { beneath: bar }),
+    text(21, 60, 605, 160, 20, { beneath: bar }),
+  ])).toEqual([]);
+  // Opaque card nested inside a transparent overlay wrapper still hides what lies beneath the wrapper.
+  const nestedNodes = new Map([[90, { parent: 1, children: [91] }], [91, { parent: 90, children: [10] }]]);
+  expect(judge({ viewport: OPEN, owners: [OPEN], items: [
+    control(10, 20, 595, 100, 44, { on: 91, solid: true }),
+    control(20, 60, 595, 200, 44, { beneath: bar }),
+  ] }, null, { host: 'ios', nodes: nestedNodes }).filter((f) => f.kind === 'overlap')).toEqual([]);
+  // Translucent overlay does not hide what lies behind it.
+  expect(overlaps([
+    control(10, 20, 595, 100, 44, { on: 90 }),
+    control(20, 60, 595, 200, 44, { beneath: bar }),
+  ])).toHaveLength(1);
+});

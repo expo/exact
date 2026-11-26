@@ -548,12 +548,12 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
     rows.push(row('iOS SDK', sdk, swift ? `${HOST_SDKS[tv ? 'tvos' : 'ios']} or later (${sdkName})` : sdkName,
       !!sdk && !refused, refused ?? 'install Xcode and select it with DEVELOPER_DIR', tv ? 'tvOS' : 'iOS'));
   }
-  // Rust build scripts compile C with PATH's clang: another toolchain first on PATH can break an iOS build.
+  // Native builds resolve Apple's clang via xcrun --find; another clang earlier on PATH is only informational.
   if (process.platform === 'darwin' && want('clang on PATH')) {
-    const other = ['clang'].map(tool => [tool, Bun.which(tool, { PATH: env.PATH ?? '' }), output('xcrun', ['--find', tool])])
-      .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
-    rows.push(row('clang on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
-      `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
+    const xcode = output('xcrun', ['--find', 'clang']), onPath = Bun.which('clang', { PATH: env.PATH ?? '' });
+    const other = onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath)));
+    rows.push(row('clang on PATH', xcode ? (other ? `${xcode} (PATH has ${onPath})` : "Xcode's") : (onPath ?? 'missing'), "Xcode's (xcrun --find clang)", !!xcode,
+      'install Xcode Command Line Tools (`xcode-select --install`)', 'iOS and macOS builds'));
   } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env, spawnSync, device ? ['iphoneos'] : undefined));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).
   if (!only) { const room = freeSpace(homedir()); if (room) rows.push(row('Free disk', `${room.gb} GB`, `${ROOM_GB} GB for a cold native build`, room.gb >= ROOM_GB, room.text, 'native builds')); }
@@ -921,7 +921,7 @@ export function hatch(args, say = console.log) {
   const names = args.filter(a => !a.startsWith('--')), word = scope === 'element' ? names.shift() : null;
   if (scope === 'element' && !/^[a-z][a-z0-9-]*$/.test(word ?? '')) throw new Error('hatch: name a word, a lowercase letter followed by lowercase letters, digits or "-" (exact hatch avatar), or --app, or --window');
   const app = resolveApp(names[0]), dir = app.dir, manifestPath = resolve(dir, 'app.json');
-  const manifest = existsSync(manifestPath) ? app.manifest : {};
+  const manifest = existsSync(manifestPath) ? app.manifest : {}, raw = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {};
   const title = String(manifest.app?.name ?? manifest.name ?? app.name).replace(/[\r\n\u2028\u2029]+/g, ' ');
   const camel = (word ?? scope).replace(/-([a-z])/g, (_, c) => c.toUpperCase()).replaceAll('-', '_'), Camel = camel[0].toUpperCase() + camel.slice(1);
   const wrote = [], todo = [];
@@ -1214,20 +1214,20 @@ class Hatches : ExactHatches() {
   if (!platforms.length) throw new Error(`hatch: ${app.name} builds no target a hatch can be written for: name a host in app.json (web, ios, macos, android)`);
   if (scope === 'element') {
     // The declaration (§5): the word, with the platforms a stub was written for. A list means every platform.
-    const had = manifest.hatches;
+    const had = raw.hatches;
     if (Array.isArray(had)) { if (!had.includes(word)) had.push(word); }
-    else manifest.hatches = { ...(had ?? {}), [word]: [...new Set([...(had?.[word] ?? []), ...platforms])] };
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    else raw.hatches = { ...(had ?? {}), [word]: [...new Set([...(had?.[word] ?? []), ...platforms])] };
+    writeFileSync(manifestPath, JSON.stringify(raw, null, 2) + '\n');
   }
   // The app hatch reads state only through the root's data-* words, and a word app.json `data` lacks fails the bake.
-  const declare = scope === 'app' && !Array.isArray(manifest.data);
+  const declare = scope === 'app' && !Array.isArray(raw.data);
   if (declare) {
-    manifest.data = [];
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    raw.data = [];
+    writeFileSync(manifestPath, JSON.stringify(raw, null, 2) + '\n');
   }
   say(`${scope === 'element' ? `hatch="${word}"` : `the ${scope} hatch`} for ${platforms.join(', ')}${wrote.length ? `:\n  wrote ${wrote.map(f => f.slice(dir.length + 1)).join('\n  wrote ')}` : ': its files were already there'}`);
-  if (scope === 'element') say(`  app.json hatches: ${JSON.stringify(manifest.hatches)}\n  mark a node in app.contract: column hatch="${word}"`);
-  if (scope === 'app') say(`  app.json data: ${JSON.stringify(manifest.data)}${declare ? ' (added)' : ''}: name each data-* word on the root that the hatch reads ("booted" for data-booted); Swift reads it as app.data[.booted]`);
+  if (scope === 'element') say(`  app.json hatches: ${JSON.stringify(raw.hatches)}\n  mark a node in app.contract: column hatch="${word}"`);
+  if (scope === 'app') say(`  app.json data: ${JSON.stringify(raw.data)}${declare ? ' (added)' : ''}: name each data-* word on the root that the hatch reads ("booted" for data-booted); Swift reads it as app.data[.booted]`);
   for (const line of todo) say(`  to do, in ${line}`);
   return { wrote, todo, platforms };
 }

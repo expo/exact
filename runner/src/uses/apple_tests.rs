@@ -521,27 +521,120 @@ fn the_search_indexs_names_select_the_content_index() {
 /// selects. Elsewhere a grip still names `drag`.
 #[test]
 fn apple_links_drag_for_height_and_transform_drags_only() {
-    use Capability::{Collections, Drag};
+    use Capability::{Collections, Drag, Motion, Transitions};
     let grip = plan("column id=\"rows\" height=200\n      column reorderFor=\"rows\" height=20");
     assert!(apple_uses(&grip).has(Collections));
+    assert!(apple_uses(&grip).has(Motion));
+    assert!(apple_uses(&grip).has(Transitions));
     assert!(!apple_uses(&grip).has(Drag));
     assert!(uses(&grip).has(Drag));
+    assert!(uses(&grip).has(Transitions));
     let sheet = plan(
         "column id=\"sheet\" box-sizing=\"border-box\" height=200\n      column heightDragFor=\"sheet\" height=20",
     );
     assert!(apple_uses(&sheet).has(Drag));
+    assert!(!apple_uses(&sheet).has(Transitions));
+    assert!(!uses(&sheet).has(Transitions));
     let photo = plan(
         "column id=\"photo\" box-sizing=\"border-box\" width=100 height=100\n      column transformDragFor=\"photo\"",
     );
     assert!(apple_uses(&photo).has(Drag));
-    // A list's `reorderdrop` is the reorder's too.
-    let dropped = contract::compile(
-        "component A\n  state rows = [\"a\", \"b\"]\n  action receive(item: string, before: option<string>)\n    rows = rows\n  view\n    list id=\"rows\" virtualized=true estimated-item-height=20 height=100 reorderdrop=receive\n      for x in rows key=x\n        column reorderFor=\"rows\" height=20\n          text x\n",
+    assert!(!apple_uses(&photo).has(Transitions));
+    assert!(!uses(&photo).has(Transitions));
+    // Each reorder signal independently selects `Transitions` and `Motion`
+    // because reorder synthesizes row translate transitions at runtime (#1851).
+    let group_only = built(|b| {
+        let expr = b.constant(&exact_plan::Value::str("board"));
+        let binding = exact_plan::BindingsRow {
+            kind: exact_plan::BindingKind::Prop,
+            id: exact_kernel::PropId::ReorderGroup as u16,
+            expr,
+            written: true,
+        };
+        b.node(
+            exact_kernel::NodeType::View as u8,
+            None,
+            None,
+            0,
+            &[binding],
+            &[],
+            None,
+        );
+    });
+    assert!(apple_uses(&group_only).has(Collections));
+    assert!(apple_uses(&group_only).has(Motion));
+    assert!(apple_uses(&group_only).has(Transitions));
+    assert!(!apple_uses(&group_only).has(Drag));
+    assert!(uses(&group_only).has(Drag));
+    assert!(uses(&group_only).has(Transitions));
+    let drop_only = built(|b| {
+        let body = b.code(Asm::new());
+        let action = b.action("act", &[], &[], body);
+        b.node(
+            exact_kernel::NodeType::View as u8,
+            None,
+            None,
+            0,
+            &[],
+            &[(exact_plan::EventKind::Reorderdrop, action, &[])],
+            None,
+        );
+    });
+    assert!(apple_uses(&drop_only).has(Collections));
+    assert!(apple_uses(&drop_only).has(Motion));
+    assert!(apple_uses(&drop_only).has(Transitions));
+    assert!(!apple_uses(&drop_only).has(Drag));
+    assert!(uses(&drop_only).has(Drag));
+    assert!(uses(&drop_only).has(Transitions));
+    let target_only = built(|b| {
+        let body = b.code(Asm::new());
+        let action = b.action("act", &[], &[], body);
+        b.node(
+            exact_kernel::NodeType::View as u8,
+            None,
+            None,
+            0,
+            &[],
+            &[(exact_plan::EventKind::Reordertargetchange, action, &[])],
+            None,
+        );
+    });
+    assert!(apple_uses(&target_only).has(Collections));
+    assert!(apple_uses(&target_only).has(Motion));
+    assert!(apple_uses(&target_only).has(Transitions));
+    assert!(!apple_uses(&target_only).has(Drag));
+    assert!(uses(&target_only).has(Drag));
+    assert!(uses(&target_only).has(Transitions));
+    // Grouped cross-list reorder (`reorderGroup` + `reordertargetchange`) and
+    // mounted `listStyle` reorder both keep `Transitions` without `Drag` on Apple.
+    let grouped_target = contract::compile(
+        "component A\n  state rows = [\"a\", \"b\"]\n  action drop(item: string, before: option<string>)\n    rows = rows\n  action target(targeted: bool)\n    rows = rows\n  view\n    list id=\"rows\" reorderGroup=\"board\" virtualized=true estimated-item-height=20 height=100 reorderdrop=drop reordertargetchange=target\n      for x in rows key=x\n        column reorderFor=\"rows\" height=20\n          text x\n",
     )
     .unwrap();
-    assert!(apple_uses(&dropped).has(Collections));
-    assert!(!apple_uses(&dropped).has(Drag));
-    assert!(uses(&dropped).has(Drag));
+    assert!(apple_uses(&grouped_target).has(Collections));
+    assert!(apple_uses(&grouped_target).has(Motion));
+    assert!(apple_uses(&grouped_target).has(Transitions));
+    assert!(!apple_uses(&grouped_target).has(Drag));
+    assert!(uses(&grouped_target).has(Drag));
+    assert!(uses(&grouped_target).has(Transitions));
+    let list_style_reorder = contract::compile(
+        "component A\n  state rows = [\"a\", \"b\"]\n  action drop(item: string, before: option<string>)\n    rows = rows\n  view\n    list id=\"rows\" listStyle=\"inset-grouped\" reorderdrop=drop\n      section\n        for x in rows key=x\n          column reorderFor=\"rows\" height=20\n            text x\n",
+    )
+    .unwrap();
+    assert!(apple_uses(&list_style_reorder).has(Collections));
+    assert!(apple_uses(&list_style_reorder).has(Motion));
+    assert!(apple_uses(&list_style_reorder).has(Transitions));
+    assert!(!apple_uses(&list_style_reorder).has(Drag));
+    assert!(uses(&list_style_reorder).has(Drag));
+    assert!(uses(&list_style_reorder).has(Transitions));
+    // A plain virtualized list without reorder does not pull in `Transitions`.
+    let plain_list = contract::compile(
+        "component A\n  state rows = [\"a\", \"b\"]\n  view\n    list id=\"rows\" virtualized=true estimated-item-height=20 height=100\n      for x in rows key=x\n        column height=20\n          text x\n",
+    )
+    .unwrap();
+    assert!(apple_uses(&plain_list).has(Collections));
+    assert!(!apple_uses(&plain_list).has(Transitions));
+    assert!(!uses(&plain_list).has(Transitions));
 }
 
 /// A link the host's own context menu serves links sharing, as a plan's

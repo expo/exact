@@ -52,7 +52,7 @@ export function binaryenArchive(version, os = process.platform, cpu = process.ar
 /** Where the pinned binaryen comes from on a machine without a package
  * manager (LLP 1054 O2): the release tarball, unpacked, its `bin/` on PATH. */
 export const BINARYEN_DOWNLOAD = `https://github.com/WebAssembly/binaryen/releases/tag/${BINARYEN.replace(' ', '_')}`;
-const FEATURES = ['--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-reference-types'];
+const FEATURES = ['--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-reference-types', '--enable-simd'];
 
 const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', maxBuffer: 1 << 28, ...options });
 
@@ -69,7 +69,7 @@ export function packageGpuWasm(crate, wasm, stage, stem, { env, profile }) {
   if (wb.status !== 0) throw new Error(`wasm-bindgen ${crate} failed`);
   const bg = resolve(stage, `${stem}_bg.wasm`);
   // EXACT_WEB_NAMES retains GPU function names for profiles, as it does for app.wasm.
-  const o = profile === 'gpu-dev' ? { status: null } : run('wasm-opt', ['-Oz', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', env.EXACT_WEB_NAMES === '1' ? '-g' : '--strip-debug', '--strip-producers', '-o', bg, bg], { env, stdio: 'inherit' });
+  const o = profile === 'gpu-dev' ? { status: null } : run('wasm-opt', ['-Oz', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-simd', env.EXACT_WEB_NAMES === '1' ? '-g' : '--strip-debug', '--strip-producers', '-o', bg, bg], { env, stdio: 'inherit' });
   const bytes = readFileSync(bg), kib = n => `${(n / 1024).toFixed(0)} KiB`;
   return `${stem}_bg.wasm ${kib(bytes.length)} (${kib(gzipSync(bytes, { level: 9 }).length)} gzip${o.status === 0 ? ', wasm-opt' : ''}), ${stem}.js ${kib(readFileSync(resolve(stage, `${stem}.js`)).length)}`;
 }

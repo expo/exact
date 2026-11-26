@@ -126,7 +126,7 @@ function serverEnv(server, db) {
   return env;
 }
 
-export const serverRun = (server, name) => `${(server.command ?? ['bun', server.entry, ...server.args]).join(' ')} at ${server.url}, ${server.database ? `on an empty database${name === 'api-test' ? '' : ' for each test'} (.exact/${name}/db.sqlite, removed after)` : `without a database${name === 'api-test' ? '' : ', restarted empty for each test'}`}${server.note ? `; ${server.note}` : ''}`;
+export const serverRun = (server, name) => `${(server.command ?? ['bun', server.entry, ...server.args]).join(' ')} at ${server.url}, ${server.database ? `on an empty database${name === 'api-test' ? '' : ' for each test'} (.exact/${name}/p${server.port}/db.sqlite, removed after)` : `without a database${name === 'api-test' ? '' : ', restarted empty for each test'}`}${server.note ? `; ${server.note}` : ''}`;
 
 /** Whether anything answers HTTP at `url` (any status). */
 export const answering = (url) => fetch(url, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
@@ -143,7 +143,7 @@ function portHolder(server) {
  * server this did not start is never stopped, nor written to. */
 export function heldLine(server) {
   const { pid, holder } = portHolder(server);
-  return `${server.url}${holder}, and the tests would ${server.database ? "write into that server's database" : 'change that server\'s state'}: stop it (${pid ? `kill ${pid}` : 'Ctrl-C where it runs'}) and run this again, which starts ${server.entry} itself${server.database ? ' on an empty one' : ''}${server.note ? `; ${server.note}` : ''}`;
+  return `${server.url}${holder}, and the tests would ${server.database ? "write into that server's database" : 'change that server\'s state'}: run on an alternate port (PORT=<free> or --backend http://127.0.0.1:<free>), or stop it (${pid ? `kill ${pid}` : 'Ctrl-C where it runs'}) and run this again, which starts ${server.entry} itself${server.database ? ' on an empty one' : ''}${server.note ? `; ${server.note}` : ''}`;
 }
 
 /** Keep the URL appServer accepted, including its path and explicit default port, for exact record comparisons. */
@@ -376,7 +376,7 @@ async function stopGroup(group, server) {
 
 async function started(dir, server, name, forward, give, takeOwnership) {
   if (await answering(server.url)) throw new Error(heldLine(server));
-  const runDir = resolve(dir, '.exact', name), db = server.database ? resolve(runDir, 'db.sqlite') : null, owner = resolve(runDir, 'owner');
+  const verbDir = resolve(dir, '.exact', name), runDir = resolve(verbDir, `p${server.port}`), db = server.database ? resolve(runDir, 'db.sqlite') : null, owner = resolve(runDir, 'owner');
   const clearDB = () => { if (db) for (const end of ['', '-wal', '-shm', '-journal']) rmSync(`${db}${end}`, { force: true }); };
   mkdirSync(runDir, { recursive: true });
   clearDB();
@@ -411,7 +411,8 @@ async function started(dir, server, name, forward, give, takeOwnership) {
     await endChild();
     clearDB(); rmSync(owner, { force: true }); give();
     stopped = true; off();
-    if (name !== 'verify') try { rmdirSync(runDir); } catch {}
+    try { rmdirSync(runDir); } catch {}
+    if (name !== 'verify') try { rmdirSync(verbDir); } catch {}
   };
   const fresh = async () => { await endChild(); clearDB(); used = false; await launch(); };
   try { await launch(); } catch (e) { await stop(); throw e; }
@@ -587,7 +588,17 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
  * `api-test` is the same call without `optional`: it wants a server, and says why it has none. */
 export async function withAppServer(dir, fn, { verb = 'api-test', optional = false } = {}) {
   const server = appServer(dir);
-  const owners = new Map(server ? ['api-test', 'test', 'verify'].map(name => readIn(dir, `.exact/${name}/owner`)?.trim().split('\n')).filter(Boolean) : []);
+  const ownerEntries = [];
+  if (server) for (const name of ['api-test', 'test', 'verify']) {
+    const base = resolve(dir, '.exact', name);
+    const candidates = [resolve(base, `p${server.port}`, 'owner'), resolve(base, 'owner')];
+    try { for (const entry of readdirSync(base)) if (/^p\d+$/.test(entry)) candidates.push(resolve(base, entry, 'owner')); } catch {}
+    for (const file of new Set(candidates)) {
+      const pair = readIn(dir, file)?.trim().split('\n');
+      if (pair) ownerEntries.push(pair);
+    }
+  }
+  const owners = new Map(ownerEntries);
   const ancestor = owners.size && ancestors().find(pid => owners.has(pid));
   if (ancestor) {
     console.error(`${verb}: using an ancestor’s server; tests share its data`);

@@ -4,6 +4,9 @@ import { Refusal, effect, After, journal, clock, commit, W, pressFeedback, fact,
 import { Counting } from "./held.js";
 import { projectRoots } from "./document.js";
 import { canonical, locationOf, fragmentOf, enc, dec, matchPattern } from "./route-pattern.js";
+import { loadOnce } from '../web/load-once.js';
+
+const loads = {};
 export { canonical, locationOf };
 const say = line => journal.push(`t=${clock.now} ${line}`);
 // A Router is [tab, tabs, next]; a Tab [name, stack]; an Entry
@@ -177,8 +180,8 @@ function hostGo(location) {
 // It counts only when a commit that lands writes that very value to the router (`assigned`), never for a value merely
 // computed. `Due` waits for the data; `Scheduled` waits for the module, and either is let go when its visit stops
 // showing that fragment or the app scrolls into view itself.
-let Navigations = [], Due = null, Scheduled = null, Fragments = null, Activations = 0;
-const fragments = () => Fragments ??= import("./fragment.js");
+let Navigations = [], Due = null, Scheduled = null, Activations = 0;
+const fragments = () => loadOnce(loads, "Fragments", () => import("./fragment.js"));
 const pageRoot = () => document.getElementById("exact-root");
 function navigating(f) {
   return (r, location) => {
@@ -272,7 +275,7 @@ export function router(slot, history) {
     const r = slot(); if (!r || !r[1].length) return;
     const op = r === Shown ? Early : mirror(r); Early = null;
     if (op?.scroll) wantScroll(op);
-    else if (op) { Due = Scheduled = null; Fragments?.then(f => f.cancel()); }
+    else if (op) { Due = Scheduled = null; loads.Fragments?.then(f => f.cancel()); }
   });
   // `effect` runs once synchronously. Its first apply follows
   // `projectRoots`' projection, so publish those initial visits now.

@@ -8,6 +8,7 @@
 // whose grants name `auth.session`, `auth.apple` or `auth.google`.
 import { journal, clock, nextTicket, Origin, Invocation } from "./rt.js";
 import { trimGrant, grantWords } from "./admission.js";
+import { loadOnce } from '../web/load-once.js';
 
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const RANK = ["device", "wake", "tool", "action", "app"];
@@ -129,6 +130,8 @@ const fixtureOrigin = () => { const o = clock.agent && typeof location === "obje
 /** Live sessions: { ticket, target, session, done(status, body), held }. */
 const Live = [];
 let Glue = null;
+const loads = {};
+const loadAuth = () => loadOnce(loads, 'auth', () => import('./auth-glue.js').then(() => Glue = globalThis.exact.authHost), error => say(`auth: unavailable: ${error.message}`));
 function settle(ticket, status, body) {
   const at = Live.findIndex(l => l.ticket === ticket);
   if (at < 0) return say(`auth ${ticket}: a late completion, dropped`);
@@ -148,7 +151,7 @@ export function install(grants, target, callOf) {
   globalThis.cancelAuthSession = prepared => { if (typeof prepared === "string" && prepared) cancelAuthWindow(prepared); };
   if (!clock.agent && typeof requestAnimationFrame === "function") {
     // The glue is in the page before any press: the popup opens in the press's own call stack.
-    requestAnimationFrame(() => setTimeout(() => { Glue = import("./auth-glue.js").then(() => globalThis.exact.authHost); Glue.then(g => { Glue = g; }); }));
+    requestAnimationFrame(() => setTimeout(loadAuth));
   }
   // Counted on its answer as an ordinary fetch is (ts-fetch.js `ordinary`, LLP 1016.000 D9) until it settles, a
   // refusal included, or is superseded, whose promise never settles (the runner drops that ticket).
@@ -196,7 +199,7 @@ export function install(grants, target, callOf) {
     // The implementation's call ended (its task superseded): the session is forgotten, its popup closed.
     cancelled?.(() => { const at = Live.indexOf(l); if (at < 0) return; Live.splice(at, 1); say(`auth ${ticket}: cancelled by its call's end`); l.close?.(); release(); done(499, "cancelled"); });
     if (clock.agent) { l.held = true; say(`device auth ${ticket} held (agent)`); return; }
-    if (!Glue || typeof Glue.arm !== "function") return settle(ticket, 501, "no system browser on this host");
+    if (!Glue || typeof Glue.arm !== "function") { loadAuth(); return settle(ticket, 501, "no system browser on this host"); }
     say(`auth ${ticket}: opened`);
     // The glue's words (auth-glue.js `arm`): the runner's `exact_auth`, here.
     let report = null;

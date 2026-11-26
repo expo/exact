@@ -154,7 +154,7 @@ impl Parser {
         } else {
             None
         };
-        self.resource_clause_in_order(&["with", "when"])?;
+        self.resource_clause_in_order(&["with", "when", "transient", "keep"])?;
         self.expect_word("as")?;
         self.expect_word("shape")?;
         let shape = self.type_expr()?;
@@ -426,5 +426,20 @@ impl Parser {
             ty = TypeExpr::List(Box::new(ty), span);
         }
         Ok((ty, depth))
+    }
+}
+
+#[cfg(test)]
+mod resource_clause_tests {
+    #[test]
+    fn transient_and_keep_before_as_shape_name_clause_order() {
+        for clause in ["transient", "keep"] {
+            let src = format!(
+                "component App\n  resource items = fetch() {clause} as shape number[]\n  view\n    text \"ok\"\n"
+            );
+            let err = crate::parse(&src).unwrap_err();
+            assert_eq!(err.id, "syntax-resource-clause-order", "{err:?}");
+            assert!(err.message.contains(clause), "{err:?}");
+        }
     }
 }

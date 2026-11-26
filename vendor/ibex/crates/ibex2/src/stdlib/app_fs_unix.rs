@@ -450,6 +450,22 @@ impl AppDirectories {
         }
         Ok(file)
     }
+    /// A granted regular file's path alone (`O_PATH`), relative to the
+    /// retained app roots. Closing it drops none of this process's POSIX
+    /// locks on the file, as closing a readable descriptor would (fcntl(2)),
+    /// so another process can reopen it through `/proc/self/fd` and read it
+    /// while this process's SQLite keeps its locks.
+    #[cfg(target_os = "linux")]
+    pub fn open_path(&self, grants: &GrantSet, path: &str) -> Result<File, HostError> {
+        self.parse(path)?;
+        crate::boundary::admit(grants, &Operation::FsRead { path: path.into() })?;
+        let (parent, leaf) = self.open_parent(path)?;
+        let file = open_at(&parent, &leaf, libc::O_PATH).map_err(error)?;
+        if !file.metadata().map_err(error)?.is_file() {
+            return Err(error("read needs a regular file"));
+        }
+        Ok(file)
+    }
     /// Read at most `cap` bytes, refusing a larger file, observing cancellation between chunks.
     pub fn read_capped(
         &self,

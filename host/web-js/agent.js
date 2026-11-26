@@ -82,6 +82,8 @@ function dropStreams(prefix) {
 import { inertAncestor, displayMode, environment, navigation, routeFlags, foldEnv, preferFold, FOLD_EVENT, preferDisplayMode, typedControl, settleValue, animationClock, pageReporter } from './navigation.js';
 import { backButton } from './input-glue.js';
 import { guestOutline, guestTap, guestType, viewBox, textBaseline, reveal, selectAll, scrollRange, typeControl, watchGlides, glidesSettled, scrollsSeen } from './agent-input.js';
+import { loadOnce } from '../web/load-once.js';
+
 // A zoomable scroller's zoom and range (zoom.js, LLP 1057.001.000 §6).
 const zoomOf = e => (e.$zoomRange ? { scrollZoom: e.$zoom, minZoom: e.$zoomRange[0], maxZoom: e.$zoomRange[1] } : {});
 // How long `clock settle` waits for a scroller gliding on its own, as a native host waits (agent.mjs reason `scroll`).
@@ -336,10 +338,10 @@ export function install(exact, { passive = false } = {}) {
   // Animated images held to the agent's clock (LLP 1011.000): the web host's
   // own `image-glue.js`, fetched at the first seek of a page with a GIF or
   // WebP (the only images it holds; a page without one does no work).
-  let images = null;
+  const loads = {};
   const holdImages = () => {
-    if (!images && document.querySelector('#exact-root img[src*=".gif" i], #exact-root img[src*=".webp" i]')) images = import('./image-glue.js').then(() => exact.holdImages({ root: document.getElementById('exact-root'), now: () => exact.clock.now }));
-    images?.then(h => h.seek());
+    if (!loads.images && document.querySelector('#exact-root img[src*=".gif" i], #exact-root img[src*=".webp" i]')) loadOnce(loads, 'images', () => import('./image-glue.js').then(() => exact.holdImages({ root: document.getElementById('exact-root'), now: () => exact.clock.now })), error => journal.push(`images: ${error.message}`));
+    loads.images?.then(h => h?.seek());
   };
   const seek = (sync = true) => { anim.register(exact.clock.now); anim.seek(exact.clock.now, sync); holdImages(); };
   // Deliver world records before later timers (LLP 1012, LLP 1046.003).

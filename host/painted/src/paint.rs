@@ -975,7 +975,9 @@ impl Painter {
             // A backdrop reads what is under it, beyond any damage.
             || !node.style.backdrop_filter.is_none()
             || self.material_note(&node)
-            || !p.colors.is_empty();
+            || !p.colors.is_empty()
+            // A reach paints past the box, where damage does not look (LLP 1123 D13)
+            || p.reach != [0.0; 4];
         let origin = node.style.transform_origin.resolve(w, h);
         let (hit_parent, hit_clip) = walk.hit_space.unwrap_or((ts, clip_rect));
         let mut hit_p = p;
@@ -1023,11 +1025,12 @@ impl Painter {
             visible,
             projective: None,
             affine: Some((ts, (x, y, w, h))),
-            hit: walk.hit_space.map(|_| HitGeometry {
+            // A reaching box takes the hits in its reached frame; what reads its geometry keeps its laid-out box
+            hit: (walk.hit_space.is_some() || p.reach != [0.0; 4]).then(|| HitGeometry {
                 shape_clips: Vec::new(),
-                rect: bbox(hit_ts, (x, y, w, h)),
+                rect: bbox(hit_ts, p.reached((x, y, w, h))),
                 clip: hit_clip,
-                affine: Some((hit_ts, (x, y, w, h))),
+                affine: Some((hit_ts, p.reached((x, y, w, h)))),
                 projective: None,
             }),
             unpress: if p.press == 1. {
@@ -1122,8 +1125,8 @@ impl Painter {
         }
         self.clipped = Some((node.id, paint.background));
         let mut geometry = paint.geometry(rect);
-        // @ref LLP 1063 — a layout transition's size is the surface's alone.
-        let mut surface = paint.geometry(shown.surface(rect));
+        // @ref LLP 1063 — a layout transition's size is the surface's alone, as a reach is (LLP 1123 D13).
+        let mut surface = paint.geometry(shown.reached(shown.surface(rect)));
         self.flight_geometry(node, &mut geometry);
         self.flight_geometry(node, &mut surface);
         // A text node still walks its runs so a visible inline paints.

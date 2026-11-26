@@ -120,8 +120,9 @@ export {
   tapWords,
   pointerGap,
 } from './agent-keys.mjs';
+import { parsePreferArgs } from './agent-prefer.mjs';
 // `prefer`'s tables and the web carrier's CDP path
-export { LAUNCH_MEDIA, PREFERENCES, PAGE_FACTS, FOLD_FACTS, displayFeatures } from './agent-prefer.mjs';
+export { LAUNCH_MEDIA, PREFERENCES, PAGE_FACTS, FOLD_FACTS, displayFeatures, parsePreferArgs } from './agent-prefer.mjs';
 /** `fail fetch <url-prefix> [times <n>]` and `pass fetch <url-prefix>` as the `prefer` request with `faults` every
  * carrier answers (LLP 1103 D3): the network is the environment, so this is a form of `prefer`, not another
  * operation (LLP 1012 §1). */
@@ -219,6 +220,7 @@ export async function main(argv, injected = {}) {
           appServerUrl,
           browser,
           file: flags.test,
+          only: flags.only,
           plan: flags.plan,
           app: flags.app,
           size: flags.size,
@@ -605,11 +607,7 @@ export async function main(argv, injected = {}) {
         break;
       // A module's value is the line's whole tail, so a JSON string keeps its spaces (`…heard="pick up milk"`).
       case 'prefer':
-        r = await s.prefer(
-          args[0] === 'extension' && args.length > 2
-            ? { extension: trimmed.replace(/^prefer\s+extension\s+/, '') }
-            : Object.fromEntries(args.flatMap((a, i) => (i % 2 ? [] : [[a, args[i + 1]]]))),
-        );
+        r = await s.prefer(parsePreferArgs(trimmed));
         break;
       // A system's call of a tool (LLP 1133.023 §10): `call <tool> <json> [--door <door>]`, run as the door would.
       case 'call': {

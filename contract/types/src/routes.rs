@@ -73,7 +73,7 @@ pub(super) fn declare(file: &File, shapes: &mut Shapes) -> Result<(), TypeError>
     if file.components.is_empty() {
         return err(
             "analyze-routes-not-root",
-            "`routes` belongs to the app's root file",
+            "`routes` belongs in the app's root file beside a `component` declaration (importing a component with `use` alone does not define the root component)",
             routes.span,
         );
     }

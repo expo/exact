@@ -1717,9 +1717,11 @@ app makes, frames included, and which App Store review asks the app to justify;
 an `iframe` of `http://` from a named host, or such a sub-resource of the app's
 own `assets/` page, needs `host.macos.appTransportSecurity` or
 `host.ios.appTransportSecurity` set to `{ "allowsArbitraryLoadsInWebContent": true }`,
-which relaxes web views only (ATS lets an IP address or a `.local` name through
+which relaxes web views only (ATS lets a local-network IP address or a `.local` name through
 without it, LLP 1020.001 §4 Q6, though on an iPhone those also ask for Local
-Network access), and how to drive it with storage. The macOS driver launches the assembled app
+Network access; non-LAN IPs such as Tailscale `100.64.0.0/10` or public IPs are still blocked
+over plain `http://` unless served over HTTPS or permitted in development with
+`allowsArbitraryLoads`), and how to drive it with storage. The macOS driver launches the assembled app
 bundle, so its ATS policy also applies during drives. A path grant covers its path and what is below
 it, by whole names: `sqlite.open app:/data` covers `app:/data/inbox-amy.sqlite`,
 `sqlite.open app:/data/inbox` does not. A refused open names the file it wanted

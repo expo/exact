@@ -1004,8 +1004,14 @@ the app first publishes it). The receipt admits both the entry plan and bytecode
 It can return immediately or await `fetch`
 and `storage.fs` reads from `app:/`. File writes, SQLite, document handles and
 native modules are unavailable in stage 1; `secret.keep` values are read from
-the shared Keychain only during refresh. The extension never persists store
+the shared Keychain only during refresh. Because SQLite is unavailable in a
+refresh, apps backed by SQLite should mirror widget-needed fields into a small
+JSON file under `app:/data/` with `storage.fs.atomicWriteFile` alongside
+mutations so the refresh reads it directly. The extension never persists store
 writes. The app reloads widget timelines after a successful write readable by a refresh, once the store has been quiet for half a second, so a burst of writes asks once.
+Successful refreshes return a WidgetKit timeline with reload policy
+`.after(max(now + 15 min, lastEntry + 1 s))`. Widget views take literal colors
+only (not runtime-computed color bindings).
 Refresh has a 900 ms deadline starting when it begins, including boot. Each JS
 turn gets the time remaining to that deadline, rather than the app's 100 ms
 per-call budget. This leaves 100 ms below LLP 1126 D8's one-second
@@ -1689,7 +1695,10 @@ retain the baked digests.
 
 An external Swift host links `ExactKit` plus each capability product its plans
 use, then calls that product's public `install()` before creating sessions.
-The generated `--embed` composition lists the capabilities to link.
+The generated `--embed` composition lists the capabilities to link. Implement
+`ExactSessionDelegate`'s `exactSession(_:command:args:)` on the embedding host
+to handle `openURL` (for links and deep links) and `setScheme` (to apply the
+app's appearance choice to the embedding window or scene).
 
 | Product | Capability | Installation |
 | --- | --- | --- |
@@ -6447,7 +6456,7 @@ column dragenter=entered dragleave=left drop=took
 | tvOS | none | empty: tvOS has no pasteboard |
 | Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
 | Android | yes: files, text and links from another app or this one, each file a copy of a `content:` item, no folders and no `file:` paths. Another app's files are copied under the read permission Android grants for the drop; without one, that drop brings its text and link alone. While a drop has no `url`, a text item whose whole last line is an `http://` or `https://` link gives that link as the `url`, and its lines before it, such as the title Chrome sends, as the `text`; a field keeps text, links and text files, as Android's text views do, unless it declares `drop`, and gives a file to the `drop` above it | empty (text only) |
-| Linux | yes, in the Wayland window, from another app, taken as a copy: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`); image data is not taken, so a browser's picture arrives as the link or file it offers beside the data, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop`; Wayland tells the window no keys, so the modifiers are those it holds | empty (text only) |
+| Linux | yes, in the Wayland window, from another app or this one, taken as a copy: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`); image data is not taken, so a browser's picture arrives as the link or file it offers beside the data, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop`; Wayland tells the window no keys, so the modifiers are those it holds; in a Flatpak sandbox the files come from the document portal's file transfer key, else only those the sandbox shares with the host | empty (text only) |
 | terminal | none | empty (text only) |
 
 The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,

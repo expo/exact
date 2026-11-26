@@ -34,8 +34,9 @@ export const pressedAt = (down, event, target) => atPoint(down, event) && target
  * parents a slot's detour is read through. One listener serves every observer of `input`, added with the first and
  * removed with the last. It is kept on `input`, which the wasm wait hands to the listener when it loads, since each of
  * the two bundles has its own copy of this module; the listener begins observing before the wait stops, so the
- * recorder keeps its place across the handoff. The listeners the page adds after it run after it; one added before it
- * runs first, and a node that one moves is read as it moved. */
+ * recorder keeps its place across the handoff. The window capture listeners the page adds after it run after it, as
+ * every document and target listener does; one added to the window's capture before it runs first, and a node that one
+ * moves is read as it moved. */
 function recordDragPaths(input, view, signal) {
   if (!view?.addEventListener || signal?.aborted) return;
   let recorder = input.recorder;
@@ -49,7 +50,7 @@ function recordDragPaths(input, view, signal) {
   recorder.users++;
   signal?.addEventListener('abort', () => {
     if (--recorder.users) return;
-    if (input.recorder === recorder) input.recorder = null;
+    input.recorder = null;
     recorder.stop.abort();
   }, { once: true });
 }

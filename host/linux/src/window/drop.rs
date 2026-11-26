@@ -13,7 +13,7 @@
 #![allow(unsafe_code)]
 
 use exact_painted::presenter::Presenter;
-use exact_painted::Dropped;
+use exact_painted::{Checked, Dropped};
 use exact_runner::DataSource;
 use smithay_client_toolkit::reexports::client::{
     backend::{Backend, ObjectId, WaylandError},
@@ -33,6 +33,10 @@ use std::sync::Arc;
 
 #[path = "lift.rs"]
 mod lift;
+#[path = "sandbox.rs"]
+mod sandbox;
+#[path = "staging.rs"]
+mod staging;
 pub(in crate::window) use lift::{Pointed, Press};
 use std::ffi::OsString;
 use std::io::{ErrorKind, PipeReader, PipeWriter, Read, Write};
@@ -58,9 +62,12 @@ const MOZ_URL: &str = "text/x-moz-url";
 /// The plain text types a drag may offer, the first offered taken: UTF-8
 /// by name, then X11's name for it, then text in no named charset.
 const TEXTS: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
-/// How long after the drop its items may take to arrive: what a source has
-/// not finished sending by then is not delivered, so a stalled source cannot
-/// hold the drop pending (D2 holds a newer drag's enters for it).
+/// How long after the drop its text and titled link may take to arrive:
+/// what a source has not finished sending of them by then is not
+/// delivered. The URI list and the portal's key are waited for until their
+/// source ends them, as the Mac waits for a promised file, since a source may
+/// first copy its files (LLP 1094.000 D13); another drop ends that wait
+/// (D2 holds a newer drag's enters meanwhile).
 const DEADLINE: Duration = Duration::from_secs(10);
 /// The most a drop's type may send; a type that sends more is not
 /// delivered.
@@ -112,9 +119,9 @@ pub(in crate::window) enum Heard {
     },
     Landed {
         number: u64,
-        id: u32,
-        dropped: Dropped,
+        landing: Landing,
     },
+    Journal(String),
 }
 
 /// The presenter's answers: whether a node under drag `number` takes the
@@ -137,6 +144,7 @@ enum Command {
     Lift {
         press: Press,
         offers: Vec<(&'static str, Arc<[u8]>)>,
+        files: Option<lift::Files>,
         icon: Option<lift::Icon>,
     },
 }
@@ -165,7 +173,14 @@ impl Drops {
             .ok()?;
         let (commands, heard) = std::sync::mpsc::channel();
         let lifting = manager.version() >= 3;
-        let out = lift::Out::new(&globals, &handle, &connection, &surface);
+        if lifting {
+            // The portal is probed as the listener starts, and a sandbox's old drag copies aged
+            exact_painted::file_transfer::Portal::session();
+            staging::sweep_at_start();
+        }
+        let out = lift::Out::new(&globals, &handle, &connection, &surface)?;
+        let (answers, answered) = std::io::pipe().ok()?;
+        (nonblocking(&answers) && nonblocking(&answered)).then_some(())?;
         let mut listener = Listener {
             surface,
             manager,
@@ -177,6 +192,7 @@ impl Drops {
             commands: heard,
             handle: handle.clone(),
             out,
+            answered: (answers, Arc::new(answered)),
         };
         globals.contents().with_list(|list| {
             for global in list.iter().filter(|g| g.interface == "wl_seat") {
@@ -241,17 +257,26 @@ impl Drops {
             }
             Heard::Dropped { number, point } => {
                 self.hover = None;
-                let id = p.drop_released(point, p.modifiers());
+                // Drops still waiting are about to land, as this one ended their wait
+                let id = p.drop_released_behind(point, p.modifiers());
                 self.send(Command::Released { number, id });
             }
-            Heard::Landed {
-                number,
-                id,
-                dropped,
-            } => {
-                let delivered = p.drop_landed(id, &dropped).is_some();
-                self.send(Command::Landed { number, delivered });
+            Heard::Landed { number, landing } => {
+                let Landing {
+                    id,
+                    dropped,
+                    checked,
+                } = landing;
+                let delivered = match checked {
+                    Some(checked) => p.drop_landed_checked(id, &dropped, checked),
+                    None => p.drop_landed(id, &dropped),
+                };
+                self.send(Command::Landed {
+                    number,
+                    delivered: delivered.is_some(),
+                });
             }
+            Heard::Journal(line) => p.host_mut().log(line),
             // The window's input hears these
             Heard::Pointer { .. } | Heard::Ended(_) | Heard::Gone => {}
         }
@@ -316,6 +341,10 @@ struct Listener {
     commands: Receiver<Command>,
     handle: QueueHandle<Self>,
     out: lift::Out,
+    /// The pipe that says a worker answered for a drop: the portal for its
+    /// key, or the sandbox's check of its files. The workers share the
+    /// writer, so none needs a descriptor of its own.
+    answered: (PipeReader, Arc<PipeWriter>),
 }
 
 /// A seat, by its global's name: its data device, and its pointer while it
@@ -342,30 +371,79 @@ struct Drag {
 }
 
 /// A drop the presenter was told of, kept until it is delivered or
-/// refused: when its items are due, counted from Wayland's drop, and the
-/// items while they arrive.
+/// refused: when its items are due, counted from Wayland's drop, and where
+/// it is.
 struct Released {
     drag: Drag,
     deadline: Instant,
-    reading: Option<Reading>,
+    progress: Progress,
 }
 
-/// Drop `id`'s items arriving through a pipe a type, each type at most
-/// `largest` bytes.
+/// Where a released drop is, and whether another drop ended its wait.
+struct Progress {
+    stage: Stage,
+    cut: bool,
+}
+
+/// Where a released drop is: waiting for the presenter to make a drop of
+/// it, its items arriving, its files checked against what the sandbox
+/// shares, or handed to the event loop.
+enum Stage {
+    Waiting,
+    Reading(Reading),
+    Checking(Checking),
+    Landed,
+}
+
+/// Drop `id`'s items, all come, while a worker checks which of the URI
+/// list's `files` the sandbox shares with the host (LLP 1094.001 D8); the
+/// paths are the worker's.
+struct Checking {
+    id: u32,
+    dropped: Dropped,
+    files: usize,
+    kept: Answer<Checked>,
+}
+
+/// A worker's answer, once it gives it.
+type Answer<T> = Arc<Mutex<Option<Vec<T>>>>;
+
+/// A drop handed to the event loop: its number among the drops, its items,
+/// and, for a sandbox's URI list, the files its check kept, each with its
+/// folder held, in place of the items' paths.
+pub(in crate::window) struct Landing {
+    id: u32,
+    dropped: Dropped,
+    checked: Option<Vec<Checked>>,
+}
+
+/// Drop `id`'s items arriving through a pipe a type, in [`Wanted`]'s order,
+/// each type at most `largest` bytes, and the portal's answer for its key
+/// once it is asked: its paths, when it gave some.
 struct Reading {
     id: u32,
-    pipes: [Option<PipeReader>; 3],
-    bytes: [Vec<u8>; 3],
+    pipes: [Option<PipeReader>; 4],
+    bytes: [Vec<u8>; 4],
     largest: usize,
+    retrieved: Option<Answer<PathBuf>>,
 }
 
+/// Where each type is in a [`Reading`]: its URI list, its titled link, its
+/// text and the portal's key.
+const URIS: usize = 0;
+const LINK: usize = 1;
+const TEXT: usize = 2;
+const KEY: usize = 3;
+
 /// The types the window reads from an offer, each spelled as offered: its
-/// URI list, its titled link and its text.
+/// URI list, its titled link, its text and, in a Flatpak sandbox, the
+/// portal's file transfer key.
 #[derive(Default, PartialEq, Debug)]
 struct Wanted {
     uris: Option<String>,
     link: Option<String>,
     text: Option<String>,
+    key: Option<String>,
 }
 
 /// An offer's MIME types, as the compositor lists them before its enter,
@@ -409,6 +487,8 @@ impl Listener {
                 return;
             }
             self.obey();
+            // A drop the presenter just made may have nothing to wait for, as when none of its pipes opened
+            self.land();
             let blocked = match connection.flush() {
                 Ok(()) => false,
                 Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => true,
@@ -428,11 +508,15 @@ impl Listener {
             fds.extend(pipes.iter().map(|&(.., fd)| poll_for(fd, libc::POLLIN)));
             let sends: Vec<(usize, i32)> = self.out.pipes().collect();
             fds.extend(sends.iter().map(|&(_, fd)| poll_for(fd, libc::POLLOUT)));
+            let made = self.out.made();
+            fds.extend(made.map(|fd| poll_for(fd, libc::POLLIN)));
+            // Always heard, so a worker that answers between the landing above and this poll wakes it
+            fds.push(poll_for(self.answered.0.as_raw_fd(), libc::POLLIN));
             let now = Instant::now();
             let wait = self
                 .released
                 .iter()
-                .filter(|r| r.reading.is_some())
+                .filter(|r| r.progress.reading().is_some_and(Reading::timed))
                 .map(|r| {
                     r.deadline
                         .saturating_duration_since(now)
@@ -469,6 +553,15 @@ impl Listener {
             }
             // A drop past its deadline lands before its pipes are read, so nothing arrives after it
             self.land();
+            let extra = &fds[2 + pipes.len() + sends.len()..];
+            // Each pass, so a key request whose time ended closes though nothing woke the loop for it
+            if made.is_some() {
+                self.out.staged();
+            }
+            if extra.last().is_some_and(|fd| fd.revents != 0) {
+                let mut bytes = [0; 64];
+                while matches!((&self.answered.0).read(&mut bytes), Ok(n) if n > 0) {}
+            }
             let ready: Vec<usize> = fds[2 + pipes.len()..]
                 .iter()
                 .zip(&sends)
@@ -481,8 +574,9 @@ impl Listener {
                     continue;
                 }
                 let released = &mut self.released[r];
-                if let Some(reading) = released.reading.as_mut() {
-                    reading.read(k, released.deadline);
+                let deadline = released.deadline;
+                if let Some(reading) = released.progress.reading_mut() {
+                    reading.read(k, deadline);
                 }
             }
             self.land();
@@ -524,29 +618,51 @@ impl Listener {
     fn pipes(&self) -> impl Iterator<Item = (usize, usize, i32)> + '_ {
         self.released.iter().enumerate().flat_map(|(r, released)| {
             let open = released
-                .reading
-                .iter()
+                .progress
+                .reading()
+                .into_iter()
                 .flat_map(|reading| reading.pipes.iter().enumerate());
             open.filter_map(move |(k, pipe)| Some((r, k, pipe.as_ref()?.as_raw_fd())))
         })
     }
 
-    /// Hand the event loop each drop whose items have all arrived, or
-    /// whose deadline passed with what had.
+    /// Hand the event loop each drop whose items have all arrived, in the
+    /// order they were released ([`settle`]). Past its deadline a drop waits
+    /// no more for its text and titled link, and one whose key has come asks
+    /// the portal for its files.
     fn land(&mut self) {
         let now = Instant::now();
-        for released in &mut self.released {
-            let due = now >= released.deadline;
-            let Some(reading) = released.reading.take_if(|r| due || r.complete()) else {
+        let Listener {
+            released,
+            proxy,
+            answered,
+            ..
+        } = self;
+        for released in released.iter_mut() {
+            let deadline = released.deadline;
+            let Some(reading) = released.progress.reading_mut() else {
                 continue;
             };
-            let (id, dropped) = reading.items();
-            let number = released.drag.number;
-            let _ = self.proxy.send_event(super::Event::Drag(Heard::Landed {
-                number,
-                id,
-                dropped,
-            }));
+            if now >= deadline {
+                reading.time_out();
+            }
+            if reading.retrieved.is_none() {
+                if let Some(key) = reading.key() {
+                    let journal = lift::journal_to(proxy.clone());
+                    reading.retrieved = Some(retrieve(key.to_owned(), answered.1.clone(), journal));
+                }
+            }
+        }
+        let journal = lift::journal_to(proxy.clone());
+        let landings = settle(
+            released.iter_mut().map(|r| &mut r.progress),
+            sandbox::sandboxed(),
+            &mut |paths| check(paths, answered.1.clone(), lift::journal_to(proxy.clone())),
+            &journal,
+        );
+        for (at, landing) in landings {
+            let number = released[at].drag.number;
+            let _ = proxy.send_event(super::Event::Drag(Heard::Landed { number, landing }));
         }
     }
 
@@ -572,7 +688,11 @@ impl Listener {
                     match id {
                         Some(id) => {
                             let released = &mut self.released[at];
-                            released.reading = Some(Reading::start(id, &released.drag));
+                            let mut reading = Reading::start(id, &released.drag);
+                            if released.progress.cut {
+                                reading.cut();
+                            }
+                            released.progress.stage = Stage::Reading(reading);
                         }
                         None => self.released.remove(at).drag.offer.destroy(),
                     }
@@ -580,8 +700,9 @@ impl Listener {
                 Command::Lift {
                     press,
                     offers,
+                    files,
                     icon,
-                } => self.lift(press, offers, icon),
+                } => self.lift(press, offers, files, icon),
                 Command::Landed { number, delivered } => {
                     let Some(at) = self.released.iter().position(|r| r.drag.number == number)
                     else {
@@ -599,15 +720,145 @@ impl Listener {
     }
 }
 
+impl Progress {
+    fn reading(&self) -> Option<&Reading> {
+        match &self.stage {
+            Stage::Reading(reading) => Some(reading),
+            _ => None,
+        }
+    }
+
+    fn reading_mut(&mut self) -> Option<&mut Reading> {
+        match &mut self.stage {
+            Stage::Reading(reading) => Some(reading),
+            _ => None,
+        }
+    }
+
+    /// Another drop ended this one's wait (LLP 1094.001 D8): it lands with
+    /// what came, which keeps a portal's answer or a check's that came, and
+    /// files whose check had not ended are not delivered.
+    fn cut(&mut self, journal: &dyn Fn(String)) {
+        self.cut = true;
+        match &mut self.stage {
+            Stage::Reading(reading) => reading.cut(),
+            Stage::Checking(checking) => {
+                let ended = checking
+                    .kept
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_some();
+                if !ended {
+                    journal(format!(
+                        "drop: {} files were left out: another drop came before the sandbox's check of them ended",
+                        checking.files
+                    ));
+                    checking.kept = Arc::new(Mutex::new(Some(Vec::new())));
+                }
+            }
+            Stage::Waiting | Stage::Landed => {}
+        }
+    }
+}
+
+/// Move each released drop on, in the order they were released, and hand
+/// over each whose items have all arrived (LLP 1094.001 D8): the landings,
+/// by their place among `drops`. A drop that still waits holds those after
+/// it, so one released behind another never lands first. In a sandbox the
+/// URI list's files go to a worker first (`check`), which keeps those the
+/// sandbox shares with the host, unless another drop ended this one's wait:
+/// then they are left out, so a stalled check holds no later drop.
+fn settle<'a>(
+    drops: impl IntoIterator<Item = &'a mut Progress>,
+    sandboxed: bool,
+    check: &mut dyn FnMut(Vec<PathBuf>) -> Answer<Checked>,
+    journal: &dyn Fn(String),
+) -> Vec<(usize, Landing)> {
+    let mut landings = Vec::new();
+    for (at, progress) in drops.into_iter().enumerate() {
+        let stage = std::mem::replace(&mut progress.stage, Stage::Landed);
+        progress.stage = match stage {
+            Stage::Reading(reading) if reading.complete() => {
+                let (id, mut dropped, given) = reading.items();
+                let checks = sandboxed && !given && !dropped.paths.is_empty();
+                if checks && progress.cut {
+                    journal(format!(
+                        "drop: {} files were left out: another drop came before the sandbox's check of them began",
+                        dropped.paths.len()
+                    ));
+                    dropped.paths.clear();
+                }
+                if checks && !progress.cut {
+                    let paths = std::mem::take(&mut dropped.paths);
+                    let files = paths.len();
+                    let kept = check(paths);
+                    Stage::Checking(Checking {
+                        id,
+                        dropped,
+                        files,
+                        kept,
+                    })
+                } else {
+                    let checked = None;
+                    landings.push((
+                        at,
+                        Landing {
+                            id,
+                            dropped,
+                            checked,
+                        },
+                    ));
+                    Stage::Landed
+                }
+            }
+            stage => stage,
+        };
+        // A check that has ended lands its drop with the files it kept
+        let ended = match &progress.stage {
+            Stage::Checking(checking) => checking
+                .kept
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take(),
+            _ => None,
+        };
+        if let Some(kept) = ended {
+            if let Stage::Checking(Checking { id, dropped, .. }) =
+                std::mem::replace(&mut progress.stage, Stage::Landed)
+            {
+                let checked = Some(kept);
+                landings.push((
+                    at,
+                    Landing {
+                        id,
+                        dropped,
+                        checked,
+                    },
+                ));
+            }
+        }
+        if !matches!(progress.stage, Stage::Landed) {
+            break;
+        }
+    }
+    landings
+}
+
 impl Reading {
     /// Ask the source for `drag`'s types for drop `id`. A type whose pipe
     /// cannot be made arrives empty.
     fn start(id: u32, drag: &Drag) -> Self {
-        let Wanted { uris, link, text } = &drag.wanted;
-        let pipes = [uris, link, text].map(|mime| {
+        let Wanted {
+            uris,
+            link,
+            text,
+            key,
+        } = &drag.wanted;
+        let pipes = [uris, link, text, key].map(|mime| {
+            let mime = mime.clone()?;
             let (reader, writer) = std::io::pipe().ok()?;
             nonblocking(&reader).then_some(())?;
-            drag.offer.receive(mime.clone()?, writer.as_fd());
+            drag.offer.receive(mime, writer.as_fd());
             // The source holds its own copy of the write end, so the read ends when the source closes it
             drop(writer);
             Some(reader)
@@ -617,20 +868,75 @@ impl Reading {
             pipes,
             bytes: Default::default(),
             largest: LARGEST,
+            retrieved: None,
         }
     }
 
-    /// Whether every type has arrived or given up.
+    /// Whether every type has arrived or given up, and the portal answered
+    /// for the key if it was asked.
     fn complete(&self) -> bool {
         self.pipes.iter().all(Option::is_none)
+            && self
+                .retrieved
+                .as_ref()
+                .is_none_or(|r| r.lock().unwrap_or_else(|e| e.into_inner()).is_some())
     }
 
-    /// The drop's number and items: a type still arriving gives nothing.
-    fn items(self) -> (u32, Dropped) {
+    /// Whether the text or the titled link is still arriving, which a
+    /// deadline bounds.
+    fn timed(&self) -> bool {
+        self.pipes[LINK].is_some() || self.pipes[TEXT].is_some()
+    }
+
+    /// Stop waiting for the text and the titled link, past their deadline:
+    /// what they had not finished sending is not delivered.
+    fn time_out(&mut self) {
+        for k in [LINK, TEXT] {
+            if self.pipes[k].take().is_some() {
+                self.bytes[k].clear();
+            }
+        }
+    }
+
+    /// Stop waiting for every type and for the portal, another drop having
+    /// come: the drop lands with what came, which keeps an answer the portal
+    /// already gave, and a key not yet redeemed is not redeemed.
+    fn cut(&mut self) {
+        for k in [URIS, LINK, TEXT, KEY] {
+            if self.pipes[k].take().is_some() {
+                self.bytes[k].clear();
+            }
+        }
+        self.bytes[KEY].clear();
+        self.retrieved = self
+            .retrieved
+            .take()
+            .filter(|r| r.lock().unwrap_or_else(|e| e.into_inner()).is_some());
+    }
+
+    /// The key the portal's type sent once it has all come: as GTK writes
+    /// it, with a terminal NUL, or as KDE does, without; none when it holds
+    /// a NUL inside or is not UTF-8.
+    fn key(&self) -> Option<&str> {
+        if self.pipes[KEY].is_some() {
+            return None;
+        }
+        let bytes = &self.bytes[KEY];
+        let bytes = bytes.strip_suffix(b"\0").unwrap_or(bytes);
+        std::str::from_utf8(bytes)
+            .ok()
+            .filter(|key| !key.is_empty() && !key.contains('\0'))
+    }
+
+    /// The drop's number and items, and whether its files are the portal's:
+    /// a type still arriving gives nothing, and the portal's paths for the
+    /// key, when it gave some, are the files.
+    fn items(self) -> (u32, Dropped, bool) {
         let Reading {
             id,
             pipes,
             mut bytes,
+            retrieved,
             ..
         } = self;
         for (pipe, bytes) in pipes.iter().zip(&mut bytes) {
@@ -638,14 +944,21 @@ impl Reading {
                 bytes.clear();
             }
         }
-        let [uris, link, text] = bytes;
-        (id, items(&uris, &link, &text))
+        let [uris, link, text, _] = bytes;
+        let mut dropped = items(&uris, &link, &text);
+        let given = retrieved.and_then(|r| r.lock().unwrap_or_else(|e| e.into_inner()).take());
+        let given = given.filter(|paths| !paths.is_empty());
+        let portal = given.is_some();
+        if let Some(paths) = given {
+            dropped.paths = paths;
+        }
+        (id, dropped, portal)
     }
 
     /// Read some of what type `k`'s pipe holds, a bounded batch so other
     /// pipes and the display are heard between: its end closes the pipe, and
-    /// an end after `deadline`, an error or more than `largest` bytes closes
-    /// it with nothing.
+    /// an error or more than `largest` bytes closes it with nothing, as does
+    /// an end of the text or the titled link after `deadline`.
     fn read(&mut self, k: usize, deadline: Instant) {
         let Some(pipe) = self.pipes[k].as_mut() else {
             return;
@@ -655,7 +968,7 @@ impl Reading {
             match pipe.read(&mut chunk) {
                 Ok(0) => {
                     self.pipes[k] = None;
-                    if Instant::now() >= deadline {
+                    if [LINK, TEXT].contains(&k) && Instant::now() >= deadline {
                         self.bytes[k].clear();
                     }
                     return;
@@ -673,6 +986,75 @@ impl Reading {
             }
         }
     }
+}
+
+/// Ask the document portal for the files of drop key `key`, on a thread of
+/// its own: the answer, empty when it gave none.
+fn retrieve(
+    key: String,
+    answered: Arc<PipeWriter>,
+    journal: impl Fn(String) + Send + 'static,
+) -> Answer<PathBuf> {
+    on_worker("exact-drop-key", answered, move || {
+        exact_painted::file_transfer::Portal::session()
+            .retrieve(&key)
+            .unwrap_or_else(|e| {
+                journal(format!(
+                    "drop: the document portal gave no files for its key: {e}"
+                ));
+                Vec::new()
+            })
+    })
+}
+
+/// Keep the files of `paths` that the sandbox shares with the host, each
+/// resolved and checked with its folder held, on a thread of its own, since
+/// a path on a slow mount can take long; the journal hears of each left out.
+fn check(
+    paths: Vec<PathBuf>,
+    answered: Arc<PipeWriter>,
+    journal: impl Fn(String) + Send + 'static,
+) -> Answer<Checked> {
+    on_worker("exact-drop-check", answered, move || {
+        let shares = sandbox::Shares::here();
+        paths
+            .into_iter()
+            .filter_map(|path| {
+                let checked = shares.resolve(&path).and_then(|real| Checked::of(&real));
+                if checked.is_none() {
+                    journal(format!(
+                        "drop: {} was left out: the sandbox does not share it with the host",
+                        path.display()
+                    ));
+                }
+                checked
+            })
+            .collect()
+    })
+}
+
+/// `work` on a thread of its own: its answer once it comes, then a byte to
+/// `answered`; an empty answer when no thread can start.
+fn on_worker<T: Send + 'static>(
+    name: &str,
+    answered: Arc<PipeWriter>,
+    work: impl FnOnce() -> Vec<T> + Send + 'static,
+) -> Answer<T> {
+    let answer = Arc::new(Mutex::new(None));
+    let to = answer.clone();
+    let run = move || {
+        let found = work();
+        *to.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+        let _ = (&*answered).write(&[1]);
+    };
+    if std::thread::Builder::new()
+        .name(name.into())
+        .spawn(run)
+        .is_err()
+    {
+        *answer.lock().unwrap_or_else(|e| e.into_inner()) = Some(Vec::new());
+    }
+    answer
 }
 
 /// Whether the wake pipe is still open, its pending wakes read.
@@ -705,9 +1087,10 @@ fn nonblocking(pipe: &impl AsRawFd) -> bool {
 
 impl Wanted {
     /// What an offer of `types` gives the window, each type as offered:
-    /// its URI list, its titled link and the first of its text types; none
-    /// when it offers none of them.
-    fn of(types: &[String]) -> Option<Self> {
+    /// its URI list, its titled link, the first of its text types and, in a
+    /// sandbox, the first of the portal's key types; none when it offers none
+    /// of them.
+    fn of(types: &[String], sandboxed: bool) -> Option<Self> {
         let find = |t: &str| {
             types
                 .iter()
@@ -718,6 +1101,7 @@ impl Wanted {
             uris: find(URI_LIST),
             link: find(MOZ_URL),
             text: TEXTS.into_iter().find_map(find),
+            key: lift::KEYS.into_iter().find_map(find).filter(|_| sandboxed),
         };
         (wanted != Wanted::default()).then_some(wanted)
     }
@@ -725,7 +1109,7 @@ impl Wanted {
     /// The type the window accepts while a node under the drag takes the
     /// drop.
     fn first(&self) -> Option<&str> {
-        [&self.uris, &self.link, &self.text]
+        [&self.uris, &self.link, &self.text, &self.key]
             .into_iter()
             .flatten()
             .next()
@@ -932,7 +1316,7 @@ impl Dispatch<WlDataDevice, ()> for Listener {
                     .unwrap_or_default();
                 // A decoration's surface takes no drag, and neither does a drag that offers nothing exact2 reads
                 let wanted = (state.drag.is_none() && surface.id() == state.surface)
-                    .then(|| Wanted::of(&types))
+                    .then(|| Wanted::of(&types, sandbox::sandboxed()))
                     .flatten();
                 let Some(wanted) = wanted else {
                     offer.accept(serial, None);
@@ -975,13 +1359,23 @@ impl Dispatch<WlDataDevice, ()> for Listener {
                         o.action.load(Ordering::Relaxed) == DndAction::Copy.bits()
                     });
                 if drag.accepted.is_some() && copy {
+                    // The event loop takes this drop's target first; a drop still waiting then lands with what
+                    // came, and this drop's enters wait for it there
                     let (number, point) = (drag.number, drag.point);
+                    state.tell(Heard::Dropped { number, point });
+                    let journal = state.journal();
+                    for released in &mut state.released {
+                        released.progress.cut(&journal);
+                    }
                     state.released.push(Released {
                         drag,
                         deadline: Instant::now() + DEADLINE,
-                        reading: None,
+                        progress: Progress {
+                            stage: Stage::Waiting,
+                            cut: false,
+                        },
                     });
-                    state.tell(Heard::Dropped { number, point });
+                    state.land();
                 } else {
                     drag.offer.destroy();
                     state.tell(Heard::Left);

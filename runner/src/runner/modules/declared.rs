@@ -438,6 +438,10 @@ impl<D: DataSource> Runner<D> {
             let state = list["state"].as_str().unwrap_or("listed").to_owned();
             let key = list["key"].as_str().unwrap_or_default().to_owned();
             let value = fields.get(&key).cloned().unwrap_or(Json::Null);
+            // Notifications read an empty tag as no tag; other lists can name an entry "".
+            let keyed = !value.is_null()
+                && !(list.get("launch").and_then(Json::as_str) == Some("notification")
+                    && value == "");
             // A registration's kind keys it beside its key (LLP 1133.017 §10).
             let kind = list.get("kind").cloned();
             if let Some(kind) = &kind {
@@ -490,7 +494,7 @@ impl<D: DataSource> Runner<D> {
                     e.fields.get(&key) == Some(&value) && e.fields.get("kind") == kind.as_ref()
                 };
                 let replaced = entries.iter().find(|e| same(e)).map(|e| e.reference);
-                if !value.is_null() {
+                if keyed {
                     entries.retain(|e| !same(e));
                 }
                 entries.push(entry);
@@ -502,10 +506,10 @@ impl<D: DataSource> Runner<D> {
                 .unwrap_or_default();
             self.log(format!("{declared}: listed{named} @{reference}"));
             if kind.is_some() {
-                self.registered(reference, replaced.filter(|_| !value.is_null()));
+                self.registered(reference, replaced.filter(|_| keyed));
             }
             self.announce_listed(&state);
-            if let Some(old) = replaced.filter(|_| !value.is_null()) {
+            if let Some(old) = replaced.filter(|_| keyed) {
                 self.extensions
                     .declared
                     .shows
@@ -547,8 +551,12 @@ impl<D: DataSource> Runner<D> {
             let value = fields.get(key).cloned().unwrap_or(Json::Null);
             let lists = self.lists_of(row);
             for state in lists {
-                let android_groups = self.host_target() == "android"
-                    && self.list_decl(&extension, &state)["androidGroups"] == true;
+                let list = self.list_decl(&extension, &state);
+                if list["launch"] == "notification" && value == "" {
+                    continue;
+                }
+                let android_groups =
+                    self.host_target() == "android" && list["androidGroups"] == true;
                 let removed = self.with_list(&extension, &state, |entries| {
                     if android_groups {
                         let removed = notification_group::close(entries, &value);

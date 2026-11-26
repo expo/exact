@@ -92,6 +92,7 @@ impl WarningSelection {
 /// Warnings from a checked file when analysis refused it.
 pub fn warnings(checked: &Checked<'_>, selection: &WarningSelection) -> Vec<LowerError> {
     crate::control_roles::unlowered();
+    crate::icons::clear(None);
     with_text_styles(checked, &TextStyles::new(), true, Vec::new(), selection)
 }
 
@@ -270,6 +271,7 @@ pub(crate) fn with_text_styles(
     border::check(&checked_view, &checked.file.styles, lowered, &mut out);
     width::text_px_width(&checked_view, &checked.file.styles, lowered, &mut out);
     svg::use_foreign_object(&checked_view, &mut out);
+    out.extend(crate::icons::warnings());
     out.extend(
         contract_analyze::warnings(checked)
             .into_iter()
@@ -468,7 +470,10 @@ fn pair(op: BinOp, x: Kinds, y: Kinds) -> Kinds {
             TIME | UNSEEN => SPAN,
             _ => TIME,
         },
-        BinOp::Sub if y == TIME => TIME,
+        BinOp::Sub if y == TIME => match x {
+            UNSEEN => SPAN,
+            _ => TIME,
+        },
         _ => join,
     }
 }
@@ -1288,5 +1293,13 @@ mod tests {
         let guard = Expr::Str(String::new(), Span::default());
         let context = (true, Some("back"), vec![&guard]);
         assert_eq!(warning_regions(element, &context), [Some(context), None]);
+    }
+
+    #[test]
+    fn countdown_subtraction_produces_span_while_addition_stays_time() {
+        assert_eq!(pair(BinOp::Sub, UNSEEN, TIME), SPAN);
+        assert_eq!(pair(BinOp::Sub, TIME, UNSEEN), SPAN);
+        assert_eq!(pair(BinOp::Add, UNSEEN, TIME), UNSEEN | TIME);
+        assert_eq!(pair(BinOp::Add, SPAN, TIME), TIME);
     }
 }

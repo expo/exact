@@ -132,6 +132,7 @@ mod links;
 mod owners;
 pub(crate) mod palette;
 pub mod preferences;
+mod reach;
 pub(crate) mod remote;
 mod requests;
 mod retained_action;
@@ -1175,6 +1176,7 @@ impl<D: DataSource> Presenter<D> {
         if renewed.is_empty() {
             return None;
         }
+        self.renew_reach(&renewed);
         for id in &renewed {
             self.ime_forget(*id);
             self.field_history.invalidate(*id);

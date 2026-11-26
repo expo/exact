@@ -94,6 +94,64 @@ pub fn mint(real: &Path, owner: u64) -> Option<String> {
     mint_as(real, owner, true)
 }
 
+/// A path a host checked as spelled, free of links, with its folder (for a
+/// file, its parent) held open and its leaf seen through that folder as no
+/// link: what [`mint_checked`] enters without reading the file system
+/// again (a Flatpak sandbox's drop, LLP 1094.001 D8).
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct Checked {
+    real: PathBuf,
+    folder: bool,
+    directory: File,
+}
+
+#[cfg(target_os = "linux")]
+impl Checked {
+    /// `real` checked, for a thread that may wait on the file system: none
+    /// when it now resolves elsewhere, when the folder opened for it is not
+    /// the one at that path (`/proc/self/fd`), as a link put in place
+    /// meanwhile would make it, or when its leaf, seen through that folder,
+    /// is a link.
+    pub fn of(real: &Path) -> Option<Checked> {
+        use std::os::fd::AsRawFd;
+        if std::fs::canonicalize(real).ok()? != real {
+            return None;
+        }
+        let folder = std::fs::symlink_metadata(real).ok()?.is_dir();
+        let opened = if folder { real } else { real.parent()? };
+        let directory = retain(opened, folder)?;
+        let held = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+        if std::fs::read_link(&held).ok()? != opened {
+            return None;
+        }
+        if !folder
+            && std::fs::symlink_metadata(held.join(real.file_name()?))
+                .ok()?
+                .is_symlink()
+        {
+            return None;
+        }
+        Some(Checked {
+            real: real.to_path_buf(),
+            folder,
+            directory,
+        })
+    }
+}
+
+/// The handle for a [`Checked`] path, as [`mint`] gives one for a path.
+#[cfg(target_os = "linux")]
+pub fn mint_checked(checked: Checked, owner: u64) -> Option<String> {
+    enter(
+        &checked.real,
+        checked.folder,
+        checked.directory,
+        owner,
+        true,
+    )
+}
+
 /// [`mint`], reusing an entry for the same path when `reuse` says so; a
 /// kept entry another object now stands at gives way to a new number.
 pub(crate) fn mint_as(real: &Path, owner: u64, reuse: bool) -> Option<String> {
@@ -101,15 +159,22 @@ pub(crate) fn mint_as(real: &Path, owner: u64, reuse: bool) -> Option<String> {
     // on a Mac); a file that does not exist yet (a save) keeps its spelling.
     let canonical = std::fs::canonicalize(real).ok();
     let real = canonical.as_deref().unwrap_or(real);
+    // Open before deduplication: a pathname may now name a replacement folder.
+    let folder = std::fs::metadata(real).is_ok_and(|m| m.is_dir());
+    let directory = retain(if folder { real } else { real.parent()? }, folder)?;
+    enter(real, folder, directory, owner, reuse)
+}
+
+/// The handle for `real`, its folder or, for a file, its parent held open
+/// as `directory`: an entry for the same path and folder when `reuse` says
+/// so, else a new one.
+fn enter(real: &Path, folder: bool, directory: File, owner: u64, reuse: bool) -> Option<String> {
     // The relative leaf must name the selected entry exactly. Lossy conversion
     // could instead read or overwrite a different file containing U+FFFD.
     let name = real.file_name()?.to_str()?.to_owned();
     if name.is_empty() || name == "." || name == ".." {
         return None;
     }
-    // Open before deduplication: a pathname may now name a replacement folder.
-    let folder = std::fs::metadata(real).is_ok_and(|m| m.is_dir());
-    let directory = retain(if folder { real } else { real.parent()? }, folder)?;
     let selected = same_file::Handle::from_file(directory.try_clone().ok()?).ok()?;
     let leaf = (!folder).then(|| name.clone());
     let mut t = table();
@@ -512,6 +577,52 @@ mod tests {
         assert!(resolve(&format!("{doc}/other.md"), 7203).is_err());
         forget(7203);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_checked_path_is_minted_from_the_folder_its_check_held() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::io::AsRawFd;
+        let root = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-docs-checked-{}", std::process::id())),
+        );
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::write(root.join("shared/a.md"), "a").unwrap();
+        std::fs::write(root.join("secret.md"), "secret").unwrap();
+        let shared = std::fs::canonicalize(root.join("shared")).unwrap();
+        symlink(&shared, root.join("link")).unwrap();
+        let minted =
+            Checked::of(&shared.join("a.md")).and_then(|checked| mint_checked(checked, 7205));
+        assert!(minted.is_some());
+        assert!(Checked::of(&shared).is_some(), "a folder");
+        let through = std::fs::canonicalize(&root).unwrap().join("link/a.md");
+        assert!(Checked::of(&through).is_none(), "a path through a link");
+        symlink(root.join("secret.md"), shared.join("b.md")).unwrap();
+        assert!(
+            Checked::of(&shared.join("b.md")).is_none(),
+            "a leaf that is a link"
+        );
+        // The folder moves, and another takes its path, between the check and the mint
+        let checked = Checked::of(&shared.join("a.md")).unwrap();
+        std::fs::rename(&shared, root.join("moved")).unwrap();
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::write(shared.join("a.md"), "replacement").unwrap();
+        let doc = mint_checked(checked, 7205).unwrap();
+        let Resolved::Real {
+            directory, path, ..
+        } = resolve(&doc, 7205).unwrap()
+        else {
+            panic!("a checked file resolves to its folder")
+        };
+        let read =
+            std::fs::read_to_string(format!("/proc/self/fd/{}/{path}", directory.as_raw_fd()));
+        assert_eq!(
+            read.unwrap(),
+            "a",
+            "the folder the check held, not the one now at its path"
+        );
+        forget(7205);
     }
 
     #[test]

@@ -144,23 +144,25 @@ fn a_titled_links_encoding_is_read_from_its_bytes() {
 
 #[test]
 fn an_offer_is_read_for_its_types_as_it_spells_them() {
-    let wanted = Wanted::of(&types(&["text/plain", "UTF8_STRING", "text/uri-list"])).unwrap();
+    let wanted = Wanted::of(
+        &types(&["text/plain", "UTF8_STRING", "text/uri-list"]),
+        false,
+    )
+    .unwrap();
     assert_eq!(wanted.uris.as_deref(), Some(URI_LIST));
     assert_eq!(wanted.link, None);
     assert_eq!(wanted.text.as_deref(), Some("UTF8_STRING"));
     assert_eq!(wanted.first(), Some(URI_LIST));
-    let spelled = Wanted::of(&types(&["TEXT/PLAIN;charset=UTF-8"])).unwrap();
+    let spelled = Wanted::of(&types(&["TEXT/PLAIN;charset=UTF-8"]), false).unwrap();
     assert_eq!(spelled.text.as_deref(), Some("TEXT/PLAIN;charset=UTF-8"));
     assert_eq!(
-        Wanted::of(&types(&["image/png", "application/x-example"])),
+        Wanted::of(&types(&["image/png", "application/x-example"]), false),
         None
     );
-    let firefox = Wanted::of(&types(&[
-        "text/x-moz-url",
-        "_NETSCAPE_URL",
-        "text/html",
-        "text/plain",
-    ]))
+    let firefox = Wanted::of(
+        &types(&["text/x-moz-url", "_NETSCAPE_URL", "text/html", "text/plain"]),
+        false,
+    )
     .unwrap();
     assert_eq!(
         (firefox.link.as_deref(), firefox.first()),
@@ -168,9 +170,25 @@ fn an_offer_is_read_for_its_types_as_it_spells_them() {
     );
 }
 
-/// A reading of three pipes, their write ends handed back.
-fn reading() -> (Reading, [PipeWriter; 3]) {
-    let ends = [(); 3].map(|_| std::io::pipe().unwrap());
+/// The portal's key is read in a sandbox alone: outside one, the URI list
+/// names files the window can open itself.
+#[test]
+fn a_sandbox_reads_the_portals_key_beside_the_uri_list() {
+    let offered = types(&["application/vnd.portal.filetransfer", "text/uri-list"]);
+    assert_eq!(Wanted::of(&offered, false).unwrap().key, None);
+    let sandboxed = Wanted::of(&offered, true).unwrap();
+    assert_eq!(
+        (sandboxed.key.as_deref(), sandboxed.uris.as_deref()),
+        (Some("application/vnd.portal.filetransfer"), Some(URI_LIST))
+    );
+    let older = Wanted::of(&types(&["application/vnd.portal.files"]), true).unwrap();
+    assert_eq!(older.key.as_deref(), Some("application/vnd.portal.files"));
+    assert_eq!(older.first(), Some("application/vnd.portal.files"));
+}
+
+/// A reading of four pipes, their write ends handed back.
+fn reading() -> (Reading, [PipeWriter; 4]) {
+    let ends = [(); 4].map(|_| std::io::pipe().unwrap());
     let writers = ends.each_ref().map(|(_, w)| w.try_clone().unwrap());
     let pipes = ends.map(|(r, _)| {
         assert!(nonblocking(&r));
@@ -181,38 +199,68 @@ fn reading() -> (Reading, [PipeWriter; 3]) {
         pipes,
         bytes: Default::default(),
         largest: 32,
+        retrieved: None,
     };
     (reading, writers)
 }
 
-fn read_all(reading: &mut Reading, deadline: Instant) {
-    for k in 0..3 {
+/// Read each pipe once, then each but those in `open`, which the test keeps
+/// open, until it ends: a test that spawns a process meanwhile lends it the
+/// write ends between its fork and its exec, so an end can come a moment
+/// late. One that never comes fails the test.
+#[allow(unsafe_code)]
+fn read_all(reading: &mut Reading, deadline: Instant, open: &[usize]) {
+    for k in 0..4 {
         reading.read(k, deadline);
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut ending: Vec<libc::pollfd> = (0..4)
+            .filter(|k| !open.contains(k))
+            .filter_map(|k| {
+                reading.pipes[k]
+                    .as_ref()
+                    .map(|p| poll_for(p.as_raw_fd(), libc::POLLIN))
+            })
+            .collect();
+        if ending.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < until,
+            "a pipe whose writers all closed never ended"
+        );
+        // SAFETY: the pollfds are live for the call and name pipes this reading holds open.
+        unsafe { libc::poll(ending.as_mut_ptr(), ending.len() as libc::nfds_t, 50) };
+        for k in (0..4).filter(|k| !open.contains(k)) {
+            reading.read(k, deadline);
+        }
     }
 }
 
 #[test]
 fn a_drop_lands_each_type_it_finished_sending_by_the_deadline() {
     let later = Instant::now() + Duration::from_secs(60);
-    let (mut whole, [mut uris, link, mut text]) = reading();
+    let (mut whole, [mut uris, link, mut text, key]) = reading();
     uris.write_all(b"file:///tmp/a\r\n").unwrap();
     text.write_all(b"Mount Fuji").unwrap();
-    drop((uris, link, text));
-    read_all(&mut whole, later);
+    drop((uris, link, text, key));
+    read_all(&mut whole, later, &[]);
     assert!(whole.complete(), "every type arrived");
-    let (id, dropped) = whole.items();
+    let (id, dropped, portal) = whole.items();
+    assert!(!portal);
     assert_eq!(
         (id, dropped.paths, dropped.text.as_str()),
         (7, vec![PathBuf::from("/tmp/a")], "Mount Fuji")
     );
 
-    let (mut stalled, [mut uris, link, mut text]) = reading();
+    let (mut stalled, [mut uris, link, mut text, key]) = reading();
     uris.write_all(b"file:///tmp/a\r\n").unwrap();
-    drop((uris, link));
+    drop((uris, link, key));
     text.write_all(b"partial").unwrap();
-    read_all(&mut stalled, later);
+    read_all(&mut stalled, later, &[TEXT]);
     assert!(!stalled.complete(), "the text is still arriving");
-    let (_, dropped) = stalled.items();
+    let (_, dropped, _) = stalled.items();
     assert_eq!(dropped.paths, [PathBuf::from("/tmp/a")]);
     assert_eq!(
         dropped.text, "",
@@ -220,27 +268,251 @@ fn a_drop_lands_each_type_it_finished_sending_by_the_deadline() {
     );
     drop(text);
 
-    let (mut late, [uris, link, mut text]) = reading();
-    drop((uris, link));
+    let (mut late, [mut uris, link, mut text, key]) = reading();
+    drop((link, key));
+    uris.write_all(b"file:///tmp/a\r\n").unwrap();
     text.write_all(b"Mount Fuji").unwrap();
-    drop(text);
-    read_all(&mut late, Instant::now());
+    drop((uris, text));
+    read_all(&mut late, Instant::now(), &[]);
     assert!(late.complete());
+    let dropped = late.items().1;
     assert_eq!(
-        late.items().1.text,
-        "",
-        "a type whose end the listener observed at the deadline is not delivered"
+        dropped.text, "",
+        "a text whose end the listener observed at the deadline is not delivered"
+    );
+    assert_eq!(
+        dropped.paths,
+        [PathBuf::from("/tmp/a")],
+        "a URI list has no deadline: its source may first copy its files"
+    );
+}
+
+/// Past the deadline the text and the titled link are given up, while the
+/// URI list is still waited for; another drop then cuts the wait, and the
+/// drop lands with what came.
+#[test]
+fn past_its_deadline_a_drop_waits_for_its_files_alone_until_another_drop() {
+    let (mut drop_, [mut uris, link, mut text, key]) = reading();
+    uris.write_all(b"file:///tmp/half").unwrap();
+    text.write_all(b"partial").unwrap();
+    drop((link, key));
+    read_all(
+        &mut drop_,
+        Instant::now() + Duration::from_secs(60),
+        &[URIS, TEXT],
+    );
+    assert!(drop_.timed());
+    drop_.time_out();
+    assert!(!drop_.complete(), "the URI list is still arriving");
+    assert!(
+        !drop_.timed(),
+        "no deadline wakes the loop for the URI list alone"
+    );
+    assert!(drop_.pipes[TEXT].is_none() && drop_.bytes[TEXT].is_empty());
+    drop_.cut();
+    assert!(drop_.complete());
+    let dropped = drop_.items().1;
+    assert!(
+        dropped.paths.is_empty(),
+        "a URI list cut short is not delivered"
+    );
+    drop((uris, text));
+}
+
+/// The key a sandbox redeems: GTK ends it with a NUL, KDE does not, and one
+/// with a NUL inside, or none at all, is no key.
+#[test]
+fn a_key_is_read_as_gtk_and_kde_write_it() {
+    let key_of = |bytes: &[u8]| {
+        let (mut reading, [uris, link, text, mut key]) = reading();
+        key.write_all(bytes).unwrap();
+        drop((uris, link, text, key));
+        read_all(&mut reading, Instant::now() + Duration::from_secs(60), &[]);
+        reading.key().map(str::to_owned)
+    };
+    assert_eq!(key_of(b"8f3a\0").as_deref(), Some("8f3a"));
+    assert_eq!(key_of(b"8f3a").as_deref(), Some("8f3a"));
+    assert_eq!(key_of(b"8f\0a"), None);
+    assert_eq!(key_of(b""), None);
+    assert_eq!(key_of(b"\0"), None);
+
+    let (mut cut, [uris, link, text, mut key]) = reading();
+    key.write_all(b"8f3a\0").unwrap();
+    drop((link, text, key));
+    read_all(&mut cut, Instant::now() + Duration::from_secs(60), &[URIS]);
+    cut.retrieved = Some(Arc::new(Mutex::new(None)));
+    cut.cut();
+    assert_eq!(cut.key(), None, "a cut drop redeems no key");
+    assert!(cut.complete(), "nor waits for the portal");
+    drop(uris);
+}
+
+/// A drop cut while only its URI list was still coming keeps the files the
+/// portal already gave for its key.
+#[test]
+fn a_cut_drop_keeps_the_portals_answer_that_came() {
+    let (mut reading, [uris, link, text, key]) = reading();
+    drop((link, text, key));
+    read_all(
+        &mut reading,
+        Instant::now() + Duration::from_secs(60),
+        &[URIS],
+    );
+    let paths = vec![PathBuf::from("/run/user/1000/doc/1a2b/notes.txt")];
+    reading.retrieved = Some(Arc::new(Mutex::new(Some(paths.clone()))));
+    reading.cut();
+    assert!(reading.complete());
+    let (_, dropped, portal) = reading.items();
+    assert!(portal);
+    assert_eq!(dropped.paths, paths);
+    drop(uris);
+}
+
+/// The paths the portal gave for the key are the files, in place of the
+/// URI list's, and a drop waits for them.
+#[test]
+fn the_portals_paths_for_the_key_are_the_files() {
+    let (mut reading, [mut uris, link, text, key]) = reading();
+    uris.write_all(b"file:///a\r\nhttps://e.example/\r\n")
+        .unwrap();
+    drop((uris, link, text, key));
+    read_all(&mut reading, Instant::now() + Duration::from_secs(60), &[]);
+    let answer = Arc::new(Mutex::new(None));
+    reading.retrieved = Some(answer.clone());
+    assert!(!reading.complete(), "the portal has not answered");
+    *answer.lock().unwrap() = Some(vec![PathBuf::from("/run/user/1000/doc/1a2b/notes.txt")]);
+    assert!(reading.complete());
+    let (_, dropped, portal) = reading.items();
+    assert!(portal, "the files are the portal's, which need no check");
+    assert_eq!(
+        dropped.paths,
+        [PathBuf::from("/run/user/1000/doc/1a2b/notes.txt")]
+    );
+    assert_eq!(
+        dropped.url, "https://e.example/",
+        "the URI list still gives the link"
     );
 }
 
 #[test]
 fn a_type_larger_than_the_limit_is_not_delivered() {
-    let (mut reading, [mut uris, link, mut text]) = reading();
+    let (mut reading, [mut uris, link, mut text, key]) = reading();
     uris.write_all(&[b'x'; 32]).unwrap();
     text.write_all(&[b'x'; 33]).unwrap();
-    drop((uris, link, text));
-    read_all(&mut reading, Instant::now() + Duration::from_secs(60));
+    drop((uris, link, text, key));
+    read_all(&mut reading, Instant::now() + Duration::from_secs(60), &[]);
     assert!(reading.complete());
     assert_eq!(reading.bytes[0].len(), 32, "the limit itself is delivered");
     assert!(reading.bytes[2].is_empty(), "one byte past it is not");
+}
+
+/// A reading whose URI list names `uris` and whose text is `text`, all
+/// arrived, with the drop's number `id`.
+fn arrived(id: u32, uris: &str, text: &str) -> Reading {
+    let (mut reading, [mut u, link, mut t, key]) = reading();
+    reading.id = id;
+    u.write_all(uris.as_bytes()).unwrap();
+    t.write_all(text.as_bytes()).unwrap();
+    drop((u, link, t, key));
+    read_all(&mut reading, Instant::now() + Duration::from_secs(60), &[]);
+    reading
+}
+
+fn reading_stage(reading: Reading) -> Progress {
+    Progress {
+        stage: Stage::Reading(reading),
+        cut: false,
+    }
+}
+
+/// What `settle` hands over, by place and drop number, with how many files
+/// each carries and whether a check kept them.
+fn settled(
+    drops: &mut [Progress],
+    check: &mut dyn FnMut(Vec<PathBuf>) -> Answer<Checked>,
+) -> (Vec<(usize, u32, usize, bool)>, Vec<String>) {
+    let lines = std::cell::RefCell::new(Vec::new());
+    let landings = settle(drops.iter_mut(), true, check, &|line| {
+        lines.borrow_mut().push(line)
+    });
+    let landed = landings
+        .into_iter()
+        .map(|(at, l)| {
+            let files = l.checked.as_ref().map_or(l.dropped.paths.len(), Vec::len);
+            (at, l.id, files, l.checked.is_some())
+        })
+        .collect();
+    (landed, lines.into_inner())
+}
+
+/// A file of this test's, checked as a sandbox's drop is.
+fn checked_file(name: &str) -> (tempfile::TempDir, Checked) {
+    let folder = tempfile::tempdir().unwrap();
+    let path = std::fs::canonicalize(folder.path()).unwrap().join(name);
+    std::fs::write(&path, name).unwrap();
+    let checked = Checked::of(&path).unwrap();
+    (folder, checked)
+}
+
+/// A drop whose URI list came and whose portal answer had not when another
+/// drop cut its wait lands at once, its files left out with no check begun,
+/// and the drop released behind it lands after it.
+#[test]
+fn a_cut_drop_still_waiting_on_the_portal_lands_at_once_without_its_files() {
+    let mut first = arrived(1, "file:///home/a.txt\r\n", "Fuji");
+    first.retrieved = Some(Arc::new(Mutex::new(None)));
+    assert!(!first.complete(), "its portal answer is still to come");
+    let mut drops = [reading_stage(first), reading_stage(arrived(2, "", "Etna"))];
+    drops[0].cut(&|_| {});
+    let (landed, lines) = settled(&mut drops, &mut |_| {
+        panic!("no check begins for a cut drop")
+    });
+    assert_eq!(landed, [(0, 1, 0, false), (1, 2, 0, false)]);
+    assert_eq!(
+        lines,
+        ["drop: 1 files were left out: another drop came before the sandbox's check of them began"]
+    );
+}
+
+/// A check that ended before another drop cut the wait keeps its files,
+/// though the listener had not yet heard it; one still running then is cut
+/// short, and a running check holds the drop released after it.
+#[test]
+fn a_cut_drop_keeps_a_check_that_ended_and_lands_before_the_next() {
+    let (_folder, kept) = checked_file("notes.txt");
+    let answer: Answer<Checked> = Arc::new(Mutex::new(None));
+    let worker = answer.clone();
+    let mut drops = [
+        reading_stage(arrived(1, "file:///home/notes.txt\r\n", "")),
+        reading_stage(arrived(2, "", "Etna")),
+    ];
+    let mut asked = Vec::new();
+    let (landed, _) = settled(&mut drops, &mut |paths| {
+        asked.push(paths);
+        answer.clone()
+    });
+    assert_eq!(asked, [vec![PathBuf::from("/home/notes.txt")]]);
+    assert!(
+        landed.is_empty(),
+        "a running check holds the drop behind it"
+    );
+    *worker.lock().unwrap() = Some(vec![kept]);
+    drops[0].cut(&|line| panic!("a check that ended is not cut: {line}"));
+    let (landed, _) = settled(&mut drops, &mut |_| unreachable!());
+    assert_eq!(landed, [(0, 1, 1, true), (1, 2, 0, false)]);
+
+    let mut drops = [reading_stage(arrived(3, "file:///home/notes.txt\r\n", ""))];
+    let running: Answer<Checked> = Arc::new(Mutex::new(None));
+    let (landed, _) = settled(&mut drops, &mut |_| running.clone());
+    assert!(landed.is_empty());
+    let lines = std::cell::RefCell::new(Vec::new());
+    drops[0].cut(&|line| lines.borrow_mut().push(line));
+    let (landed, _) = settled(&mut drops, &mut |_| unreachable!());
+    assert_eq!(landed, [(0, 3, 0, true)], "cut short, it delivers none");
+    assert_eq!(
+        lines.into_inner().len(),
+        1,
+        "the journal hears of the file left out"
+    );
+    *running.lock().unwrap() = Some(Vec::new());
 }
