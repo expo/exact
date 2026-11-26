@@ -33,9 +33,10 @@ extension NativeViews {
         }
     }
 
-    /// A plain controller whose own view holds `view` and fills the node's box, so `view` stays a
-    /// plain subview there, its frame, margins and responder chain as outside a controller, and only
-    /// its safe area takes what the controller adds. A controller's root view would take other
+    /// A plain controller whose own view holds `view` and lies on the node's content box, which `view`
+    /// fills, so `view` stays a plain subview there, its margins and responder chain as outside a
+    /// controller, and its safe area takes what the controller adds whole: the two share coordinates,
+    /// so a clearance in the view's is the controller's. A controller's root view would take other
     /// margins: UIKit's system minimum, 16 points at each side on an iPhone, inside which a map fits
     /// its camera, or none of a plain view's 8.
     private static func controller(holding view: UIView) -> UIViewController {
@@ -56,18 +57,15 @@ extension NativeViews {
         waitingScreens.remove(entry.id)
         let adopting = screen.parent !== parent
         if adopting {
-            if screen.parent != nil {
-                releaseSafeArea(entry)
-                detach(entry)
-            }
+            if screen.parent != nil { detach(entry) }
             parent.addChild(screen)
         }
         if let attached = entry.attached, attached.superview !== owner {
             if let box = entry.made?.viewIfLoaded {
-                box.frame = owner.bounds
+                box.frame = owner.contentBox()
                 if view.superview !== box { box.addSubview(view) }
             }
-            if !entry.sizing { view.frame = owner.contentBox() }
+            if !entry.sizing { view.frame = entry.made?.viewIfLoaded?.bounds ?? owner.contentBox() }
             owner.addSubview(attached)
         }
         if adopting {
@@ -126,7 +124,10 @@ extension NativeViews {
     /// A dialog's content stays in its node as the node moves into its sheet or back.
     func leaving(_ subtree: NodeView) {
         for entry in screens(in: subtree) where entries[entry.id] === entry {
-            if let screen = entry.screen { leaveParent(screen) }
+            if let screen = entry.screen, screen.parent != nil {
+                releaseSafeArea(entry)
+                leaveParent(screen)
+            }
         }
     }
 
@@ -142,7 +143,11 @@ extension NativeViews {
         screen.removeFromParent()
     }
 
-    func detach(_ entry: NativeEntry, moving: Bool = true) {
+    /// Take `entry`'s controller out of its parent and its view out of the node, first giving back the
+    /// clearance and what the host borrowed and running the declaration's release (D15), unless the
+    /// caller `released` them already, as the view's going does before a parked instance's reset.
+    func detach(_ entry: NativeEntry, moving: Bool = true, released: Bool = false) {
+        if !released, entry.screen?.parent != nil { releaseSafeArea(entry) }
         // Without the bracket UIKit can defer didDisappear until after reattachment.
         let visible = moving && entry.view?.window != nil && entry.screen?.parent != nil ? entry.screen : nil
         visible?.beginAppearanceTransition(false, animated: false)
@@ -152,8 +157,8 @@ extension NativeViews {
     }
 }
 
-/// The view of the controller the host makes for a native view with none (LLP 1123 D15): it fills the
-/// node's box and holds the native view, and a touch that lands on it and not on the native view goes
+/// The view of the controller the host makes for a native view with none (LLP 1123 D15): it lies on the
+/// node's content box and holds the native view, and a touch that lands on it and not on the native view goes
 /// to the node, as it does beside a native view outside a controller.
 final class ContainedBox: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {

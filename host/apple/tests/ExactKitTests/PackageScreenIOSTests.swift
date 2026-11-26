@@ -147,8 +147,19 @@ final class PackageScreenIOSTests: XCTestCase {
         XCTAssertEqual(clearing.additionalSafeAreaInsets, UIEdgeInsets(top: 30, left: 0, bottom: 10, right: 0), "beside the app's own")
         XCTAssertFalse(natives.clear(100021, owed: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
         XCTAssertEqual(plain.additionalSafeAreaInsets, .zero, "nothing for a view that does not consent")
+        // A move takes the clearance back before the controller leaves its parent, and the next clearance is written anew
+        let owner = try XCTUnwrap(natives.entries[100020]?.owner)
+        natives.setScreensMounted(false, in: owner)
+        XCTAssertNil(clearing.parent)
+        XCTAssertEqual(clearing.additionalSafeAreaInsets, UIEdgeInsets(top: 0, left: 0, bottom: 10, right: 0), "given back as it moves")
+        XCTAssertEqual(clearing.view.accessibilityValue, "1", "the declaration's release ran before the move")
+        natives.setScreensMounted(true, in: owner)
+        XCTAssertTrue(clearing.parent === home)
+        XCTAssertTrue(natives.clear(100020, owed: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
+        XCTAssertEqual(clearing.additionalSafeAreaInsets, UIEdgeInsets(top: 30, left: 0, bottom: 10, right: 0))
         natives.destroy(id: 100020)
         XCTAssertEqual(clearing.additionalSafeAreaInsets, UIEdgeInsets(top: 0, left: 0, bottom: 10, right: 0), "given back, the app's kept")
+        XCTAssertEqual(clearing.view.accessibilityValue, "2", "and once more as the view goes, not twice")
     }
 
     /// LLP 1123 D15: a native view with no controller that lets the host clear its safe area is
@@ -189,6 +200,13 @@ final class PackageScreenIOSTests: XCTestCase {
         XCTAssertTrue(natives.clear(100030, owed: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
         home.view.layoutIfNeeded()
         XCTAssertEqual(view.safeAreaInsets.top, before.top + 30, "the view's safe area takes the clearance")
+        // Padded past the band, the view lies below it and still takes the clearance whole, in its own coordinates
+        let node = try XCTUnwrap(owner as? NodeView), pad = before.top + 20
+        node.applyKernelContentBox(node.bounds.inset(by: UIEdgeInsets(top: pad, left: 0, bottom: 0, right: 0)), padding: [pad, nil, nil, nil])
+        natives.laidOut(node)
+        home.view.layoutIfNeeded()
+        XCTAssertEqual(view.convert(view.bounds, to: owner).minY, pad, "on the node's content box")
+        XCTAssertEqual(view.safeAreaInsets.top, 30, "the clearance whole, with no band left over it")
         natives.destroy(id: 100030)
         XCTAssertNil(made.parent)
         XCTAssertNil(made.view.superview, "taken out of the node's box")

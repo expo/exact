@@ -82,15 +82,17 @@ package struct ScrollInsetsMac: Equatable {
         }
     }
 
-    /// D14's `band` for `scroll` on AppKit, top right bottom left: its frame's overlap with the area
-    /// outside its owner view's safe area (`NSView.safeAreaRect`), at most that area's depth on each
-    /// edge (D9), in the owner's orientation whether or not it is flipped.
+    /// D14's `band` for `scroll` on AppKit, top right bottom left, in the scroll view's own coordinates,
+    /// where its insets are written: its bounds' overlap with the area outside its owner view's safe
+    /// area (`NSView.safeAreaRect`), at most that area's depth on each edge (D9), whether or not
+    /// either is flipped.
     package static func band(of scroll: NSView, in owner: NSView) -> [CGFloat] {
-        let frame = scroll.convert(scroll.bounds, to: owner), safe = owner.safeAreaRect, area = owner.safeAreaInsets
-        let depth = { (value: CGFloat, most: CGFloat) in min(max(0, value), most) }
-        let above = owner.isFlipped ? safe.minY - frame.minY : frame.maxY - safe.maxY
-        let below = owner.isFlipped ? frame.maxY - safe.maxY : safe.minY - frame.minY
-        return [depth(above, area.top), depth(frame.maxX - safe.maxX, area.right), depth(below, area.bottom), depth(safe.minX - frame.minX, area.left)]
+        let whole = scroll.convert(owner.bounds, from: owner), safe = scroll.convert(owner.safeAreaRect, from: owner)
+        let frame = scroll.bounds, flipped = scroll.isFlipped
+        let depth = { (value: CGFloat, most: CGFloat) in min(max(0, value), max(0, most)) }
+        let above = flipped ? depth(safe.minY - frame.minY, safe.minY - whole.minY) : depth(frame.maxY - safe.maxY, whole.maxY - safe.maxY)
+        let below = flipped ? depth(frame.maxY - safe.maxY, whole.maxY - safe.maxY) : depth(safe.minY - frame.minY, safe.minY - whole.minY)
+        return [above, depth(frame.maxX - safe.maxX, whole.maxX - safe.maxX), below, depth(safe.minX - frame.minX, safe.minX - whole.minX)]
     }
 
     /// Whether the node whose scroll view `scroll` is keeps its end as its insets move: it opens at

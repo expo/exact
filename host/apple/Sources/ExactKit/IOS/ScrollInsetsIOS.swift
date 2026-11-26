@@ -101,19 +101,20 @@ package struct ScrollInsetsIOS: Equatable {
                                horizontalIndicator: edgeInsets(follow(rows.horizontalIndicator, true)))
     }
 
-    /// D14's native `band` for `scroll`, top right bottom left: its frame's overlap with the unsafe
-    /// area of its owner's view, as UIKit gives that view, at most that area's depth on each edge
-    /// however small the scroller (D9). A scroll view's own `safeAreaInsets` do not serve: UIKit
+    /// D14's native `band` for `scroll`, top right bottom left, in the scroller's own coordinates,
+    /// where its insets are written: its bounds' overlap with the unsafe area of its owner's view, as
+    /// UIKit gives that view, at most that area's depth on each edge however small the scroller (D9),
+    /// so a scroller scaled under its owner takes the band at its own scale. A scroll view's own `safeAreaInsets` do not serve: UIKit
     /// gives a view none of the band past its superview's box, so a scroll view that reach outsets
     /// reads less than it overlaps (LLP 1123, the evidence row "Outset scroll view"). It reads the
     /// overlap at the current offsets of the scroll views above, and it holds Exact's own writes to
     /// the owner's controller, which D11's writers are to take out.
     package static func band(of scroll: UIView, in owner: UIView) -> [CGFloat] {
-        let frame = scroll.convert(scroll.bounds, to: owner), area = owner.safeAreaInsets
-        let safe = owner.bounds.inset(by: area)
-        let depth = { (value: CGFloat, most: CGFloat) in min(max(0, value), most) }
-        return [depth(safe.minY - frame.minY, area.top), depth(frame.maxX - safe.maxX, area.right),
-                depth(frame.maxY - safe.maxY, area.bottom), depth(safe.minX - frame.minX, area.left)]
+        let whole = scroll.convert(owner.bounds, from: owner), frame = scroll.bounds
+        let safe = scroll.convert(owner.bounds.inset(by: owner.safeAreaInsets), from: owner)
+        let depth = { (value: CGFloat, most: CGFloat) in min(max(0, value), max(0, most)) }
+        return [depth(safe.minY - frame.minY, safe.minY - whole.minY), depth(frame.maxX - safe.maxX, whole.maxX - safe.maxX),
+                depth(frame.maxY - safe.maxY, whole.maxY - safe.maxY), depth(safe.minX - frame.minX, safe.minX - whole.minX)]
     }
 
     /// The kernel's terms for one scroller, shared with AppKit's writer.

@@ -297,6 +297,31 @@ final class ScrollInsetsIOSTests: XCTestCase {
         XCTAssertEqual([scroll.adjustedContentInset.left, scroll.adjustedContentInset.right], [band.left, band.right])
     }
 
+    func testAScaledScrollerTakesTheBandInItsOwnCoordinates() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the band is a scene window's safe area") }
+        // D14: a scroller at half scale under its owner, top edges together, clears the owner's top
+        // band with twice its depth in its own points, the insets it is written in
+        let (_, owner) = try scrollView(in: scene)
+        let band = owner.safeAreaInsets
+        XCTAssertGreaterThan(band.top, 0, "the device has a top band")
+        let box = UIView(frame: CGRect(x: 0, y: 0, width: owner.bounds.width * 2, height: owner.bounds.height * 2))
+        box.layer.anchorPoint = .zero
+        box.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
+        box.frame.origin = .zero
+        owner.addSubview(box)
+        let scroll = UIScrollView(frame: box.bounds)
+        scroll.contentSize = CGSize(width: box.bounds.width, height: 10_000)
+        box.addSubview(scroll)
+        owner.layoutIfNeeded()
+        XCTAssertEqual(ScrollInsetsIOS.band(of: scroll, in: owner)[0], band.top * 2, accuracy: 0.01)
+        var never = ScrollInsetsIOS.Rows()
+        never.adjustment = .never
+        ScrollInsetsIOS.write(scroll, in: owner, terms: .init(), rows: never)
+        XCTAssertEqual(scroll.contentInset.top, band.top * 2, accuracy: 0.01, "the owner's band, cleared on screen")
+        let top = owner.convert(CGPoint(x: 0, y: scroll.contentOffset.y + scroll.adjustedContentInset.top), from: scroll).y
+        XCTAssertEqual(top, band.top, accuracy: 0.01, "the inset ends at the band's inner edge on screen")
+    }
+
     func testAScrollerInAnotherTakesNoneOfTheBandThatOneTook() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "the band is a scene window's safe area") }
         // An inner scroll view at the top of an outer one's content, the outer scrolled 30 under
@@ -492,6 +517,17 @@ final class ScrollInsetsIOSTests: XCTestCase {
         lentFlow.list(["list_section_insets_reference": .string("layout-margins")])
         lentFlow.release()
         XCTAssertEqual(flow.sectionInsetReference, .fromContentInset, "given back on release")
+
+        // The module replaces the layout it holds: the first gets its own back and the second keeps its own
+        let first = UICollectionViewFlowLayout(), second = UICollectionViewFlowLayout()
+        second.sectionInsetReference = .fromLayoutMargins
+        let collection = UICollectionView(frame: .zero, collectionViewLayout: first)
+        let replaced = LentScrollIOS(view: collection, layout: nil)
+        replaced.list(["list_section_insets_reference": .string("safe-area")])
+        collection.collectionViewLayout = second
+        replaced.release()
+        XCTAssertEqual(first.sectionInsetReference, .fromContentInset, "the first layout's own")
+        XCTAssertEqual(second.sectionInsetReference, .fromLayoutMargins, "the second layout's own")
     }
 
     func testAWriteOutOfAWindowWritesNothing() {

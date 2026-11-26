@@ -1155,7 +1155,7 @@ final class NativeViews: NativeModuleHosting {
         #endif
         if entry.instance != 0 { NativeProcess.set(entry.instance, nil) }
         #if os(iOS) || os(tvOS)
-        detach(entry, moving: false)
+        detach(entry, moving: false, released: true)
         #else
         // Retire a descendant/field editor before destroying its module instance.
         entry.owner?.presenter?.keyViewLoopStale = true
@@ -1224,9 +1224,16 @@ final class NativeViews: NativeModuleHosting {
         if entry.sizing && owner.bounds.isEmpty { return }
         entry.sizing = false
         #if os(iOS) || os(tvOS)
-        entry.made?.viewIfLoaded?.frame = owner.bounds
-        #endif
+        // A host-made controller's view lies on the content box, which the native view fills (`NativeScreens`)
+        if let box = entry.made?.viewIfLoaded {
+            box.frame = owner.contentBox()
+            view.frame = box.bounds
+        } else {
+            view.frame = owner.contentBox()
+        }
+        #else
         view.frame = owner.contentBox()
+        #endif
         #if os(iOS) || os(tvOS)
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         #endif
@@ -1391,7 +1398,7 @@ extension NativeViews {
         if list.count >= Self.reuseCap { discard(list.removeFirst()) }
         view.alpha = 1
         view.isHidden = false
-        detach(entry)
+        detach(entry, released: true)
         entry.nonce = 0; entry.revealing = false; entry.sizing = false; entry.owner = nil
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         list.append(entry)

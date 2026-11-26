@@ -13,9 +13,15 @@ private final class AppTable: ExactNativeScreen {
     override func prepareForReuse() throws {}
 }
 
-/// An app's screen that lets the host clear its safe area through its controller (LLP 1123 D15).
+/// An app's screen that lets the host clear its safe area through its controller (LLP 1123 D15), which
+/// counts its declaration's releases in its view's `accessibilityValue`.
 private final class ClearingTable: ExactNativeScreen {
-    override var safeArea: ExactNativeSafeArea? { ExactNativeSafeArea(adjustsAdditionalSafeAreaInsets: true) }
+    override var safeArea: ExactNativeSafeArea? {
+        ExactNativeSafeArea(adjustsAdditionalSafeAreaInsets: true, release: { [weak self] in
+            guard let view = self?.screen.view else { return }
+            view.accessibilityValue = String((Int(view.accessibilityValue ?? "") ?? 0) + 1)
+        })
+    }
 }
 
 /// A reusable view with no controller that lets the host clear its safe area (LLP 1123 D15).

@@ -16,6 +16,8 @@ package final class LentScrollIOS {
     /// host holds it.
     private var insetsContent: Bool?, followsReadable: Bool?
     private var sectionReference: UICollectionViewFlowLayout.SectionInsetReference?
+    /// The flow layout `sectionReference` is held on, which gets its own back even after the view moves to another.
+    private weak var sectionLayout: UICollectionViewFlowLayout?
 
     private struct Borrowed {
         let content, vertical, horizontal: UIEdgeInsets
@@ -62,7 +64,13 @@ package final class LentScrollIOS {
             Self.hold(&followsReadable, \.cellLayoutMarginsFollowReadableWidth, of: table,
                       at: style["list_cell_margins_follow_readable_width"]?.number.map { $0 != 0 })
         }
-        guard let flow = (view as? UICollectionView)?.collectionViewLayout as? UICollectionViewFlowLayout else { return [] }
+        let flow = (view as? UICollectionView)?.collectionViewLayout as? UICollectionViewFlowLayout
+        // A layout the module replaced gets its own reference back, and the new one is held afresh
+        if sectionLayout !== flow {
+            if let kept = sectionReference { sectionLayout?.sectionInsetReference = kept }
+            (sectionReference, sectionLayout) = (nil, flow)
+        }
+        guard let flow else { return [] }
         let word = style["list_section_insets_reference"]?.string
         let reference = word.flatMap(UICollectionViewFlowLayout.SectionInsetReference.init(listInsets:))
         Self.hold(&sectionReference, \.sectionInsetReference, of: flow, at: reference)
