@@ -277,13 +277,19 @@ function outputPath(path) {
 // Cargo follows directory links. Track their contents without reading outputs
 // through an alias or opening special files the baker may never use.
 // With no pre-bake snapshot, `since` rejects inputs whose change time cannot precede the bake.
-export function watchedDigest(paths, outputs, { inventory = false, since = Infinity, snapshots } = {}) {
+export function watchedDigest(paths, outputs, options) {
+  return digestWatches(paths, outputRoots(outputs), options);
+}
+
+// Reuse the resolved output roots within this scan. A later validation
+// (including the scans on both sides of Cargo) resolves them again.
+function digestWatches(paths, roots, { inventory = false, since = Infinity, snapshots } = {}) {
   const hash = createHash('sha256');
-  const excluded = outputs.map(outputPath), ancestors = new Set();
+  const ancestors = new Set();
   let stable = true;
   const changed = info => { if (info.ctimeMs >= since) stable = false; };
   const row = (...values) => hash.update(JSON.stringify(values) + '\n');
-  const visit = (path, top = false, atRoot = false, output = watchOutput(outputs, [path]), entry = {}) => {
+  const visit = (path, top = false, atRoot = false, output = watchOutput([], [path], roots), entry = {}) => {
     let info, link;
     try {
       info = lstatSync(path);
@@ -299,7 +305,7 @@ export function watchedDigest(paths, outputs, { inventory = false, since = Infin
       }
       if (inventory && atRoot && basename(path).startsWith('.') && info.isDirectory()) return;
       const real = realpathSync(path);
-      if (excluded.some(root => under(root, real))) { if (!inventory) row(path, 'output'); return; }
+      if (roots.some(root => under(root, real))) { if (!inventory) row(path, 'output'); return; }
       entry.directory = info.isDirectory();
       changed(info);
       if (link) changed(link);
@@ -391,12 +397,13 @@ function sourceInventory(app, outputs) {
  * omits their missing-file watches. */
 export function bakeSourceInputs(app, paths, outputs) {
   outputs = [...new Set(outputs.filter(Boolean).map(path => resolve(path)))];
-  const inventory = sourceInventory(app, outputs);
-  return {inputs:[...new Set(paths)].sort().map(path => ({path, sha256:watchedDigest([path], outputs)})), outputs, inventory};
+  const inventory = sourceInventory(app, outputs), roots = outputRoots(outputs);
+  return {inputs:[...new Set(paths)].sort().map(path => ({path, sha256:digestWatches([path], roots)})), outputs, inventory};
 }
 
 export function pendingSourceInputs(record) {
-  const changed = record.inputs.filter(({path, sha256}) => watchedDigest([path], record.outputs) !== sha256).map(({path}) => path);
+  const roots = outputRoots(record.outputs);
+  const changed = record.inputs.filter(({path, sha256}) => digestWatches([path], roots) !== sha256).map(({path}) => path);
   const inventory = record.inventory;
   if (watchedDigest(inventory.paths, inventory.outputs, {inventory:true}) !== inventory.sha256) changed.push('app source inventory');
   return changed;

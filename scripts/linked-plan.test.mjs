@@ -930,6 +930,29 @@ test('replacing a watched file with an old directory invalidates freshness', asy
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 
+test('watch digests pick up an output alias retarget on the next observation', async () => {
+  const {bakeSourceInputs, pendingSourceInputs} = await import('./cargo-dep-info.mjs');
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'source-output-alias-')));
+  try {
+    const app = {dir, manifest:{}}, output = resolve(dir, 'output');
+    const first = resolve(dir, 'first'), second = resolve(dir, 'second');
+    const paths = [first, second].map(path => {
+      mkdirSync(path);
+      const source = resolve(path, 'entry.contract');
+      writeFileSync(source, 'source');
+      return source;
+    });
+    const linkOutput = target => symlinkSync(target, output, process.platform === 'win32' ? 'junction' : 'dir');
+    linkOutput(first);
+    const record = bakeSourceInputs(app, paths, [output]);
+    expect(pendingSourceInputs(record)).toEqual([]);
+    writeFileSync(paths[0], 'ignored output');
+    expect(pendingSourceInputs(record)).toEqual([]);
+    rmSync(output); linkOutput(second);
+    expect(pendingSourceInputs(record)).toEqual([...paths, 'app source inventory']);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
 test.skipIf(process.platform === 'win32')('output exclusions are resolved once per collector and refreshed for the next collector', async () => {
   const {buildInputCollector} = await import('./cargo-dep-info.mjs');
   const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'collector-outputs-')));
