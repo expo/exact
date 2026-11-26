@@ -342,9 +342,10 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertTrue(fixture.search.bindEditor().isFirstResponder)
     }
 
-    /// Hiding the keyboard over results in the detail column only uncovers them, as over a UIKit search results
-    /// controller's list: the results keep their frame, and no row is laid out again or animates while the keys go down.
-    func testHidingTheKeyboardOnlyUncoversTheDetailResults() throws {
+    /// Results in the detail column sit as a UIKit search results controller's list does beside the sidebar: its cards
+    /// the controller's system minimum margin in from the column's visible edge. Hiding the keyboard over them only
+    /// uncovers them: the results keep their frame, and no row is laid out again or animates while the keys go down.
+    func testDetailResultsKeepUIKitsMarginAndHidingTheKeyboardOnlyUncoversThem() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents search and its keyboard in a window scene") }
         let fixture = try boot(regular: true, detailSearch: true)
         let window = try XCTUnwrap(window)
@@ -363,6 +364,9 @@ final class SearchLevelsIOSTests: XCTestCase {
             return block.view.convert(block.block, to: window)
         }
         let before = try frame()
+        let card = try XCTUnwrap((list as? UICollectionView)?.visibleCells.min { $0.frame.minY < $1.frame.minY })
+        XCTAssertEqual(card.convert(card.bounds, to: window).minX - before.minX, results.systemMinimumLayoutMargins.leading, accuracy: 0.5,
+                       "the first card sits the system minimum in from the results' edge, as a hand-built list's")
         func animating(_ view: UIView) -> Bool { !(view.layer.animationKeys() ?? []).isEmpty || view.subviews.contains(where: animating) }
         var moved: Set<String> = []
         let sampler = Timer(timeInterval: 1.0 / 120, repeats: true) { _ in

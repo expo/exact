@@ -512,6 +512,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     /// 1115 §2), as it replaces the sheet's grouped ground on the other hosts (LLP 1084 D7): the list's own layer paints
     /// it in its box and UIKit's grounds are clear, so `transparent` shows what is behind the list around its cards.
     private var writesGround = false
+    /// The controller's system minimum margins last given the collection view (`directionalLayoutMargins`, which reads
+    /// back with the safe area added)
+    private var rootMargins = NSDirectionalEdgeInsets.zero
     /// In a split's list column beside its detail: UIKit's sidebar list (GroupedSidebarIOS.swift).
     var sidebar = false
     /// The theme's roles this list last drew with (LLP 1095 D4): a new table
@@ -902,6 +905,18 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         var frame = owner.scrollFrame
         if !owner.reachGiven { frame.origin.x -= reach.left; frame.size.width += reach.left + reach.right }
         assign(collection, \.frame, frame)
+        #if os(iOS)
+        // UIKit puts an inset-grouped list's cards at its layout margins: a hand-built list is its controller's root,
+        // with the controller's system minimum past its safe area (20 in from an iPhone Duo's sidebar, 0 at its side
+        // strip), which the collection view, no controller's root, lacks; none where the route's controller does not
+        // respect the minimum (`-exact-respects-system-minimum-layout-margins`, `followMinimumMargins`)
+        if let controller = ViewPresentation.controller(for: owner, layout: true),
+           case let m = controller.viewRespectsSystemMinimumLayoutMargins ? controller.systemMinimumLayoutMargins : .zero,
+           m.leading != rootMargins.leading || m.trailing != rootMargins.trailing {
+            rootMargins = m
+            collection.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: m.leading, bottom: 0, trailing: m.trailing)
+        }
+        #endif
         if looks { refreshLooks() }
         for cell in collection.visibleCells {
             guard let cell = cell as? GroupedCell, let id = cell.row else { continue }
