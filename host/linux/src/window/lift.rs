@@ -9,6 +9,7 @@
 //! (`staging.rs`), as a URI list and, while the document portal serves,
 //! as the portal's file transfer key.
 
+use super::received::KEYS;
 use super::staging::Staging;
 use super::{nonblocking, Command, Heard, Listener};
 use exact_painted::file_transfer::{Portal, Transfer};
@@ -47,12 +48,6 @@ pub(super) const TEXTS: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
 pub(super) const URI_LIST: &str = "text/uri-list";
 /// Mozilla's titled link, the form Firefox and Chromium read a link in.
 pub(super) const MOZ_URL: &str = "text/x-moz-url";
-/// The document portal's file transfer key, then GTK's older name for it,
-/// which a sandboxed receiver redeems for the files.
-pub(super) const KEYS: [&str; 2] = [
-    "application/vnd.portal.filetransfer",
-    "application/vnd.portal.files",
-];
 /// What the window's drags offer of D1's values.
 pub(super) const OFFERS: Offers = Offers {
     text: true,
