@@ -9,7 +9,7 @@ import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/app
 import { noWindowsHost } from '../host/windows/build.mjs';
 import { phone, phoneBridge, phoneStartupFailure, phoneLaunch, crashReports, displayPictureReply } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
-import { checkedAppleRun, checkedLaunchPlan, linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
+import { checkedAppleRun, checkedLaunchPlan, linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild, refuseCheckedLaunchEnv } from './agent-build.mjs';
 import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, shown, bakedSettingChanges, watchedNewer } from './agent-launch.mjs';
 import { androidBinary, androidDeploy, apkRecord } from './agent-android.mjs';
 import { iosTouchInput, openTouches } from '../host/apple/touches.mjs';
@@ -95,19 +95,20 @@ export async function phoneScreenshot({ ask, udid, appId, container, path, windo
 /** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. `reader`: on Android, the app
  * on the Canvas reader (its APK), not the Linux host headless; unsaid, EXACT_ANDROID_READER decides (how a script
  * that opens a drive says it). */
-export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, touch = 'agent', reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
+export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, touch = 'agent', reader = !!process.env.EXACT_ANDROID_READER, onProcess, checked = checkedAppleRun(host, app, { device }) }) {
   const linux = host === 'linux', android = host === 'android'; // @ref LLP 1107 — Android: the Linux host on a phone, under adb
   const windows = host === 'windows', portable = linux || windows || android;
   const sample = host === 'host';
-  const a = checkedAppleRun(host, app, { device, sample })?.app ?? resolveApp(app);
-  const artifacts = portable ? null : appleArtifacts(a, { destination: device ? 'ios' : 'macos', host: sample });
+  if (checked) refuseCheckedLaunchEnv('macos', process.env, extra);
+  const a = checked?.app ?? resolveApp(app);
+  const artifacts = portable || checked ? null : appleArtifacts(a, { destination: device ? 'ios' : 'macos', host: sample });
   const deviceBundle = artifacts?.bundle;
   const bin = windows ? (process.env.EXACT_WINDOWS_BIN ?? resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(a.dir, 'dist-windows'), `${executableName(a)}.exe`))
-    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a, undefined, reader)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
+    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a, undefined, reader)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (checked?.built ?? process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
   // The macOS build by its own record (agent-build.mjs, which an app's exact.mjs runs first to build it, or bakes its plan-only edit).
   // What a desktop app is started with, where a launch gives a marked setting (LLP 1153.002 D2): what its freshness reads.
   const childEnv = { ...process.env, ...extra };
-  const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED, launch: childEnv }) : null;
+  const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked, launch: childEnv }) : null;
   if (macBuild?.checked) {
     plan = checkedLaunchPlan('macos', macBuild, a, extra.EXACT_PLAN || plan || childEnv.EXACT_PLAN);
   } else if (macBuild) {
@@ -153,7 +154,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   };
   // A Mac bundle carries its own assets (bundle.mjs copies the capture into Contents/Resources); a bare binary
   // reads the capture of this target directory, which another one's build did not write.
-  const assets = windows ? dirname(bin) : linux || android ? a.dir
+  const assets = checked ? resolve(checked.bundle, 'Contents/Resources') : windows ? dirname(bin) : linux || android ? a.dir
     : !device && process.env.EXACT_MAC_BIN && /\.app\/Contents\/MacOS\/[^/]+$/.test(resolve(bin)) ? resolve(bin, '../../Resources') : artifacts.capture;
   if (!portable && !device && !process.env.EXACT_ASSETS && !extra.EXACT_ASSETS && !existsSync(assets))
     throw new Error(`${bin}'s assets are not at ${assets}: ${process.env.EXACT_MAC_BIN ? 'export the CARGO_TARGET_DIR it was built with, or name its assets with EXACT_ASSETS' : `run ${sample ? `bun host/apple/build.mjs ${a.crate('apple')} --host` : rebuildCommand(a, 'mac')}`}`);

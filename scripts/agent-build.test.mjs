@@ -103,7 +103,7 @@ test('native drives refuse a baked backend that the drive did not select', async
   const { dir, write } = scratchApp('backend-drive');
   const saved = { ...process.env };
   try {
-    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) delete process.env[key];
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'EXACT_MAC_BIN', 'PORT']) delete process.env[key];
     const literal = 'http://127.0.0.1:4400', other = 'http://127.0.0.1:4412', hosts = ['macos', 'ios'], checks = {};
     write('app.ts', `// const origin = 'http://comment.invalid';\nexport const origin = \`${literal}/\` as const;\n`);
     write('.exact/typescript-inputs.json', JSON.stringify({ modules: [['app.ts', resolve(dir, 'app.ts')]] }));
@@ -165,7 +165,7 @@ test('native drives refuse a baked backend that the drive did not select', async
     write('app.ts', `// const origin = '${literal}';\nconst config = { origin: '${literal}' };\n`);
     check();
   } finally {
-    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'EXACT_BUILD_CHECK_OUT', 'PORT']) {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'EXACT_BUILD_CHECK_OUT', 'EXACT_MAC_BIN', 'PORT']) {
       if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
     }
     rmSync(dir, { recursive: true, force: true });
@@ -797,7 +797,8 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     for (const file of ['app.contract', 'app.ts', 'types.ts', 'lib/model.ts', 'lib/seed.json', 'lib/format.mjs', 'lib/digits.mjs', 'scripts/export.mjs', 'server/index.ts', 'server/routes.ts', 'server/fixtures.json', 'app.json', 'exact.mjs']) stamp(file, -60);
     // The build: its receipt names the plan its build script baked, beside which is the module receipt it paired.
     const target = 'aarch64-apple-ios-sim', out = resolve(app.target, target, 'host-dev/build/plan-log-apple-0123/out');
-    const module = { version: 1, appId: 'com.exact.plan-log', grants: '', abi: 1, surfaces: {}, bytecodeVersion: 96 };
+    const module = { version: 1, appId: 'com.exact.plan-log', grants: '', abi: 1, surfaces: {}, bytecodeVersion: 96,
+      plan: { sha256: createHash('sha256').update('plan two').digest('hex') }, module: { sha256: createHash('sha256').update('bytecode').digest('hex') } };
     mkdirSync(out, { recursive: true });
     writeFileSync(resolve(out, 'app.plan'), 'plan one');
     writeFileSync(resolve(out, 'app.module.json'), JSON.stringify(module));
@@ -825,7 +826,6 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     const reset = () => { said.length = builds.length = bakes.length = 0; };
     const kept = () => planOverride('ios', app, nativeBuild('ios', app));
     process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/checked');
-
     // A script app.ts never imports is no input, a `.mjs` as a `.ts`; one it imports, through another, is.
     const input = notBuildInput(dir);
     assert.deepEqual(['scripts/export.mjs', 'lib/format.mjs', 'lib/digits.mjs', 'server/index.ts'].map(f => input(resolve(dir, f))), [true, false, false, true]);

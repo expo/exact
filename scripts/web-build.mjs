@@ -109,7 +109,7 @@ export function privateNativeBuild(app, kind) {
   }, close(code = 0, checked) { if (!existsSync(directory)) return; try { if (!(stale && code)) keep(checked); } finally { rmSync(directory, { recursive: true, force: true }); } } };
 }
 
-function nativeFiles(directory, prefix = '') {
+export function nativeFiles(directory, prefix = '') {
   return readdirSync(resolve(directory, prefix)).sort().flatMap(name => {
     const path = prefix ? `${prefix}/${name}` : name, file = resolve(directory, path), stat = lstatSync(file);
     if (stat.isSymbolicLink()) return [[path, 'link', readlinkSync(file)]];

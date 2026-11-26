@@ -219,6 +219,7 @@ export async function main(argv, injected = {}) {
           atResult: (t) => { at = null; report(t); },
           host,
           running,
+          checked,
           browser,
           file: flags.test,
           plan: flags.plan,
@@ -412,6 +413,7 @@ export async function main(argv, injected = {}) {
       return await (injected.open ?? open)({
         host,
         browser,
+        checked,
         ax: ops.some(line => /^\s*tree\s+--ax(?:\s|$)/.test(line)),
         env: {
           ...(flags.live ? { EXACT_AGENT: 'live' } : {}),
@@ -630,7 +632,7 @@ export async function main(argv, injected = {}) {
       case 'fail':
       case 'pass':
         r = await s.op(
-          faultRequest(op, args, fetchOrigins(resolve(flags.webDist ?? defaultWebDist(selectedApp())))),
+          faultRequest(op, args, checked?.origins ?? fetchOrigins(resolve(flags.webDist ?? defaultWebDist(selectedApp())))),
         );
         break;
       case 'perf':

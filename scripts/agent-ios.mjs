@@ -1,9 +1,9 @@
 // The iOS simulator carrier (scripts/agent.mjs `open`): the bundle `build.mjs --ios` assembled, installed and launched
 // with the agent socket's path in its environment.
-import { exclusiveIOS, simulatorDisplay, refuseBackendOrigin } from './agent-launch.mjs';
-import { checkedAppleRun, checkedLaunchPlan, nativeBuild, planOverride, refuseBuild } from './agent-build.mjs';
+import { exclusiveIOS, simulatorDisplay, refuseBackendOrigin, staleError } from './agent-launch.mjs';
+import { checkedAppleRun, checkedBundleDigest, checkedLaunchPlan, nativeBuild, planOverride, refuseBuild, refuseCheckedLaunchEnv } from './agent-build.mjs';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -15,6 +15,7 @@ import { bundleId, install } from '../host/apple/build.mjs';
 import { simulatorAssetRoot, simulatorPlanPath } from '../host/apple/assets.mjs';
 import {
   crashWatch,
+  installedBuild,
   keepInstalledRelease,
   showSimulator,
   simulator,
@@ -49,16 +50,18 @@ export async function openIOS({
   env: extra = {},
   session,
   hostFixture = false,
+  checked = checkedAppleRun('ios', app, { sample: hostFixture }),
   touch = 'agent',
   ax = false,
   onProcess,
 }) {
-  const a = checkedAppleRun('ios', app, { sample: hostFixture })?.app ?? resolveApp(app);
+  if (checked) refuseCheckedLaunchEnv('ios', process.env, extra);
+  const a = checked?.app ?? resolveApp(app);
   // What the simulator gives the app (openIOSOwned); a marked setting there is the launch's (LLP 1153.002 D2).
   const launched = simulatorLaunch(extra);
   const built = nativeBuild('ios', a, {
       sample: hostFixture,
-      checked: process.env.EXACT_BUILD_CHECKED,
+      checked,
       launch: launched,
     }),
     bundle = built.built;
@@ -80,7 +83,7 @@ export async function openIOS({
       exclusiveIOS(dev.udid, id, () =>
         // An AX drive turns UIKit's accessibility runtime on for its launch (`withAccessibilityRuntime`).
         withAccessibilityRuntime(dev.udid, touch === 'agent' && ax, accessibility => // `ax`, not a bool of it: verify's is 'try'
-          openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess, accessibility }).catch(error => {
+          openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess, accessibility, checked }).catch(error => {
             if (dev.cachedBooted) {
               try {
                 if (simulators().find(d => d.udid === dev.udid)?.state !== 'Booted') error.retrySimulator = true;
@@ -113,7 +116,7 @@ function stuckLaunch(udid, pid) {
     io.status === 0 ? `the simulator's display is in ${shot}` : "the simulator's display could not be captured",
   ].join('; ');
 }
-async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess, accessibility }) {
+async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess, accessibility, checked }) {
   showSimulator(dev, true); // a person watching sees what is driven, and keeps the focus
   // Real touches (LLP 1080.000, `--touch platform`; `drag`, an authored test's drag alone): the runner starts first, so
   // its own launch never backgrounds the app.
@@ -129,10 +132,21 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   // A Release build installed under the bundle id is copied aside first, and the note says how to put it back
   // (`keepInstalledRelease`).
   const key = containerKey(dev.udid, id);
+  const marker = checked && `${checked.installRecord}.${dev.udid}`;
+  const installedStale = () => staleError(`ios build is stale: the installed copy of ${id} on simulator ${dev.udid} differs from the startup check; rerun exact test or agent`);
   let kept;
   try {
-    kept = keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true), { container: appContainers.get(key) });
+    const installed = checked ? installedBuild(dev.udid, id) : undefined;
+    const matches = installed && checkedBundleDigest(installed.installed) === checked.bundleDigest;
+    if (checked && !matches && existsSync(marker)) throw installedStale();
+    kept = matches ? { install: false, container: installed.installed }
+      : keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true),
+        { container: appContainers.get(key), checkedInstall: installed });
     if (kept.install) {
+      if (checked) {
+        const state = nativeBuild('ios', a, { checked });
+        if (state.changed.length) refuseBuild('ios', state, a);
+      }
       appContainers.delete(key);
       install(dev, bundle, a, hostFixture, true);
     }
@@ -163,22 +177,39 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   // holds the display lock (`simulatorDisplay`) through the accessibility setup and the launch.
   try {
     let container = kept.container ?? appContainers.get(key);
-    if (!extra.EXACT_ASSETS) {
+    if (checked && kept.install) {
+      try { container = simulatorAppContainer(dev.udid, id, 'app'); }
+      catch { throw installedStale(); }
+    } else if (!extra.EXACT_ASSETS) {
       if (!container || !existsSync(container)) container = simulatorAppContainer(dev.udid, id, 'app');
       appContainers.set(key, container);
     }
     env.EXACT_ASSETS = simulatorAssetRoot(extra.EXACT_ASSETS ? null : container, extra.EXACT_ASSETS, resolve(dir, 'assets'));
     const selectedPlan = env.EXACT_PLAN ?? process.env.SIMCTL_CHILD_EXACT_PLAN;
-    if (selectedPlan) env.EXACT_PLAN = simulatorPlanPath(selectedPlan, resolve(dir, 'plan'));
+    if (selectedPlan && !checked) env.EXACT_PLAN = simulatorPlanPath(selectedPlan, resolve(dir, 'plan'));
     const childEnv = { ...process.env };
     for (const [k, v] of Object.entries(env)) childEnv[`SIMCTL_CHILD_${k}`] = v;
+    let attempts = 0;
     launch = simulatorConsole(
-      () =>
-        spawn(
+      () => {
+        if (checked) {
+          if (attempts++) {
+            try { if (simulatorAppContainer(dev.udid, id, 'app') !== container) throw installedStale(); }
+            catch { throw installedStale(); }
+          }
+          if (attempts > 1 || kept.install) {
+            if (checkedBundleDigest(container) !== checked.bundleDigest) throw installedStale();
+          }
+          const state = nativeBuild('ios', a, { checked });
+          if (state.changed.length) refuseBuild('ios', state, a);
+          writeFileSync(marker, checked.bundleDigest);
+        }
+        return spawn(
           'xcrun',
           ['simctl', 'launch', '--console', '--terminate-running-process', dev.udid, id ?? bundleId(a.crate('apple'))],
           { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] },
-        ),
+        );
+      },
       hostLines,
       onProcess,
     );

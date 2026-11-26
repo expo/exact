@@ -546,10 +546,10 @@ export function replacedNote(udid, app, replaced, release) {
  *  Both share the bundle id, so a later benchmark or person would otherwise find the development build with no way
  *  back (euxy port). Nothing is reinstalled for the drive: that is the person's call. A clone that cannot be made
  *  throws, and nothing is installed. A drive's later sessions find the development build and copy nothing. */
-export function keepInstalledRelease(udid, id, bundle, executable, { records = resolve(homedir(), '.cache/exact/simulator-releases'), installRecords, container } = {}) {
-  const matching = matchingInstall(udid, id, bundle, executable, { records: installRecords, container });
+export function keepInstalledRelease(udid, id, bundle, executable, { records = resolve(homedir(), '.cache/exact/simulator-releases'), installRecords, container, checkedInstall } = {}) {
+  const matching = checkedInstall === undefined ? matchingInstall(udid, id, bundle, executable, { records: installRecords, container }) : null;
   if (matching) return { install: false, container: matching };
-  const { installed, trust, what } = installedBuild(udid, id) ?? {};
+  const { installed, trust, what } = (checkedInstall === undefined ? installedBuild(udid, id) : checkedInstall) ?? {};
   if (!installed || trust === 'development') return { install: true };
   // Copied beside the older copy first, which a failed copy leaves in place.
   const dir = resolve(records, `${udid}-${id}`), next = `${dir}.new`, copy = resolve(dir, basename(installed));

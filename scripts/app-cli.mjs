@@ -415,7 +415,8 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   } catch {}
   return exit; };
   // EXACT2 as well, for an app's scripts that read that name (LLP 1036.001 D3).
-  const childEnv = (env = {}) => ({ ...process.env, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_APP_DIR: dir, EXACT: exact2, EXACT2: exact2, EXACT_LAUNCHER_PID: String(process.pid), ...env });
+  let checkedAppDir;
+  const childEnv = (env = {}) => ({ ...process.env, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_APP_DIR: checkedAppDir ?? dir, EXACT: exact2, EXACT2: exact2, EXACT_LAUNCHER_PID: String(process.pid), ...env });
   // `agent --attach` reads an app already running (LLP 1012.000 D1): the driver takes it as given, before anything here
   // builds, prepares or adds a launch default.
   if (verb === 'agent' && rest.includes('--attach')) return log(spawnSync(process.execPath, [resolve(exact2, verbs.agent[0]), ...verbs.agent.slice(1), ...rest], {
@@ -630,7 +631,9 @@ if (verb === 'contract') {
   if (drivesWeb || drivesNative || verb === 'verify' && ['web', 'ios', 'windows'].includes(host)) {
     const { resolveApp } = await import(resolve(exact2, 'scripts/app.mjs'));
     const { privateWebBuild, privateNativeBuild } = await import(resolve(exact2, 'scripts/web-build.mjs'));
-    const build = (host === 'web' ? privateWebBuild : privateNativeBuild)(resolveApp(dir), verb);
+    const app = resolveApp(dir);
+    if (checksApple) checkedAppDir = app.dir;
+    const build = (host === 'web' ? privateWebBuild : privateNativeBuild)(app, verb);
     Object.assign(process.env, build.env);
     if (host !== 'web') await build.seed(host, { checkInDrive: checksApple });
     process.once('exit', code => build.close(code, buildCheck));
@@ -660,7 +663,7 @@ if (verb === 'contract') {
     }
     if (built) return log(await withCargoFault(built));
     if (verb === 'test') {
-      const run = checksApple && (await import(resolve(exact2, 'scripts/agent-build.mjs'))).checkedAppleRun(host, dir);
+      const run = checksApple && (await import(resolve(exact2, 'scripts/agent-build.mjs'))).checkedAppleRun(host, checkedAppDir);
       const server = run ? run.server : (await import(resolve(exact2, 'scripts/verify.mjs'))).appServer(dir);
       if (server?.refusal) { console.error(`test: ${server.refusal}`); return log(1); }
     }

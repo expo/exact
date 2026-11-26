@@ -34,7 +34,7 @@ const MOVE_MS = 2000;
 const MOVED_SINCE_REVEAL = /is covered or not hit at its projected center/;
 
 /** The input methods of session `s` over `carrier`, which `open` adds to `s`. */
-export function sessionInput(s, { carrier, host, timing, touch, app }) {
+export function sessionInput(s, { carrier, host, timing, touch, app, checkedApp }) {
   return {
     /** What this carrier's input actually is (LLP 1035.003 D2/D3): whether it can hold a contact across requests,
      * and how each form is delivered — `platform` (a real input event through the platform's own path),
@@ -557,7 +557,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
     /** A share another app sends (LLP 1133.024 D9): `type <root> "share:?text=…&files=<path>"`, handed with the
      * app's `share_target` to the host's claim path; the web takes its text as its GET share target's location. */
     async share(target, href) {
-      const shareTarget = appShareTarget(app),
+      const shareTarget = appShareTarget(app, checkedApp),
         share = driverShare(href, process.cwd());
       if (host === 'web') return s.type(target, webShareLocation(shareTarget, share));
       const node = await s.find(target);

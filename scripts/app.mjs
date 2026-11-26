@@ -390,7 +390,7 @@ export function platformCrateKind(dir, kind) {
 
 /** The app `nameOrCrate` selects (`caltrain`, `caltrain-web`, …; or `EXACT_APP_DIR`): its directory, Cargo workspace,
  * target directory, crate identity (`appCrateName`), and manifest. */
-export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
+export function appLocation(nameOrCrate) {
   const path = nameOrCrate && /[\\/]|^\.\.?$/.test(String(nameOrCrate)) ? resolve(String(nameOrCrate)) : null;
   const outside = path ?? (process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : null);
   if (path) nameOrCrate = undefined;
@@ -399,6 +399,10 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
   const selector = path ?? name;
   let dir = outside ?? resolve(ROOT, 'apps', name);
   if (!outside && !existsSync(resolve(dir, 'app.contract')) && existsSync(resolve(ROOT, 'game/games', name, 'app.contract'))) dir = resolve(ROOT, 'game/games', name);
+  return { dir, name, selector, outside };
+}
+export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
+  let { dir, name, selector, outside } = appLocation(nameOrCrate);
   if (!existsSync(resolve(dir, 'app.contract'))) throw new Error(`no app at ${dir} (no app.contract)${outside ? '' : '; set EXACT_APP_DIR for an app outside this repo'}`);
   preservePaths(dir);
   dir = realpathSync(dir);
@@ -408,7 +412,6 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
     if (PINNED_BUN) installedModules();
     installedFileDependencies(dir); // builds read a file: package as of its last install
   }
-  // Materialize defaults before Cargo inspects workspace members on a clean checkout.
   const manifest = claimVariant(dir, () => readManifest(dir, name));
   if (manifest.game === undefined) name = appCrateName(dir, name);
   if (dirname(dir) === resolve(ROOT, 'game/games') && manifest.game === undefined) {

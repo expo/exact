@@ -6,6 +6,7 @@ import { fileIdentity, resourceIdentities } from '../host/apple/assets.mjs';
 import { beside as besideDist } from '../host/web/beside.mjs';
 import { inlineSettings } from '../js/bake/src/__exact_env.mjs';
 import { recordedConstants } from '../js/bake/src/__exact_facts.mjs';
+import { backendOrigin, injectBackendOrigin, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
 
 const readIn = (dir, path) => { try { return readFileSync(resolve(dir, path), 'utf8'); } catch { return null; } };
 
@@ -65,6 +66,46 @@ export function appSettings(dir, env = process.env, inputs = appSourceInputs(dir
   const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
   const load = recordedConstants(resolveImport, file => modules.get(file), file => authored.get(file));
   return { ...inlineSettings(modules.get('app.ts') ?? '', dir, parse, env, { modules, resolveImport, launches:false }), modules, load };
+}
+
+const plainSecrets = grants => grants.split('\n').flatMap(line => {
+  const words = line.trim().replace(/^development\s+/, '').split(/\s+/);
+  return words.length === 2 && words[0] === 'secret.keep' ? [words[1]] : [];
+});
+
+function appGrants(settings, parse, backend, env) {
+  const options = { source: settings.modules.get('app.ts'), load: settings.load };
+  const code = injectBackendOrigin(settings.code, backend, parse, env, options);
+  return staticFacts(code, parse, options).grants ?? '';
+}
+
+export function signInGrants(dir, backend, env) {
+  const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
+  return plainSecrets(appGrants(appSettings(dir, env), parse, backend, env));
+}
+
+/** Native fetch aliases and the grants read by signed-in. A baked receipt supplies the evaluated grants when present. */
+export function nativeTestFacts(dir, env, { backend, bakedOrigin, bakedGrants, signIn = false } = {}) {
+  const contract = readIn(dir, 'app.contract') ?? '';
+  const declared = [...contract.matchAll(/^\s+url\s+"(https?:\/\/[^/?#{"\s]+)/gm)].map(m => m[1]);
+  const source = readIn(dir, 'app.ts');
+  if (source === null && bakedGrants === undefined) return { origins: bakedOrigin ? [bakedOrigin] : [...new Set(declared)], secrets: [] };
+  const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
+  if (backend === undefined) backend = backendOrigin(dir, env);
+  const origin = bakedOrigin ?? backend ?? literalBackendOrigin(source ?? '', parse);
+  let grants = bakedGrants, secrets = [], grantError = null;
+  if (grants === undefined && (!origin || signIn)) {
+    try {
+      const settings = appSettings(dir, env);
+      grants = signIn ? appGrants(settings, parse, backend, env)
+        : staticFacts(settings.code, parse, { load: settings.load }).grants ?? '';
+    }
+    catch (error) { grantError = error.message; }
+  }
+  if (signIn && grants !== undefined) secrets = plainSecrets(grants);
+  const origins = origin ? [origin] : grantError ? [] : [...new Set([...declared, ...(grants ?? '').split('\n')
+    .map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:(?:\/\/[^/\s]+)?)(?:\/|\s|$)/.exec(line)?.[1]).filter(Boolean)])];
+  return { origins, secrets, grantError };
 }
 
 /** The modules of the app's own that `path` imports (`from './x'`, `import './x'`, `import('./x')`, `require('./x')`),

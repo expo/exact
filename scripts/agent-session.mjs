@@ -109,6 +109,7 @@ export async function open({
   port,
   ax = false,
   attach,
+  checked = checkedAppleRun(host, app, { device }),
 } = {}, { openDevice = openStdio } = {}) {
   browser ??= 'chrome';
   if (!['chrome', 'firefox', 'webkit'].includes(browser))
@@ -188,7 +189,7 @@ export async function open({
   }
   // @ref LLP 1133.024 D9 — a cold share: the web's location, or the native host's claim before its boot.
   if (url?.startsWith('share:')) {
-    const target = appShareTarget(app, checkedAppleRun(host, app, { device })?.app),
+    const target = appShareTarget(app, checked?.app),
       share = driverShare(url, process.cwd());
     if (host === 'web') url = webShareLocation(target, share);
     else {
@@ -211,7 +212,7 @@ export async function open({
     : // `documents` are the Mac's command line, a terminal's route in (LLP
       // 1033 D3); each window's session then routes by its label (LLP 1069.010).
       host === 'macos' || host === 'mac'
-      ? await openStdio({ host: 'macos', plan, size: size ?? VIEWPORT, env, app, session, documents, onProcess })
+      ? await openStdio({ host: 'macos', plan, size: size ?? VIEWPORT, env, app, session, documents, onProcess, checked })
       : host === 'host'
         ? await openStdio({ host: 'host', plan, env, app, session, onProcess })
         : host === 'host-ios'
@@ -222,7 +223,7 @@ export async function open({
             : host === 'windows'
               ? await openStdio({ host: 'windows', plan, size: size ?? VIEWPORT, env, app, onProcess })
               : host === 'ios'
-                ? await openIOS({ plan, env, app, size, touch, ax, onProcess })
+                ? await openIOS({ plan, env, app, size, touch, ax, onProcess, checked })
                 : await openWeb({
                     browser,
                     plan,
@@ -250,7 +251,7 @@ export async function open({
   // Without a plan of the drive's own, a native host runs its bake's: the maps a development bake left
   // (LLP 1012.001.000 D6).
   const baked = () => {
-    const a = checkedAppleRun(host, app, { device })?.app ?? resolveApp(app);
+    const a = checked?.app ?? resolveApp(app);
     const bin =
       host === 'windows'
         ? (process.env.EXACT_WINDOWS_BIN ?? resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(a.dir, 'dist-windows'), `${executableName(a)}.exe`))
@@ -920,7 +921,7 @@ export async function open({
     },
     springboard: carrier.springboard,
   };
-  Object.assign(s, sessionInput(s, { carrier, host, timing, touch, app }));
+  Object.assign(s, sessionInput(s, { carrier, host, timing, touch, app, checkedApp: checked?.app }));
   // An attached session reads, on the app's own wall clock (LLP 1012.000 D3): the driver refuses input and the clock
   // before it sends anything, as the app would.
   if (attach !== undefined) {

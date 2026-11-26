@@ -19,9 +19,9 @@ import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { checkedAppleRun, macSandboxed } from './agent-build.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { requestBase } from './app-server.mjs';
-import { backendOrigin, backendOriginSelection, injectBackendOrigin, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
+import { backendOrigin, backendOriginSelection, staticFacts } from '../js/bake/src/typescript.mjs';
 import { declaredSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
-import { appSettings } from './app-imports.mjs';
+import { appSettings, nativeTestFacts, signInGrants } from './app-imports.mjs';
 import { createRequire } from 'node:module';
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
 const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url)) ? await import('../snapback4/web/device-build.mjs') : null;
@@ -742,8 +742,7 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * `atLine({ name, index, line, last, op })` runs before each step of a test, `atResult(result)` as each test's result
  * lands: a run's caller says where a long test is and what each test did as it goes, not only at the run's end.
  */
-export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, atLine, atResult, port, running, only, testIndex, replayLaunch, replayShots, ax } = {}) {
-  const checked = checkedAppleRun(host, app, { device });
+export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, atLine, atResult, port, running, only, testIndex, replayLaunch, replayShots, ax, checked = checkedAppleRun(host, app, { device }) } = {}) {
   const selected = checked?.app ?? resolveApp(app);
   // The APK carrier runs at the phone's size (agent-stdio.mjs reads `reader` the same way).
   const apk = host === 'android' && (reader ?? !!process.env.EXACT_ANDROID_READER);
@@ -767,8 +766,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   if (c.status !== 0) throw new Error(c.stderr?.trim() || c.error?.message || 'contract test compiler failed');
   // Native runs use the origin their build selected (LLP 1142 D13), else the scaffold's declared one, else the grants
   // app.ts names as the build evaluates them, when no web admission file exists.
-  const appOrigins = checked?.backendOrigin ? [checked.backendOrigin]
-    : host !== 'web' ? nativeFetchOrigins(selected.dir, { ...process.env, ...(env ?? {}) }) : [];
+  const appOrigins = checked?.origins ?? (host !== 'web' ? nativeFetchOrigins(selected.dir, { ...process.env, ...(env ?? {}) }) : []);
   const authored = JSON.parse(c.stdout), properties = authored.properties.filter(p => p.kind === 'always');
   const unchecked = authored.properties.filter(p => p.kind !== 'always').reduce((n, p) => n + Math.max(1, p.lines.length), 0);
   if (unchecked) console.error(`properties on ${host}: ${unchecked} lines not checked (after, its frames and commands, and never refuses); the driver exposes no commit trace`);
@@ -781,7 +779,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   // Where the host keeps its stores, as it will see its environment (a drive's env overrides the driver's).
   const launched = { ...process.env, ...(env ?? {}) };
   const id = selected.id, chrome = host === 'web' && (browser ?? launched.EXACT_WEB_BROWSER ?? 'chrome') === 'chrome';
-  const base = device ? null : chrome ? driveStore(selected, storage, env).base : host === 'web' ? null : storeBase(id, host, launched, launched.HOME || homedir(), (host === 'macos' || host === 'mac') && macSandboxed(selected));
+  const base = device ? null : chrome ? driveStore(selected, storage, env).base : host === 'web' ? null : storeBase(id, host, launched, launched.HOME || homedir(), checked ? checked.sandboxed : (host === 'macos' || host === 'mac') && macSandboxed(selected));
   // A run's own names where the driver can remove them; a simulator's (one drive at a time: a launch ends the
   // last) reuse one store a test, emptied at launch, so they cannot pile up in its app container.
   // Android's stores are on the device, out of the driver's reach, but a run's names stay its own there too (LLP 1107).
@@ -789,7 +787,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   sweepTestStores(base, storage);
   // Where a `request` line's path is (LLP 1116.006 D8): the backend the build selected when it is on this
   // machine (a checkout's fixture port, LLP 1142 D13), else the address app.ts calls.
-  const chosen = checked ? checked.backendOrigin : backendOrigin(selected.dir, launched);
+  const chosen = checked ? checked.backend?.origin ?? null : backendOrigin(selected.dir, launched);
   const server = checked ? checked.requestBase : requestBase(selected.dir, chosen);
   let done = false;
   const scope = testScope(host), timing = launched.EXACT_AGENT_TIMING;
@@ -859,6 +857,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     try {
       await running?.beforeTest();
     } catch (e) {
+      if (e.stale) throw e;
       landed({ name: t.name, index: n, failures: [`${t.name}: ${e.message}`], notes });
       continue;
     }
@@ -870,18 +869,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     if (sessions.length) {
       try {
         if (!server) throw new Error('signed-in needs the local OAuth fixture as the app server');
-        const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
-        const settings = appSettings(selected.dir, launched);
-        const source = settings.modules.get('app.ts');
-        const options = { source, load: settings.load };
-        const code = injectBackendOrigin(settings.code, chosen, parse, launched, options);
-        const grants = staticFacts(code, parse, options).grants ?? '';
-        const plain = new Set(grants.split('\n').map(line => line.trim().split(/\s+/))
-          .map(words => words[0] === 'development' ? words.slice(1) : words)
-          .filter(words => words.length === 2 && words[0] === 'secret.keep').map(words => words[1]));
+        if (checked?.grantError) throw new Error(checked.grantError);
+        const plain = checked?.secrets ?? signInGrants(selected.dir, chosen, launched);
         const { signedInSession } = await import('../packages/oauth/test/fixture.ts');
         for (const st of sessions) {
-          if (!plain.has(st.key)) throw new Error(`line ${st.line}: signed-in requires a plain secret.keep grant for ${st.key}`);
+          if (!plain.includes(st.key)) throw new Error(`line ${st.line}: signed-in requires a plain secret.keep grant for ${st.key}`);
           stored.push(['#oauth.' + st.key, await signedInSession(server, st.key, st.account)]);
         }
       } catch (e) {
@@ -903,10 +895,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // (every `clock +N`, settle and timer), as the runner reports it; whole milliseconds, which every host takes.
     const first = facts.epoch; // the test's launch date, which a `reload` moves `facts.epoch` on from
     const reached = async () => { const { clock } = await s.op({ op: 'tags' }).catch(() => ({})); return facts.epoch + Math.floor(Number.isFinite(clock) ? clock : s.now); };
-    const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, reader, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port, ax });
+    const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, reader, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port, ax, checked });
     let s;
     try { s = await launch(fresh); } catch (e) {
-      if ((!running && !e.retrySimulator) || e.missingBuild) throw e; // no build: the next test would say the same
+      if ((!running && !e.retrySimulator) || e.missingBuild || e.stale) throw e; // no build: the next test would say the same
       let why = e.message;
       try { running?.check(); } catch (dead) { why = dead.message; }
       landed({ name: t.name, index: n, failures: [`${t.name}: ${why}`], notes });
@@ -960,7 +952,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           environment.EXACT_AGENT_RESTORE_WINDOW = id;
         }
         await s.close();
-        s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: environment, app, webDist, device, phone, reader, url, storage: store, touch: fingers, chrome: bars, scale, port, ax });
+        s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: environment, app, webDist, device, phone, reader, url, storage: store, touch: fingers, chrome: bars, scale, port, ax, checked });
       }
       s.notes = notes;
       // A module's permission is the runner's, which starts again, as a phone keeps a granted one across a restart.
@@ -1361,6 +1353,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             if (next === 'stop' || next === 'done') break;
           }
         } catch (e) {
+          if (e.stale) throw e;
           failures.push(`${at}: ${e.message}`);
           break;
         }
@@ -1404,20 +1397,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
  * build selected (LLP 1142 D13), else app.ts's literal `const origin`, else the origins its `net.fetch` grants name as the
  * build evaluates them, a setting's value (`import.meta.env.API_BASE_URL`, LLP 1153 D4) in place of its read. */
 export function nativeFetchOrigins(dir, env = process.env) {
-  // A source declared in app.contract names its origin in its `url` line (LLP 1162.001 D3).
-  let contract = ''; try { contract = readFileSync(resolve(dir, 'app.contract'), 'utf8'); } catch { /* none */ }
-  const declared = [...contract.matchAll(/^\s+url\s+"(https?:\/\/[^/?#{"\s]+)/gm)].map(m => m[1]);
-  let code; try { code = readFileSync(resolve(dir, 'app.ts'), 'utf8'); } catch { return [...new Set(declared)]; }
-  const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
-  const origin = backendOrigin(dir, env) ?? literalBackendOrigin(code, parse);
-  if (origin) return [origin];
-  let grants = '';
-  try {
-    const settings = appSettings(dir, env);
-    grants = staticFacts(settings.code, parse, { load: settings.load }).grants ?? '';
-  }
-  catch { return []; } // the bake refuses it, and says why when it builds
-  return [...new Set([...declared, ...grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:(?:\/\/[^/\s]+)?)(?:\/|\s|$)/.exec(line)?.[1]).filter(Boolean)])];
+  return nativeTestFacts(dir, env).origins;
 }
 /** Resolve the built grant alias and diagnose a fault that cannot meet a granted URL. */
 export function resolveFaultPrefix(prefix, origins, say=console.warn) {

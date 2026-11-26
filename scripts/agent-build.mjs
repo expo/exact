@@ -23,16 +23,19 @@ import { closeSync, copyFileSync, createWriteStream, existsSync, linkSync, mkdir
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { slashRelative, within } from './paths.mjs';
 import { fileURLToPath } from 'node:url';
-import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
+import { appleArtifacts } from '../host/apple/build.mjs';
 import { simulatorPlanPath } from '../host/apple/assets.mjs';
 import { compilerError, compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale, staleError } from './agent-launch.mjs';
 import { CONFIG_JSON, DECLARATIONS, moduleGraph } from './module-graph.mjs';
-import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, resolveApp, shaderWatchRoots } from './app.mjs';
+import { appLocation, bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, resolveApp, shaderWatchRoots } from './app.mjs';
 import { bakeTool, linkedBakeDir } from './linked-plan.mjs';
 import { childValue, launchNames } from '../js/bake/src/__exact_env.mjs';
 import { simulatorLaunch } from '../host/apple/devices.mjs';
-import { appServer, requestBase } from './app-server.mjs';
-import { backendOrigin as selectedBackend } from '../js/bake/src/typescript.mjs';
+import { appServer, onThisMachine } from './app-server.mjs';
+import { nativeTestFacts } from './app-imports.mjs';
+import { backendOriginSelection } from '../js/bake/src/typescript.mjs';
+import { selectedVariant } from './variants.mjs';
+import { nativeFiles } from './web-build.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const label = host => host === 'ios' ? 'iOS' : host === 'windows' ? 'Windows' : 'macOS';
@@ -44,6 +47,7 @@ const shown = file => relative(process.cwd(), file).startsWith('..') ? file : re
 
 function readBuildCheck(checked) {
   if (!checked) return null;
+  if (typeof checked !== 'string') return checked;
   try {
     const run = JSON.parse(checked);
     const record = value => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -51,7 +55,10 @@ function readBuildCheck(checked) {
     if (!['ios', 'macos'].includes(run?.host) || !text(run.receipt) || typeof run.override !== 'boolean'
       || !(run.plan === null || text(run.plan)) || !(run.requestedPlan === null || text(run.requestedPlan))
       || !(run.requestBase === null || text(run.requestBase)) || !(run.server === null || record(run.server))
-      || !Array.isArray(run.planFiles) || !run.planFiles.every(text)) return null;
+      || !record(run.planFiles) || !Object.values(run.planFiles).every(text)
+      || ![run.built, run.bundle, run.bundled, run.receiptFile, run.installRecord].every(path => text(path) && isAbsolute(path))
+      || !text(run.bundleDigest) || !text(run.bundledDigest) || !Array.isArray(run.origins) || !Array.isArray(run.secrets)
+      || !(run.variant === null || text(run.variant))) return null;
     const { app } = run;
     if (record(app) && record(app.manifest) && typeof app.outside === 'boolean'
       && [app.dir, app.name, app.id, app.displayName, app.selector, app.target, app.appleCrate].every(text)
@@ -68,14 +75,39 @@ export function checkedAppleRun(host, selector, { device = false, sample = false
   const run = readBuildCheck(process.env.EXACT_BUILD_CHECKED);
   if (run?.host !== host) return null;
   const { app } = run;
-  const path = selector && /[\\/]|^\.\.?$/.test(selector) ? selector : process.env.EXACT_APP_DIR;
-  if (path) {
-    try { if (realpathSync(resolve(path)) !== app.dir) return null; } catch { return null; }
-  } else {
-    const name = (selector || 'caltrain').replace(/-(web|apple|ios|macos|linux|windows|gpu)$/, '');
-    if (![app.selector, app.name].includes(name) && selector !== app.appleCrate) return null;
-  }
+  try { if (realpathSync(appLocation(selector).dir) !== app.dir) return null; } catch { return null; }
+  const variant = process.env.EXACT_VARIANT_APP ? selectedVariant(app.dir) : process.env.EXACT_VARIANT;
+  if ((variant || null) !== run.variant) return null;
   return { ...run, app: { ...app, crate: () => app.appleCrate } };
+}
+
+export const checkedBundleDigest = bundle => {
+  try {
+    const files = nativeFiles(bundle), dir = realpathSync(bundle);
+    if (files.some(([path, kind]) => kind === 'link' && !within(dir, realpathSync(resolve(dir, path))))) return null;
+    return createHash('sha256').update(JSON.stringify(files)).digest('hex');
+  } catch { return null; }
+};
+
+export function refuseCheckedLaunchEnv(host, env, extra = {}) {
+  const variables = ['EXACT_DEV_PLAN', 'EXACT_MODULES', 'EXACT_ASSETS', 'EXACT_UPDATE_ORIGIN', 'EXACT_UPDATE_DIR',
+    'EXACT_LISTEN_DYLIB', 'DYLD_LIBRARY_PATH', 'DYLD_FRAMEWORK_PATH', 'DYLD_INSERT_LIBRARIES'];
+  const names = host === 'ios' ? variables.map(key => [`SIMCTL_CHILD_${key}`, key])
+    : [...variables, 'EXACT_MAC_BIN'].map(key => [key, key]);
+  const blocked = names.find(([inherited, key]) => env[inherited] !== undefined || extra[key] !== undefined);
+  if (blocked) {
+    const name = extra[blocked[1]] !== undefined ? blocked[1] : blocked[0];
+    throw staleError(`${host} checked launch refuses ${name}; remove it and start another run`);
+  }
+}
+
+function verifyCheckedProducts(run) {
+  const changed = [];
+  if (digestOf(run.receiptFile) !== run.receipt) changed.push(existsSync(run.receiptFile) ? run.receiptFile : run.built);
+  if (run.bundled !== run.receiptFile && digestOf(run.bundled) !== run.bundledDigest) changed.push(run.bundled);
+  if (!changed.length && checkedBundleDigest(run.bundle) !== run.bundleDigest) changed.push(run.bundle);
+  if (run.plan && !checkedPlanPresent(run)) changed.push(run.plan);
+  return changed;
 }
 
 /** What a drive of `app` on `host` (`ios`, else macOS) launches, by its own
@@ -88,31 +120,39 @@ export function checkedAppleRun(host, selector, { device = false, sample = false
  * `launch` is the app's launch environment (`pendingBuildInputs`). */
 export function nativeBuild(host, app, { sample = false, checked = null, hashed = null, launch } = {}) {
   host = host === 'mac' ? 'macos' : host;
+  const run = readBuildCheck(checked);
+  if (!sample && run?.host === host && run.app.dir === app.dir && run.app.id === app.id) {
+    return { built: run.built, receipt: run.receiptFile, digest: run.receipt, changed: verifyCheckedProducts(run),
+      backendOrigin: run.backendOrigin, checked: true, plan: run.plan, override: run.override, requestedPlan: run.requestedPlan };
+  }
   const ios = host === 'ios';
-  const built = ios ? appleArtifacts(app, { destination: 'ios-simulator', host: sample }).bundle : appleRunBinary(app, sample);
+  const artifacts = appleArtifacts(app, { destination: ios ? 'ios-simulator' : 'macos', host: sample });
+  const { bundle } = artifacts;
+  const built = ios ? bundle : resolve(bundle, 'Contents/MacOS', artifacts.executable);
   if (!existsSync(built)) return { built, missing: true, changed: [] };
   let receipt = receiptPath(host, app, { sample }), bytes;
   try { if (receipt) bytes = readFileSync(receipt); }
   catch (error) { if (error.code !== 'ENOENT') throw error; receipt = undefined; }
-  const selected = bytes && JSON.parse(bytes);
+  let selected;
+  try { selected = bytes && JSON.parse(bytes); }
+  catch { throw staleError(`${host} build is stale: ${receipt} is corrupt; rerun exact test or agent`); }
   const backendOrigin = selected?.build?.backendOrigin ?? null;
-  const run = readBuildCheck(checked);
-  const prior = !sample && run?.host === host && run.app.dir === app.dir && run.app.id === app.id ? run : null;
   const digest = bytes ? createHash('sha256').update(bytes).digest('hex') : null;
-  const changed = prior
-    ? [ ...(prior.receipt !== digest ? [receipt ?? built] : []),
-        ...(prior.plan && !checkedPlanPresent(prior) ? [prior.plan] : []) ]
-    : receiptChanges(receipt, app, { hashed: !!hashed && hashed === digest, launch });
-  const bundled = ios ? resolve(built, 'receipt.json') : resolve(appleArtifacts(app, { host: sample }).bundle, 'Contents/Resources/receipt.json');
+  const changed = receiptChanges(receipt, app, { hashed: !!hashed && hashed === digest, launch });
+  const bundled = resolve(bundle, ios ? 'receipt.json' : 'Contents/Resources/receipt.json');
+  let bundledDigest = bundled === receipt ? digest : null;
   if (!sample && receipt && (!ios || bundled !== receipt)) {
     try {
-      const actual = bundled === receipt ? selected : JSON.parse(readFileSync(bundled, 'utf8'));
+      const fromBundle = bundled === receipt ? bytes : readFileSync(bundled);
+      bundledDigest = createHash('sha256').update(fromBundle).digest('hex');
+      const actual = bundled === receipt ? selected : JSON.parse(fromBundle);
       const identity = r => [r.built, r.started, r.target, r.composition, r.compatibilityId, r.build?.trust, r.build?.backendOrigin, r.build?.binary?.sha256];
       // A sidecar can outlive the bundle it describes.
       if (actual.build?.trust !== 'development' || JSON.stringify(identity(selected)) !== JSON.stringify(identity(actual))) changed.push(bundled);
     } catch { changed.push(bundled); }
   }
-  return { built, receipt, digest, changed, backendOrigin, ...(prior ? { checked: true, plan: prior.plan, override: prior.override, requestedPlan: prior.requestedPlan } : {}) };
+  return { built, bundle, bundled, bundledDigest, receipt, digest, changed, backendOrigin,
+    sandboxed: /<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/.test(selected?.entitlements ?? '') };
 }
 
 /** Whether the macOS build a drive of `app` launches signs the App Sandbox (`mac --sandbox`, LLP 1030.005 D4), as
@@ -165,13 +205,17 @@ export const linuxRebuild = (app) => ownVerb(app, 'linux') ?? `bun scripts/build
 
 /** The driver's refusal (LLP 1012.001.000 D1) on what `nativeBuild` found. */
 export function refuseBuild(host, state, app, { sample = false } = {}) {
+  if (state.checked) {
+    if (state.changed.length)
+      throw staleError(`${host} build is stale: ${state.changed.join(', ')} changed after the startup check; rerun exact test or agent`);
+    if (state.override)
+      throw staleError(`${host} build is stale: the checked sources require the baked plan override; start another run to supply this plan`);
+    return;
+  }
   const ios = host === 'ios';
   const command = sample ? `bun host/apple/build.mjs${ios ? ' --ios' : ''} ${app.crate('apple')} --host` : rebuildCommand(app, ios ? 'ios' : 'mac');
   if (state.missing) throw new Error(`run ${command} first`);
-  if (!state.checked) refuseBackendOrigin(state, app, command);
-  if (state.checked && state.override && !state.changed.length) {
-    throw staleError(`${host} build is stale: the checked sources require the baked plan override; run ${command} before supplying another plan`);
-  }
+  refuseBackendOrigin(state, app, command);
   refuseStale(ios ? 'ios' : sample ? 'sample host' : 'macos', state.receipt ?? state.built, state.changed, command);
 }
 
@@ -321,7 +365,7 @@ function overrideFilesPresent(plan) {
 }
 
 function checkedPlanPresent({ plan, planFiles }) {
-  try { return isFile(plan) && planFiles.every(file => isFile(resolve(dirname(plan), file))); }
+  try { return JSON.stringify(planContents(plan)) === JSON.stringify(planFiles); }
   catch { return false; }
 }
 
@@ -350,9 +394,14 @@ function stagePlan(source, parent, override) {
     const files = planContents(plan);
     if (JSON.stringify(files) !== JSON.stringify(planContents(source)))
       throw new Error('the original files differ from the staged copy');
-    if ((override || files['app.module.json'] || files['app.hbc']) && !overrideFilesPresent(plan))
-      throw new Error('the plan requires both app.module.json and app.hbc');
-    return { plan, planFiles: Object.keys(files) };
+    let module;
+    if (override || files['app.module.json'] || files['app.hbc']) {
+      if (!overrideFilesPresent(plan)) throw new Error('the plan requires both app.module.json and app.hbc');
+      module = JSON.parse(readFileSync(resolve(stage, 'app.module.json')));
+      if (module.plan?.sha256 !== files[basename(plan)] || module.module?.sha256 !== files['app.hbc'])
+        throw new Error('the module receipt does not match the plan and bytecode');
+    }
+    return { plan, planFiles: files, module };
   } catch (error) {
     rmSync(stage, { recursive: true, force: true });
     throw staleError(`plan ${source} changed while staging or could not be staged: ${error.message}; start another run`);
@@ -523,21 +572,35 @@ export async function waitForBuild(app, say = line => console.error(line)) {
 export async function buildFirst(host, app, { say = line => console.error(line), build = appleBuild, wait = waitForBuild, bake = bakePlan, retries = 2, plan } = {}) {
   host = host === 'ios' ? 'ios' : 'macos';
   if (host === 'macos' && process.env.EXACT_MAC_BIN) return 0; // the caller's own binary: the driver says it did not check
+  const out = process.env.EXACT_BUILD_CHECK_OUT;
+  if (out) refuseCheckedLaunchEnv(host, process.env);
+  const requestedPlan = plan || driveLaunch(host).EXACT_PLAN;
+  const backend = out ? backendOriginSelection(app.dir) : undefined;
   await wait(app, say);
   await reportPrebuild(app, host === 'ios' ? ['--ios'] : [], say);
   const state = nativeBuild(host, app);
-  if (!state.missing) refuseBackendOrigin(state, app);
-  const requestedPlan = plan || driveLaunch(host).EXACT_PLAN;
+  if (!state.missing) refuseBackendOrigin(state, app, null, backend);
   // Every launch in this run uses the checked build and its selected plan.
   const checked = (overridePlan = null, build = state) => {
-    const out = process.env.EXACT_BUILD_CHECK_OUT;
-    if (!out || !build.receipt) return 0;
+    if (!out) return 0;
+    if (!build.receipt) throw staleError(`${host} build is stale: ${build.built} has no receipt; rerun exact test or agent`);
     const { dir, name, id, displayName, selector, target, outside, manifest: { deploy, share_target } } = app;
-    const server = appServer(dir), base = requestBase(dir, selectedBackend(dir));
+    const local = !!backend && onThisMachine(backend.origin);
+    const server = appServer(dir, process.env, { manifest: app.manifest, backend, local });
+    const requestBase = server?.url ?? (local ? backend.origin : null);
     const source = overridePlan ?? requestedPlan;
-    const staged = source ? stagePlan(resolve(source), dirname(out), !!overridePlan) : { plan: null, planFiles: [] };
+    const { module, ...staged } = source ? stagePlan(resolve(source), dirname(out), !!overridePlan) : { plan: null, planFiles: {} };
+    const baked = module ?? (!source && builtModule(app, JSON.parse(readFileSync(build.receipt, 'utf8'))));
+    const facts = nativeTestFacts(dir, process.env, { backend: backend?.origin ?? null,
+      bakedOrigin: baked?.backendOrigin ?? build.backendOrigin, bakedGrants: baked?.grants, signIn: !!requestBase });
+    const { built, bundle, bundled, bundledDigest, sandboxed } = build;
+    const bundleDigest = checkedBundleDigest(bundle);
+    if (!bundleDigest || digestOf(build.receipt) !== build.digest || digestOf(build.bundled) !== build.bundledDigest)
+      throw staleError(`${host} build is stale: ${bundle} changed during the startup check; rerun exact test or agent`);
     writeFileSync(out, JSON.stringify({
-      host, receipt: build.digest, backendOrigin: build.backendOrigin, requestBase: base, server, ...staged,
+      host, built, bundle, bundleDigest, bundled, bundledDigest, sandboxed, receipt: build.digest, receiptFile: build.receipt,
+      installRecord: out + '.installed', backendOrigin: build.backendOrigin, backend, requestBase, server, ...facts, ...staged,
+      variant: app.manifest.variant?.name ?? null,
       override: !!overridePlan, requestedPlan: requestedPlan ? resolve(requestedPlan) : null,
       app: { dir, name, id, displayName, selector, target, outside, manifest: { deploy, share_target }, appleCrate: app.crate('apple') },
     }));
@@ -556,7 +619,7 @@ export async function buildFirst(host, app, { say = line => console.error(line),
         refuseBuild(host, baked, app);
         return checked(null, baked);
       }
-      refuseBackendOrigin(baked, app);
+      refuseBackendOrigin(baked, app, null, backend);
       // The euxy port timed four variants with `simctl launch`, each the installed plan.
       say(`${label(host)}: ${what} changed; running the new plan on the existing build (no native rebuild). Only the agent's drives run it: a launch outside them (\`simctl launch\`, the home screen) runs the installed plan, so \`bun exact.mjs ${host === 'ios' ? 'ios' : 'mac'}\` before timing one`);
       for (const line of warningLines(app.dir, host, compilerWarnings(made.output))) say(line);
@@ -670,5 +733,5 @@ if (import.meta.main && process.argv[2] === '--tool') { // the bake tool, after 
     process.exit(2);
   }
   Promise.resolve().then(() => args[0] === 'windows' ? windowsBuildFirst(resolveApp(value('--app'))) : buildFirst(args[0], resolveApp(value('--app')), { plan: value('--plan') }))
-    .then(code => process.exit(code), error => { console.error(error.message); process.exit(1); });
+    .then(code => process.exit(code), error => { console.error(error.message); process.exit(error.stale ? 3 : 1); });
 }

@@ -2,15 +2,17 @@
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { createRequire, isBuiltin } from 'node:module';
 import { constants, networkInterfaces } from 'node:os';
 import { takePort } from './port-lock.mjs';
 import { alive, ancestors, closeJob, commandLine, endJob, endRecord, jobActive, jobHas, jobName, openJob, recordedEnd } from './processes.mjs';
 import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
 import { appModules, appSettings, appSourceInputs, readsDB } from './app-imports.mjs';
+import { staleError } from './agent-launch.mjs';
+import { walkRuntime } from '../js/bake/src/__exact_portable.mjs';
 
 // The app's own server (LLP 1116.006 D3). A local origin the data module calls, with any path under it.
 const LOCAL = /\bhttps?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{2,5}(?:\/[\w\-./]*)?/, LOCAL_SOCKET = new RegExp(LOCAL.source.replace('https?', 'wss?'));
@@ -69,8 +71,7 @@ export function requestBase(dir, chosen) {
 }
 
 /** `serverUrl`'s answer as `{ url, note }`: `note` says which origin it took and why when the code names more than one. */
-export function serverChoice(dir, env = process.env) {
-  const { modules, values, reads } = builtSettings(dir, env);
+export function serverChoice(dir, env = process.env, { modules, values, reads } = builtSettings(dir, env)) {
   const texts = [...modules].map(([path, code]) => [path, uncommented(code, path)]);
   const all = (re) => texts.flatMap(([path, t]) => [...(t ?? '').matchAll(new RegExp(re.source, 'g'))].map((m) => ({ path, url: m[0] })));
   const found = [...all(LOCAL), ...all(LOCAL_SOCKET)].map((f) => ({ ...f, url: f.url.replace(/\/$/, '').replace(/^ws/, 'http') }));
@@ -95,9 +96,9 @@ export function serverChoice(dir, env = process.env) {
  * check reads; with none, it is refused unless `server.database` is false, as a test never writes to a database it cannot tell is its own. null without a server; else `why` says what keeps it
  * from being run when the app calls no local URL (null when nothing does), `refusal` (LLP 1116.008 D1) the one line for an
  * entry that needs a database but does not read `DB`, which `test` and `verify` stop on. */
-export function appServer(dir, env = process.env) {
-  let named = null, serverArgs = [], manifest = {};
-  try { manifest = JSON.parse(readIn(dir, 'app.json') ?? '{}') ?? {}; } catch {}
+export function appServer(dir, env = process.env, checked) {
+  let named = null, serverArgs = [], manifest = checked?.manifest ?? {};
+  if (!checked) try { manifest = JSON.parse(readIn(dir, 'app.json') ?? '{}') ?? {}; } catch {}
   const argv = manifest.commands?.server, database = manifest.server?.database !== false;
   let command = null;
   if (Array.isArray(argv) && /(^|\/)bun$/.test(argv[0])) {
@@ -109,9 +110,13 @@ export function appServer(dir, env = process.env) {
   const entry = command ? named ?? command.join(' ') : [named, 'server.ts', 'server/index.ts', 'server/server.ts'].find((p) => p && readIn(dir, p) != null);
   if (!entry) return null;
   const fixture = /(^|[/\\])fixtures?[/\\]/.test(entry);
-  const selected = fixture ? backendOriginSelection(dir, env) : null;
-  const local = selected && onThisMachine(selected.origin);
-  const chosen = selected ? null : serverChoice(dir, env), url = selected ? local ? selected.origin : null : chosen.url;
+  const selected = checked
+    ? (fixture || checked.local ? checked.backend : null)
+    : fixture ? backendOriginSelection(dir, env) : null;
+  const local = checked ? selected && checked.local : selected && onThisMachine(selected.origin);
+  const settings = builtSettings(dir, env);
+  const chosen = selected ? null : serverChoice(dir, env, settings), url = selected ? local ? selected.origin : null : chosen.url;
+  const digest = checked && url ? serverDigest(dir, entry, command) : null;
   const why = !url ? `${entry} is left alone: app.ts calls no local URL (http://127.0.0.1:<port>), so where the app reaches it is unknown` : null;
   const refusal = url && database && command && !named
     ? `app.json's commands.server (${command.join(' ')}) names no file of the app to read, so whether it opens its database at the path DB names cannot be told: name its entry file in the command, or say it keeps none in app.json: "server": { "database": false }`
@@ -120,7 +125,58 @@ export function appServer(dir, env = process.env) {
     : null;
   const port = url ? Number(new URL(url).port || (new URL(url).protocol === 'https:' ? 443 : 80)) : null;
   if (selected && local) { const at = serverArgs.indexOf('--port'); if (at >= 0) serverArgs[at + 1] = String(port); }
-  return { entry, args: entry === named ? serverArgs : [], database, url, port, why, refusal, settings: builtSettings(dir, env).values, ...(chosen?.note ? { note: chosen.note } : {}), ...(fixture ? { fixture: true } : {}), ...(command ? { command } : {}) };
+  const server = { entry, args: entry === named ? serverArgs : [], database, url, port, why, refusal, settings: settings.values, ...(chosen?.note ? { note: chosen.note } : {}), ...(fixture ? { fixture: true } : {}), ...(command ? { command } : {}), ...(digest ? { digest } : {}) };
+  checkServerSources(dir, server);
+  return server;
+}
+
+function serverDigest(dir, entry, command) {
+  try {
+    if (command) throw new Error('the local sources of a custom server command cannot be determined');
+    // Bun caches resolution within a process. The server starts with an empty cache.
+    const script = `import { serverSourceDigest } from ${JSON.stringify(import.meta.url)};
+      try { console.log(serverSourceDigest(process.argv[1])); }
+      catch (error) { console.error(error.message); process.exitCode = 1; }`;
+    const result = Bun.spawnSync([process.execPath, '--eval', script, resolve(dir, entry)], { cwd: dir, timeout: 10_000 });
+    const digest = result.stdout.toString().trim();
+    if (result.exitCode !== 0 || !/^[a-f0-9]{64}$/.test(digest))
+      throw new Error(result.stderr.toString().trim() || 'could not read the server sources');
+    return digest;
+  } catch (error) {
+    throw staleError(`server ${entry} cannot be checked: ${error.message}; rerun exact test or agent`);
+  }
+}
+
+export function serverSourceDigest(entry) {
+  const files = new Set([entry]);
+  const hash = createHash('sha256');
+  for (const file of files) {
+    const at = realpathSync(file), bytes = readFileSync(at);
+    hash.update(JSON.stringify([file, at, createHash('sha256').update(bytes).digest('hex')]));
+    const loader = /\.(tsx|jsx|[cm]?[jt]s)$/.exec(at)?.[1]?.replace(/^[cm]/, '');
+    if (!loader) continue;
+    const source = bytes.toString('utf8');
+    if (/\b(?:import|require)\s*\(/.test(source)) {
+      const { program } = createRequire(import.meta.url)('rolldown/utils').parseSync(at, source);
+      walkRuntime(program, (node, local) => {
+        const imported = node.type === 'ImportExpression' ? node.source
+          : node.type === 'CallExpression' && node.callee.name === 'require' && !local.has('require') ? node.arguments[0] : null;
+        if (imported && typeof imported.value !== 'string') throw new Error(`${at} loads a module by a computed name`);
+      });
+    }
+    for (const { path, kind } of new Bun.Transpiler({ loader }).scanImports(source)) {
+      const imported = Bun.resolveSync(path, dirname(at), kind !== 'require-call');
+      if (isAbsolute(imported)) files.add(imported);
+      else if (!isBuiltin(imported) && !/^(?:bun:|bun$)/.test(imported))
+        throw new Error(`${at} imports ${path}, which is not a local file`);
+    }
+  }
+  return hash.digest('hex');
+}
+
+function checkServerSources(dir, server) {
+  if (server.digest && server.digest !== serverDigest(dir, server.entry, server.command))
+    throw staleError(`server ${server.entry} is stale: its sources changed after the startup check; rerun exact test or agent`);
 }
 
 // The app's settings as `appServer` read them: the server listens where the build calls it, as Bun's .env loading may not.
@@ -271,6 +327,7 @@ const jobGroup = (pid, job) => ({ pid, job, close: () => closeJob(job) });
  * process's end ends the server, through the supervisor's stdin, which only this process writes. `dir` takes the
  * keeper's record of the end. */
 function spawnServer(server, dir, env, stderr, owner, records) {
+  checkServerSources(dir, server);
   const command = server.command ?? [process.execPath, server.entry, ...server.args], token = randomUUID();
   const supervisor = Bun.spawn([process.execPath, SUPERVISOR, 'supervise', owner ? '1' : '0', records, token, ...command], { cwd: dir, env, detached: true, stdin: owner ? 'pipe' : 'ignore', stdout: 'pipe', stderr });
   // Its lines: `started` with the group's id, then the server's exit status.
@@ -560,7 +617,10 @@ export async function withAppServer(dir, fn, { verb = 'api-test', optional = fal
       running = await startServer(dir, server, verb, { forward: true });
       console.error(`${verb}: ${serverRun(server, verb)}`);
     }
-  } catch (e) { console.error(`${verb}: ${e.message}`); return 1; }
+  } catch (e) {
+    if (e.stale) throw e;
+    console.error(`${verb}: ${e.message}`); return 1;
+  }
   let code;
   try { code = await fn(running); } finally { await running?.stop(); }
   const deaths = running?.exits() ?? [];

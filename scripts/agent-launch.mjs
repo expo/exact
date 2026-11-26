@@ -1056,12 +1056,12 @@ const fileDigest = path => { try { return createHash('sha256').update(readFileSy
 
 /** A native bake must name the backend this drive selected before any app process starts. `command` is the rebuild
  * the refusal names. */
-export function refuseBackendOrigin(build, app, command = null) {
+export function refuseBackendOrigin(build, app, command = null, selection) {
   const source = resolve(app.dir, 'app.ts');
   if (!existsSync(source)) return;
   const literal = literalBackendOrigin(readFileSync(source, 'utf8'), createRequire(import.meta.url)('rolldown/utils').parseSync);
   if (!literal) return;
-  const selected = backendOriginSelection(app.dir) ?? { origin: literal, source: 'app.ts origin' };
+  const selected = (selection === undefined ? backendOriginSelection(app.dir) : selection) ?? { origin: literal, source: 'app.ts origin' };
   const actual = build?.backendOrigin;
   if (!actual) throw new Error(`the native build receipt has no backend origin; ${command ? `run ${command}` : 'rebuild'} before driving this app`);
   if (actual !== selected.origin) throw new Error(
