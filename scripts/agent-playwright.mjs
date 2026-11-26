@@ -202,7 +202,7 @@ export function playwrightPointer({ name, move, down, up, wait }) {
       checkDragDeadline();
       return { contact: opts.id, phase: 'down', at: [px, py], delivery: 'platform', pointer: 'mouse' };
     }
-    if (!contact) throw new Error('no contact is down');
+    if (!contact) throw Object.assign(new Error('no contact is down'), { contact: false });
     if (kind === 'move') {
       const pressed = contact, from = { ...pressed };
       const to = { x: opts.x ?? contact.x + (opts.dx ?? 0), y: opts.y ?? contact.y + (opts.dy ?? 0) };

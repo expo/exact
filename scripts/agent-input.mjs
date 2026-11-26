@@ -427,12 +427,12 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
      * The platform owns hit-testing, recognition, scrolling and animation: the app receives whatever it delivers,
      * and a carrier that cannot hold a contact answers `delivery: "unsupported"` rather than faking one. */
     async pointer(phase, opts = {}, land = true) {
-      checkDragDeadline();
       if (phase === 'cancel') {
         pointerArguments(phase, opts);
         const release = cancelActiveDrag(s);
         if (release) return release;
       }
+      checkDragDeadline();
       requireDragOwner(s);
       // One sample at most each `FRAME_MS`, as the carriers space a timed move; a sample refused partway, or a contact
       // the carrier ended, answers as the move. A clock the display holds (live frame capture, `--live`) refuses the
@@ -509,19 +509,18 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
         // A move refused partway answers where the delivered samples left the contact.
         else if (phase === 'move' && Array.isArray(r.at)) s.contact = { x: r.at[0], y: r.at[1] };
       }
-      // On timeout the drag needs only confirmation that the carrier released the pointer.
-      if (!land) return r;
       // A virtual hold seeks the clock (platformer R7). The reader can wait without a new commit.
       if (phase === 'hold' && opts.virtual && opts.ms > 0 && !(r.waitMs > 0) &&
           !(Number.isFinite(r.clock) && r.clock > before))
         await s.clock(`+${opts.ms}`);
-      return s.landed({
+      const receipt = {
         ...r,
         phase,
         delivery: r.delivery ?? s.input.delivery(phase),
         carrier: host,
         mode: r.mode ?? timing,
-      });
+      };
+      return land ? s.landed(receipt) : receipt;
     },
     /** Deliver a location to a navigation root (LLP 1038 D11), or set an input's text through the host's text input
      * path; an iframe accepts `{text, selector}` or `{key, selector}` for its guest. */

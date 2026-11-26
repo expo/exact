@@ -9,8 +9,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { basename, resolve } from 'node:path';
 import { FIELDS } from '../host/web/drag-in.js';
 
-/** Observed only while CDP holds a finger. Cancellation ends the DOM pointer
- * stream even though the driver still has to lift its injected touch. */
+/** CDP releases a mouse at its last delivered move. For touch, pointercancel ends the DOM stream before the injected finger lifts. */
 export function pageContact(phase, point) {
   const key = '__exactAgentContact', previous = globalThis[key];
   if (phase === 'position') return previous?.at;
@@ -88,6 +87,8 @@ const expectations = new WeakSet();
 const dragOwners = new WeakMap();
 const deliveringPhase = new AsyncLocalStorage();
 const guardedCarriers = new WeakSet();
+const readingGesture = new AsyncLocalStorage();
+const pendingRelease = new WeakMap();
 
 // Public input cannot replace the contact while its driver is waiting for a move or landing.
 export function requireDragOwner(session) {
@@ -97,8 +98,11 @@ export function requireDragOwner(session) {
 
 // Only the caller outside the gesture can interrupt it. Its cancel receives the carrier’s release receipt.
 export function cancelActiveDrag(session) {
-  if (checkDragDeadline() || deliveringPhase.getStore()) return;
-  return dragOwners.get(session.carrier ?? session)?.cancel?.();
+  const owner = dragOwners.get(session.carrier ?? session);
+  if (deliveringPhase.getStore() || !owner?.cancel) return;
+  const source = readingGesture.getStore();
+  if (source ? source !== owner || session.held : checkDragDeadline()) return;
+  return owner.cancel();
 }
 
 // A library caller can send raw input on a carrier shared by successive sessions.
@@ -120,9 +124,17 @@ export function guardDragInput(carrier) {
     carrier.input = async (...args) => {
       checkDragDeadline();
       requireDragOwner(carrier);
-      const reply = await input(...args);
-      checkDragDeadline();
-      return reply;
+      const owner = deliveringPhase.getStore();
+      const tracked = owner?.pending !== undefined && ['down', 'move', 'up', 'cancel'].includes(args[1]);
+      if (args[1] === 'down' && pendingRelease.has(carrier)) throw new Error('the preceding drag still has input awaiting delivery');
+      if (tracked) owner.pending++;
+      try {
+        const reply = await input(...args);
+        checkDragDeadline();
+        return reply;
+      } finally {
+        if (tracked && --owner.pending === 0 && pendingRelease.get(carrier) === owner) pendingRelease.delete(carrier);
+      }
     };
   }
   if (typeof carrier.close === 'function') {
@@ -408,7 +420,9 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   const lastCheckpoint = legs.findLastIndex(leg => leg.during.length);
   const controller = new AbortController(), released = Promise.withResolvers();
   const owner = {
+    pending: 0,
     cancel() {
+      manual = true;
       controller.abort(new Error('drag cancelled'));
       return released.promise.then(reply => {
         if (!reply) throw new Error('the carrier did not confirm the cancel');
@@ -416,8 +430,9 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
       });
     },
   };
-  let releaseReply;
+  let releaseReply, manual = false;
   requireDragOwner(s);
+  if (pendingRelease.has(carrier)) throw new Error('the preceding drag still has input awaiting delivery');
   if (s.contact) throw new Error('a contact is already down; use `tap up` or `tap cancel` first');
   dragOwners.set(s.carrier ?? s, owner);
   let deadline = lastCheckpoint >= 0 ? performance.now() + DRAG_BOUNDS.total : undefined;
@@ -425,7 +440,12 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   const within = work => withDragDeadline(deadline, work, controller.signal);
   const deliver = work => within(() => deliveringPhase.run(owner, work));
   const phase = async (name, opts) => {
+    // A requested wall-clock hold spends its own duration before the checkpoint.
+    const credit = name === 'hold' && timing === 'platform' && deadline !== undefined ? opts.ms : 0;
+    const started = performance.now();
+    if (credit) deadline += credit;
     const r = await deliver(() => s.pointer(name, opts));
+    if (credit) deadline -= Math.max(0, credit - (performance.now() - started));
     if (r.error || r.delivery === 'unsupported') throw new Error(`drag: ${name}: ${r.error ?? r.reason ?? 'unsupported'}`);
     if (r.landError) throw new Error(`drag: ${name} was delivered; landing what it started failed: ${r.landError}`);
     if (deadline !== undefined && (r.closed || r.contact === false)) throw new Error(`drag: ${name}: the contact ended before the checkpoint`);
@@ -495,7 +515,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
         before = s.now;
         for (const op of leg.during) {
           s.held = target;
-          try { done.push(await within(() => op())); } finally { s.held = null; }
+          try { done.push(await within(() => readingGesture.run(owner, op))); } finally { s.held = null; }
         }
       } catch (error) {
         if (leg.during.some(op => expectations.has(op)) || error instanceof DragTimeout) {
@@ -514,6 +534,8 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     // A `down` that threw may still have pressed: release at the carrier, whose own contact decides.
     const expired = error instanceof DragTimeout;
     const interrupted = controller.signal.aborted || expired;
+    // A carrier may have accepted a move without submitting it yet. Its reply ends that uncertainty.
+    if (expired && owner.pending) pendingRelease.set(carrier, owner);
     controller.abort(error);
     const bounded = lastCheckpoint >= 0 || interrupted;
     if (!down) s.contact = { x: start[0], y: start[1] };
@@ -521,7 +543,10 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
       if (!s.contact) break;
       // An ordinary failure still lands the release. After timeout, each release attempt gets time to acknowledge.
       const releaseBy = bounded ? Math.max(deadline ?? 0, performance.now() + 1000) : undefined;
-      const r = await withDragDeadline(releaseBy, () => deliveringPhase.run(owner, () => s.pointer(name, {}, !expired))).catch(() => null);
+      const r = await withDragDeadline(releaseBy, () => deliveringPhase.run(owner, () => s.pointer(name, {}, !interrupted))).catch(cause => {
+        if (cause.contact === false) s.contact = null;
+        return null;
+      });
       if (r && !r.error && r.delivery !== 'unsupported') { releaseReply = r; s.contact = null; }
     }
     if (bounded && s.contact && s.close) {
@@ -537,7 +562,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   } finally {
     controller.abort(new Error('the drag has ended'));
     dragOwners.delete(s.carrier ?? s);
-    released.resolve(releaseReply ?? up);
+    released.resolve(manual && releaseReply ? s.landed(releaseReply) : releaseReply ?? up);
   }
   return noted(await s.tagged({ tapped: node.id, target, ...(scrolled ? { scrolled } : {}), at: down.at, drag: said, lifted: up.at, ...(done.length ? { during: done } : {}), delivery: down.delivery, carrier: host, mode: timing }), [...new Set(phaseNotes), ...await reorderNotes(s, mark)]);
 }

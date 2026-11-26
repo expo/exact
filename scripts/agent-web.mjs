@@ -856,7 +856,7 @@ async function openWebUnlocked({
               ...(mouse ? { pointer: 'mouse' } : {}),
             };
           }
-          if (!contact) throw new Error('no contact is down');
+          if (!contact) throw Object.assign(new Error('no contact is down'), { contact: false });
           // A clock moved while the contact was down (`clock +500` between legs) moves its timestamps too, so a
           // velocity read from them sees the pause; the move's own time ends at the clock's.
           const caught = async (ms) => { contact.t = Math.max(contact.t, (contact.origin + (await ask({ op: 'tags' })).clock - ms) / 1000); };

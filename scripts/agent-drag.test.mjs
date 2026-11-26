@@ -360,6 +360,32 @@ test.each(['library', 'plain', 'expect', 'landing', 'move'])('one drag deadline 
   } finally { DRAG_BOUNDS.total = bound; }
 }, 2500);
 
+test('a timed-out carrier move finishes before another contact is admitted', async () => {
+  const move = Promise.withResolvers(), bound = DRAG_BOUNDS.total, phases = [];
+  const s = await open({ host: 'ios', device: true }, { openDevice: async () => ({
+    host: 'ios', close: async () => {},
+    async ask(req) {
+      if (req.op === 'layout') return { nodes: [{ id: 7, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 100, h: 100 } };
+      return { lines: [], next: 0 };
+    },
+    async input(id, phase) {
+      if (phase === 'move') await move.promise;
+      phases.push(phase);
+      return { at: [50, 50], delivery: 'platform' };
+    },
+  }) });
+  const drag = dx => dragTap({ s, carrier: s.carrier, node: { id: 7 }, target: 'area', host: 'ios', timing: 'platform' },
+    { dx, dy: 0, over: 1, during: [() => 'held'] });
+  try {
+    DRAG_BOUNDS.total = 120;
+    await expect(drag(1)).rejects.toThrow('timed out');
+    await expect(drag(0)).rejects.toThrow('input awaiting delivery');
+    move.resolve();
+    expect((await drag(0)).during).toEqual(['held']);
+    expect(phases).toEqual(['down', 'cancel', 'move', 'down', 'up']);
+  } finally { move.resolve(); DRAG_BOUNDS.total = bound; await s.close(); }
+});
+
 test('raw wire and carrier input cannot release another caller’s checkpoint', async () => {
   const phases = [];
   const s = await open({ host: 'ios', device: true }, { openDevice: async () => ({
