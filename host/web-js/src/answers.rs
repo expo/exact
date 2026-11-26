@@ -149,12 +149,12 @@ impl<'a> Answers<'a> {
     }
 }
 
-pub(super) fn status_owners(owners: &[u32]) -> String {
+pub(super) fn status_owners(owners: &[u32], scope: &crate::code::Scope) -> String {
     format!(
         "[{}]",
         owners
             .iter()
-            .map(|n| format!("e{n}"))
+            .map(|&n| scope.status_owner(n))
             .collect::<Vec<_>>()
             .join(",")
     )
