@@ -129,6 +129,7 @@ shape Nav
   groups: NavGroup[]
   year: string
   shareImage: string
+  siteName: string
   agentIntro: string
   startPrompt: string
   startLabel: string

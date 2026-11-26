@@ -104,13 +104,22 @@ function structuredData(p: Page): object {
 const headFor = (p: Page | undefined) =>
   p ? `${ORIGIN ? `<link rel="canonical" href="${esc(ORIGIN + p.path)}">` : ''}<link rel="alternate" type="text/markdown" href="${esc(ORIGIN + (p.path === '/' ? '/index' : p.path))}.md"><link rel="llms-txt" href="/llms.txt"><meta property="og:locale" content="${site.locale}"><script type="application/ld+json">${json(structuredData(p))}</script>` : '';
 
+const SHARED_TITLE_TAGS = [/<meta property="og:title" content="[^"]*">/, /<meta name="twitter:title" content="[^"]*">/];
+function withSharedTitles(html: string, p: Page | undefined): string {
+  if (!p) return html;
+  return SHARED_TITLE_TAGS.reduce((text, tag) => {
+    if (!tag.test(text)) throw new Error(`postbuild: ${p.path} has no tag matching ${tag.source}`);
+    return text.replace(tag, found => found.replace(/content="[^"]*"/, () => `content="${esc(p.title)}"`));
+  }, html);
+}
+
 const byFile = new Map(pages.map(p => [htmlOf(p.path), p]));
 let prepainted = 0;
 for (const f of readdirSync(DIST, { recursive: true, encoding: 'utf8' }).filter(f => f.endsWith('.html'))) {
   const text = readFileSync(join(DIST, f), 'utf8');
   if (!text.includes(BASE) || text.includes(PREPAINT)) continue;
   const page = byFile.get(f.split('\\').join('/'));
-  writeFileSync(join(DIST, f), text.replace(/<link rel="icon" href="[^"]*">/, FAVICON).replace(BASE, PREPAINT + headFor(page)));
+  writeFileSync(join(DIST, f), withSharedTitles(text, page).replace(/<link rel="icon" href="[^"]*">/, FAVICON).replace(BASE, PREPAINT + headFor(page)));
   prepainted++;
 }
 
