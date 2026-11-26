@@ -151,47 +151,62 @@ export function activities(readers) {
 const geometryAbsent = { available: false, generation: 0, size: null, frame: null, observations: null, cornerInsets: null, cornerRadii: null, margins: null, regions: null, scroll: null, keyboard: null, chrome: null };
 /** The geometry facts (LLP 1123 D6) as the browser has laid the page out, read after each commit settles: of the
  * element whose `id` a reader names, its border box's size and its frame in the space it asks for, as the browser
- * draws it, the document's outside every owner, the viewport's for `"window"` and a node's border box's for `"node"`;
- * unavailable where the element is gone or has no box. The quantities only a native host has, and the observations and
+ * draws it, the document's outside every owner, the viewport's for `"window"` and a node's border box's for `"node"`,
+ * `none` there where that node or an ancestor of it is transformed, since a bounding rectangle does not recover its
+ * own coordinates; unavailable where the element is gone or has no box. The quantities only a native host has, and the observations and
  * margins until the web's owners report them (D17), are `none`. An answer the layout moves is answered again in a
  * commit of its own, its `generation` the number of the layout it reads; at D6's bound of eight such commits in a row
  * the answers hold until a commit or a resize with another cause. */
 export function geometry(readers) {
   let generation = 0, chain = 0, ours = false;
+  // What each reader was told, by its name and arguments, so instances of one declaration reading other elements keep
+  // their own; compared with the generation left out, which a refresh moves for every reader
   const told = new Map();
-  const answer = (args) => {
+  const answer = (args, generation) => {
     const doc = globalThis.document, find = (id) => typeof id === "string" ? doc?.getElementById?.(id) : null;
     const el = find(args?.[0]);
     if (!el?.getClientRects?.().length) return { ...geometryAbsent, generation };
     const r = el.getBoundingClientRect(), space = args[1] ?? "owner", node = space === "node" ? find(args[2]) : null;
     const origin = space === "owner" ? [-(globalThis.scrollX ?? 0), -(globalThis.scrollY ?? 0)] : space === "window" ? [0, 0]
-      : node?.getClientRects().length ? [node.getBoundingClientRect().left, node.getBoundingClientRect().top] : null;
+      : node?.getClientRects().length && !transformed(node) ? [node.getBoundingClientRect().left, node.getBoundingClientRect().top] : null;
     const frame = origin && { x: r.left - origin[0], y: r.top - origin[1], width: r.width, height: r.height };
     return { ...geometryAbsent, available: true, generation, size: { width: r.width, height: r.height }, frame };
   };
-  const shapedAnswer = (name, args) => {
-    const [fields, shape] = readers[name], v = answer(args);
+  const shapedAnswer = (name, args, at = generation) => {
+    const [fields, shape] = readers[name], v = answer(args, at);
     return shape ? shaped(shape, v, "geometry", name) : fields.map(n => v[n]);
   };
+  const key = (name, args) => JSON.stringify([name, args ?? []]);
   (data.reserved ??= {}).exactGeometry = (_, args, name) => {
-    const out = shapedAnswer(name, args);
-    told.set(name, { args, json: JSON.stringify(out) });
-    return out;
+    told.set(key(name, args), { name, args, json: JSON.stringify(shapedAnswer(name, args, 0)) });
+    return shapedAnswer(name, args);
   };
   // An answer the layout moved since it was read, answered again; at the bound, held
   const check = (cause) => {
     chain = cause === "geometry" ? chain + 1 : 0;
-    const moved = [...told].filter(([name, t]) => JSON.stringify(shapedAnswer(name, t.args)) !== t.json).map(([name]) => name);
+    const moved = [...new Set([...told.values()].filter((t) => JSON.stringify(shapedAnswer(t.name, t.args, 0)) !== t.json).map((t) => t.name))];
     if (!moved.length) return;
     if (chain >= 8) return say("geometry-feedback: a geometry fact moved its own layout eight times in a row; its answers hold until another cause lays the page out (LLP 1123 D6)");
     generation++;
     ours = true;
+    // A refreshed name's snapshots go, and those its readers still read come back with the reads: an instance that
+    // has gone reads nothing and leaves none
+    for (const [k, t] of told) if (moved.includes(t.name)) told.delete(k);
     commit(() => { for (const r of Resources) if (r.source === "exactGeometry" && moved.includes(r.name)) R(r); }, "geometry");
   };
   rt.After?.push(() => { const cause = ours ? "geometry" : "commit"; ours = false; check(cause); });
   if (typeof addEventListener === "function") addEventListener("resize", () => check("resize"));
 }
 /** The web has no native chain, and no settle loop that leaves a box unsettled until D17: each answered unavailable. */
+/** Whether `el` or an ancestor of it is transformed, which a bounding rectangle cannot undo. */
+function transformed(el) {
+  for (let e = el; e?.nodeType === 1; e = e.parentElement) {
+    const s = getComputedStyle(e);
+    if ((s.transform && s.transform !== "none") || (s.scale && s.scale !== "none") || (s.rotate && s.rotate !== "none") || (s.translate && s.translate !== "none")) return true;
+  }
+  return false;
+}
+
 export function nativeChain(readers) {
   (data.reserved ??= {}).exactNativeChain = (_, a, name) => byName(readers, name, { available: false, generation: 0, entries: null });
 }

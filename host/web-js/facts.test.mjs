@@ -271,3 +271,39 @@ test("a geometry fact is the browser's layout of the element, answered again as 
     expect(said.some(m => m.startsWith('geometry-feedback'))).toBe(true);
   } finally { globalThis.document = prior; rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("each geometry reader's answer is its own, refreshed only for a move, and a transformed node's space is none", async () => {
+  // LLP 1123 D6: two instances of one declaration reading two elements keep their own snapshots, so moving the second
+  // refreshes; a refresh's new generation alone moves nothing, so a quiet layout makes no further commit; and a frame in
+  // a transformed node's space is none
+  const rects = { hero: { left: 10, top: 120, width: 200, height: 80 }, card: { left: 0, top: 100, width: 300, height: 400 } };
+  const style = {};
+  const element = (id) => rects[id] && { nodeType: 1, id, getClientRects: () => [rects[id]], getBoundingClientRect: () => rects[id] };
+  const prior = { document: globalThis.document, getComputedStyle: globalThis.getComputedStyle };
+  Object.assign(globalThis, { document: { getElementById: element }, scrollX: 0, scrollY: 0, getComputedStyle: (el) => style[el.id] ?? {} });
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-instances-'));
+  try {
+    writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [];
+      export const Resources = [{ name: 'g', source: 'exactGeometry' }];
+      export function R(r) { commits.at(-1).read.push(...['hero', 'card'].map((id) => data.reserved.exactGeometry(null, [id], r.name))); }
+      export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
+      export const Refusal = Error, Kept = () => '', say = () => {};`);
+    const { geometry } = await import(resolve(dir, 'facts.js'));
+    const { data, After, commits } = await import(resolve(dir, 'rt.js'));
+    const rect = { x: 'n', y: 'n', width: 'n', height: 'n' };
+    geometry({ g: [['generation', 'frame'], { generation: 'n', frame: ['?', rect] }] });
+    const read = (args) => data.reserved.exactGeometry(null, args, 'g');
+    expect(read(['hero'])).toEqual([0, [10, 120, 200, 80]]);
+    expect(read(['card'])).toEqual([0, [0, 100, 300, 400]]);
+    // The second instance's element moves: one commit answers both at generation 1, and then nothing more
+    rects.card = { left: 0, top: 110, width: 300, height: 400 };
+    for (const a of After) a();
+    expect(commits.map((c) => c.why)).toEqual(['geometry']);
+    expect(commits[0].read).toEqual([[1, [10, 120, 200, 80]], [1, [0, 110, 300, 400]]]);
+    // A node's space under a transform cannot be recovered from rectangles
+    style.card = { transform: 'matrix(2, 0, 0, 2, 0, 0)' };
+    expect(read(['hero', 'node', 'card'])).toEqual([1, null]);
+  } finally { Object.assign(globalThis, prior); rmSync(dir, { recursive: true, force: true }); }
+});
