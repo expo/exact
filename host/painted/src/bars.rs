@@ -167,7 +167,7 @@ impl<D: DataSource> Host<D> {
             wanted.extend(placed.into_iter().map(|id| (id, HostCover::Whole)));
         }
         let (mut routes, mut tabs, mut stacks) = (Vec::new(), None, Vec::new());
-        let mut locals = BTreeMap::new();
+        let (mut locals, mut bands) = (BTreeMap::new(), BTreeMap::new());
         if let (Some(root), Some((above, below, foot))) = (root, room) {
             let back = kernel
                 .node(root)
@@ -241,6 +241,7 @@ impl<D: DataSource> Host<D> {
                             (env.left - sheet_margin).max(0.0),
                         ];
                         locals.insert(*route, cover);
+                        bands.insert(*route, cover);
                         wanted.insert(*route, HostCover::Edges(cover));
                         continue;
                     }
@@ -277,11 +278,10 @@ impl<D: DataSource> Host<D> {
                     // The page supplies the local sides used to position a route.
                     // Feeding its resulting overlap back into those lengths can
                     // move the route straight back under the cutout.
+                    let band = [top.max(env.top), env.right, below.max(env.bottom), env.left];
+                    bands.insert(*route, band);
                     if top > 0.0 || below > 0.0 {
-                        locals.insert(
-                            *route,
-                            [top.max(env.top), env.right, below.max(env.bottom), env.left],
-                        );
+                        locals.insert(*route, band);
                     }
                 }
             }
@@ -305,6 +305,7 @@ impl<D: DataSource> Host<D> {
         }
         let bars = &mut self.navigation.bars;
         (bars.root, bars.routes, bars.tabs, bars.stacks) = (root, routes, tabs, stacks);
+        bars.bands = bands;
         let held_locals = std::mem::replace(&mut bars.locals, locals);
         let before = std::mem::replace(&mut bars.covers, wanted);
         self.navigation.lifted = (self.navigation.bars.covers.iter())

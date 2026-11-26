@@ -410,6 +410,13 @@ impl<D: DataSource> Presenter<D> {
         sheet_span(self.viewport.0)
     }
 
+    /// Where the stage shows the sheet `modal` opened, its left edge and top
+    /// in the page, points, while it shows one.
+    pub(super) fn sheet_origin(&self, modal: NodeKey) -> Option<(f32, f32)> {
+        let sheet = self.stage.sheets.iter().find(|s| s.modal == modal)?;
+        Some((self.sheet_span().0, self.sheet_top_now(sheet)))
+    }
+
     fn sheet_top_now(&self, sheet: &Sheet) -> f32 {
         let now = self.host.now();
         match &self.stage.gesture {

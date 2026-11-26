@@ -268,6 +268,7 @@ export function helperClassifications(group) {
     ["painted:host/painted/src/paint/shape.rs", "PaintedBox::contains"],
     ["painted:host/painted/src/paint/shared.rs", "SharedState::update"],
     ["painted:host/painted/src/presenter/alert.rs", "Presenter::alert_anchor_scroll Presenter::backdrop"],
+    ["painted:host/painted/src/presenter/owners.rs", "Presenter::owner_updates"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::surface_clock"],
     ["painted:host/painted/src/presenter/top/status.rs", "Presenter::place_status_items Presenter::status_icon Presenter::status_items Presenter::status_menu Presenter::status_menu_ancestors Presenter::status_menu_pixels Presenter::status_popover Presenter::status_quit_removed Presenter::with_exit"],
   ]),

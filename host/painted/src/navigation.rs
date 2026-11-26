@@ -234,6 +234,10 @@ pub struct Projection {
     /// Each barred or sheeted route's local insets (LLP 1123 D9), top right
     /// bottom left, as the kernel was last told.
     pub(crate) locals: BTreeMap<ViewId, [f32; 4]>,
+    /// Each route's band as the bars and its sheet give it (LLP 1123 D2),
+    /// top right bottom left, barred or not: the room its local insets
+    /// carry, or the window's insets where it has no bar.
+    pub(crate) bands: BTreeMap<ViewId, [f32; 4]>,
 }
 
 impl Navigation {

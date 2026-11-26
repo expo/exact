@@ -1064,4 +1064,4 @@ impl<D: DataSource> Presenter<D> {
 
 #[cfg(test)]
 #[path = "bars_tests.rs"]
-mod tests;
+pub(in crate::presenter) mod tests;
