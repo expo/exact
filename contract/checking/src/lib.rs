@@ -440,6 +440,14 @@ impl<'a> Visit<'a> {
         }
     }
 
+    /// An option match's subject and `some` binder name.
+    pub fn option_match(self) -> Option<(&'a Expr, &'a str)> {
+        match self.node {
+            Node::Match { subject, some, .. } => Some((subject, some.0.as_str())),
+            _ => None,
+        }
+    }
+
     /// A repetition's region identity, binders, subject and key.
     pub fn repetition(self) -> Option<(u32, &'a str, Option<&'a str>, &'a Expr, &'a Expr)> {
         match self.node {

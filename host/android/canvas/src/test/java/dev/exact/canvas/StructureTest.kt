@@ -47,4 +47,48 @@ class StructureTest {
         assertEquals(6, s.layerEnd(b, 6, words.size))
         assertEquals(-1, s.layerEnd(b, 2, words.size - 1))
     }
+
+    @Test fun nestedGroupsTrackIndependentSignaturesRangesAndParents() {
+        val s = Structure()
+        val beforeRow = intArrayOf(17, 10, 0, 0)
+        val innerRow = intArrayOf(17, 20, 0, 40)
+        val afterRow = intArrayOf(17, 30, 0, 200)
+        val stream = IntBuffer.wrap(
+            intArrayOf(20, 1) + beforeRow + intArrayOf(20, 2) + innerRow + intArrayOf(21) + afterRow + intArrayOf(21)
+        )
+        var tok10 = 1; var tok20 = 2; var tok30 = 3
+        val token: (Int) -> Int = { when (it) { 10 -> tok10; 20 -> tok20; else -> tok30 } }
+        val root = s.read(stream, token = token)
+        val outerBefore = s.groupSigs.getValue(1).copyOf()
+        val innerBefore = s.groupSigs.getValue(2).copyOf()
+        assertEquals(listOf(1, 2), s.groups.map { it[0] })
+        assertEquals(mapOf(2 to 1), s.groupParents)
+        assertArrayEquals(intArrayOf(2, stream.limit() - 1), s.groupRange(stream, 1))
+        assertArrayEquals(intArrayOf(8, 12), s.groupRange(stream, 2))
+
+        val outerDirect = ArrayList<Int>()
+        s.forEachDirectRow(stream, s.groupRange(stream, 1)!!) { outerDirect.add(stream.get(it + 1)) }
+        assertEquals(listOf(10, 30), outerDirect)
+
+        val innerDirect = ArrayList<Int>()
+        s.forEachDirectRow(stream, s.groupRange(stream, 2)!!) { innerDirect.add(stream.get(it + 1)) }
+        assertEquals(listOf(20), innerDirect)
+
+        // Updating an inner row changes only the inner group, leaving outer and root untouched.
+        tok20 = 22
+        assertFalse(s.updateRows(token))
+        assertEquals(setOf(2), s.changedGroups)
+        assertArrayEquals(outerBefore, s.groupSigs.getValue(1))
+        assertFalse(innerBefore.contentEquals(s.groupSigs.getValue(2)))
+        assertArrayEquals(root, s.read(stream, token = token))
+        assertArrayEquals(outerBefore, s.groupSigs.getValue(1))
+
+        // Updating an outer row after the nested group changes only the outer group.
+        val innerNow = s.groupSigs.getValue(2).copyOf()
+        tok30 = 33
+        assertFalse(s.updateRows(token))
+        assertEquals(setOf(1), s.changedGroups)
+        assertArrayEquals(innerNow, s.groupSigs.getValue(2))
+        assertArrayEquals(root, s.read(stream, token = token))
+    }
 }

@@ -49,6 +49,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val rowTop = android.util.SparseIntArray()
     private val rowGroup = android.util.SparseIntArray()
     private var ingestGroup = 0
+    private val ingestGroups = ArrayList<Int>(4)
+    private val liveGroups = HashSet<Int>()
+    private val recordedGroups = HashSet<Int>()
+    private val fieldMatrix = android.graphics.Matrix()
     /** offscreen=0: a layer's dash is recorded each frame wherever its row is, to compare ([Layers.rowShows]). */
     private val skipOffscreen = (context as Activity).intent.getStringExtra("offscreen") != "0"
 
@@ -62,7 +66,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val k = rowTop.indexOfKey(row)
         if (k < 0) return true
         val y = java.lang.Float.intBitsToFloat(rowTop.valueAt(k))
-        val at = y + (groups[rowGroup.get(row, 0)]?.translationY ?: 0f)
+        val at = y + groupOffsetY(rowGroup.get(row, 0))
         val margin = height / 3f
         return at + rowTall.get(row, height) > -margin && at < height + margin
     }
@@ -123,13 +127,13 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         p.slot = { slots.nodes[it] }
         return p
     }
-    private val main: Player = resolving(Player(fonts))
+    private val main: Player = resolving(Player(fonts)).also { it.onGroupRecorded = { id -> recordedGroups.add(id) } }
     /** Records a layer again from its kept drawing ([Layers]), which can come while [main] replays a row: a Player's
      * scratch state is one replay's. */
     private val relayer: Player = resolving(Player(fonts))
     private val background = Player(fonts).also { it.origins = nativeOrigins }
     private val shared = SharedElements(main, { images[it] }, layers::mapShared, layers::sharedOpacity) { id, rect ->
-        groups[id]?.let { rect.offset(it.translationX, it.translationY) }
+        rect.offset(groupOffsetX(id), groupOffsetY(id))
     }
     /** Each picture's slot; its own Player records one again while [main] may be mid-replay. */
     private val slots = Slots(Player(fonts).also { p -> p.image = { images[it] }; p.animated = { animated[it] } },
@@ -397,6 +401,30 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** Scroller [id]'s rows' node, once a stream drew them. */
     internal fun group(id: Int): android.graphics.RenderNode? = groups[id]
+    internal fun groupOffsetX(id: Int): Float {
+        var x = 0f; var cur = id
+        while (cur != 0) { groups[cur]?.let { x += it.translationX }; cur = structure.groupParents[cur] ?: 0 }
+        return x
+    }
+    internal fun groupOffsetY(id: Int): Float {
+        var y = 0f; var cur = id
+        while (cur != 0) { groups[cur]?.let { y += it.translationY }; cur = structure.groupParents[cur] ?: 0 }
+        return y
+    }
+    internal fun groupParentOffsetX(id: Int): Float = groupOffsetX(structure.groupParents[id] ?: 0)
+    internal fun groupParentOffsetY(id: Int): Float = groupOffsetY(structure.groupParents[id] ?: 0)
+    internal fun hasParentGroup(id: Int): Boolean = structure.groupParents.containsKey(id)
+    internal fun fieldVisible(node: android.graphics.RenderNode, w: Float, h: Float, out: RectF): Boolean {
+        out.set(0f, 0f, w, h)
+        return nativeOrigins.transform(node, fieldMatrix, out)
+    }
+    private fun retireGroups() {
+        val it = groups.entries.iterator()
+        while (it.hasNext()) {
+            val (id, node) = it.next()
+            if (id !in liveGroups) { node.discardDisplayList(); it.remove() }
+        }
+    }
     /** A frame that draws what moved, with nothing recorded again. */
     internal fun tick() { ticker?.invalidate() }
     /** The view's own drawing is recorded again from the last stream (what it names changed). */
@@ -421,7 +449,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val owned = owner != null
         if (owned) takeOwned() else if (taken) taken = false else take()
         android.os.Trace.beginSection("exact replay")
-        ops?.let { main.replay(canvas, it, 0, it.limit()); nativeOrigins.publishing = false; natives?.placeFrames() }
+        ops?.let { main.replay(canvas, it, 0, it.limit()); nativeOrigins.publishing = false; natives?.placeFrames(); fields?.place(); retireGroups() }
         shared.draw(canvas)
         textSelection.draw(canvas)
         android.os.Trace.endSection()
@@ -567,7 +595,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (coverTrace && painted) traceNewRows()
         rootRetained = allQuiet
         // The root display list stands. All of its changed children have published their new placements.
-        if (painted && rootRetained) { nativeOrigins.publishing = false; natives?.placeFrames() }
+        if (painted && rootRetained) { nativeOrigins.publishing = false; natives?.placeFrames(); fields?.place(); retireGroups() }
         timerApplied = publication
         if (any) { ingestBegan = began; ingestEnded = System.nanoTime() }
         timerReport()
@@ -581,9 +609,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val same = retain && !structure.opaque && root.contentEquals(rootSig)
         rootSig = root
         if (same && recordGroups) {
+            recordedGroups.clear()
             for (g in structure.groups) {
                 val id = g[0]
-                if (structure.groupSigs[id]?.contentEquals(groupSigs[id]) == true) continue
+                if (id in recordedGroups || structure.groupSigs[id]?.contentEquals(groupSigs[id]) == true) continue
                 if (!recordGroup(stream, g, "exact group again")) return false
             }
         }
@@ -603,12 +632,13 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** After a stream, and each move of the reader's own, which may make none ([Owner]): the feed, the scrollers' rows,
      * the hosted fields and a view lent to another element. */
-    internal fun placeScrolled() { placeFeed(); scrolling.place(); fields?.place(); Formas.placed() }
+    internal fun placeScrolled() { scrolling.place(); placeFeed(); fields?.place(); Formas.placed() }
 
     private fun placeFeed() {
+        val g = groups[feed]
+        if (g != null && scrolling.shift(feed) == null) nativeOrigins.translate(g, feedBaseX, feedY())
         nearNatives()
-        val g = groups[feed] ?: return
-        nativeOrigins.translate(g, feedBaseX, feedY())
+        if (g == null) return
         // cover=1: how far the view reaches past the feed's drawn rows (px, either side), a trace counter.
         if (coverTrace && reach()) {
             val y = feedY()
@@ -634,27 +664,23 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * the direction they are: 0 in view), the nearest, and how many are in view. */
     private fun traceNewRows() {
         val b = ops ?: return
-        val range = groupRange(b, feed) ?: return
+        val range = structure.groupRange(b, feed) ?: return
         val y = feedY()
         var nearest = Long.MAX_VALUE; var inView = 0; var n = 0
-        var i = range[0]
         var drawn = 0; var above = 0f; var below = 0f
-        while (i < range[1]) {
-            if (b.get(i) == 17) {
-                val id = b.get(i + 1)
-                drawn++
-                val t = f(b, i + 3) + y
-                above = Math.max(above, -t); below = Math.max(below, t + (rows[id]?.height ?: 1) - height)
-                if (definedAt.containsKey(id) && traced.add(id)) {
-                    n++
-                    val top = f(b, i + 3) + y
-                    val bottom = top + (rows[id]?.height ?: 1)
-                    val d = when { bottom < 0 -> -bottom; top > height -> top - height; else -> 0f }.toLong()
-                    if (d == 0L) inView++
-                    nearest = Math.min(nearest, d)
-                }
+        structure.forEachDirectRow(b, range) { i ->
+            val id = b.get(i + 1)
+            drawn++
+            val t = f(b, i + 3) + y
+            above = Math.max(above, -t); below = Math.max(below, t + (rows[id]?.height ?: 1) - height)
+            if (definedAt.containsKey(id) && traced.add(id)) {
+                n++
+                val top = f(b, i + 3) + y
+                val bottom = top + (rows[id]?.height ?: 1)
+                val d = when { bottom < 0 -> -bottom; top > height -> top - height; else -> 0f }.toLong()
+                if (d == 0L) inView++
+                nearest = Math.min(nearest, d)
             }
-            i = structure.end(b, i)
         }
         android.os.Trace.setCounter("exact group rows", drawn.toLong())
         android.os.Trace.setCounter("exact group above px", above.toLong())
@@ -673,9 +699,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val nearAhead = (context as Activity).intent.getStringExtra("nearahead")?.toFloatOrNull() ?: Structure.NEAR_AHEAD
     private val nearBehind = (context as Activity).intent.getStringExtra("nearbehind")?.toFloatOrNull() ?: Structure.NEAR_BEHIND
     private val nearKeepMore = (context as Activity).intent.getStringExtra("nearkeep")?.toFloatOrNull() ?: Structure.NEAR_KEEP
-    /** The feed's rows in the last stream: ids and tops in the group's coordinates. */
+    /** Every scroll group's rows in the last stream: ids, tops in their group's coordinates, and group id. */
     private var feedIds = IntArray(64)
     private var feedTops = FloatArray(64)
+    private var feedGroups = IntArray(64)
     private var feedCount = -1
     /** The feed's group in the stream being applied (the owner names it with the stream). */
     private var feedNext = 0
@@ -684,27 +711,27 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val nearKnown = HashSet<Int>()
     private val nearSeen = HashSet<Int>()
 
-    /** The last stream's feed rows, read once a stream. */
+    /** All grouped rows in the last stream, read once a stream so switching feeds keeps nested views live. */
     private fun feedRows() {
         feedCount = -1
         val n = natives ?: return
         if (!lazyOn) return
-        val range = ops?.let { groupRange(it, feedNext) }
-        if (range == null) {
-            // No feed to place rows in: every element has its view.
-            n.everywhere()
-            return
-        }
-        val b = ops!!
-        var k = 0
-        var i = range[0]
-        while (i < range[1]) {
-            if (b.get(i) == 17) {
-                if (k == feedIds.size) { feedIds = feedIds.copyOf(2 * k); feedTops = feedTops.copyOf(2 * k) }
-                feedIds[k] = b.get(i + 1); feedTops[k] = f(b, i + 3); k++
+        val b = ops ?: run { n.everywhere(); return }
+        var k = 0; var sawGroup = false; var cur = 0
+        ingestGroups.clear()
+        var i = 0; val lim = b.limit()
+        while (i < lim) {
+            when (b.get(i)) {
+                20 -> { sawGroup = true; ingestGroups.add(cur); cur = b.get(i + 1) }
+                21 -> cur = if (ingestGroups.isEmpty()) 0 else ingestGroups.removeAt(ingestGroups.lastIndex)
+                17 -> if (cur != 0) {
+                    if (k == feedIds.size) { feedIds = feedIds.copyOf(2 * k); feedTops = feedTops.copyOf(2 * k); feedGroups = feedGroups.copyOf(2 * k) }
+                    feedIds[k] = b.get(i + 1); feedTops[k] = f(b, i + 3); feedGroups[k] = cur; k++
+                }
             }
             i = structure.end(b, i)
         }
+        if (!sawGroup) { n.everywhere(); return }
         feedCount = k
         n.lazy = true
     }
@@ -713,14 +740,13 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private fun nearNatives() {
         val n = natives ?: return
         if (feedCount < 0 || !n.nearing) return
-        val y = feedY()
         val h = height.toFloat()
         val up = (if (scrollV < 0f) nearAhead else nearBehind) * h
         val down = (if (scrollV > 0f) nearAhead else nearBehind) * h
         nearShow.clear(); nearKeep.clear(); nearKnown.clear(); nearSeen.clear()
         for (k in 0 until feedCount) {
             val id = feedIds[k]
-            val top = feedTops[k] + y
+            val top = feedTops[k] + groupOffsetY(feedGroups[k])
             val bottom = top + (rows[id]?.height ?: 1)
             nearKnown.add(id)
             if (bottom > -up - nearKeepMore * h && top < h + down + nearKeepMore * h) {
@@ -754,13 +780,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private fun nearRows(stream: IntBuffer) {
         nearY.clear()
         if (!nearOn || !async || Math.abs(scrollV) * Structure.NEAR_S < height * 0.1f) return
-        val range = groupRange(stream, feed) ?: return
+        val range = structure.groupRange(stream, feed) ?: return
         var residual = 0f
         for ((_, d) in sent) residual += d
-        var i = range[0]
-        while (i < range[1]) {
-            if (stream.get(i) == 17) nearY[stream.get(i + 1)] = f(stream, i + 3) - residual
-            i = structure.end(stream, i)
+        structure.forEachDirectRow(stream, range) { i ->
+            nearY[stream.get(i + 1)] = f(stream, i + 3) - residual
         }
     }
 
@@ -800,21 +824,17 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private var reachUp = 0f
     private fun reach(): Boolean {
         val b = ops ?: return false
-        val range = groupRange(b, feed) ?: return false
+        val range = structure.groupRange(b, feed) ?: return false
         val y = feedY()
         val top = -y; val bottom = -y + height
         // The drawn rows, by top: a row still recording on the worker (nothing drawn in its place) ends the reach.
         spans.clear()
-        var i = range[0]
-        while (i < range[1]) {
-            if (b.get(i) == 17) {
-                val id = b.get(i + 1)
-                val node = rows[id] ?: pending[id]?.let { rows[it] }
-                val ry = f(b, i + 3)
-                spans.add(floatArrayOf(ry, ry + (node?.height ?: 1).toFloat(), if (node != null) 1f else 0f,
-                    if (pending.containsKey(id)) 1f else 0f, id.toFloat()))
-            }
-            i = structure.end(b, i)
+        structure.forEachDirectRow(b, range) { i ->
+            val id = b.get(i + 1)
+            val node = rows[id] ?: pending[id]?.let { rows[it] }
+            val ry = f(b, i + 3)
+            spans.add(floatArrayOf(ry, ry + (node?.height ?: 1).toFloat(), if (node != null) 1f else 0f,
+                if (pending.containsKey(id)) 1f else 0f, id.toFloat()))
         }
         spans.sortBy { it[0] }
         var down = top
@@ -839,48 +859,29 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * node (p: that one has no drawing), M nothing to draw), and the stream's age. */
     fun tagState(): String {
         val b = ops ?: return "none"
-        val range = groupRange(b, feed) ?: return "nofeed"
+        val range = structure.groupRange(b, feed) ?: return "nofeed"
         val y = feedY()
         val sb = StringBuilder()
         sb.append("y=").append(y.toInt()).append(" h=").append(height).append(" age=").append((System.nanoTime() - tookAt) / 1000).append(" |")
-        var i = range[0]
-        while (i < range[1]) {
-            if (b.get(i) == 17) {
-                val id = b.get(i + 1)
-                val own = rows[id]
-                val prev = pending[id]?.let { rows[it] }
-                val node = own ?: prev
-                val top = f(b, i + 3) + y
-                val bottom = top + (node?.height ?: 0)
-                if (bottom > -400 && top < height + 400) {
-                    val how = when {
-                        own != null -> if (own.hasDisplayList()) "D" else "E"
-                        prev != null -> if (prev.hasDisplayList()) "P" else "p"
-                        else -> "M"
-                    }
-                    sb.append(' ').append(id).append(':').append(top.toInt()).append(':').append(bottom.toInt()).append(':').append(how)
+        structure.forEachDirectRow(b, range) { i ->
+            val id = b.get(i + 1)
+            val own = rows[id]
+            val prev = pending[id]?.let { rows[it] }
+            val node = own ?: prev
+            val top = f(b, i + 3) + y
+            val bottom = top + (node?.height ?: 0)
+            if (bottom > -400 && top < height + 400) {
+                val how = when {
+                    own != null -> if (own.hasDisplayList()) "D" else "E"
+                    prev != null -> if (prev.hasDisplayList()) "P" else "p"
+                    else -> "M"
                 }
+                sb.append(' ').append(id).append(':').append(top.toInt()).append(':').append(bottom.toInt()).append(':').append(how)
             }
-            i = structure.end(b, i)
         }
         return sb.toString()
     }
     private var tookAt = 0L
-
-    /** Group [id]'s body in [b] (after its GROUP_BEGIN, up to its GROUP_END), or null. */
-    private fun groupRange(b: IntBuffer, id: Int): IntArray? {
-        var i = 0
-        var from = -1
-        val n = b.limit()
-        while (i < n) {
-            val op = b.get(i)
-            val j = structure.end(b, i)
-            if (op == 20 && b.get(i + 1) == id) from = j
-            if (op == 21 && from >= 0) return intArrayOf(from, i)
-            i = j
-        }
-        return null
-    }
 
     /** A deferred placement can now draw its fallback or completed row. */
     private var rowsReady = false
@@ -897,8 +898,12 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         rowPainted = false
         val stream = ops ?: return@FrameCallback
         var pageChanged = structure.updateRows(::rowToken)
-        if (!pageChanged) for (g in structure.groups) {
-            if (g[0] in structure.changedGroups && !recordGroup(stream, g, "exact group rows done")) pageChanged = true
+        if (!pageChanged) {
+            recordedGroups.clear()
+            for (g in structure.groups) {
+                val id = g[0]
+                if (id !in recordedGroups && id in structure.changedGroups && !recordGroup(stream, g, "exact group rows done")) pageChanged = true
+            }
         }
         if (pageChanged) invalidate() else if (painted || structure.changedGroups.isNotEmpty()) tick()
     }
@@ -939,11 +944,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             if (retained(stream)) Change.GROUP else Change.ROOT
         }
         told?.let { scrolling.told(it) }
-        scrolling.place()
+        scrolling.place(); nearNatives()
         fields?.place()
         Formas.placed()
         textSelection.refresh()
-        if (change == Change.GROUP) { nativeOrigins.publishing = false; natives?.placeFrames() }
+        if (change == Change.GROUP) { nativeOrigins.publishing = false; natives?.placeFrames(); fields?.place(); retireGroups() }
         return change
     }
 
@@ -982,7 +987,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         layers.flush { slots.gone(Slots.layer(it)); natives?.layerFreed(it) }
         unrowedSeen.clear()
         nativeLayerRows.clear()
-        rowTop.clear(); rowGroup.clear(); ingestGroup = 0
+        rowTop.clear(); rowGroup.clear(); ingestGroups.clear(); ingestGroup = 0; liveGroups.clear()
         nearRows(stream)
         // A row's platform view waits for [feedRows] to say where the row is (it gives every one its view when it cannot).
         natives?.lazy = lazyOn
@@ -1200,8 +1205,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     i += 4
                 }
                 18 -> { freeing.add(b.get(i + 1)); i += 2 }
-                20 -> { if (ingestRow == 0) ingestGroup = b.get(i + 1); i += 2 }
-                21 -> { if (ingestRow == 0) ingestGroup = 0; i += 1 }
+                20 -> { if (ingestRow == 0) { val gid = b.get(i + 1); liveGroups.add(gid); ingestGroups.add(ingestGroup); ingestGroup = gid }; i += 2 }
+                21 -> { if (ingestRow == 0) ingestGroup = if (ingestGroups.isEmpty()) 0 else ingestGroups.removeAt(ingestGroups.lastIndex); i += 1 }
                 23 -> {
                     // Its row's bounds, clipped: a slot is drawn in its row's coordinates.
                     val s = slots.node(b.get(i + 1))
@@ -1344,11 +1349,9 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private fun placeLater() {
         if (laterRows.isEmpty()) return
         val b = ops ?: return
-        val range = groupRange(b, feedNext) ?: return
-        var i = range[0]
-        while (i < range[1]) {
-            if (b.get(i) == 17) laterRows[b.get(i + 1)]?.let { it.top = f(b, i + 3) }
-            i = structure.end(b, i)
+        val range = structure.groupRange(b, feedNext) ?: return
+        structure.forEachDirectRow(b, range) { i ->
+            laterRows[b.get(i + 1)]?.let { it.top = f(b, i + 3) }
         }
     }
 

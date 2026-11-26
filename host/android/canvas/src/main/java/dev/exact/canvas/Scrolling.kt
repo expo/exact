@@ -1011,7 +1011,8 @@ internal class Scrolling(private val view: ExactView) {
         holder.setPosition(0, 0, view.width, view.height)
         val c = holder.beginRecording()
         if (!live) c.drawRenderNode(g) else {
-            val l = s.port.left.roundToInt(); val t = s.port.top.roundToInt()
+            val l = (s.port.left - view.groupParentOffsetX(s.id)).roundToInt()
+            val t = (s.port.top - view.groupParentOffsetY(s.id)).roundToInt()
             val w = max(1, s.port.width().roundToInt()); val h = max(1, s.port.height().roundToInt())
             val port = RenderNode("exact port")
             port.setPosition(l, t, l + w, t + h)
