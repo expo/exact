@@ -8,7 +8,7 @@ const SITE = resolve(import.meta.dir, '..');
 const DIST = resolve(SITE, process.argv[2] ?? 'dist');
 const ORIGIN = site.origin;
 
-type Page = { path: string; route: string; title: string; description: string; source: string; section: string; updated: string };
+type Page = { path: string; route: string; title: string; description: string; source: string; section: string; updated: string; breadcrumbs: { name: string; path: string }[] };
 const pages: Page[] = JSON.parse(readFileSync(join(SITE, 'content/pages.json'), 'utf8'));
 if (!existsSync(join(DIST, 'routes.json'))) throw new Error(`${DIST} has no routes.json: run web-build first`);
 
@@ -91,13 +91,10 @@ function structuredData(p: Page): object {
     isPartOf: { '@type': 'WebSite', name: site.name, ...(ORIGIN ? { url: `${ORIGIN}/` } : {}) },
     ...url,
   };
-  if (!ORIGIN) return { '@context': 'https://schema.org', ...article };
+  if (!ORIGIN || !p.breadcrumbs.length) return { '@context': 'https://schema.org', ...article };
   const breadcrumb = {
     '@type': 'BreadcrumbList',
-    itemListElement: [
-      { '@type': 'ListItem', position: 1, name: site.name, item: `${ORIGIN}/` },
-      { '@type': 'ListItem', position: 2, name: p.title, item: ORIGIN + p.path },
-    ],
+    itemListElement: [...p.breadcrumbs, { name: p.title, path: p.path }].map(({ name, path }, i) => ({ '@type': 'ListItem', position: i + 1, name, item: ORIGIN + path })),
   };
   return { '@context': 'https://schema.org', '@graph': [article, breadcrumb] };
 }

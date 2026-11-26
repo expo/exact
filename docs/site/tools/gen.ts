@@ -419,15 +419,15 @@ const homeMarkdown = () => {
   const rows = agentRows.map(r => `- [${r.title}](${md('/agents', r.anchor)}): ${r.detail}.`);
   return `\n## Explore the docs\n\n${cards.join('\n')}\n\n## For AI agents\n\n${AGENT_INTRO} [See all agent resources](${md('/agents')}).\n\n${rows.join('\n')}\n`;
 };
-const crumbsOf = (page: (typeof pages)[number]) => {
+const trailOf = (page: (typeof pages)[number]) => {
   const section = sections.find(s => s.pages.some(n => n.source === page.source));
   if (!section || page.route === 'home') return [];
   const tab = tabs.find(t => t.id === section.tab)!;
   const entry = section.pages.find(n => n.source === page.source)!;
   return [
-    { title: tab.title, href: sections.find(s => s.tab === tab.id)!.pages[0].path, icon: tab.icon },
-    ...(section.title === tab.title ? [] : [{ title: section.title, href: '', icon: '' }]),
-    ...(entry.route === page.route ? [] : [{ title: bySource.get(page.source)!.title, href: entry.path, icon: '' }]),
+    { title: tab.title, path: sections.find(s => s.tab === tab.id)!.pages[0].path, icon: tab.icon, linked: true },
+    ...(section.title === tab.title ? [] : [{ title: section.title, path: (firstPage(section) ?? entry).path, icon: '', linked: false }]),
+    ...(entry.route === page.route ? [] : [{ title: bySource.get(page.source)!.title, path: entry.path, icon: '', linked: true }]),
   ];
 };
 const groups = sections.filter(section => section.pages.some(p => !p.hidden && !p.landing)).map((section, g) => ({
@@ -468,7 +468,7 @@ pages.forEach(page => {
     path: page.path,
     movedFrom: Object.entries(redirects).filter(([, to]) => to === page.path).map(([from]) => from),
     section: sections.find(x => x.pages.some(n => n.source === page.source))?.title ?? '',
-    crumbs: crumbsOf(page),
+    crumbs: trailOf(page).map(({ title, path, icon, linked }) => ({ title, href: linked ? path : '', icon })),
     title: page.title,
     description: page.description,
     subtitle: page.part ? '' : page.description,
@@ -515,7 +515,7 @@ const badRedirects = Object.entries(redirects).flatMap(([from, to]) => [
 ]);
 for (const e of badRedirects) console.error(e);
 writeFileSync(join(OUT, 'redirects.ts'), `const moved: { origin: string; redirects: Record<string, string>; pages: { path: string; title: string; route: string }[] } = ${JSON.stringify({ origin: ORIGIN, redirects, pages: listed.map(p => ({ path: p.path, title: p.title, route: p.route })) })};\nexport default moved;\n`);
-writeFileSync(join(OUT, 'pages.json'), JSON.stringify(listed.map(p => ({ path: p.path, route: p.route, title: p.title, description: p.description, source: p.source, section: sections.find(x => x.pages.some(n => n.source === p.source))?.title ?? '', updated: isoDateOf(p.source) })), null, 2));
+writeFileSync(join(OUT, 'pages.json'), JSON.stringify(listed.map(p => ({ path: p.path, route: p.route, title: p.title, description: p.description, source: p.source, section: sections.find(x => x.pages.some(n => n.source === p.source))?.title ?? '', updated: isoDateOf(p.source), breadcrumbs: trailOf(p).map(({ title, path }) => ({ name: title, path })) })), null, 2));
 
 const app = readFileSync(APP, 'utf8');
 const begin = app.indexOf(ROUTES_BEGIN), end = app.indexOf(ROUTES_END);
