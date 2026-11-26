@@ -2,7 +2,7 @@
 use super::super::bars::tests::{barred, tap, Nothing, APP};
 use super::super::stage::{sheet_span, SHEET_HANDLE};
 use super::super::*;
-use exact_kernel::{KeyboardReport, OwnerUpdate};
+use exact_kernel::{Keyboard, KeyboardReport, OwnerUpdate};
 
 fn update(p: &Presenter<Nothing>, test_id: &str) -> OwnerUpdate {
     let kernel = p.host().kernel();
@@ -38,7 +38,11 @@ fn a_routes_update_is_the_room_its_bars_take() {
         (&home.margins, &home.segments, &home.chrome, &home.regions),
         (&None, &None, &None, &None)
     );
-    assert_eq!(home.keyboard, KeyboardReport::default());
+    assert_eq!(
+        home.keyboard,
+        KeyboardReport::Dismissed,
+        "Android's window has a software keyboard, none showing"
+    );
     let page = p.page_origin();
     assert_eq!(
         home.window_map.unwrap().0,
@@ -184,5 +188,47 @@ fn a_desktop_shells_routes_keep_bands_of_zero_and_retire_with_their_stack() {
     assert!(
         p.owner_updates().iter().all(|(v, _)| Some(*v) != gone),
         "no update once it has left its stack"
+    );
+}
+
+/// Android's software keyboard is the window's bottom inset, docked across its width, in each owner's space; a desktop
+/// shell, which tells no window, leaves it unreported.
+#[test]
+fn a_routes_keyboard_is_the_windows_in_its_own_space() {
+    let (mut p, _) = barred(APP);
+    let mut window = *p.window().unwrap();
+    window.keyboard = [0., 0., 300., 0.];
+    assert_eq!(p.set_window(window), None);
+    let _ = p.after_commit();
+    let home = update(&p, "route-home");
+    let [.., ox, oy] = home.window_map.unwrap().0;
+    let (width, height) = window.size;
+    let shown = Keyboard {
+        frame: [-ox, height - 300. - oy, width, 300.],
+        docked: true,
+    };
+    assert_eq!(home.keyboard, KeyboardReport::Shown(shown));
+    let kernel = p.host.runner_mut().kernel_mut();
+    let route = kernel
+        .node_by_key(kernel.find_by_test_id("route-home")[0])
+        .unwrap()
+        .id;
+    assert!(
+        kernel.update_owner(route, home).is_ok(),
+        "the kernel takes it"
+    );
+    let (desktop, error) = Presenter::boot_with(
+        &crate::test_plan(APP),
+        Nothing,
+        (412., 840.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(
+        update(&desktop, "route-home").keyboard,
+        KeyboardReport::Unreported
     );
 }
