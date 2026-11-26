@@ -1374,6 +1374,10 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         let settled = { nav.transitionCoordinator == nil }
+        // The bar's hidden state, which Exact keeps with UIKit's flag (iOS 18)
+        let kept = { (hidden: Bool, what: String) in
+            if #available(iOS 18.0, *) { XCTAssertEqual(tabs.isTabBarHidden, hidden, "the kept state: \(what)") }
+        }
         try tapNode(session, "detail")
         until("Detail pushed") { nav.viewControllers.count == 2 && settled() && barShows(tabs) }
         spin(0.3)
@@ -1389,6 +1393,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertTrue(barShows(tabs), "Second's root shows the bar, Home's late push notwithstanding")
         tapTab(tabs, 0)
         until("back on Chat over Detail, hidden") { tabs.selectedIndex == 0 && settled() && nav.viewControllers.count == 3 && !barShows(tabs) }
+        kept(true, "Chat")
         spin(0.3)
         // A cancelled interactive pop back to Detail keeps it hidden; a completed one shows it.
         let pop = InteractivePop()
@@ -1402,9 +1407,11 @@ final class NavigationBasicsIOSTests: XCTestCase {
         until("the cancelled pop leaves Chat, the bar hidden") { settled() && nav.viewControllers.count == 3 && !barShows(tabs) }
         spin(0.3)
         XCTAssertFalse(barShows(tabs), "still hidden over Chat")
+        kept(true, "Chat, the pop cancelled")
         pop.interactive = false
         nav.popViewController(animated: true)
         until("back on Detail, the bar shows") { settled() && nav.viewControllers.count == 2 && barShows(tabs) }
+        kept(false, "Detail")
         session.presenter.navigationHost.setAppDelegate(nav, nil)
         // A route that shows the tablist pushed over Chat, which hides it: hidden still, as Chat is under it.
         nav.popToRootViewController(animated: true)
@@ -1417,6 +1424,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         until("Detail over Chat") { settled() && nav.viewControllers.count == 3 }
         spin(0.4)
         XCTAssertFalse(barShows(tabs), "Chat under Detail keeps the bar hidden")
+        kept(true, "Detail over Chat")
         try tapNode(session, "compose-detail") // a batch: the stack at rest is followed again
         spin(0.4)
         XCTAssertFalse(barShows(tabs), "and after an ordinary update")
