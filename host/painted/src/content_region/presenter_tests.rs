@@ -14,6 +14,8 @@ mod input_clock;
 mod popover;
 #[path = "projection_discriminator_tests.rs"]
 mod projection_discriminator;
+#[path = "snap_change_tests.rs"]
+mod snap_changes;
 const APP: &str = r#"component App
   state title = "old picture"
   state link = "https://old.example/"
