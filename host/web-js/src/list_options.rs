@@ -151,7 +151,8 @@ impl Em<'_> {
                     .into_iter()
                     .flatten()
                 {
-                    values.push(format!("{getter}()"));
+                    let g = scope.frame_binding(getter, frame.depth);
+                    values.push(format!("{g}()"));
                 }
             }
         }
