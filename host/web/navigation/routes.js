@@ -120,7 +120,9 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
 // Base wide navigation on the space within each horizontal segment
 let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map(), shownPlaceholders = new WeakMap();
 const activationRequired = new WeakSet(), activated = new WeakSet();
-const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
+// @ref LLP 1123 D7 — a popover route is a presentation, the web's sheet until it presents popovers of its own
+const shownAs = (route) => route?.getAttribute("navigationPresentation") === "popover" ? "modal" : route?.getAttribute("navigationPresentation");
+const sheet = (route) => ["modal", "fullscreen"].includes(shownAs(route));
 // @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
 // `navigationInitialDetent` names, else the first, among the detents UIKit keeps (ModalIOS.swift `keptDetents`: a
 // word it cannot read, and one out of order, are dropped). neutral.css sizes it from `data-exact-detent` and
@@ -236,7 +238,7 @@ const sheetAt = (routes, i) => {
     return -1;
   }
   for (let j = i; j > 0; j--) {
-    const p = routes[j].getAttribute("navigationPresentation");
+    const p = shownAs(routes[j]);
     if (p === "modal" || p === "fullscreen") {
       return p === "modal" ? j : -1;
     }
@@ -247,7 +249,7 @@ export const overPage = (route) => {
   if (!SHEETS) {
     return false;
   }
-  const p = route?.getAttribute("navigationPresentation");
+  const p = shownAs(route);
   if (p !== "fullscreen") {
     return p === "modal";
   }
@@ -858,7 +860,7 @@ function appBack(route) {
   }
   // without its fragment, which would scroll it again (LLP 1153 D5)
 }
-const closedNone = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation")) && route.getAttribute("closedby") === "none";
+const closedNone = (route) => sheet(route) && route.getAttribute("closedby") === "none";
 /** Press the Back control wherever it is, shown or not, as UIKit's Back presses it (NavigationBack.swift `control`),
 * unless it is disabled, or inert (the web's choice: iOS's Back reads no inert); else why it was not pressed. */
 function pressBack(nav) {
@@ -1161,7 +1163,7 @@ export const navigation = {
         // A route pushed inside a sheet goes Back to the route before it in the sheet, as Android's Back does there.
         for (const nav of [...root.querySelectorAll("[navigationBack]")].reverse()) {
           const route = selectedRoute(nav), routes = routesOf(nav), inSheet = route && sheetAt(routes, routes.indexOf(route)) >= 0;
-          if (!(inSheet || ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"))) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
+          if (!(inSheet || sheet(route)) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
             continue;
           }
           event.preventDefault();
@@ -1305,7 +1307,7 @@ export const navigation = {
         }
         const modal = over[presented], beneath = routes.findLastIndex((r, i) => i < presented && !over[i]);
         if (SHEETS) {
-          setScrim(panels[stack] ?? nav, routes[presented]?.getAttribute("navigationPresentation") === "modal");
+          setScrim(panels[stack] ?? nav, shownAs(routes[presented]) === "modal");
         }
         detailRows(routes, found);
         if (stack === at && list) {
@@ -1441,7 +1443,7 @@ export const navigation = {
         url: last?.url ?? null,
         route: key,
         stack: index >= 0 ? routes.slice(0, index + 1).map((r) => r.getAttribute("navigationKey")) : [],
-        presentation: ["modal", "fullscreen"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
+        presentation: ["modal", "fullscreen", "popover"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
         source: selected?.getAttribute("navigationSource") ?? null,
         closedby: selected?.getAttribute("closedby") ?? null,
         transition: {

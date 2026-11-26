@@ -377,7 +377,7 @@
   /* Modal dimming belongs to the host; UIKit supplies its own backdrop. It dims the route the
      sheet covers (the navigation glue marks it), so the sheet's own background paints undimmed (recipes F6).
      neutral.css supplies the sheet's ground; authored paint wins. */
-  [navigationPresentation="modal"] { isolation: isolate; position: relative; }
+  :is([navigationPresentation="modal"], [navigationPresentation="popover"]) { isolation: isolate; position: relative; }
   [data-exact-covered]::after { content: ""; position: absolute; inset: 0; background: #00000033; pointer-events: none; }
   /* A platform material (host policy, LLP 1053.000 D3, D4): the schema's approximation of the named material, from the variables the host sets
      (element.rs `material_css`). It wins over an authored backdrop-filter on the same node, as the native hosts do. */

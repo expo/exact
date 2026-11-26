@@ -226,7 +226,7 @@ export function observe(views, inactive = () => false) {
       const overlaps = (lo, hi, start, length, allowZero) => length > 0 && (allowZero && hi === lo
         ? lo >= start && lo <= start + length : Math.min(hi, start + length) > Math.max(lo, start));
       if (!overlaps(b.left, b.right, clip.x, clip.w, !y) || !overlaps(b.top, b.bottom, clip.y, clip.h, y)) continue;
-      const sheet = el.closest('[navigationPresentation="modal"], [data-exact-in-sheet]');
+      const sheet = el.closest('[navigationPresentation="modal"], [navigationPresentation="popover"], [data-exact-in-sheet]');
       if (y && sheet && W < 900 && H >= 480 && (sheet.getAnimations().some(a => a.playState === 'running') ||
           sheet.$sheetCanGrow && sheet.getBoundingClientRect().height < H - 12 && !fixedHeightBetween(el, sheet))) continue;
       // Only a measured row supports a claim about a positive port. A zero port hides even an unmounted row.

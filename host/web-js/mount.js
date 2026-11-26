@@ -382,7 +382,7 @@ export function each(p, list, key, row, pure) {
         list.every(r => r.frag) &&
         !a.previousSibling &&
         !b.nextSibling &&
-        !viewChildren(parent).some(r => r.getAttribute('navigationPresentation') === 'modal')
+        !viewChildren(parent).some(r => ['modal', 'popover'].includes(r.getAttribute('navigationPresentation')))
       ) {
         endAll(gone);
         Portals?.rescue(parent);
