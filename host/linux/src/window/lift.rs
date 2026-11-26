@@ -3,10 +3,15 @@
 //! seat and serial, which winit's events lack and Wayland's `start_drag`
 //! needs; a lift names its press by them, and the listener starts the drag
 //! only while that press is still the seat's grab. The drag is a copy-only
-//! data source whose types are ready at the lift, sent without blocking in
-//! the listener's loop, with the node's picture as its icon.
+//! data source whose text and link are ready at the lift, sent without
+//! blocking in the listener's loop, with the node's picture as its icon.
+//! Its files go as copies made at the first request for a file type
+//! (`staging.rs`), as a URI list and, while the document portal serves,
+//! as the portal's file transfer key.
 
+use super::staging::Staging;
 use super::{nonblocking, Command, Heard, Listener};
+use exact_painted::file_transfer::{Portal, Transfer};
 use exact_painted::presenter::drag_out::{Lift, LiftPicture, Lifter, Offers};
 use smithay_client_toolkit::reexports::client::{
     protocol::{
@@ -27,12 +32,12 @@ use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
 use std::cell::{Cell, RefCell};
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, PipeWriter, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The types a lift offers its text as: UTF-8 by name, then X11's name for
@@ -42,11 +47,17 @@ pub(super) const TEXTS: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
 pub(super) const URI_LIST: &str = "text/uri-list";
 /// Mozilla's titled link, the form Firefox and Chromium read a link in.
 pub(super) const MOZ_URL: &str = "text/x-moz-url";
-/// What the window's drags offer of D1's values: files are stage 7's.
+/// The document portal's file transfer key, then GTK's older name for it,
+/// which a sandboxed receiver redeems for the files.
+pub(super) const KEYS: [&str; 2] = [
+    "application/vnd.portal.filetransfer",
+    "application/vnd.portal.files",
+];
+/// What the window's drags offer of D1's values.
 pub(super) const OFFERS: Offers = Offers {
     text: true,
     url: true,
-    files: false,
+    files: true,
 };
 /// How long after a target asks for a type its bytes may take to go: a
 /// target that stops reading then gets no more.
@@ -97,11 +108,18 @@ impl Lifts {
     pub(super) fn take(&self) -> Option<Command> {
         let (press, lift) = self.lifted.borrow_mut().take()?;
         let mut offers: Vec<(&'static str, Arc<[u8]>)> = Vec::new();
-        if !lift.url.is_empty() {
+        let files = (!lift.files.is_empty()).then(|| Files {
+            staging: Staging::new(lift.files, lift.assets, lift.app),
+            link: lift.url.clone(),
+        });
+        // With files, the URI list waits for their copies
+        if !lift.url.is_empty() && files.is_none() {
             offers.push((
                 URI_LIST,
                 uri_list(&[] as &[&Path], &lift.url).into_bytes().into(),
             ));
+        }
+        if !lift.url.is_empty() {
             offers.push((MOZ_URL, moz_url(&lift.url).into()));
         }
         if !lift.text.is_empty() {
@@ -115,9 +133,17 @@ impl Lifts {
         Some(Command::Lift {
             press,
             offers,
+            files,
             icon,
         })
     }
+}
+
+/// A lift's files: their copies, made at the first request for a file type,
+/// and the link the URI list holds after them.
+pub(super) struct Files {
+    staging: Arc<Staging>,
+    link: String,
 }
 
 /// `url` as `text/x-moz-url`: UTF-16 in the host's byte order with no byte
@@ -152,6 +178,230 @@ pub(super) fn uri_list(files: &[impl AsRef<Path>], url: &str) -> String {
         list.push_str("\r\n");
     }
     list
+}
+
+/// A line for the app's journal through `proxy`, from any thread.
+pub(super) fn journal_to(
+    proxy: winit::event_loop::EventLoopProxy<super::super::Event>,
+) -> impl Fn(String) + Send + 'static {
+    move |line| {
+        let _ = proxy.send_event(super::super::Event::Drag(Heard::Journal(line)));
+    }
+}
+
+/// Register a drag's copies with the portal for a target that asked for
+/// its key at `requested`, once they are made, all within 10 seconds of the
+/// later of the request and the copies' end ([`due`]): the transfer, or
+/// none, goes to `answer`, then a byte to `made`. A transfer the listener no
+/// longer waits for is stopped.
+fn register(
+    staging: &Staging,
+    requested: Instant,
+    answer: &Mutex<Registration>,
+    made: &PipeWriter,
+    journal: &dyn Fn(String),
+) {
+    let (copies, at) = staging.wait();
+    let portal = Portal::session();
+    let key = match copies.len() {
+        0 => None,
+        count => portal
+            .send(count, |n| copies.open(n), due(requested, at))
+            .inspect_err(|e| {
+                journal(format!(
+                    "drag: the document portal did not take its files: {e}"
+                ))
+            })
+            .ok(),
+    };
+    let mut registration = answer.lock().unwrap_or_else(|e| e.into_inner());
+    match (&*registration, key) {
+        (Registration::Abandoned, Some(transfer)) => {
+            drop(registration);
+            portal.stop(&transfer);
+        }
+        (Registration::Abandoned, None) => {}
+        (_, transfer) => *registration = Registration::Answered(transfer),
+    }
+    let _ = (&*made).write(&[1]);
+}
+
+/// The key requests the listener holds: each target's pipe, kept here so
+/// that it closes by its deadline whatever the worker registering the copies
+/// does, until the worker's key goes out as a [`Sending`].
+#[derive(Default)]
+pub(super) struct Keys {
+    keyed: Vec<Keyed>,
+}
+
+/// A target's request for the portal's key: its pipe, when it came, the
+/// drag's copies, and the worker's answer.
+struct Keyed {
+    pipe: std::fs::File,
+    requested: Instant,
+    staging: Arc<Staging>,
+    answer: Arc<Mutex<Registration>>,
+}
+
+/// Where a worker's registration of a drag's copies is: under way, ended
+/// with a key or none, or given up by the listener, so that a key that
+/// comes later is stopped.
+#[derive(Default)]
+enum Registration {
+    #[default]
+    Waiting,
+    Answered(Option<Transfer>),
+    Abandoned,
+}
+
+/// When a file type's answer is due: 10 seconds after the later of its
+/// request and the copies' end.
+fn due(requested: Instant, copied: Instant) -> Instant {
+    requested.max(copied) + DEADLINE
+}
+
+impl Keys {
+    /// Hold `pipe` for a key registered for `staging`'s copies, the
+    /// registration on a thread of its own; the pipe closes at once, with
+    /// no key, when none can start.
+    fn request(
+        &mut self,
+        pipe: std::fs::File,
+        staging: Arc<Staging>,
+        made: &Arc<PipeWriter>,
+        journal: impl Fn(String) + Send + 'static,
+    ) {
+        let answer = Arc::new(Mutex::new(Registration::default()));
+        let requested = Instant::now();
+        let (copies, answered, made) = (staging.clone(), answer.clone(), made.clone());
+        let started = std::thread::Builder::new()
+            .name("exact-drag-key".into())
+            .spawn(move || register(&copies, requested, &answered, &made, &journal));
+        if started.is_ok() {
+            self.keyed.push(Keyed {
+                pipe,
+                requested,
+                staging,
+                answer,
+            });
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.keyed.is_empty()
+    }
+
+    /// When the next request's time ends, once its copies are made.
+    fn due(&self) -> Option<Instant> {
+        self.keyed
+            .iter()
+            .filter_map(|k| Some(due(k.requested, k.staging.copies()?.1)))
+            .min()
+    }
+
+    /// Each answered key as a [`Sending`] due when its registration's time
+    /// ends; and each pipe whose worker gave no key, or did not answer by
+    /// then, closed with nothing, its key stopped if it comes later.
+    fn settle(&mut self, now: Instant) -> Vec<Sending> {
+        let mut sends = Vec::new();
+        for keyed in std::mem::take(&mut self.keyed) {
+            let Some((_, at)) = keyed.staging.copies() else {
+                self.keyed.push(keyed);
+                continue;
+            };
+            let deadline = due(keyed.requested, at);
+            let mut registration = keyed.answer.lock().unwrap_or_else(|e| e.into_inner());
+            match std::mem::take(&mut *registration) {
+                Registration::Answered(Some(transfer)) => {
+                    let mut bytes = transfer.key.clone().into_bytes();
+                    // A terminal NUL, as GTK writes it
+                    bytes.push(0);
+                    drop(registration);
+                    sends.push(Sending {
+                        pipe: keyed.pipe,
+                        bytes: bytes.into(),
+                        at: 0,
+                        deadline,
+                        key: Some(transfer),
+                    });
+                }
+                Registration::Waiting if now < deadline => {
+                    drop(registration);
+                    self.keyed.push(keyed);
+                }
+                Registration::Waiting | Registration::Abandoned => {
+                    *registration = Registration::Abandoned
+                }
+                Registration::Answered(None) => {}
+            }
+        }
+        sends
+    }
+}
+
+impl Drop for Keys {
+    /// The window closes: a key registered and not yet sent is stopped, and
+    /// so is one that comes later.
+    fn drop(&mut self) {
+        for keyed in &self.keyed {
+            let mut registration = keyed.answer.lock().unwrap_or_else(|e| e.into_inner());
+            if let Registration::Answered(Some(transfer)) =
+                std::mem::replace(&mut *registration, Registration::Abandoned)
+            {
+                Portal::session().stop(&transfer);
+            }
+        }
+    }
+}
+
+impl Sending {
+    /// Write a bounded batch of what is left, so the display and other pipes
+    /// are heard between, each write only while `clock` says the deadline
+    /// has not passed; a failed write ends the sending.
+    fn write(&mut self, clock: &dyn Fn() -> Instant) {
+        for _ in 0..16 {
+            let now = clock();
+            if self.at == self.bytes.len() || now >= self.deadline {
+                return;
+            }
+            let end = (self.at + (1 << 16)).min(self.bytes.len());
+            match self.pipe.write(&self.bytes[self.at..end]) {
+                Ok(n) => self.at += n,
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == ErrorKind::WouldBlock => return,
+                Err(_) => {
+                    self.deadline = now;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// The transfer whose key this sends, when not all the key's characters
+    /// went: a receiver takes a key with or without GTK's terminal NUL.
+    fn unfinished_key(&self) -> Option<&Transfer> {
+        self.key
+            .as_ref()
+            .filter(|transfer| self.at < transfer.key.len())
+    }
+}
+
+impl Drop for Sending {
+    /// A key that did not all go is stopped, however its sending ended:
+    /// with an error, past its deadline, or the window closed.
+    fn drop(&mut self) {
+        if let Some(transfer) = self.unfinished_key() {
+            Portal::session().stop(transfer);
+        }
+    }
+}
+
+/// Whether `file` is a pipe or a socket, whose writes `O_NONBLOCK` keeps
+/// from waiting: asked of the pipe's size and the socket's type, which no
+/// file system answers, so a descriptor on a stalled mount holds nothing up.
+fn streams(file: &std::fs::File) -> bool {
+    rustix::pipe::fcntl_getpipe_size(file).is_ok()
+        || rustix::net::sockopt::socket_type(file).is_ok()
 }
 
 /// A drag's icon as Wayland places it, by whole points from the pointer:
@@ -209,8 +459,9 @@ impl Icon {
 }
 
 /// The listener's side of lifts: the globals an icon needs, the window's
-/// surface a drag starts from, the sources not yet retired and the types
-/// being sent.
+/// surface a drag starts from, the sources not yet retired, the types
+/// being sent and the URI lists waiting for their files' copies, which say
+/// they are made through `made`.
 pub(super) struct Out {
     compositor: Option<WlCompositor>,
     shm: Option<WlShm>,
@@ -218,24 +469,38 @@ pub(super) struct Out {
     origin: Option<WlSurface>,
     sources: Vec<Source>,
     sends: Vec<Sending>,
+    waiting: Vec<Waiting>,
+    keys: Keys,
+    made: (std::io::PipeReader, Arc<std::io::PipeWriter>),
 }
 
 /// A drag the window started, or asked for: its press, its source, its
-/// types and their bytes, its icon, and whether the press's gesture ended.
+/// types and their bytes, its files, its icon, and whether the press's
+/// gesture ended.
 struct Source {
     press: Press,
     source: WlDataSource,
     offers: Vec<(&'static str, Arc<[u8]>)>,
+    files: Option<Files>,
     icon: Option<(WlSurface, WlBuffer, Option<WpViewport>)>,
     ended: bool,
 }
 
-/// A type going to a target through its pipe, due by `deadline`.
+/// A URI list a target asked for, waiting for its files' copies.
+struct Waiting {
+    pipe: std::fs::File,
+    staging: Arc<Staging>,
+    link: String,
+}
+
+/// A type going to a target through its pipe, due by `deadline`; for the
+/// portal's key, the transfer it names, stopped when the key does not all go.
 struct Sending {
     pipe: std::fs::File,
     bytes: Arc<[u8]>,
     at: usize,
     deadline: Instant,
+    key: Option<Transfer>,
 }
 
 /// The pointer a seat holds for the listener: whether it is over the
@@ -282,20 +547,60 @@ pub(in crate::window) enum Pointed {
 }
 
 impl Out {
+    /// None when the pipe that says copies are made cannot be.
     pub(super) fn new(
         globals: &smithay_client_toolkit::reexports::client::globals::GlobalList,
         handle: &QueueHandle<Listener>,
         connection: &Connection,
         surface: &smithay_client_toolkit::reexports::client::backend::ObjectId,
-    ) -> Self {
-        Out {
+    ) -> Option<Self> {
+        let (says, made) = std::io::pipe().ok()?;
+        (nonblocking(&says) && nonblocking(&made)).then_some(())?;
+        Some(Out {
             compositor: globals.bind(handle, 1..=6, ()).ok(),
             shm: globals.bind(handle, 1..=1, ()).ok(),
             viewporter: globals.bind(handle, 1..=1, ()).ok(),
             origin: WlSurface::from_id(connection, surface.clone()).ok(),
             sources: Vec::new(),
             sends: Vec::new(),
+            waiting: Vec::new(),
+            keys: Keys::default(),
+            made: (says, Arc::new(made)),
+        })
+    }
+
+    /// The pipe that says a drag's copies are made or a key registered,
+    /// while URI lists or key requests wait.
+    pub(super) fn made(&self) -> Option<i32> {
+        (!self.waiting.is_empty() || !self.keys.is_empty()).then(|| self.made.0.as_raw_fd())
+    }
+
+    /// Send each waiting URI list whose files' copies are made, due 10
+    /// seconds from now, the later of its request and its copies' end, and
+    /// each key registered ([`Keys::settle`]).
+    pub(super) fn staged(&mut self) {
+        let mut bytes = [0; 64];
+        while matches!((&self.made.0).read(&mut bytes), Ok(n) if n > 0) {}
+        let now = Instant::now();
+        let (ready, waiting) = std::mem::take(&mut self.waiting)
+            .into_iter()
+            .partition::<Vec<_>, _>(|w| w.staging.copies().is_some());
+        self.waiting = waiting;
+        for w in ready {
+            let copies = w
+                .staging
+                .copies()
+                .map(|(copies, _)| copies)
+                .unwrap_or_default();
+            self.sends.push(Sending {
+                pipe: w.pipe,
+                bytes: uri_list(&copies.paths(), &w.link).into_bytes().into(),
+                at: 0,
+                deadline: now + DEADLINE,
+                key: None,
+            });
         }
+        self.sends.extend(self.keys.settle(now));
     }
 
     /// Each pipe being sent to, by its place, with its descriptor.
@@ -306,12 +611,14 @@ impl Out {
             .map(|(k, s)| (k, s.pipe.as_raw_fd()))
     }
 
-    /// How long until the next send is due, in milliseconds.
+    /// How long until the next send or key request is due, in milliseconds.
     pub(super) fn due(&self, now: Instant) -> Option<i32> {
         self.sends
             .iter()
-            .map(|s| {
-                s.deadline
+            .map(|s| s.deadline)
+            .chain(self.keys.due())
+            .map(|deadline| {
+                deadline
                     .saturating_duration_since(now)
                     .as_millis()
                     .min(i32::MAX as u128) as i32
@@ -323,25 +630,10 @@ impl Out {
     /// and other pipes are heard between, and close each pipe that is done,
     /// failed or past its deadline.
     pub(super) fn send(&mut self, ready: &[usize]) {
-        let now = Instant::now();
         for &k in ready {
-            let sending = &mut self.sends[k];
-            for _ in 0..16 {
-                if sending.at == sending.bytes.len() {
-                    break;
-                }
-                let end = (sending.at + (1 << 16)).min(sending.bytes.len());
-                match sending.pipe.write(&sending.bytes[sending.at..end]) {
-                    Ok(n) => sending.at += n,
-                    Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-                    Err(_) => {
-                        sending.at = sending.bytes.len();
-                        break;
-                    }
-                }
-            }
+            self.sends[k].write(&Instant::now);
         }
+        let now = Instant::now();
         self.sends
             .retain(|s| s.at < s.bytes.len() && now < s.deadline);
     }
@@ -377,6 +669,11 @@ impl Source {
 }
 
 impl Listener {
+    /// A line for the app's journal, from any thread.
+    pub(super) fn journal(&self) -> impl Fn(String) + Send + 'static {
+        journal_to(self.proxy.clone())
+    }
+
     /// Start the drag `press` lifted, if that press is still its seat's grab
     /// with the left button alone held on the window's surface; else the
     /// lift is stale, and the release or press that made it so reaches the
@@ -385,11 +682,18 @@ impl Listener {
         &mut self,
         press: Press,
         offers: Vec<(&'static str, Arc<[u8]>)>,
+        files: Option<Files>,
         icon: Option<Icon>,
     ) {
         let Some(seat) = self.seats.iter().find(|s| s.name == press.seat) else {
             return;
         };
+        // A drag's types are fixed as it starts, so the key goes from the first lift after a probe succeeds
+        let portal = Portal::session();
+        let keyed = files.is_some() && portal.available();
+        if files.is_some() && !keyed {
+            portal.reprobe();
+        }
         let grabbed = seat
             .pointer
             .as_ref()
@@ -404,8 +708,15 @@ impl Listener {
         };
         let handle = &self.handle;
         let source = self.manager.create_data_source(handle, ());
-        for (mime, _) in &offers {
-            source.offer((*mime).to_owned());
+        let deferred = files.iter().flat_map(|_| {
+            keyed
+                .then_some(KEYS)
+                .into_iter()
+                .flatten()
+                .chain([URI_LIST])
+        });
+        for mime in offers.iter().map(|(mime, _)| *mime).chain(deferred) {
+            source.offer(mime.to_owned());
         }
         // A copy alone, so a drop never moves anything of the app's
         source.set_actions(DndAction::Copy);
@@ -422,6 +733,7 @@ impl Listener {
             press,
             source,
             offers,
+            files,
             icon,
             ended: false,
         });
@@ -830,20 +1142,50 @@ impl Dispatch<WlDataSource, ()> for Listener {
     ) {
         match event {
             wl_data_source::Event::Send { mime_type, fd } => {
-                let bytes = state
-                    .out
-                    .sources
-                    .iter()
-                    .find(|s| s.source == *source)
-                    .and_then(|s| s.offers.iter().find(|(mime, _)| *mime == mime_type))
-                    .map(|(_, bytes)| bytes.clone());
+                let Some(from) = state.out.sources.iter().find(|s| s.source == *source) else {
+                    return;
+                };
                 let pipe = std::fs::File::from(fd);
+                // A regular file's writes can wait whatever `O_NONBLOCK` says, so only a pipe or a socket is written to
+                if !streams(&pipe) {
+                    return;
+                }
+                let file_type = mime_type == URI_LIST || KEYS.contains(&mime_type.as_str());
+                if let Some(files) = from.files.as_ref().filter(|_| file_type) {
+                    let staging = files.staging.clone();
+                    staging.start(&state.out.made.1, state.journal());
+                    if !nonblocking(&pipe) {
+                        return;
+                    }
+                    if mime_type != URI_LIST {
+                        let journal = state.journal();
+                        state
+                            .out
+                            .keys
+                            .request(pipe, staging, &state.out.made.1, journal);
+                    } else {
+                        let link = files.link.clone();
+                        state.out.waiting.push(Waiting {
+                            pipe,
+                            staging,
+                            link,
+                        });
+                        state.out.staged();
+                    }
+                    return;
+                }
+                let bytes = from
+                    .offers
+                    .iter()
+                    .find(|(mime, _)| *mime == mime_type)
+                    .map(|(_, bytes)| bytes.clone());
                 if let Some(bytes) = bytes.filter(|_| nonblocking(&pipe)) {
                     state.out.sends.push(Sending {
                         pipe,
                         bytes,
                         at: 0,
                         deadline: Instant::now() + DEADLINE,
+                        key: None,
                     });
                 }
             }

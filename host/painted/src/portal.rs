@@ -270,6 +270,8 @@ pub(crate) fn socket_of(address: &str) -> Option<Socket> {
 mod bus;
 #[cfg(unix)]
 pub(crate) use bus::choose;
+#[cfg(target_os = "linux")]
+pub mod transfer;
 
 #[cfg(all(test, unix))]
 #[path = "portal_tests.rs"]

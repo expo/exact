@@ -180,8 +180,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/file_drop.rs",
       "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_dropped Presenter::drag_event Presenter::drag_flush " +
-      "Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_owner " +
-      "Presenter::drop_released Presenter::dropped Presenter::field_drop"],
+      "Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_landed_checked Presenter::drop_owner " +
+      "Presenter::drop_released Presenter::drop_released_behind Presenter::dropped Presenter::field_drop Presenter::landed"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
     ["painted:host/painted/src/presenter/replacement.rs", "Presenter::buttons_released Presenter::pointer_released Presenter::reader_touch Presenter::set_touching"],
@@ -433,7 +433,7 @@ export const classifications = [
     ["painted:host/painted/src/height_binding.rs", "Host::discover_height_handles Host::resolved_height_target"],
     ["painted:host/painted/src/holds.rs", "Host::retained_input_eligible"],
     ["painted:host/painted/src/host.rs",
-      "Host::agent Host::app_roots Host::carry Host::content_region Host::document_value Host::engine Host::executor Host::executor_with Host::grants Host::kernel Host::log " +
+      "Host::agent Host::app_files Host::app_roots Host::carry Host::content_region Host::document_value Host::engine Host::executor Host::executor_with Host::grants Host::kernel Host::log " +
       "Host::now Host::preorder Host::presented Host::project_navigation Host::roots Host::router_op Host::runner Host::size_new_symbols " +
       "Host::take_commands Host::take_surface_updates Host::viewport Host::wants_frames"],
     ["painted:host/painted/src/lower.rs", "Host::layer_tracks Host::lower_eligibility Host::spinner_tracks"],
@@ -1097,7 +1097,7 @@ export const classifications = [
   ]),
   group("picker results", ["one-shot"], "current picker/share request and its app file roots", "UI-owned",
     "host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
-    ["painted:host/painted/src/picker.rs", "agent cold_share copy_in dimensions file know_roots open open_known place publish resolve roots scripted set_roots xdg_base"],
+    ["painted:host/painted/src/picker.rs", "AppFiles::of AppFiles::open_path agent cold_share copy_in dimensions file know_roots open open_known open_path place publish resolve roots scripted set_roots xdg_base"],
   ]),
   group("presence storage", ["durable operation"], "app-scoped secret vault/backend and secret generation", "durable",
     "host/painted/src/presence_secrets.rs backend/on_keystore select the app vault; system_support.rs SecretSession seeds and remembers secret records. Stored secret state is separate from a session-owned presence check.", [

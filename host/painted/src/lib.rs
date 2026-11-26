@@ -89,6 +89,9 @@ mod placement;
 // The Linux desktop portal; Windows uses its window's common item dialogs.
 #[cfg_attr(any(not(unix), target_os = "android"), allow(dead_code))]
 mod portal;
+/// The document portal's file transfer, across a Flatpak sandbox's edge.
+#[cfg(target_os = "linux")]
+pub use portal::transfer as file_transfer;
 pub mod presence_secrets;
 pub mod presenter;
 pub mod raster;
@@ -116,6 +119,10 @@ pub fn set_event_waker(waker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
 }
 
 pub use app::Composed;
+/// A dropped file a Flatpak sandbox's host checked off the interface's
+/// thread, its folder held (LLP 1094.001 D8).
+#[cfg(target_os = "linux")]
+pub use exact_data::documents::Checked;
 pub use hatches::Hatches;
 pub use host::{Host, HostError};
 pub use presenter::{Dropped, Presenter};

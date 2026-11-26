@@ -1,6 +1,10 @@
 // Synchronous runner APIs and their value helpers, plus the platform adapters that use them.
 export function helperClassifications(group) {
   return [
+  group("drag file transfers", ["subscription", "one-shot"], "the process's document-portal connections and probe, and one transfer key per receiver's request", "durable",
+    "host/painted/src/portal/transfer.rs keeps the process's session-bus connection that registers transfers, since a transfer key dies with its sender's connection, and another for probes and redemptions, so their failures end no key; it follows the portal's owner on the bus. Each key is registered for one request and redeemed once (autostop), and may be redeemed after the drag that gave it ends. No view holds either.", [
+    ["painted:host/painted/src/portal/transfer.rs", "Portal::available Portal::reprobe Portal::retrieve Portal::send Portal::session Portal::stop"],
+  ]),
   group("delivery", ["durable operation"], "installed app/update stream; session application is synchronous", "durable",
     "The named public runner-crate source is the delivery API or its value/admission helper. runner/src/runner/delivery.rs exposes the app delivery state; host delivery synchronization applies persisted stream facts to the current session.", [
     ["runner:runner/src/delivery.rs", "Delivery::field Delivery::with_compat production refuse_analysis"],

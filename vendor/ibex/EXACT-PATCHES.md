@@ -1352,3 +1352,11 @@ reaches the directory, as an 8.3 short name can on Windows. A temporary file
 takes the root's permissions, not its destination folder's, which differs only
 where a folder below a root has its own inheritable ACL. Replay on a refresh
 (expo/exact#1692).
+
+## A path-only app file on Linux
+
+`AppDirectories::open_path` opens a granted regular file as `O_PATH`, through
+the same retained roots and link refusals as `open_file`. Closing that
+descriptor drops none of the process's POSIX locks on the file, so a drag's
+copy helper process reopens it (`/proc/self/fd`) and the app's SQLite keeps
+its locks on a database dragged out (LLP 1094.000 D13).

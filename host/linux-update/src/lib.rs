@@ -38,6 +38,10 @@ fn run_installed<D: DataSource + Default>(
     compat: &str,
     composed: exact_painted::Composed,
 ) -> i32 {
+    #[cfg(target_os = "linux")]
+    if let Some(code) = exact_linux::drag_copy_helper() {
+        return code;
+    }
     if exact_painted::app::print_baked_receipt(compat) {
         return 0;
     }

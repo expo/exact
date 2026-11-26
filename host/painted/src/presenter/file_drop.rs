@@ -39,6 +39,9 @@ pub(super) struct DragIn {
     /// The last pending drop's number, kept across a new plan so that no
     /// copy that arrives late lands on a drop of the new one.
     last: u32,
+    /// While a drop is released behind earlier ones (`drop_released_behind`),
+    /// the newest of them: what is queued meanwhile waits for them to land.
+    behind: Option<u32>,
 }
 
 /// A node under the drag, and whether it heard the drag's `dragenter`: one
@@ -51,13 +54,16 @@ struct Member {
 }
 
 /// An enter or a leave to send, with its record's point and modifiers, for
-/// the drag under way (`drop` none) or for pending drop `drop`.
+/// the drag under way (`drop` none) or for pending drop `drop`; held, with
+/// what is queued after it, while a pending drop numbered `after` or lower
+/// has not landed.
 struct Sent {
     key: NodeKey,
     kind: EventKind,
     point: (f32, f32),
     held: KeyModifiers,
     drop: Option<u32>,
+    after: Option<u32>,
 }
 
 impl DragIn {
@@ -84,6 +90,7 @@ impl DragIn {
             point,
             held,
             drop,
+            after: self.behind,
         });
     }
 
@@ -105,6 +112,12 @@ impl DragIn {
         self.outbox
             .retain(|s| !(s.key == key && s.drop == drop && s.kind == EventKind::Dragleave));
     }
+}
+
+/// Whether `sent` waits for a drop in `pending` to land.
+fn waits(pending: &[Pending], sent: &Sent) -> bool {
+    sent.after
+        .is_some_and(|after| pending.iter().any(|p| p.id <= after))
 }
 
 /// A drop released before its items arrived: its target (none once the
@@ -161,6 +174,19 @@ impl<D: DataSource> Presenter<D> {
         self.drop_landed(id, dropped)
     }
 
+    /// Release the drag at `point` while the drops pending now are about to
+    /// land, as a second drop on Linux ends their wait (LLP 1094.001 D8):
+    /// this drop's target, record and chain are taken now, as
+    /// `drop_released` takes them, but its enters, and all that is queued
+    /// after them, wait for those drops to land, so their actions cannot
+    /// clear what this drag drew.
+    pub fn drop_released_behind(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<u32> {
+        self.drag_in.behind = self.drag_in.pending.iter().map(|p| p.id).max();
+        let id = self.drop_released(point, held);
+        self.drag_in.behind = None;
+        id
+    }
+
     /// Release the drag at `point` before its items arrive, as Android's
     /// copies do (LLP 1094.001 D2): the innermost node that takes a drop
     /// there, its record and the chain under the drag become the drop's,
@@ -214,6 +240,42 @@ impl<D: DataSource> Presenter<D> {
     /// leave. A drag still under way then hears the enters it waited for at
     /// the nodes under it now. The target, when delivered.
     pub fn drop_landed(&mut self, id: u32, dropped: &Dropped) -> Option<ViewId> {
+        self.landed(id, dropped, |paths| {
+            paths
+                .iter()
+                .filter(|path| path.is_absolute() && path.exists())
+                .filter_map(|path| exact_data::documents::mint(path, 0))
+                .collect()
+        })
+    }
+
+    /// [`Presenter::drop_landed`] for files the host checked off this
+    /// thread, each with its folder held (a Flatpak sandbox's, LLP 1094.001
+    /// D8): `checked` are the files, minted with no further reading of the
+    /// file system, and `dropped`'s paths are not read.
+    #[cfg(target_os = "linux")]
+    pub fn drop_landed_checked(
+        &mut self,
+        id: u32,
+        dropped: &Dropped,
+        checked: Vec<exact_data::documents::Checked>,
+    ) -> Option<ViewId> {
+        self.landed(id, dropped, |_| {
+            checked
+                .into_iter()
+                .filter_map(|checked| exact_data::documents::mint_checked(checked, 0))
+                .collect()
+        })
+    }
+
+    /// Land drop `id`, its files the handles `mint` gives for its paths, when
+    /// it has a target.
+    fn landed(
+        &mut self,
+        id: u32,
+        dropped: &Dropped,
+        mint: impl FnOnce(&[PathBuf]) -> Vec<String>,
+    ) -> Option<ViewId> {
         let at = self.drag_in.pending.iter().position(|p| p.id == id)?;
         let pending = self.drag_in.pending.remove(at);
         let target = pending
@@ -223,13 +285,8 @@ impl<D: DataSource> Presenter<D> {
                 self.pointer_node(t, &[EventKind::Drop]) == Some(t)
                     && !self.brush.region_blocks_action(t)
             });
-        let files: Vec<_> = match target {
-            Some(_) => dropped
-                .paths
-                .iter()
-                .filter(|path| path.is_absolute() && path.exists())
-                .filter_map(|path| exact_data::documents::mint(path, 0))
-                .collect(),
+        let files = match target {
+            Some(_) => mint(&dropped.paths),
             None => Vec::new(),
         };
         let arrived = !(files.is_empty() && dropped.text.is_empty() && dropped.url.is_empty());
@@ -243,14 +300,21 @@ impl<D: DataSource> Presenter<D> {
                     dropped.url.clone(),
                 )
         });
+        // The failed drop's leaves go first, ahead of what a drop released
+        // behind it holds: they can change what the drag still under way is
+        // over
         if delivered.is_none() {
-            let at = (pending.point, pending.held);
-            for m in pending.chain.iter().filter(|m| m.entered) {
-                self.drag_in.send(m.key, EventKind::Dragleave, at, Some(id));
+            for m in pending.chain.iter().filter(|m| m.entered).rev() {
+                self.drag_in.outbox.push_front(Sent {
+                    key: m.key,
+                    kind: EventKind::Dragleave,
+                    point: pending.point,
+                    held: pending.held,
+                    drop: Some(id),
+                    after: None,
+                });
             }
         }
-        // The failed drop's leaves go first: they can change what the drag
-        // still under way is over
         self.drag_flush();
         if self.drag_in.over {
             self.drag_at(self.drag_in.point, self.drag_in.held);
@@ -477,7 +541,13 @@ impl<D: DataSource> Presenter<D> {
     /// hears drags and has a box, and one that does not then hears no leave
     /// either.
     fn drag_flush(&mut self) {
-        while let Some(sent) = self.drag_in.outbox.pop_front() {
+        loop {
+            let DragIn {
+                outbox, pending, ..
+            } = &mut self.drag_in;
+            let Some(sent) = outbox.pop_front_if(|sent| !waits(pending, sent)) else {
+                break;
+            };
             let Some(id) = self.host.kernel().node_by_key(sent.key).map(|n| n.id) else {
                 continue;
             };
@@ -754,6 +824,62 @@ mod tests {
         p.drop_landed(first, &text("first"));
         assert_eq!(counts(&p), [2., 2., 0.]);
         assert_eq!(p.host.runner().slot("text"), Some(&Value::str("first")));
+    }
+
+    /// A zone that logs its enters, leaves and drops, and that its first
+    /// drop moves away from where the drag was.
+    fn moving_zone() -> Presenter<()> {
+        booted(
+            r#"component App
+  state log = ""
+  state moved = false
+  action received(e: DragEvent)
+    log = `${log}drop ${e.text}, `
+    moved = true
+  action entered(e: DragEvent)
+    log = `${log}enter, `
+  action left(e: DragEvent)
+    log = `${log}leave, `
+  view
+    column width=300 height=200 margin-top=(moved ? 400 : 0) testId="zone" drop=received dragenter=entered dragleave=left
+"#,
+        )
+    }
+
+    #[test]
+    fn a_drop_released_behind_another_takes_its_target_first_and_hears_its_enter_after() {
+        let (mut p, point) = (moving_zone(), (150., 100.));
+        let held = KeyModifiers::default();
+        p.drag_over(point, held);
+        let first = p.drop_released(point, held).unwrap();
+        p.drag_over(point, held);
+        let second = p.drop_released_behind(point, held).unwrap();
+        assert_eq!(
+            log(&p),
+            "enter, ",
+            "the second drag's enter waits for the first drop"
+        );
+        assert!(p.drop_landed(first, &text("first")).is_some());
+        assert_eq!(log(&p), "enter, drop first, enter, ");
+        assert!(
+            p.drop_landed(second, &text("second")).is_some(),
+            "the zone taken at the release, though the first drop moved it"
+        );
+        assert_eq!(log(&p), "enter, drop first, enter, drop second, ");
+    }
+
+    #[test]
+    fn a_failed_drop_leaves_before_one_released_behind_it_enters() {
+        let (mut p, point) = (moving_zone(), (150., 100.));
+        let held = KeyModifiers::default();
+        p.drag_over(point, held);
+        let first = p.drop_released(point, held).unwrap();
+        p.drag_over(point, held);
+        let second = p.drop_released_behind(point, held).unwrap();
+        assert_eq!(p.drop_landed(first, &Dropped::default()), None);
+        assert_eq!(log(&p), "enter, leave, enter, ");
+        assert!(p.drop_landed(second, &text("second")).is_some());
+        assert_eq!(log(&p), "enter, leave, enter, drop second, ");
     }
 
     #[test]
