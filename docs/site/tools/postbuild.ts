@@ -102,7 +102,7 @@ function structuredData(p: Page): object {
   return { '@context': 'https://schema.org', '@graph': [article, breadcrumb] };
 }
 const headFor = (p: Page | undefined) =>
-  p ? `${ORIGIN ? `<link rel="canonical" href="${esc(ORIGIN + p.path)}">` : ''}<link rel="alternate" type="text/markdown" href="${esc(ORIGIN + (p.path === '/' ? '/index' : p.path))}.md"><link rel="llms-txt" href="/llms.txt"><meta property="og:locale" content="${site.locale}"><script type="application/ld+json">${json(structuredData(p))}</script>` : '';
+  p ? `${ORIGIN ? `<link rel="canonical" href="${esc(ORIGIN + p.path)}">` : ''}<link rel="alternate" type="text/markdown" href="${esc(ORIGIN + (p.path === '/' ? '/index' : p.path))}.md"><link rel="llms-txt" href="/llms.txt"><meta property="og:locale" content="${site.locale}"><meta name="twitter:site" content="${site.twitterSite}"><script type="application/ld+json">${json(structuredData(p))}</script>` : '';
 
 const byFile = new Map(pages.map(p => [htmlOf(p.path), p]));
 let prepainted = 0;
