@@ -78,9 +78,17 @@ const BASE = '<base href="/">';
 const PREPAINT = `${BASE}<script>try{let g=k=>JSON.parse(localStorage.getItem("exact.state."+k)),t=g("theme"),e=document.documentElement;if(t=="light"||t=="dark")e.style.colorScheme=t;if(g("sidebar")===false)e.dataset.sidebar="hidden"}catch{}</script><style>[data-sidebar=hidden] #exact-root:not([data-boot-ms]) [data-testid=sidebar-shown]{width:0!important;visibility:hidden}[data-sidebar=hidden] #exact-root:not([data-boot-ms]) [data-testid=sidebar-rail]{width:calc(48px - clamp(0px,(960px - 100vw)*1000,48px))!important}</style>`;
 
 const json = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
+const EXPO = {
+  '@type': 'Organization',
+  '@id': 'https://expo.dev/#organization',
+  name: 'Expo',
+  url: 'https://expo.dev',
+  logo: { '@type': 'ImageObject', url: 'https://docs.expo.dev/static/images/expo-logo.svg' },
+};
+const byExpo = { '@id': EXPO['@id'] };
 function structuredData(p: Page): object {
   const url = ORIGIN ? { url: ORIGIN + p.path } : {};
-  if (p.path === '/') return { '@context': 'https://schema.org', '@type': 'WebSite', name: site.name, description: site.description, inLanguage: 'en', ...url };
+  if (p.path === '/') return { '@context': 'https://schema.org', '@graph': [{ '@type': 'WebSite', name: site.name, description: site.description, inLanguage: 'en', publisher: byExpo, ...url }, EXPO] };
   const article = {
     '@type': 'TechArticle',
     headline: p.title,
@@ -88,10 +96,13 @@ function structuredData(p: Page): object {
     inLanguage: 'en',
     ...(p.updated ? { dateModified: p.updated } : {}),
     ...(p.section ? { articleSection: p.section } : {}),
+    ...(ORIGIN ? { image: ORIGIN + site.shareImage } : {}),
+    author: byExpo,
+    publisher: byExpo,
     isPartOf: { '@type': 'WebSite', name: site.name, ...(ORIGIN ? { url: `${ORIGIN}/` } : {}) },
     ...url,
   };
-  if (!ORIGIN) return { '@context': 'https://schema.org', ...article };
+  if (!ORIGIN) return { '@context': 'https://schema.org', '@graph': [article, EXPO] };
   const breadcrumb = {
     '@type': 'BreadcrumbList',
     itemListElement: [
@@ -99,7 +110,7 @@ function structuredData(p: Page): object {
       { '@type': 'ListItem', position: 2, name: p.title, item: ORIGIN + p.path },
     ],
   };
-  return { '@context': 'https://schema.org', '@graph': [article, breadcrumb] };
+  return { '@context': 'https://schema.org', '@graph': [article, breadcrumb, EXPO] };
 }
 const headFor = (p: Page | undefined) =>
   p ? `${ORIGIN ? `<link rel="canonical" href="${esc(ORIGIN + p.path)}">` : ''}<link rel="alternate" type="text/markdown" href="${esc(ORIGIN + (p.path === '/' ? '/index' : p.path))}.md"><link rel="llms-txt" href="/llms.txt"><meta property="og:locale" content="${site.locale}"><script type="application/ld+json">${json(structuredData(p))}</script>` : '';
