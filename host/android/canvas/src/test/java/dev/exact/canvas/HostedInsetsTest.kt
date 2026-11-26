@@ -16,11 +16,14 @@ import org.robolectric.annotation.Config
 @Config(sdk = [31], manifest = Config.NONE)
 class HostedInsetsTest {
     // A 1080 by 2400 window with a 120-pixel status bar, a 60-pixel navigation bar and an 800-pixel keyboard
-    private val window = WindowInsets.Builder()
-        .setInsets(WindowInsets.Type.statusBars(), Insets.of(0, 120, 0, 0))
-        .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, 60))
-        .setInsets(WindowInsets.Type.ime(), Insets.of(0, 0, 0, 800))
-        .build()
+    // Lazily, so the Android 10 case, which has no typed insets, never builds it
+    private val window by lazy {
+        WindowInsets.Builder()
+            .setInsets(WindowInsets.Type.statusBars(), Insets.of(0, 120, 0, 0))
+            .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, 60))
+            .setInsets(WindowInsets.Type.ime(), Insets.of(0, 0, 0, 800))
+            .build()
+    }
 
     @Test fun aViewIsGivenTheBandsItLiesIn() {
         val bars = WindowInsets.Type.systemBars()
@@ -36,6 +39,20 @@ class HostedInsetsTest {
         val middle = HostedInsets.of(window, Rect(0, 1000, 1080, 1800), 1080, 2400)
         assertEquals(Insets.NONE, middle.getInsets(bars))
         assertEquals(Insets.of(0, 0, 0, 200), middle.getInsets(WindowInsets.Type.ime()))
+    }
+
+    @Test fun theMaximumInsetsMoveWithThem() {
+        // In the middle the status bar is none of the view's, even ignoring its visibility
+        val middle = HostedInsets.of(window, Rect(0, 1000, 1080, 1800), 1080, 2400)
+        assertEquals(Insets.NONE, middle.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()))
+    }
+
+    @Test @Config(sdk = [29]) fun onAndroid10ItInsetsTheSystemWindow() {
+        @Suppress("DEPRECATION")
+        val window = WindowInsets.Builder().setSystemWindowInsets(Insets.of(0, 120, 0, 60)).build()
+        @Suppress("DEPRECATION")
+        val top = HostedInsets.of(window, Rect(0, 50, 1080, 650), 1080, 2400).systemWindowInsets
+        assertEquals(Insets.of(0, 70, 0, 0), top)
     }
 
     @Test fun theViewsOwnListenerSeesThemAndKeepsItsReturn() {
