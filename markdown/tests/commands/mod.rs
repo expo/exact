@@ -262,6 +262,8 @@ fn block_commands_toggle_lines() {
     assert_eq!(run("a tit|le", Command::Heading(2)), "## a tit|le");
     assert_eq!(run("## a tit|le", Command::Heading(2)), "a tit|le");
     assert_eq!(run("## a tit|le", Command::Heading(1)), "# a tit|le");
+    assert_eq!(run("   ## a tit|le", Command::Heading(2)), "   a tit|le");
+    assert_eq!(run("   ## a tit|le", Command::Heading(1)), "   # a tit|le");
     assert_eq!(run("|one\n\ntwo|", Command::Bullet), "- |one\n\n- two|");
     assert_eq!(run("- |one\n- two|", Command::Ordered), "1. |one\n2. two|");
     assert_eq!(run("1. one|", Command::Task), "- [ ] one|");

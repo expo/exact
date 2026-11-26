@@ -120,18 +120,23 @@ pub(crate) fn quote_prefix(line: &str) -> (u8, Vec<B>, usize) {
     }
 }
 
-/// `#` to `######` and the spaces after, as (level, marker length).
+/// `#` to `######` and the spaces after, as (level, marker length). CommonMark
+/// 0.31.2 §4.2: up to three spaces of indent come first, inside the marker.
 pub(crate) fn heading(s: &str) -> Option<(u8, usize)> {
-    let level = s.bytes().take_while(|&c| c == b'#').count();
+    let indent = s.bytes().take(4).take_while(|&c| c == b' ').count();
+    if indent > 3 {
+        return None;
+    }
+    let level = s[indent..].bytes().take_while(|&c| c == b'#').count();
     if !(1..=6).contains(&level) {
         return None;
     }
-    let rest = &s[level..];
+    let rest = &s[indent + level..];
     if rest.is_empty() {
-        return Some((level as u8, level));
+        return Some((level as u8, indent + level));
     }
     let spaces = rest.bytes().take_while(|&c| c == b' ').count();
-    (spaces > 0).then_some((level as u8, level + spaces))
+    (spaces > 0).then_some((level as u8, indent + level + spaces))
 }
 
 fn rule(s: &str) -> bool {
