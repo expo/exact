@@ -76,18 +76,22 @@ impl Painter {
     /// by its extension, less `painted`, what its own surface covers, in up to four rectangles that meet without
     /// overlapping, so a translucent colour paints once. Nothing for a box with no colour; no box of its own, so it
     /// takes no hits and is no accessibility element. Gradients and images stay inside the box.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn extension_strip(
         &mut self,
+        kernel: &Kernel,
+        node: &NodeRef<'_>,
         shown: &Presented,
         color: [u8; 4],
         painted: Rect4,
         rect: Rect4,
         ts: Transform,
     ) {
-        if shown.extension == [0.0; 4] || color[3] == 0 {
+        if shown.extension == [0.0; 4] || color[3] == 0 || !extends(kernel, node) {
             return;
         }
-        let (ex, ey, ew, eh) = super::presented::outset(rect, shown.extension);
+        let outer = super::presented::outset(rect, shown.extension);
+        let (ex, ey, ew, eh) = super::grid::outward(outer, shown.extension, ts, self.scale);
         let (x0, y0, x1, y1) = (
             painted.0.max(ex),
             painted.1.max(ey),
@@ -105,4 +109,26 @@ impl Painter {
         }
         self.damage.unsupported = true;
     }
+}
+
+/// Whether `node` may extend (LLP 1123 D13): its paint is its own plain picture, so it clips no overflow, scrolls not,
+/// and has no clip path, mask or filter, nor a filtered ancestor, whose filter the strip would escape.
+fn extends(kernel: &Kernel, node: &NodeRef<'_>) -> bool {
+    let plain = |n: &NodeRef<'_>| n.style.filter.is_none();
+    if effective_overflow(node) != (Overflow::Visible, Overflow::Visible)
+        || node.style.rare.clip_path.has_path()
+        || node.style.rare.mask_image.gradient().is_some()
+        || !plain(node)
+    {
+        return false;
+    }
+    let mut at = node.parent;
+    while let Some(id) = at {
+        let Some(n) = kernel.node(id) else { break };
+        if !plain(&n) {
+            return false;
+        }
+        at = n.parent;
+    }
+    true
 }

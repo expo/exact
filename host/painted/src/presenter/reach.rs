@@ -50,6 +50,12 @@ impl<D: DataSource> Presenter<D> {
         if changed {
             self.dirty = true;
             self.clamp_scroll();
+            // The runner's geometry follows at once, back to the CSS offset when released, which it may hold as none
+            let at = self.scroll.get(&view).copied().unwrap_or_default();
+            let (x, y) = claim.map_or(at, |c| c.displacement(at));
+            self.host
+                .runner_mut()
+                .scrolled(Some(view), f64::from(x), f64::from(y));
         }
         changed
     }
