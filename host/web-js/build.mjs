@@ -324,7 +324,7 @@ if (ts && unregistered.length && !captured.facts.exported.includes('draw')) {
 const plan = readFileSync(resolve(gen, 'app.js'), 'utf8'), contentFiles = {}, languages = splitLanguages(plan, contentFiles, out);
 const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'zoom.js', 'portal.js', 'beat.js', 'regions.js', 'declarations.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
 if (languages) runtime.push('language-assets.js', 'chosen-language.js', 'fetch-table.js', 'sha256.js');
-for (const f of runtime) cpSync(resolve(here, (f === 'timer-observations.js' || f === 'sha256.js') ? '../web/' + f : f), resolve(gen, f));
+for (const f of runtime) writeFileSync(resolve(gen, f), localImports(readFileSync(resolve(here, (f === 'timer-observations.js' || f === 'sha256.js') ? '../web/' + f : f), 'utf8')));
 if (siteBase !== '/') {
   // Specialize the URL boundaries only. Root builds keep the ordinary runtime's bytes.
   writeFileSync(resolve(gen, 'site.js'), readFileSync(resolve(here, 'site.js'), 'utf8').replace('__EXACT_SITE_BASE__', JSON.stringify(siteBase)));
@@ -736,8 +736,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // `prepareChunks`, below, writes their names here as Rolldown renders the entry.
   `for (const name of __EXACT_DEFERRED_CHUNKS__) document.head.append(Object.assign(document.createElement('link'), { rel: 'modulepreload', fetchPriority: 'low', href: new URL(name, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'}).href }));`,
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'output.js', 'store.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'package-session.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) cpSync(resolve(here, f), resolve(gen, f));
-for (const file of ['modules.js', 'symbols.js']) writeFileSync(resolve(gen, file), localImports(readFileSync(resolve(here, file), 'utf8')));
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'output.js', 'store.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'package-session.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) writeFileSync(resolve(gen, f), localImports(readFileSync(resolve(here, f), 'utf8')));
 const checkpointSource = readFileSync(resolve(here, 'page-checkpoint.js'), 'utf8'), checkpointFaultImport = "import { checkpointFaults } from '../web/faults.js';";
 if (!checkpointSource.includes(checkpointFaultImport)) throw new Error('page-checkpoint.js no longer imports checkpointFaults');
 writeFileSync(resolve(gen, 'page-checkpoint.js'), localImports(production ? checkpointSource.replace(checkpointFaultImport, 'const checkpointFaults = () => [];') : checkpointSource));
@@ -823,7 +822,7 @@ const uploadsImport = "import { ledger, requestKey } from './uploads.js';";
 // 1047.002 D3).
 const storageGrants = tsGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
 const storageFlag = 'const STORAGE_GRANTED = true;';
-const tsData = readFileSync(resolve(here, 'ts-data.js'), 'utf8');
+const tsData = localImports(readFileSync(resolve(here, 'ts-data.js'), 'utf8'));
 for (const line of [uploadsImport, storageFlag, streamImport]) if (!tsData.includes(line)) throw new Error(`host/web-js/ts-data.js: build.mjs replaces a line it no longer has: ${line}`);
 if (ts) writeFileSync(resolve(gen, 'ts-data.js'), (seamLazy ? "import './held-hooks.js';\n" : '') + tsData.replace("'__APP_TS__'", () => JSON.stringify(pageAppTs))
   .replace(uploadsImport, streams ? uploadsImport : "import { data as runtime } from './rt.js'; const ledger = runtime.uploads, requestKey = () => undefined;")
@@ -866,16 +865,16 @@ cpSync(resolve(here, 'ts-body-from.js'), resolve(gen, 'ts-body-from.js'));
 for (const f of ['ts-link.js', 'ts-load.js']) cpSync(resolve(here, f), resolve(gen, f));
 cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
 cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));
-cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
+writeFileSync(resolve(gen, 'auth.js'), localImports(readFileSync(resolve(here, 'auth.js'), 'utf8')));
 writeFileSync(resolve(gen, 'files.js'), localImports(readFileSync(resolve(here, 'files.js'), 'utf8')));
 cpSync(resolve(here, 'url.js'), resolve(gen, 'url.js'));
-cpSync(resolve(here, 'sounds.js'), resolve(gen, 'sounds.js'));
+writeFileSync(resolve(gen, 'sounds.js'), localImports(readFileSync(resolve(here, 'sounds.js'), 'utf8')));
 cpSync(resolve(here, 'wakelock.js'), resolve(gen, 'wakelock.js'));
 writeFileSync(resolve(gen, 'drag.js'), localImports(readFileSync(resolve(here, 'drag.js'), 'utf8')));
 cpSync(resolve(here, 'orientationlock.js'), resolve(gen, 'orientationlock.js'));
 cpSync(resolve(here, 'transport.js'), resolve(gen, 'transport.js'));
 cpSync(resolve(here, 'clockin.js'), resolve(gen, 'clockin.js'));
-cpSync(resolve(here, 'midi.js'), resolve(gen, 'midi.js'));
+writeFileSync(resolve(gen, 'midi.js'), localImports(readFileSync(resolve(here, 'midi.js'), 'utf8')));
 // The server bundle a JavaScript render runs (render.mjs), one script per VM context.
 let renderOrigin;
 try { const u = new URL(manifest.app?.origin); if (['http:', 'https:'].includes(u.protocol)) renderOrigin = u.origin; } catch { /* No configured origin. */ }
