@@ -77,3 +77,32 @@ test('compiler freshness includes a dependency workspace manifest and lockfile',
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('a backdated product stays fresh over build-script outputs written before its dep-info', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-backdated-fresh-'));
+  try {
+    const product = resolve(dir, 'compiler'), dep = `${product}.d`;
+    const crate = resolve(dir, 'dep'), source = resolve(crate, 'src/lib.rs'), table = resolve(crate, 'schema.json');
+    const buildOut = resolve(dir, 'build/fixture-0123456789abcdef/out'), generated = resolve(buildOut, 'schema.rs');
+    mkdirSync(resolve(crate, 'src'), { recursive: true });
+    mkdirSync(buildOut, { recursive: true });
+    writeFileSync(resolve(crate, 'Cargo.toml'), '[package]\nname="fixture"\nversion="0.1.0"\n');
+    writeFileSync(source, ''); writeFileSync(table, '{}'); writeFileSync(generated, '');
+    writeFileSync(resolve(buildOut, '../output'), 'cargo:rerun-if-changed=schema.json\n');
+    writeFileSync(product, ''); writeFileSync(dep, `${product}: ${source} ${generated}\n`);
+    const started = Date.now() / 1000 + 10;
+    for (const p of [resolve(crate, 'Cargo.toml'), source, table]) utimesSync(p, started - 5, started - 5);
+    utimesSync(product, started, started);
+    utimesSync(generated, started + 2, started + 2);
+    utimesSync(dep, started + 4, started + 4);
+    expect(fresh(product, dep)).toBe(true);
+    // An edit to a rerun-if-changed source during the build invalidates the product.
+    utimesSync(table, started + 1, started + 1);
+    expect(fresh(product, dep)).toBe(false);
+    utimesSync(table, started - 5, started - 5);
+    expect(fresh(product, dep)).toBe(true);
+    // A build-script output rewritten after the build finished invalidates the product.
+    utimesSync(generated, started + 5, started + 5);
+    expect(fresh(product, dep)).toBe(false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

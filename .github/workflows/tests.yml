@@ -180,8 +180,9 @@ jobs:
               for (const f of all.filter((_, i) => i % 2 === shard)) console.log(f);
             '
           )
+          cargo build -q -p contract --bin contract
           if [[ " ${files[*]} " == *"./scripts/agent-test.test.mjs"* ]]; then
-            cargo build --profile host-dev -p caltrain-render
+            cargo build --profile host-dev -p caltrain-linux --bin caltrain-render
           fi
           echo "Running ${#files[@]} script test files (shard $SHARD)"
           bun test "${files[@]}"
