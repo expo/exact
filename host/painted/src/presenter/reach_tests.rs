@@ -242,3 +242,74 @@ fn a_colour_only_extension_paints_the_boxs_colour_around_it_once() {
     assert!(p.set_box_extension(card, None));
     assert!(p.frame().data() == empty, "as before the extension");
 }
+
+/// A 300-point scroller at (0, 100) whose first child is a 50-point top bar on its scrollport, over its rows.
+const BARRED: &str = r##"component App
+  view
+    box testId="root" width="100%" height="100%" background-color="#ffffff" position="relative"
+      scroll testId="port" position="absolute" left=0 top=100 width=300 height=300
+        box testId="bar" -exact-safe-area-bar="top" height=50 background-color="#808080"
+        box testId="row-0" height=100 background-color="#ff0000"
+        box testId="row-1" height=100 background-color="#00ff00"
+        box testId="row-2" height=100 background-color="#0000ff"
+        box testId="row-3" height=100 background-color="#ffff00"
+        box testId="row-4" height=100 background-color="#00ffff"
+"##;
+
+const GREY: [u8; 3] = [128, 128, 128];
+
+/// With the kernel laying bars on scrollports, a scroller's top bar keeps its place as the content scrolls 100 under
+/// it, takes the hits there, and is painted over the content; with it off, the bar is the content's first row.
+#[test]
+fn a_scrollers_own_bar_stays_on_its_scrollport_over_its_content() {
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(BARRED),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let (port, bar) = (id(&p, "port"), id(&p, "bar"));
+    p.frame();
+    assert!(
+        p.host().kernel().scrollport_bars(port).is_empty(),
+        "no bars on scrollports until the kernel lays them"
+    );
+    p.scroll.insert(port, (0., 100.));
+    assert_ne!(
+        pixel(&mut p, 150., 110.),
+        GREY,
+        "off, the bar scrolls away with the content"
+    );
+    p.host.runner_mut().kernel_mut().set_scrollport_bars(true);
+    p.scroll.insert(port, (0., 0.));
+    let _ = p.after_commit();
+    p.frame();
+    assert_eq!(p.host().kernel().scrollport_bars(port), vec![bar]);
+    assert_eq!(pixel(&mut p, 150., 110.), GREY);
+    let top = p.rect_of(bar).unwrap();
+    p.scroll.insert(port, (0., 100.));
+    assert_eq!(
+        pixel(&mut p, 150., 110.),
+        GREY,
+        "on, the bar keeps its place"
+    );
+    assert_eq!(
+        p.rect_of(bar),
+        Some(top),
+        "where it was painted before the scroll"
+    );
+    assert_eq!(
+        p.hit(150., 110.),
+        Some(bar),
+        "over the content it takes the hits"
+    );
+    assert_ne!(
+        pixel(&mut p, 150., 160.),
+        GREY,
+        "the content scrolls on below it"
+    );
+}
