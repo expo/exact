@@ -245,19 +245,9 @@ final class ModalStackIOSTests: XCTestCase {
             return try TouchRunner.aim(CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2), in: XCTUnwrap(window))
         }
         let window = try XCTUnwrap(window)
-        func capture(_ name: String) {
-            let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
-            let image = renderer.image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) }
-            let attachment = XCTAttachment(image: image)
-            attachment.name = name
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-        capture("Back before the hold")
         var hold = try at(back)
         let away = try TouchRunner.aim(CGPoint(x: window.bounds.width * 0.7, y: window.bounds.height * 0.85), in: window)
         hold.merge(["op": "drag", "to": away["point"]!, "screenTo": away["screen"]!, "press": 2.4, "hold": 0.3, "velocity": 600.0]) { _, new in new }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { capture("Back history during the hold") }
         XCTAssertEqual(try touch.ask(hold)["done"] as? Bool, true)
         XCTAssertEqual(nav.viewControllers, original, "releasing away dismisses without a pop")
         XCTAssertEqual(session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: "(back)").count,
