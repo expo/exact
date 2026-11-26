@@ -39,3 +39,15 @@ pub(super) fn shorthand_changed(
     style_changed(arena, layout, slot, rows, receipt);
     propagate_inherited(arena, layout, slot, rows, touched, receipt);
 }
+
+/// Moving the layer of an independent paragraph leaves its text source intact.
+pub(super) fn only_translates(arena: &NodeArena, slot: u32, mask: StyleMask) -> bool {
+    arena.node_type(slot) == NodeType::Text
+        && !arena.is_inline_run(slot)
+        && mask.minus(StyleMask::LAYOUT).iter().all(|row| {
+            matches!(
+                row,
+                StyleId::Translate | StyleId::TranslatePercent | StyleId::TranslateZ
+            )
+        })
+}

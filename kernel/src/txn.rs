@@ -1467,7 +1467,7 @@ pub(crate) fn style_changed(
     symbol_font_changed(arena, slot, mask, receipt);
     if !mask.minus(StyleMask::LAYOUT).is_empty() {
         arena.mark_export_dirty(slot, NodeFlags::PAINT_DIRTY);
-        if !mask.intersects(StyleMask::TEXT) {
+        if !mask.intersects(StyleMask::TEXT) && !text_style::only_translates(arena, slot, mask) {
             arena.revise_text(slot, false);
         }
     }

@@ -106,7 +106,10 @@ final class StagePlan {
     #if os(macOS)
     /// The views share this flag so they join the committed tree together.
     /// It can outlive the plan without retaining its views or operations.
-    final class Publication { var committed = false }
+    final class Publication {
+        var committed = false
+        fileprivate(set) var language: String?
+    }
     let publication = Publication()
     var tips: [NodeView] = [], cursorRects: [NodeView] = []
     #endif
@@ -173,6 +176,9 @@ final class StagePlan {
             while at != found, let up = parent[at] { below[up, default: 0] += 1; at = up; d += 1 }
             depth[id] = d
         }
+        #if os(macOS)
+        publication.language = batch.ops.last(where: { $0.op == .language }).map { $0.payload["lang"] as? String ?? "" }
+        #endif
         self.depth = depth
         self.large = Set(below.filter { $0.value > Self.attachLimit }.keys)
         self.structural = structural

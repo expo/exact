@@ -367,6 +367,9 @@ impl<D: DataSource> Host<D> {
                 );
             }
             runs.push(']');
+            if let Some(mirror) = self.mirror.get_mut(&owner) {
+                mirror.paragraph = node.paragraph_stamp().map(Box::new);
+            }
             batch.paragraph(owner, &runs);
         }
     }
@@ -491,6 +494,17 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(super) fn update(&mut self, id: ViewId, batch: &mut Batch) {
+        self.update_node(id, None, batch);
+    }
+
+    /// Receipt updates can prove an owner's paragraph inputs stayed the same.
+    /// A host refresh (environment, bar typography or native projection) resends them.
+    pub(super) fn update_node(
+        &mut self,
+        id: ViewId,
+        stamp: Option<exact_kernel::ParagraphStamp>,
+        batch: &mut Batch,
+    ) {
         if self.svg.element(self.runner.kernel(), id).is_some() {
             return;
         }
@@ -510,7 +524,11 @@ impl<D: DataSource> Host<D> {
             self.dirty_paragraphs.insert(owner);
         }
         if let Some(owner) = self.paragraph_owner(id) {
-            self.dirty_paragraphs.insert(owner);
+            if stamp.is_none()
+                || stamp.as_ref() != self.mirror.get(&owner).and_then(|m| m.paragraph.as_deref())
+            {
+                self.dirty_paragraphs.insert(owner);
+            }
             if owner != id {
                 return;
             }

@@ -59,6 +59,31 @@ final class StagedApplyMacTests: XCTestCase {
         return wireBatch(ops)
     }
 
+    func testStagedParagraphsHyphenateInTheLanguageTheyWillShow() throws {
+        let p = Presenter()
+        show(p.viewport)
+        p.apply(wireBatch(tree + [["op": "language", "lang": "en", "dir": "ltr"]]))
+        let ids = Array(9300..<9304)
+        var ops: [[String: Any]] = []
+        for id in ids {
+            ops += [["op": "create", "id": id, "kind": "text", "props": ["text": "Donaudampfschifffahrtsgesellschaft", "markup": "markdown", "atoms": "mention"], "style": ["hyphens": "auto"]],
+                    ["op": "paragraph", "id": id, "runs": []],
+                    ["op": "frame", "id": id, "x": 0, "y": 0, "w": 90, "h": 90]]
+        }
+        ops += [["op": "children", "id": 9004, "ids": ids], ["op": "language", "lang": "de", "dir": "ltr"]]
+        let plan = try XCTUnwrap(p.stagePlan(wireBatch(ops)))
+        while !plan.preparedAll { p.prepare(plan, until: .infinity) }
+        let label = try XCTUnwrap(plan.made[9300])
+        _ = label.accessibilityChildren()
+        XCTAssertEqual(p.documentLanguage, "en")
+        XCTAssertEqual(label.paragraphSpec().language, "de")
+        p.revealing = plan
+        p.apply(plan.reveal())
+        XCTAssertEqual(p.documentLanguage, "de")
+        XCTAssertEqual(label.paragraphSpec().language, "de")
+        XCTAssertFalse(label.paragraphSpec().source.inserted.isEmpty)
+    }
+
     func testAStagedBatchShowsNothingUntilItsRevealAndAllOfItThen() throws {
         let p = Presenter()
         show(p.viewport)

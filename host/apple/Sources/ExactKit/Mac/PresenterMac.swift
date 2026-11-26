@@ -1089,7 +1089,8 @@ package final class Presenter {
         CATransaction.begin()
         defer { CATransaction.commit() }
         session?.fieldChrome.presented(batch.layoutProvisional)
-        defer { applyLanguage(batch); toolbar.languageApplied(batch); applyWakeLock(batch); applyOrientationLock(batch) }
+        let languageChanged = takeLanguage(batch)
+        defer { applyLanguage(batch, documentChanged: languageChanged); toolbar.languageApplied(batch); applyWakeLock(batch); applyOrientationLock(batch) }
         if let inspectors = batch.routeInspectors {
             routeInspectors = Dictionary(inspectors.map { ($0.route, $0) }, uniquingKeysWith: { first, _ in first })
         }

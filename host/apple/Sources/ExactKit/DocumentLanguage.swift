@@ -6,15 +6,18 @@ import UIKit
 #endif
 
 extension Presenter {
-    func applyLanguage(_ batch: Batch) {
-        let language = batch.ops.last { $0.op == .language }
-        if let language {
-            documentLanguage = language.payload["lang"] as? String ?? ""
-            documentDirection = language.payload["dir"] as? String ?? "ltr"
-        }
-        guard language != nil || batch.ops.contains(where: { [.create, .style, .props, .children].contains($0.op) }) else { return }
+    /// Accessibility can ask for a hyphenated paragraph while its run table is being applied.
+    func takeLanguage(_ batch: Batch) -> Bool {
+        guard let language = batch.ops.last(where: { $0.op == .language }) else { return false }
+        documentLanguage = language.payload["lang"] as? String ?? ""
+        documentDirection = language.payload["dir"] as? String ?? "ltr"
+        return true
+    }
+
+    func applyLanguage(_ batch: Batch, documentChanged: Bool) {
+        guard documentChanged || batch.ops.contains(where: { [.create, .style, .props, .children].contains($0.op) }) else { return }
         let changed: [NodeView]
-        if language != nil {
+        if documentChanged {
             changed = Array(views.values)
         } else {
             changed = Set(batch.ops.compactMap(\.nodeID)).compactMap { views[$0] }
@@ -24,7 +27,7 @@ extension Presenter {
         #else
         root.semanticContentAttribute = documentDirection == "rtl" ? .forceRightToLeft : .forceLeftToRight
         root.accessibilityLanguage = documentLanguage.isEmpty ? nil : documentLanguage
-        if language != nil { turnChrome() }
+        if documentChanged { turnChrome() }
         #endif
         for node in changed {
             let direction = node.style["direction"]?.string ?? documentDirection
@@ -70,6 +73,16 @@ extension Presenter {
         for child in view.subviews where !(child is NodeView) { setLanguage(child) }
     }
     #endif
+}
+
+extension NodeView {
+    /// Offstage text can draw or answer an accessibility read before its document is revealed.
+    var paragraphLanguage: String {
+        #if os(macOS)
+        if case .preparing(let publication) = stage, !publication.committed, let language = publication.language { return language }
+        #endif
+        return presenter?.documentLanguage ?? ""
+    }
 }
 
 #if !os(macOS)

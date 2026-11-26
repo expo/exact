@@ -879,7 +879,6 @@ package final class Presenter {
         collections.endBatch()
         return true
     }
-
     func apply(_ batch: Batch) {
         NodeView.scrollLayoutEpoch &+= 1
         defer { NodeView.scrollLayoutEpoch &+= 1 }
@@ -898,7 +897,8 @@ package final class Presenter {
         defer { fieldsWaiting = outerWaiting }
         let outerInput = inputStarted; inputStarted = batch.input
         defer { inputStarted = outerInput }
-        defer { applyLanguage(batch); applyWakeLock(batch); applyOrientationLock(batch) }
+        let languageChanged = takeLanguage(batch)
+        defer { applyLanguage(batch, documentChanged: languageChanged); applyWakeLock(batch); applyOrientationLock(batch) }
         if applySnapshots(batch) { return }
         takeRootTabs(batch)
         PaintOrder.begin(); let schemes = ColorSchemes.begin(); defer { schemes.end() }
