@@ -152,6 +152,8 @@ impl<D: DataSource> Host<D> {
     /// An optional `accessory` names the element the tablist names as its tab
     /// bar's accessory, and an optional `accessoryNote` says why it names
     /// none, for a development build's journal (LLP 1075.003 §9.17).
+    /// `rowsAbove` names the rows the author wrote between the panels and the
+    /// tablist that the tab bar's room moves above the bar (LLP 1083.000 D4).
     fn root_tabs_json(&self, root: ViewId, tabs: &exact_kernel::RootTabs) -> String {
         let list = |ids: &[ViewId]| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let kernel = self.runner.kernel();
@@ -187,8 +189,13 @@ impl<D: DataSource> Host<D> {
             .map_or_else(String::new, |note| {
                 format!(",\"accessoryNote\":{}", serde_json::Value::String(note))
             });
+        let rows_above = if tabs.rows_above.is_empty() {
+            String::new()
+        } else {
+            format!(",\"rowsAbove\":[{}]", list(&tabs.rows_above))
+        };
         format!(
-            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}{splits}{footer}{accessory}{note}}}",
+            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}{splits}{footer}{accessory}{note}{rows_above}}}",
             tabs.tablist,
             list(&tabs.tabs),
             list(&tabs.panels)

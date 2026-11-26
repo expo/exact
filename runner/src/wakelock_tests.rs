@@ -305,6 +305,22 @@ fn a_whole_host_cover_holds_nothing() {
     assert_eq!(super::holders(&r), vec![id]);
 }
 
+/// A box a native bar keeps the room of (a root tablist with a row between it
+/// and the panels, LLP 1083.000 D4) shows nothing it holds, and so holds
+/// nothing, as the bar is all that shows there.
+#[test]
+fn a_room_host_cover_holds_nothing() {
+    let mut r = boot();
+    let id = player(&r).unwrap();
+    let parent = r.kernel().node(id).unwrap().parent.unwrap();
+    r.kernel_mut()
+        .set_host_cover(parent, Some(exact_kernel::HostCover::Room(83.0)))
+        .unwrap();
+    assert!(super::holders(&r).is_empty());
+    r.kernel_mut().set_host_cover(parent, None).unwrap();
+    assert_eq!(super::holders(&r), vec![id]);
+}
+
 /// A `dialog` or popover holds nothing until its host reports it open: a
 /// host other than iOS and tvOS lays a closed box out and hides it only in
 /// its views (LLP 1133.029 §12).

@@ -5132,6 +5132,14 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   tablist links, in the `footer` the sidebar shows, or a radio or a tab of its group), a
   development build on iOS 26 and later writes the reason to `logs` while Exact's own
   tab container shows the tabs. To see it, drive iOS with `--chrome platform`.
+- **A row of your own above the tab bar**: a row written between the panels and the root
+  tablist that the tablist does not name keeps its own box and look, and on iOS sits on
+  the shown tab bar where the web puts it above the tab strip, with the routes' content
+  ending at its top. Write the tablist in flow at the end of a flex column whose child
+  holding the panels grows (`flex=1`), and the row in that column between the two, or
+  after the panels inside that child where it is itself such a column. Elsewhere, such
+  as a column beside the tablist, a tablist placed with `position="absolute"` or moved
+  first with `order`, iOS leaves the row under the shown bar (LLP 1083.000 D4).
 - A tab bar that minimizes as content scrolls (`tabBarMinimizeBehavior`) is not a
   Contract word: unsaid, the bar is UIKit's default, and an app that wants it sets it
   from the `tabs` hatch, which hands it the `UITabBarController` (docs/reference.md,

@@ -1312,10 +1312,14 @@ public struct RootTabs: Equatable {
     /// (`navigationTabAccessory`, LLP 1075.003 §9.17), and why it names none,
     /// for a development build's journal.
     public let accessory: UInt32?, accessoryNote: String?
+    /// The rows the author wrote between the panels and the tablist that the tab bar's room moves
+    /// above the bar (LLP 1083.000 D4).
+    public let rowsAbove: [UInt32]
 
     public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], footer: UInt32? = nil, navigation: [Bool] = [], possibleSplits: [UInt32] = [], unsaid: Bool, covered: Bool = false,
-                accessory: UInt32? = nil, accessoryNote: String? = nil) {
+                accessory: UInt32? = nil, accessoryNote: String? = nil, rowsAbove: [UInt32] = []) {
         self.possibleSplits = possibleSplits
+        self.rowsAbove = rowsAbove
         (self.footer, self.accessory, self.accessoryNote) = (footer, accessory, accessoryNote)
         (self.root, self.tablist, self.tabs, self.panels, self.navigation, self.unsaid, self.covered) = (root, tablist, tabs, panels, navigation, unsaid, covered)
     }
@@ -1326,7 +1330,7 @@ public struct RootTabs: Equatable {
         self.init(root: UInt32(root), tablist: UInt32(tablist), tabs: ids("tabs"), panels: ids("panels"),
                   footer: o["footer"]?.number.map { UInt32($0) }, navigation: (o["navigation"]?.array ?? []).map { $0 == .bool(true) },
                   possibleSplits: ids("possibleSplits"), unsaid: o["unsaid"] == .bool(true), covered: o["covered"] == .bool(true),
-                  accessory: o["accessory"]?.number.map { UInt32($0) }, accessoryNote: o["accessoryNote"]?.string)
+                  accessory: o["accessory"]?.number.map { UInt32($0) }, accessoryNote: o["accessoryNote"]?.string, rowsAbove: ids("rowsAbove"))
     }
 }
 

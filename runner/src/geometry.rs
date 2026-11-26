@@ -1248,6 +1248,8 @@ impl Point<'_> {
             || ((props.str(PropId::NavigationKey).is_some()
                 || props.str(PropId::AccessibilityRole) == Some("tabpanel"))
                 && crate::head::inactive(self.kernel, arena.local_id(slot)))
+            // A box a native bar keeps the room of shows the bar, which the host hit-tests (LLP 1083.000 D4)
+            || matches!(arena.cover(slot), Some(exact_kernel::HostCover::Room(_)))
         {
             return;
         }

@@ -160,6 +160,7 @@ extension Runtime {
             case .edges(let e)?: (1, [e.top, e.right, e.bottom, e.left])
             case .whole?: (2, [0, 0, 0, 0])
             case .bar?: (26, [0, 0, 0, 0])
+            case .room(let height)?: (30, [height, 0, 0, 0])
             case .inset(let top, let bottom)?: (3, [top, 0, bottom, 0])
             case .gutter(let right, let bottom)?: (12, [0, right, bottom, 0])
             case .rowSpacing(let top, let bottom)?: (25, [top, 0, bottom, 0])

@@ -18,6 +18,10 @@ package enum HostCover: Equatable {
     /// views of its own (LLP 1141.004 D2): `display: none`, as `whole`, but
     /// for those blocks, which are laid out and shown.
     case bar
+    /// A box replaced by a native bar that keeps its place in the page: laid
+    /// out as an empty box this many points tall, what it holds hidden (LLP
+    /// 1083.000 D4).
+    case room(CGFloat)
     /// A scroller UIKit insets (a route's collapsing or bottom-edge
     /// scroller): the kernel lays its content out between these insets
     /// (LLP 1116.000 D1.2).
@@ -26,4 +30,13 @@ package enum HostCover: Equatable {
     case gutter(right: CGFloat, bottom: CGFloat)
     /// Space the native table puts outside this row's rectangle.
     case rowSpacing(top: CGFloat, bottom: CGFloat)
+
+    /// Whether what the box holds takes no space and hides: replaced whole, by a bar, or by one
+    /// that keeps the box's room (the kernel's `HostCover::hides_content`).
+    package var hidesContent: Bool {
+        switch self {
+        case .whole, .bar, .room: true
+        case .edges, .inset, .gutter, .rowSpacing: false
+        }
+    }
 }

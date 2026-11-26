@@ -7,7 +7,8 @@
 // navigation owner per tab"), so a scroll offset, a draft or a pushed screen
 // survives a switch. The authored `tablist` supplies the items — a symbol
 // over a label, its `-fill` symbol when selected — and takes no room while
-// the bar shows. A tap on the bar is UIKit's (`TabDelegateProxy`): on another
+// the bar shows, or the bar's where the author wrote rows between the panels
+// and it (TabBarRoomIOS.swift). A tap on the bar is UIKit's (`TabDelegateProxy`): on another
 // tab, Exact presses that tab's authored tab inside `shouldSelect`, so the
 // router follows; on the selected tab above its root, UIKit pops the stack,
 // which the router follows as a Back. Under the agent
@@ -198,10 +199,14 @@ extension NavigationHost {
         guard !tabContainerAsked, presenter.modalHost.routes.isEmpty, !presenter.modalHost.inTransition, presentedNavigations.isEmpty,
               let root = self.container, let tabs = NavigationTabs.of(root, presenter), let parent = container.parent else { return }
         tabContainerAsked = true
+        // The stacks go without Exact's clearance for the rows on its bar (LLP 1083.000 D4), and get none until
+        // they have moved; when Exact's container keeps them, the next pass gives it back
+        releaseRowStacks()
         // Offer the stacks in place: a container the hook returns takes them from Exact's, as UIKit moves any
         // child. Emptying Exact's first would lose its bar's selection: a tab bar controller emptied and filled
         // again keeps its selected index but shows no tab selected (iOS 26 and 27).
         guard let owned = askTabContainer(tabs, selected: routerTab) else {
+            siblings.rowStacksHeld = false
             let navs = tabPanels.compactMap { tabStacks[$0] }
             if !restoreBuiltTabs(container, navs), container.viewControllers?.count != navs.count {
                 presenter.session?.log("hatch: tabContainer took the tabs' stacks but returned no container; Exact's has them back")
@@ -218,6 +223,7 @@ extension NavigationHost {
         // The release's UIKit calls reach only the covers, which retire no tabs; the handoff ends if they ever do
         guard tabController === container, self.container === root else {
             tabAccessoryHandingOff = false
+            siblings.rowStacksHeld = false
             return
         }
         #endif
@@ -238,6 +244,7 @@ extension NavigationHost {
         container.removeFromParent()
         tabController = nil
         tabOwner = owned
+        siblings.rowStacksHeld = false
         mount(owned, in: parent, at: root)
         #if os(iOS)
         tabAccessoryHandingOff = false
@@ -941,6 +948,8 @@ extension NavigationHost {
     /// tablist paints again.
     func retireTabs() {
         projectSidebarFooter(nil)
+        // The stacks leave without Exact's clearance for the rows on the bar, and get none back while they go
+        releaseRowStacks()
         #if os(iOS)
         // The retiring container shows no accessory again, whatever UIKit calls back during the release
         tabAccessoryHandingOff = true
@@ -976,6 +985,7 @@ extension NavigationHost {
         }
         tabController = nil
         tabOwner = nil
+        siblings.rowStacksHeld = false
         #if os(iOS)
         tabAccessoryHandingOff = false
         #endif

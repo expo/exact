@@ -651,6 +651,9 @@ pub struct RootTabs {
     /// The tablist names an accessory that no element outside the routes
     /// carries: none is mounted, or the name is wrong.
     pub accessory_missing: bool,
+    /// The rows the author wrote between the panels and the tablist that a
+    /// native tab bar's room moves above the bar (LLP 1083.000 D4).
+    pub rows_above: Vec<ViewId>,
 }
 
 impl RootTabs {
@@ -766,6 +769,73 @@ impl crate::arena::NodeArena {
                     && (style.display == Display::Block
                         || style.display == Display::Flex && column(style.flex_direction))
             })
+    }
+}
+
+impl crate::arena::NodeArena {
+    /// The rows the author wrote between the root's `panels` and its tablist
+    /// `list` that a native tab bar's room moves above the bar (LLP 1083.000
+    /// D4): `list`, holding no panel, is in flow in a flex column whose child
+    /// holding the panels is in flow and grows, so a room in the list moves
+    /// the rows up by its height, and each row is a displayed node in flow, not the
+    /// bar's `accessory`, after that child and before the list in the order
+    /// the column lays them out, or after the panels inside that child, where
+    /// each level down to the panels is a flex column whose child holding
+    /// them grows, so its rows end where it does. The rule reads the authored
+    /// tree, not a layout the room changes.
+    pub(crate) fn rows_above_tablist(
+        &self,
+        list: u32,
+        panels: &[u32],
+        accessory: Option<u32>,
+    ) -> Vec<u32> {
+        let column = |slot| {
+            let style = self.style(slot);
+            style.display == Display::Flex && style.flex_direction == FlexDirection::Column
+        };
+        let in_flow = |slot| {
+            self.style(slot).display != Display::None
+                && matches!(
+                    crate::style::top_layer::layout_position(self, slot),
+                    PositionType::Static | PositionType::Relative
+                )
+        };
+        let holds = |slot: u32| {
+            panels
+                .iter()
+                .any(|&p| p == slot || self.is_ancestor(slot, p))
+        };
+        let row = |slot: u32| Some(slot) != accessory && !holds(slot) && in_flow(slot);
+        // A flex column's children in the order its layout takes them, a stable sort by `order`
+        let laid = |slot: u32| {
+            let mut children = self.children(slot).to_vec();
+            children.sort_by_key(|&child| self.style(child).order);
+            children
+        };
+        let mut rows = Vec::new();
+        let Some(parent) = self
+            .parent(list)
+            .filter(|&p| column(p) && in_flow(list) && !holds(list))
+        else {
+            return rows;
+        };
+        let mut level = laid(parent);
+        let Some(mut end) = level.iter().position(|&c| c == list) else {
+            return rows;
+        };
+        while let Some(at) = level[..end].iter().rposition(|&c| holds(c)) {
+            let holder = level[at];
+            if self.style(holder).flex_grow <= 0.0 || !in_flow(holder) {
+                break;
+            }
+            rows.extend(level[at + 1..end].iter().copied().filter(|&c| row(c)));
+            if panels.contains(&holder) || !column(holder) {
+                break;
+            }
+            level = laid(holder);
+            end = level.len();
+        }
+        rows
     }
 }
 
@@ -1046,7 +1116,12 @@ impl crate::arena::NodeArena {
             let sidebar_footer = footer.filter(|_| self.allows_sidebar(root, list, footer));
             let (accessory, accessory_refused, accessory_missing) =
                 self.tab_accessory(root, list, sidebar_footer, &panels, &named);
+            let rows_above = self.rows_above_tablist(list, &panels, accessory);
             Some(RootTabs {
+                rows_above: rows_above
+                    .into_iter()
+                    .map(|slot| self.local_id(slot))
+                    .collect(),
                 footer: footer.map(|slot| self.local_id(slot)),
                 tablist: self.local_id(list),
                 tabs,

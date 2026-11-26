@@ -63,6 +63,12 @@ extension NavigationHost {
         let before = besideOwner === owner && besideIdentity == id ? ContributionsIOS.existing(on: owner)?.effect(of: id) ?? .zero : .zero
         var changed = false, reach = UIEdgeInsets.zero, above: [NodeView] = []
         siblings.place(in: ownerMount(root))
+        // A row named above the tablist that is a flat leaf gets a view, so it can lift with the rest over the shown bar
+        if keptBarHeight() != nil, let list = adoptedTablist.flatMap({ presenter.views[$0] }), let rows = rowsAbove(list) {
+            let leaves = rows.filter { presenter.flats.leaves[$0] != nil }
+            for id in leaves { presenter.flats.promote(id) }
+            if !leaves.isEmpty { presenter.flats.flush() }
+        }
         var walk = panelSiblings(in: area, routes: routes, drawn: drawn, skipping: owned, hidden: tabBarHidden)
         if !walk.promote.isEmpty {
             // A flat leaf that paints over the container gets a view, mounted now, and lifts with the rest
@@ -71,6 +77,7 @@ extension NavigationHost {
             walk = panelSiblings(in: area, routes: routes, drawn: drawn, skipping: owned, hidden: tabBarHidden)
         }
         let (bottom, rows, lifts) = (walk.bottom, walk.rows, walk.lifts)
+        clearRowsOnStacks(walk.raised, as: id)
         #if os(iOS)
         // The adopted More on screen at its list, as its stack names it from the start of a pop to it (reading
         // `moreNavigationController` makes a More where UIKit has none); not the tab controller's selection, which
@@ -397,12 +404,17 @@ extension NavigationHost {
             guard let edges else { continue }
             if edges != .init(top: 0, right: 0, bottom: 0, left: 0) { wanted[c.node.id] = .edges(edges) }
         }
-        // The tablist whose place the tab bar takes takes no room. One that
-        // holds the root's panels keeps them, and their routes, in the page.
+        // The tablist whose place the tab bar takes takes no room, or, with a row written between the
+        // panels and it, the bar's (`barRoom`). One that holds the root's panels keeps them, and their
+        // routes, in the page.
         if let list = adoptedTablist.flatMap({ presenter.views[$0] }) {
             measuredTablist = presenter.session?.view.map { list.convert(list.bounds, to: $0) }
             if adopts(tablist: list) {
-                for node in Self.covered(list, keeping: tabPanels.compactMap { presenter.views[$0] }) { wanted[node.id] = .whole }
+                if let room = barRoom(for: list) {
+                    wanted[list.id] = .room(room)
+                } else {
+                    for node in Self.covered(list, keeping: tabPanels.compactMap { presenter.views[$0] }) { wanted[node.id] = .whole }
+                }
             }
             // Clear authored tabs, page content outside the routes, of the unsafe edges they reach
             else if tablistAppearanceNone, list.style["display"]?.string != "none", let edges = unsafeEdges(of: list) {

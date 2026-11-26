@@ -875,6 +875,10 @@ pub(crate) fn continue_document(
                                 receipt.reparented.push(arena.key(*o));
                             }
                             arena.set_parent(*o, None);
+                            // One that leaves a box a bar keeps the room of takes its space back
+                            if crate::kernel::is_room(arena, slot) {
+                                crate::kernel::restyle_cover(arena, layout, &[*o]);
+                            }
                             // A producer detaches before it destroys: the
                             // parent an exit leaves from is the one it had.
                             if leaving_with(arena, *o).is_some() {
@@ -921,6 +925,9 @@ pub(crate) fn continue_document(
                     // however many of its children moved here.
                     let mut sources = Vec::new();
                     let mut seen: IdSet<u32> = IdSet::default();
+                    // A child that comes into a box a bar keeps the room of, or
+                    // leaves one, takes no space there or takes it back
+                    let rooms = crate::kernel::room_moves(arena, slot, &new);
                     for n in &new {
                         if let Some(p) = arena.parent(*n) {
                             if p != slot && seen.insert(p) {
@@ -929,6 +936,7 @@ pub(crate) fn continue_document(
                         }
                         arena.set_parent(*n, Some(slot));
                     }
+                    crate::kernel::restyle_cover(arena, layout, &rooms);
                     for (p, context) in sources {
                         if arena.node_type(p) == NodeType::Text {
                             invalidate_text(arena, layout, p);

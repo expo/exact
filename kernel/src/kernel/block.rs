@@ -479,7 +479,8 @@ impl Blocks {
 /// host replaced whole, which hides every block in it (a tab not yet built,
 /// LLP 1075.003 §9.12); under a box a bar replaced with no block its host
 /// gave on the way down to `slot`, `slot`'s own included, since the bar shows
-/// such a block in a view of its own; or, with `authored`, under a box
+/// such a block in a view of its own; under a box a bar keeps the room of,
+/// which shows nothing it holds; or, with `authored`, under a box
 /// authored `display: none`. `itself`: `slot`'s own cover counts too.
 fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool {
     let mut given = false;
@@ -490,6 +491,7 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
             match arena.cover(s) {
                 Some(super::HostCover::Whole) => return true,
                 Some(super::HostCover::Bar) if !given => return true,
+                Some(super::HostCover::Room(_)) if above => return true,
                 _ => {}
             }
         }

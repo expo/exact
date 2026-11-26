@@ -62,8 +62,8 @@ pub(crate) use block::{apply as apply_block, publication_start, Blocks};
 pub use block::{BlockAxis, BlockMeasure, BlockShown, HostBlock};
 pub(crate) use cover::{
     apply as apply_cover, chain_changed as cover_chain_changed,
-    children_changed as cover_children_changed, contributed_padding as cover_padding,
-    style_changed as cover_style_changed,
+    children_changed as cover_children_changed, contributed_padding as cover_padding, is_room,
+    restyle as restyle_cover, room_moves, style_changed as cover_style_changed,
 };
 pub use cover::{credited_edges, HostCover};
 pub use edge_bar::BarEdgeEffect;

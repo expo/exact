@@ -22,6 +22,7 @@ mod clock_sync;
 mod compare;
 mod content_region;
 mod cover;
+mod cover_room;
 mod detached;
 mod env;
 mod export;
