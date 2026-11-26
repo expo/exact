@@ -453,11 +453,13 @@ extension Presenter {
             native["item"] = [r.location, r.length, c.location, c.length]
         }
         let frame = o.accessibilityFrame
-        if !frame.isEmpty {
+        if placed(frame) {
             let vp = viewport
             if let window = vp.window {
                 let r = vp.convert(frame, from: window.screen.coordinateSpace)
-                e["frame"] = ["x": round2(r.minX - vp.pageOrigin.x), "y": round2(r.minY - vp.pageOrigin.y), "w": round2(r.width), "h": round2(r.height), "source": "element"]
+                if let box = elementFrame(x: r.minX - vp.pageOrigin.x, y: r.minY - vp.pageOrigin.y, w: r.width, h: r.height) {
+                    e["frame"] = box
+                }
             }
         }
         #else
@@ -506,12 +508,14 @@ extension Presenter {
             native["item"] = [rows.location, rows.length, columns.location, columns.length]
         }
         if let ident = f.identifier, !ident.isEmpty, ident != axTestId(id) { native["identifier"] = cut(ident) }
-        if !f.frame.isEmpty, let window = viewport.window {
+        if placed(f.frame), let window = viewport.window {
             // Screen points, y up, into the viewport's: the clip view's, less its scroll.
             let clip = viewport.contentView
             let r = clip.convert(window.convertFromScreen(f.frame), from: nil)
             let y = clip.isFlipped ? r.minY - clip.bounds.origin.y : clip.bounds.maxY - r.maxY
-            e["frame"] = ["x": round2(r.minX - clip.bounds.origin.x), "y": round2(y), "w": round2(r.width), "h": round2(r.height), "source": "element"]
+            if let box = elementFrame(x: r.minX - clip.bounds.origin.x, y: y, w: r.width, h: r.height) {
+                e["frame"] = box
+            }
         }
         #endif
         if Self.underSegments(obj), e["interactive"] as? Bool == true,
@@ -593,7 +597,25 @@ extension Presenter {
     }
 
     private func axTestId(_ id: UInt32?) -> String? { id.flatMap { views[$0]?.props["testId"] ?? inlineText($0)?.props["testId"] } }
-    private func round2(_ x: CGFloat) -> Double { (Double(x) * 100).rounded() / 100 }
+    /// Whether an element's frame has a finite, non-empty place on screen.
+    /// Non-finite rects (for example, an infinite or NaN frame from a third-party
+    /// view) are omitted like empty ones because JSON cannot represent them.
+    private func placed(_ r: CGRect) -> Bool {
+        !r.isEmpty && !r.isNull && r.minX.isFinite && r.minY.isFinite && r.width.isFinite && r.height.isFinite
+    }
+    /// Rounds a viewport-relative frame to 2 decimal places, returning nil if
+    /// coordinate conversion or scaling overflows to a non-finite number.
+    private func elementFrame(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) -> [String: Any]? {
+        guard let rx = finiteRound2(x), let ry = finiteRound2(y),
+              let rw = finiteRound2(w), let rh = finiteRound2(h) else { return nil }
+        return ["x": rx, "y": ry, "w": rw, "h": rh, "source": "element"]
+    }
+    private func finiteRound2(_ x: CGFloat) -> Double? {
+        let scaled = Double(x) * 100
+        guard scaled.isFinite else { return nil }
+        let value = scaled.rounded() / 100
+        return value.isFinite ? value : nil
+    }
 
     #if os(iOS) || os(tvOS)
     /// An element outside a session-owned modal view, and outside the

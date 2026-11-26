@@ -64,6 +64,7 @@ impl<D: DataSource> Presenter<D> {
                 Origin::Anchor | Origin::Clamp => after,
             };
             self.reader.rebased(view, before, rebased);
+            self.rebase_wheel_snap(view, before, rebased);
             self.scroll_end_acknowledged(view, accepted, moved);
             if survives {
                 // What this acknowledgement applied is no longer the newer position's to apply.
