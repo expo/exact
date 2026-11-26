@@ -247,7 +247,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     /// A nested editor owns its selection gestures, including read-only
     /// text. Plain gestures and native context menus use the same boundary.
-    func hitsNativeEditor(_ view: UIView?) -> Bool { Self.nativeEditor(view, below: self) }
+    package func hitsNativeEditor(_ view: UIView?) -> Bool { Self.nativeEditor(view, below: self) }
     /// Whether `view` is in a native editor's view below `boundary`, which
     /// owns its selection gestures.
     static func nativeEditor(_ view: UIView?, below boundary: UIView) -> Bool {

@@ -50,8 +50,10 @@ package final class ChainingScrollView: NSScrollView {
     /// a point is this view's own, as its empty chrome is, and not a child's scrolled beneath the border.
     package override func hitTest(_ point: NSPoint) -> NSView? {
         guard !removeAfterMouseUp, let hit = super.hitTest(point) else { return nil }
-        // `point` is in the superview's coordinates, its node's, as the edge is.
-        if let edge = paddingClip?.path, !edge.contains(point) { return self }
+        // `point` is in the superview's coordinates, its node's; map through this view's bounds into the active mask's.
+        if let mask = layer?.mask as? CAShapeLayer, let edge = mask.path,
+           !edge.contains(CGPoint(x: point.x - frame.minX + bounds.minX - mask.frame.minX,
+                                  y: point.y - frame.minY + bounds.minY - mask.frame.minY)) { return self }
         return hit
     }
     package override func acceptsFirstMouse(for event: NSEvent?) -> Bool {

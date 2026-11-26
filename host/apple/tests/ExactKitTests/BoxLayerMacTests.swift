@@ -498,6 +498,21 @@ final class BoxLayerMacTests: XCTestCase {
         scroll.scrollerStyle = .overlay
         node.layoutResize = CGSize(width: 0, height: 20); node.applyTransform(); node.applySurface()
         XCTAssertFalse(scroll.layer?.mask === edge, "a layout transition's surface masks the scroll view at its own size")
+        for offset: CGFloat in [0, 40] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            XCTAssertTrue(node.hitTest(NSPoint(x: 60, y: 116)) === child, "expanded surface admits hits past original padding edge, offset \(offset)")
+        }
+        node.layoutResize = CGSize(width: 0, height: -40); node.applyTransform(); node.applySurface()
+        for offset: CGFloat in [0, 40] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            XCTAssertTrue(node.hitTest(NSPoint(x: 60, y: 90)) === scroll, "contracted surface rejects hits outside shrunk padding edge, offset \(offset)")
+            XCTAssertTrue(node.hitTest(NSPoint(x: 60, y: 40)) === child, "contracted surface admits hits inside shrunk padding edge, offset \(offset)")
+        }
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        node.layoutResize = CGSize(width: 0, height: 20); node.applyTransform(); node.applySurface()
         let surfaceMask = try XCTUnwrap(scroll.layer?.mask)
         p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 2.0, "border_width_top": 12.0, "border_width_right": 6.0])]))
         XCTAssertTrue(NSEdgeInsetsEqual(scroll.clipInsets, NSEdgeInsets(top: 12, left: 2, bottom: 2, right: 6)), "new widths while the surface owns the mask")
@@ -512,6 +527,21 @@ final class BoxLayerMacTests: XCTestCase {
         node.layoutResize = .zero; node.applyTransform(); node.applySurface()
         XCTAssertTrue(scroll.layer?.mask === edge, "and the padding edge is back when it ends")
         XCTAssertEqual(try ink(10, 10), "border")
+
+        // Removing border-radius while keeping a border keeps the rectangular padding-edge mask.
+        p.apply(wireBatch([look(["border_width": 8.0, "border_color_top": [0, 255, 0, 128]])]))
+        XCTAssertNotNil(scroll.layer?.mask, "a square bordered scroller still clips to its padding edge")
+        XCTAssertEqual(try ink(4, 60), "border", "translucent border keeps showing ground after radius removal")
+        XCTAssertEqual(try ink(10, 60), "child", "child shows inside square padding edge")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 4, y: 60)) === scroll, "under square border is scroll view's")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 10, y: 60)) === child, "inside square padding edge hits child")
+
+        // One hidden axis (`clipsItself`) with a border still clips scrolled content to its padding edge.
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 8.0, "border_color_top": [0, 255, 0, 128]], x: "hidden")]))
+        XCTAssertTrue(node.clipsToBounds)
+        XCTAssertNotNil(scroll.layer?.mask, "self-clipping border box still clips scrolled content to its padding edge")
+        XCTAssertEqual(try ink(4, 60), "border", "hidden/auto border keeps child out from under border")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 4, y: 60)) === scroll)
 
         // Borders of two widths make the padding edge's corner an ellipse, 8 by 20 round (24, 24).
         p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 4.0, "border_width_left": 16.0, "border_color_top": [0, 0, 0, 0]])]))
@@ -545,13 +575,78 @@ final class BoxLayerMacTests: XCTestCase {
         XCTAssertEqual(scroll.layer?.cornerRadius, 24)
 
         p.apply(wireBatch([look(["border_radius_top_left": 24.0, "border_radius_top_right": 24.0])]))
-        XCTAssertEqual(scroll.layer?.cornerRadius, 0, "a capture's render has no corner mask")
+        XCTAssertEqual(scroll.layer?.cornerRadius, 0, "partial corners use a path so captures match the window")
+        XCTAssertNotNil(scroll.layer?.mask)
+        XCTAssertEqual(try ink(3, 3), "none", "top-left rounded corner clips child")
+        XCTAssertEqual(try ink(116, 3), "none", "top-right rounded corner clips child")
+        XCTAssertEqual(try ink(3, 116), "child", "bottom-left square corner keeps child")
+        XCTAssertEqual(try ink(116, 116), "child", "bottom-right square corner keeps child")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 3, y: 3)) === scroll, "clipped top-left corner is scroll view's")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 3, y: 116)) === child, "unclipped bottom-left corner hits child")
+
         p.apply(wireBatch([look(["border_radius_top_left": 18.0, "border_radius_top_right": 4.0])]))
         XCTAssertEqual(scroll.layer?.cornerRadius, 0, "corners that differ need a path")
+        XCTAssertNotNil(scroll.layer?.mask)
+        XCTAssertEqual(try ink(2, 2), "none", "top-left radius 18 clips outside its curve")
+        XCTAssertEqual(try ink(117, 2), "child", "top-right radius 4 stays inside its curve")
+        XCTAssertEqual(try ink(2, 117), "child", "bottom-left radius 0 stays square")
+
+        // Differing corners with a translucent border clip to the padding edge while scrolled.
+        p.apply(wireBatch([look(["border_radius_top_left": 28.0, "border_radius_top_right": 8.0,
+                                 "border_width": 6.0, "border_color_top": [0, 255, 0, 128]])]))
+        for offset: CGFloat in [0, 40] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            XCTAssertEqual(try ink(10, 10), "border", "top-left 28 with 6 border clips child, offset \(offset)")
+            XCTAssertEqual(try ink(112, 8), "child", "top-right 8 with 6 border leaves radius 2 inner curve, offset \(offset)")
+            XCTAssertEqual(try ink(8, 112), "child", "bottom-left 0 with 6 border stays square inside border, offset \(offset)")
+        }
+        scroll.contentView.scroll(to: .zero)
+
+        // Elliptical corners: 50% on a 120×60 box is a 60×30 ellipse.
+        p.apply(wireBatch([look(["border_radius": ["pct": 50.0]]), ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 120, "h": 60]]))
+        XCTAssertEqual(scroll.layer?.cornerRadius, 0, "elliptical corners use a path")
+        XCTAssertNotNil(scroll.layer?.mask)
+        XCTAssertEqual(try ink(10, 10), "none", "outside the 60×30 ellipse")
+        XCTAssertEqual(try ink(20, 14), "child", "inside the 60×30 ellipse")
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 0, "w": 120, "h": 120]]))
+
+        // Non-Apple corner-shape: bevel (superellipse K = 0) of radius 24 cuts x + y < 24.
+        p.apply(wireBatch([look(["border_radius": 24.0, "corner_shape": [0.0, 0.0, 0.0, 0.0]])]))
+        XCTAssertEqual(scroll.layer?.cornerRadius, 0, "non-Apple corner-shape uses a path")
+        XCTAssertNotNil(scroll.layer?.mask)
+        XCTAssertEqual(try ink(10, 10), "none", "outside the bevel diagonal")
+        XCTAssertEqual(try ink(15, 15), "child", "inside the bevel diagonal")
+
+        // A painted-menu default surface with a non-Apple corner-shape drops glass and clips with the bevel path.
+        p.apply(wireBatch([
+            ["op": "props", "id": 2, "set": ["defaultSurface": "true", "popover": "auto", "accessibilityRole": "menu", "defaultSurfaceRadius": "16"]],
+            look(["border_radius": 24.0, "corner_shape": [0.0, 0.0, 0.0, 0.0]]),
+        ]))
+        XCTAssertNil(node.materialView, "non-Apple corner-shape declines the default glass surface")
+        XCTAssertNotNil(scroll.layer?.mask, "and clips the scroller with the bevel path")
+        XCTAssertEqual(try ink(10, 10), "none", "default surface bevel clips outside its diagonal")
+        XCTAssertEqual(try ink(15, 15), "child", "default surface bevel keeps inside its diagonal")
+        p.apply(wireBatch([["op": "props", "id": 2, "set": ["defaultSurface": "false"]]]))
+
+        // A scroll view drawn past its box (`setReach`) keeps its square clip until reach returns to zero.
+        node.setReach(NSEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
+        XCTAssertNil(scroll.layer?.mask, "a reaching scroll view has its corners elsewhere")
+        node.setReach(NSEdgeInsetsZero)
+        XCTAssertNotNil(scroll.layer?.mask, "and restores its mask once reach ends")
+
+        // Clearing reach during an active expanded surface preserves the surface's clip ownership.
         p.apply(wireBatch([look(["border_radius": 24.0], x: "hidden")]))
-        XCTAssertTrue(node.clipsToBounds, "one axis hidden: the box's own layer clips")
+        node.setReach(NSEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
+        node.layoutResize = CGSize(width: 0, height: 20); node.applyTransform(); node.applySurface()
+        XCTAssertEqual(node.surface?.clippedSelf, true)
+        node.setReach(NSEdgeInsetsZero)
+        XCTAssertFalse(node.clipsToBounds, "ending reach does not restore bounds clip while expanded surface owns it")
+        node.layoutResize = .zero; node.applyTransform(); node.applySurface()
+        XCTAssertTrue(node.clipsToBounds, "one axis hidden: the box's own layer clips once surface ends")
         XCTAssertEqual(node.layer?.cornerRadius, 24)
         XCTAssertEqual(try XCTUnwrap(node.scroll).layer?.cornerRadius, 0, "and its scroll view needs no corner")
+        XCTAssertNil(try XCTUnwrap(node.scroll).layer?.mask)
     }
 
     /// A scroller clipped at its padding edge is driven as one that is not (expo/exact#1442): its scroll view finds
@@ -572,8 +667,9 @@ final class BoxLayerMacTests: XCTestCase {
         var said: [String] = []
         p.onScrollDrag = { id, end in said.append(end.map { "\(id) end \($0.velocity.y)" } ?? "\(id) start") }
         func look(_ id: Int, _ rows: [String: Any]) -> [String: Any] {
-            ["op": "style", "id": id, "style": rows.merging(["overflow_x": "auto", "overflow_y": "auto", "border_width": 8.0,
-                                                               "border_color_top": [0, 255, 0, 128]]) { a, _ in a }]
+            var base: [String: Any] = ["overflow_x": "auto", "overflow_y": "auto"]
+            if id == 2 { base["border_width"] = 8.0; base["border_color_top"] = [0, 255, 0, 128] }
+            return ["op": "style", "id": id, "style": rows.merging(base) { a, _ in a }]
         }
         // Two scrollers of eight cards 100 points high, 2 rounded and 3 square, each 120 points square.
         var ops: [[String: Any]] = [["op": "create", "id": 1, "kind": "view"]]
