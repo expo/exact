@@ -749,7 +749,7 @@ impl<D: DataSource> Host<D> {
         }
         .or_else(|| self.paint.view_dark(node.key));
         shown.lowered = self.lowered_mask(node.key);
-        shown.reach = self.safe_area.reach(node.key);
+        (shown.reach, shown.scroll) = self.safe_area.of(node.key);
         // @ref LLP 1061 D7, LLP 1121 D8 — the press and the looks that hold;
         // the painter samples the background and ink independently.
         let looks = self.looks_shown.on(id);

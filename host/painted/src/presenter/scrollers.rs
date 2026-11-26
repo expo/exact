@@ -269,8 +269,10 @@ impl<D: DataSource> Presenter<D> {
                 s.axes = (s.axes.0 && open.0, s.axes.1 && open.1);
                 open = (open.0 && !cut.0, open.1 && !cut.1);
                 if s.axes.0 || s.axes.1 || zooms {
+                    // A claimed scroller's port is its reached frame, which takes its hits (LLP 1123 D13)
                     if let Some(b) = self.box_of(id) {
-                        s.port = shown(b.rect, b.clip);
+                        let claimed = self.host.presented(id).scroll.is_some();
+                        s.port = shown(if claimed { b.for_hit().rect } else { b.rect }, b.clip);
                     }
                     chain.push(s);
                 }
