@@ -257,3 +257,107 @@ fn a_routes_map_is_its_frame_in_the_page_less_the_pages_scroll() {
     let [.., x, y] = update(&p, "route-home").window_map.unwrap().0;
     assert_eq!((x, y), (20., 20.));
 }
+
+/// A fold's segments are each route's, clipped to it and in its space: a route across a 12-point hinge has both, and
+/// one that lies on one segment has none.
+#[test]
+fn a_routes_segments_are_the_documents_clipped_to_it() {
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(APP),
+        Nothing,
+        (412., 840.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let kernel = p.host.runner_mut().kernel_mut();
+    let halves = vec![
+        exact_kernel::Rect {
+            x: 0.,
+            y: 0.,
+            width: 200.,
+            height: 840.,
+        },
+        exact_kernel::Rect {
+            x: 212.,
+            y: 0.,
+            width: 200.,
+            height: 840.,
+        },
+    ];
+    kernel.set_segments(2, 1, halves.clone()).unwrap();
+    let home = update(&p, "route-home");
+    let grid = home.segments.clone().expect("across the hinge");
+    // Clipped to the route, which the tab bar's row leaves short of the page's height
+    let h = p
+        .host()
+        .kernel()
+        .node(id_of(&p, "route-home"))
+        .unwrap()
+        .frame
+        .height;
+    let clipped: Vec<_> = halves
+        .iter()
+        .map(|r| exact_kernel::Rect { height: h, ..*r })
+        .collect();
+    assert!(h < 840.);
+    assert_eq!((grid.cols, grid.rows, grid.rects), (2, 1, clipped));
+    let route = id_of(&p, "route-home");
+    assert!(
+        p.host
+            .runner_mut()
+            .kernel_mut()
+            .update_owner(route, home)
+            .is_ok(),
+        "the kernel takes it"
+    );
+    let source = APP.replace(
+        "    main navigationKey",
+        "    main margin-left=220 navigationKey",
+    );
+    let (mut right, _) = Presenter::boot_with(
+        &crate::test_plan(&source),
+        Nothing,
+        (412., 840.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    let kernel = right.host.runner_mut().kernel_mut();
+    kernel
+        .set_segments(
+            2,
+            1,
+            vec![
+                exact_kernel::Rect {
+                    x: 0.,
+                    y: 0.,
+                    width: 200.,
+                    height: 840.,
+                },
+                exact_kernel::Rect {
+                    x: 212.,
+                    y: 0.,
+                    width: 200.,
+                    height: 840.,
+                },
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        update(&right, "route-home").segments,
+        None,
+        "on one segment"
+    );
+}
+
+fn id_of(p: &Presenter<Nothing>, test_id: &str) -> ViewId {
+    let kernel = p.host().kernel();
+    kernel
+        .node_by_key(kernel.find_by_test_id(test_id)[0])
+        .unwrap()
+        .id
+}
