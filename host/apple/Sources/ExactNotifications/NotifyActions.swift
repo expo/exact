@@ -37,6 +37,7 @@ import UserNotifications
 struct DeclaredAction: Equatable {
     let action: String, title: String, foreground: Bool, destructive: Bool, authenticationRequired: Bool
     let placeholder: String?
+    fileprivate var replyButtonTitle: String?
 
     init?(_ json: [String: Any]) {
         guard let action = json["action"] as? String, !action.isEmpty else { return nil }
@@ -46,6 +47,17 @@ struct DeclaredAction: Equatable {
         destructive = json["destructive"] as? Bool ?? false
         authenticationRequired = json["authenticationRequired"] as? Bool ?? false
         placeholder = json["placeholder"] as? String
+        // macOS copies the action title until its system submit button is measured.
+        #if os(iOS)
+        if placeholder != nil { replyButtonTitle = "" }
+        #endif
+    }
+
+    /// Category equality includes the submit caption. Earlier hosts registered
+    /// the action title and kept only the authored fields in defaults.
+    fileprivate init?(kept json: [String: Any]) {
+        self.init(json)
+        replyButtonTitle = json["textInputButtonTitle"] as? String
     }
 
     /// The system returns this revision, not just the authored name. An old
@@ -64,7 +76,7 @@ struct DeclaredAction: Equatable {
         if authenticationRequired { options.insert(.authenticationRequired) }
         guard let placeholder else { return UNNotificationAction(identifier: identifier, title: title, options: options) }
         return UNTextInputNotificationAction(identifier: identifier, title: title, options: options,
-                                             textInputButtonTitle: title, textInputPlaceholder: placeholder)
+                                             textInputButtonTitle: replyButtonTitle ?? title, textInputPlaceholder: placeholder)
     }
 }
 
@@ -83,21 +95,24 @@ enum DeclaredCategories {
     static func lists(_ declared: String) -> [[DeclaredAction]] {
         guard let json = try? JSONSerialization.jsonObject(with: Data(declared.utf8)) as? [String: Any],
               let lists = (json["notifications.showNotification"] as? [String: Any])?["actions"] as? [[[String: Any]]] else { return [] }
-        return lists.map { $0.compactMap(DeclaredAction.init) }.filter { !$0.isEmpty }
+        return lists.map { $0.compactMap(DeclaredAction.init(_:)) }.filter { !$0.isEmpty }
     }
 
     /// The last registered Exact definitions, kept for ownership reconciliation.
     static var kept: [String: [DeclaredAction]] {
         guard let data = defaults.data(forKey: key),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: [[String: Any]]] else { return [:] }
-        return json.mapValues { $0.compactMap(DeclaredAction.init) }
+        return json.mapValues { $0.compactMap(DeclaredAction.init(kept:)) }
     }
 
     static func keep(_ categories: [String: [DeclaredAction]]) {
         let json = categories.mapValues { $0.map { a -> [String: Any] in
             var o: [String: Any] = ["action": a.action, "title": a.title, "foreground": a.foreground,
                                     "destructive": a.destructive, "authenticationRequired": a.authenticationRequired]
-            if let p = a.placeholder { o["placeholder"] = p }
+            if let p = a.placeholder {
+                o["placeholder"] = p
+                o["textInputButtonTitle"] = a.replyButtonTitle
+            }
             return o
         } }
         if let data = try? JSONSerialization.data(withJSONObject: json) { defaults.set(data, forKey: key) }

@@ -310,7 +310,14 @@ final class NotificationActionTests: XCTestCase {
         XCTAssertEqual(approve.options, [.authenticationRequired], "a background action brings nothing forward")
         XCTAssertFalse(approve is UNTextInputNotificationAction)
         XCTAssertEqual(note.options, [.foreground])
-        XCTAssertEqual((note as? UNTextInputNotificationAction)?.textInputPlaceholder, "Note")
+        let reply = try XCTUnwrap(note as? UNTextInputNotificationAction)
+        XCTAssertEqual(reply.title, "Add a note")
+        XCTAssertEqual(reply.textInputPlaceholder, "Note")
+        #if os(iOS)
+        XCTAssertEqual(reply.textInputButtonTitle, "")
+        #else
+        XCTAssertEqual(reply.textInputButtonTitle, reply.title)
+        #endif
         let destructive = try XCTUnwrap(DeclaredAction(["action": "delete", "title": "Delete", "foreground": false, "destructive": true]))
         XCTAssertEqual(destructive.platform.options, [.destructive])
         XCTAssertTrue(DeclaredCategories.lists("{}").isEmpty)
@@ -321,6 +328,49 @@ final class NotificationActionTests: XCTestCase {
         let approveNote = try XCTUnwrap(registered.first { $0.identifier == "approve,note" })
         XCTAssertEqual(approveNote.actions.map(\.identifier), lists[0].map(\.identifier))
         XCTAssertEqual(ids, ["approve,note", "embedder"])
+    }
+
+    func testReplyCategoryOwnershipAcrossTheSubmitCaptionChange() throws {
+        let (session, _) = self.session()
+        let row = ["action": "reply", "title": "Reply", "placeholder": "Type here"]
+        let reply = try XCTUnwrap(DeclaredAction(row))
+        // This identifier was produced by the host that copied the title.
+        let id = "reply=a2cfc9805bcb706b7bf136c699866e2c698f111f9ed4d69e167f02328e3b641f"
+        XCTAssertEqual(reply.identifier, id)
+        let oldAction = UNTextInputNotificationAction(identifier: id, title: "Reply", options: [.foreground],
+                                                     textInputButtonTitle: "Reply", textInputPlaceholder: "Type here")
+        let old = UNNotificationCategory(identifier: "reply", actions: [oldAction], intentIdentifiers: [], options: [])
+        let saved = try JSONSerialization.data(withJSONObject: ["reply": [row]])
+        DeclaredCategories.defaults.set(saved, forKey: DeclaredCategories.key)
+        registered = [old]
+        let presenter = NotificationPresenter.shared
+        presenter.declare([[reply]], for: session)
+        XCTAssertEqual(registered.first?.actions.first, reply.platform)
+        choose(response(entry(session), category: "reply", action: "reply", text: "Clean", definition: reply))
+        let args = held(session).last?["args"] as? [Any]
+        XCTAssertEqual((args?.last as? [String: Any])?["reply"] as? String, "Clean")
+
+        #if os(iOS)
+        // The embedder installed the new caption before Exact attempted the upgrade.
+        DeclaredCategories.defaults.set(saved, forKey: DeclaredCategories.key)
+        presenter.declare([[reply]], for: session)
+        XCTAssertEqual(registered.first?.actions.first, reply.platform)
+        choose(response(entry(session), category: "reply", action: "reply", text: "Foreign", definition: reply))
+        XCTAssertEqual(held(session).count, 1)
+        #endif
+    }
+
+    func testActionRevisionCoversEveryAuthoredField() throws {
+        let row: [String: Any] = ["action": "reply", "title": "Reply", "foreground": true, "destructive": false,
+                                  "authenticationRequired": false, "placeholder": "Answer"]
+        let original = try XCTUnwrap(DeclaredAction(row))
+        for (key, value) in row {
+            var changed = row
+            if let flag = value as? Bool { changed[key] = !flag }
+            else { changed[key] = "Other" }
+            let updated = try XCTUnwrap(DeclaredAction(changed))
+            XCTAssertNotEqual(updated.identifier, original.identifier, key)
+        }
     }
 
     func testRemovedCategoriesAreReconciledIncludingAnEmptyPlan() throws {

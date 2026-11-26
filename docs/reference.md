@@ -4212,7 +4212,9 @@ grant beside this one: see [Push](#push).
   when the category name stays the same. `e.action` remains the authored name.
   Data code's
   post may name only a list the app's Contract writes (`TypeError`
-  otherwise). `placeholder=some("Note")` makes the action a text field;
+  otherwise). `placeholder=some("Note")` makes the action a text field.
+  iOS supplies the localized submit button (“Send” in English). On macOS
+  Exact uses the action title until the system button has been measured there.
   `destructive` and `authenticationRequired` are the platform's flags (the
   device must be unlocked first). Choosing one is `notificationclick` with
   `action` its name and `reply` what the person typed; it never opens the
