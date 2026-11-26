@@ -352,6 +352,10 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** The window ([Native.window]): told before [boot] so the host is laid out in it from its first frame, and
      * whenever its size, the display's density or an inset changes, when the host lays the page out again. */
+    fun keyboardProgress(depth: Int) {
+        handler.post { Native.keyboardProgress(depth) }
+    }
+
     fun window(width: Int, height: Int, scale: Float, insets: IntArray) {
         val number = ++windowSent
         handler.post {

@@ -154,6 +154,13 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.fitted();
     }
 
+    /// The software keyboard's bottom inset in pixels as its inset animation shows it, or a negative depth once it ends
+    /// (LLP 1123 D7).
+    pub fn set_keyboard_progress(&mut self, depth: i32) {
+        self.p
+            .set_keyboard_progress((depth >= 0).then(|| depth as f32 / self.scale));
+    }
+
     /// Before a paint: a commit may have changed what the root says of the
     /// window (`viewport-fit`, `interactive-widget`).
     pub(super) fn fit(&mut self) {

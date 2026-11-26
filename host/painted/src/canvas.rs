@@ -338,8 +338,9 @@ pub struct Recorder {
     images: HashMap<usize, (u32, WeakPicture, u64)>,
     /// Frames begun: when a picture was last drawn.
     frames: u64,
-    /// The scroller whose rows are being drawn, if any.
-    group: Option<u32>,
+    /// Scrollers whose rows are currently being drawn, outermost first.
+    /// Active scroll-row groups, innermost last, each with the clip depth outside it.
+    groups: Vec<(u32, usize)>,
     /// Frames a picture goes undrawn before the reader's copy is freed
     /// (`EXACT_IDLE_FRAMES`, else [`IDLE_FRAMES`]).
     idle: u64,
@@ -426,7 +427,7 @@ impl Recorder {
             images: HashMap::new(),
             next_image: 1,
             frames: 0,
-            group: None,
+            groups: Vec::new(),
             idle: std::env::var("EXACT_IDLE_FRAMES")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -558,7 +559,7 @@ impl Backend for Recorder {
         self.clips.clear();
         self.origin = (0.0, 0.0);
         self.row = None;
-        self.group = None;
+        self.groups.clear();
         self.slot = None;
         self.again = None;
         self.slot_sets.clear();
@@ -999,10 +1000,18 @@ impl Backend for Recorder {
     fn row_culled(&self, bounds: Rect4) -> bool {
         // A scroller's rows all draw so a move needs no paint, unless its
         // clips leave nothing (a page out of view): no move shows them.
-        match self.group {
+        match self.groups.last() {
             None => self.culled(Some(bounds)),
             Some(_) => self.clipped_out(),
         }
+    }
+
+    fn can_group(&self) -> bool {
+        self.row.is_none()
+            && self.layers.unlayered()
+            && !self.shared.opened()
+            && self.slot.is_none()
+            && self.again.is_none()
     }
 
     fn group_begin(&mut self, id: ViewId, scroll: (f32, f32)) {
@@ -1011,7 +1020,7 @@ impl Backend for Recorder {
         if !self.clips.is_empty() {
             self.materialize(self.clips.len() - 1);
         }
-        self.group = Some(id);
+        self.groups.push((id, self.clips.len()));
         self.ops.extend([GROUP_BEGIN, id]);
         // The group records on a fresh Canvas, independently of the outer matrix.
         self.matrix = None;
@@ -1019,7 +1028,7 @@ impl Backend for Recorder {
     }
 
     fn group_end(&mut self) {
-        self.group = None;
+        self.groups.pop();
         self.ops.push(GROUP_END);
         // The reader returns to the outer Canvas, whose matrix may differ.
         self.matrix = None;

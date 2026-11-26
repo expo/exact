@@ -329,7 +329,7 @@ impl<D: DataSource> Presenter<D> {
             .map(|(at, within)| {
                 let b = &self.boxes[at];
                 let groups = self.brush.row_groups();
-                let group = groups.iter().find(|g| g.1 <= at && at < g.2);
+                let group = groups.iter().rfind(|g| g.1 <= at && at < g.2);
                 (b, within, group.map_or(0, |g| g.0))
             });
         let mut flags = 0;
