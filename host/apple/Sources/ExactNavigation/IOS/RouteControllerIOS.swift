@@ -52,6 +52,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var itemNodes: [ObjectIdentifier: UInt32] = [:]
     #endif
     weak var host: NavigationHost?
+    /// The cover follows UIKit's layout pass, where its transition's animation is installed.
+    private(set) var safeAreaNeedsLayout = false
     weak var ownedScroll: NodeView?
     /// The scroller a large title collapses with (LLP 1075.003 Stage 3).
     weak var collapseScroll: NodeView?
@@ -176,8 +178,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         SafeAreaSteps.react(self) { [weak self] in
-            self?.rideBars()
-            self?.host?.coversChanged()
+            guard let self else { return }
+            safeAreaNeedsLayout = true
+            rideBars()
+            view.setNeedsLayout()
         }
     }
     // Back on a screen whose list pushed the one leaving: the row that was
@@ -217,6 +221,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         fitContentViewport()
+        if safeAreaNeedsLayout {
+            safeAreaNeedsLayout = false
+            host?.coversChanged()
+        }
         host?.presenter.owners.publish()
         if scrollEdgesOwed { host?.settleScrollEdges() }
         #if os(iOS)

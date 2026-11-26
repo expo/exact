@@ -253,7 +253,7 @@ extension NavigationHost {
             let barAbove = nav.map { c.parent is PlainTab ? !$0.isNavigationBarHidden : routeShowsBar(c, in: $0) } ?? false
             // Nested in a split's list column, the detail's routes are under that column's bar (LLP 1127 §1, item 2)
             let barNav = split.flatMap { $0.nested && nav === $0.detail ? $0.list : nil } ?? nav
-            let settled = c.surface.window != nil && (search || (barNav?.isNavigationBarHidden ?? true) != barAbove)
+            let settled = !c.safeAreaNeedsLayout && c.surface.window != nil && (search || (barNav?.isNavigationBarHidden ?? true) != barAbove)
             // A route showing no bar has no title: its inset is the status bar's, none in landscape (LLP 1130 D3).
             let barless = !barAbove
             let topPeers = arrangementScrollers(in: c, top: true), bottomPeers = arrangementScrollers(in: c, top: false)
@@ -558,7 +558,7 @@ extension NavigationHost {
         for c in controllers.values where presenter.views[c.node.id] === c.node {
             let last = localInsets.wanted[c.node.id], moving = c.navigationController?.transitionCoordinator != nil
             let view = c.surface
-            guard view.window != nil, c.node.window != nil, last == nil || !moving || c.appearing else {
+            guard view.window != nil, c.node.window != nil, !c.safeAreaNeedsLayout, last == nil || !moving || c.appearing else {
                 wanted[c.node.id] = last
                 continue
             }
