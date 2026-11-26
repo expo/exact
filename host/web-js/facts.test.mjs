@@ -241,8 +241,8 @@ test("a geometry fact is the browser's layout of the element, answered again as 
     writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
     writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [], said = [];
-      export const Resources = [{ name: 'g', source: 'exactGeometry' }, { name: 'n', source: 'exactGeometry' }];
-      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.name === 'g' ? ['hero'] : ['hero', 'node', 'card'], r.name)); }
+      export const Resources = [{ name: 'g', source: 'exactGeometry', asked: ['hero'] }, { name: 'n', source: 'exactGeometry', asked: ['hero', 'node', 'card'] }];
+      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.asked, r.name)); }
       export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
       export const Refusal = Error, Kept = () => '', say = (m) => said.push(m);`);
     const { geometry } = await import(resolve(dir, 'facts.js'));
@@ -286,8 +286,8 @@ test("each geometry reader's answer is its own, refreshed only for a move, and a
     writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
     writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [];
-      export const Resources = [{ name: 'g', source: 'exactGeometry' }];
-      export function R(r) { commits.at(-1).read.push(...['hero', 'card'].map((id) => data.reserved.exactGeometry(null, [id], r.name))); }
+      export const Resources = [{ name: 'g', source: 'exactGeometry', asked: ['hero'] }, { name: 'g', source: 'exactGeometry', asked: ['card'] }];
+      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.asked, r.name)); }
       export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
       export const Refusal = Error, Kept = () => '', say = () => {};`);
     const { geometry } = await import(resolve(dir, 'facts.js'));
@@ -305,5 +305,41 @@ test("each geometry reader's answer is its own, refreshed only for a move, and a
     // A node's space under a transform cannot be recovered from rectangles
     style.card = { transform: 'matrix(2, 0, 0, 2, 0, 0)' };
     expect(read(['hero', 'node', 'card'])).toEqual([1, null]);
+  } finally { Object.assign(globalThis, prior); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a geometry reader that reads other arguments, or has gone, keeps no snapshot of what it read", async () => {
+  // LLP 1123 D6: after each commit only what a live instance reads now is compared, so an element a reader has left, or
+  // the element of a reader disposed of, moves nothing
+  const rects = { old: { left: 0, top: 0, width: 10, height: 10 }, current: { left: 0, top: 50, width: 10, height: 10 } };
+  const element = (id) => rects[id] && { nodeType: 1, id, getClientRects: () => [rects[id]], getBoundingClientRect: () => rects[id] };
+  const prior = { document: globalThis.document, getComputedStyle: globalThis.getComputedStyle };
+  Object.assign(globalThis, { document: { getElementById: element }, scrollX: 0, scrollY: 0, getComputedStyle: () => ({}) });
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-live-'));
+  try {
+    writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, After = [], commits = [];
+      export const Resources = [{ name: 'g', source: 'exactGeometry', asked: ['old'] }];
+      export function R(r) { commits.at(-1).read.push(data.reserved.exactGeometry(null, r.asked, r.name)); }
+      export function commit(f, why) { commits.push({ why, read: [] }); f(); for (const a of After) a(); }
+      export const Refusal = Error, Kept = () => '', say = () => {};`);
+    const { geometry } = await import(resolve(dir, 'facts.js'));
+    const { data, After, commits, Resources } = await import(resolve(dir, 'rt.js'));
+    geometry({ g: [['frame'], { frame: ['?', { x: 'n', y: 'n', width: 'n', height: 'n' }] }] });
+    const read = (args) => data.reserved.exactGeometry(null, args, 'g');
+    read(['old']);
+    // The reader now reads another element: the one it left moves, and nothing is answered again
+    Resources[0].asked = ['current'];
+    read(['current']);
+    for (const a of After) a();
+    rects.old = { ...rects.old, top: 5 };
+    for (const a of After) a();
+    expect(commits).toEqual([]);
+    // Disposed of, its element moving answers nothing either
+    Resources[0].gone = true;
+    rects.current = { ...rects.current, top: 60 };
+    for (const a of After) a();
+    expect(commits).toEqual([]);
   } finally { Object.assign(globalThis, prior); rmSync(dir, { recursive: true, force: true }); }
 });
