@@ -202,6 +202,10 @@ open class ExactActivity : Activity() {
         // The raw insets go to the host whenever they change, and the window's size when it does; nothing is padded
         // here (D3.3).
         root.setOnApplyWindowInsetsListener { _, insets -> window(insets); insets }
+        // The keyboard as it moves, which the inset dispatch gives only at its ends (LLP 1123 D7)
+        if (Build.VERSION.SDK_INT >= 30) root.setWindowInsetsAnimationCallback(KeyboardProgress { depth ->
+            view.owner?.keyboardProgress(depth) ?: Native.keyboardProgress(depth)
+        })
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> window() }
         // A freeform window can move without laying out its children again.
         val location = IntArray(2)

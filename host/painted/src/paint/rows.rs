@@ -242,6 +242,8 @@ pub(super) struct Rows {
     /// [`sticky_parents`] and the walk it was found for.
     sections: Option<(u64, Rc<IdSet<ViewId>>)>,
     sticky_scrollers: Option<IdSet<ViewId>>,
+    /// Nodes that are, or contain, a vertical scroller eligible for its own group.
+    pub(super) scroller_ancestors: Option<(u64, Rc<IdSet<ViewId>>)>,
     /// The environment the kept rows resolved `env()` against.
     env: Option<exact_kernel::Env>,
     /// The controls' own states and choices the kept rows drew
@@ -269,8 +271,9 @@ pub(super) struct Rows {
     /// `EXACT_ROWS=0` turns rows off, for comparison.
     off: Option<bool>,
     /// This walk's scrollers with rows: each one's id and the range of the
-    /// walk's boxes its rows pushed.
+    /// walk's boxes its rows pushed, with indices of open groups stacked for nesting.
     groups: Vec<(ViewId, usize, usize)>,
+    open_groups: Vec<usize>,
     /// The container whose children are its scroller's rows, while it is
     /// walked (see [`Painter::wraps_rows`]).
     wrapper: Option<NodeKey>,
@@ -559,6 +562,7 @@ impl Painter {
             .get_or_insert_with(|| std::env::var("EXACT_ROWS").is_ok_and(|v| v == "0"));
         self.rows.frame += 1;
         self.rows.groups.clear();
+        self.rows.open_groups.clear();
         self.rows.sticky_scrollers = None;
         self.rows.active = !off
             && (self.backend.rows() || self.backend.geometry_rows())
@@ -630,9 +634,11 @@ impl Painter {
         }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
         self.backend.group_begin(id, scroll);
+        let at = self.rows.groups.len();
         self.rows
             .groups
             .push((id, walk.boxes.len(), walk.boxes.len()));
+        self.rows.open_groups.push(at);
     }
 
     /// A sticky box moves with its constraint, independently of the group.
@@ -656,8 +662,8 @@ impl Painter {
             return;
         }
         self.backend.group_end();
-        if let Some(g) = self.rows.groups.last_mut() {
-            g.2 = walk.boxes.len();
+        if let Some(at) = self.rows.open_groups.pop() {
+            self.rows.groups[at].2 = walk.boxes.len();
         }
     }
 
@@ -1065,6 +1071,10 @@ impl Painter {
             || ts.ky != 0.0
             || (walk.scene.hidden)(id)
             || (split_sections && node.layout_position() == exact_kernel::PositionType::Sticky)
+            || (!split_sections
+                && self.backend.rows()
+                && self.backend.can_group()
+                && self.holds_nested_group(walk.scene.kernel, id))
         {
             // A backend that splits sections keeps one row group, the outer
             // scroller's, and none opens inside a layer capture. Another

@@ -331,7 +331,14 @@ impl Lowerer<'_> {
         controls::check_progress(tag, expanded, children)?;
         crate::live_time::check(tag, expanded, *span)?;
         let alert = self.check_menu_shapes(tag, expanded, children, *span)?;
-        let parted = self.alert_parts(tag, expanded, children, alert, *span, *instance);
+        let parted = self.alert_parts(
+            tag,
+            expanded,
+            children,
+            alert.always_alertdialog && alert.alert,
+            *span,
+            *instance,
+        );
         let children: &[Node] = parted.as_deref().unwrap_or(children);
         let closedby = menus::implied_closedby(tag, expanded, *span, alert);
         let expanded = closedby.as_deref().unwrap_or(expanded);
