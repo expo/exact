@@ -1,5 +1,13 @@
+#if os(iOS) || os(macOS)
 #if os(iOS)
 import UIKit
+package typealias TargetView = UIView
+package typealias TargetController = UIViewController
+#else
+import AppKit
+package typealias TargetView = NSView
+package typealias TargetController = NSViewController
+#endif
 
 /// A native view whose raw safe area a box reads by name (LLP 1123 D9, "Registration"):
 /// `var(--exact-target-<name>-safe-area-inset-<edge>)`. A registration holds its view weakly and
@@ -30,14 +38,14 @@ package final class ExactNativeTarget {
     /// strong reference to the session off it.
     private let owner: WeakSession
     private var session: ExactSession? { owner.session }
-    private weak var view: UIView?
+    private weak var view: TargetView?
     /// The view's identity, kept for when the view is gone (`TargetIds`).
     private var id: UInt64
     private var generation: UInt64
     private var disposed = false
 
     /// Register `view` under `name` for `session`.
-    package static func register(name: String, view: UIView, in session: ExactSession) throws -> ExactNativeTarget {
+    package static func register(name: String, view: TargetView, in session: ExactSession) throws -> ExactNativeTarget {
         guard valid(name) else { throw Refusal.invalidName(name) }
         guard live(name, in: session) == nil else { throw Refusal.taken(name) }
         let target = ExactNativeTarget(name: name, view: view, session: session)
@@ -48,11 +56,11 @@ package final class ExactNativeTarget {
 
     /// Register `controller`'s view under `name` for `session`, loading the view; the registration
     /// follows that view, not the controller.
-    package static func register(name: String, controller: UIViewController, in session: ExactSession) throws -> ExactNativeTarget {
+    package static func register(name: String, controller: TargetController, in session: ExactSession) throws -> ExactNativeTarget {
         try register(name: name, view: controller.view, in: session)
     }
 
-    private init(name: String, view: UIView, session: ExactSession) {
+    private init(name: String, view: TargetView, session: ExactSession) {
         self.name = name
         self.view = view
         owner = WeakSession(session)
@@ -75,7 +83,7 @@ package final class ExactNativeTarget {
 
     /// Give the registration another view: its generation rises, so no box takes the old
     /// view's insets for the new one's.
-    package func replace(view: UIView) {
+    package func replace(view: TargetView) {
         guard !disposed, let session else { return }
         self.view = view
         id = TargetIds.id(of: view)
@@ -96,8 +104,12 @@ package final class ExactNativeTarget {
 
     /// The target as the kernel takes it now: the view's insets, none while it is out of a window
     /// or gone, under the identity and generation the registration holds.
-    private var current: OwnerUpdateIOS.Target {
-        var target = OwnerUpdateIOS.target(view)
+    private var current: OwnerUpdateWire.Target {
+        #if os(iOS)
+        var target = OwnerUpdateIOS.wire(OwnerUpdateIOS.target(view))
+        #else
+        var target = OwnerUpdateMac.target(view)
+        #endif
         target.id = id
         target.generation = generation
         return target
@@ -153,11 +165,11 @@ package final class ExactNativeTarget {
 
     /// A registration in the kernel's wire form (`encode_registration`): the name's length
     /// and bytes, then the target after a presence byte.
-    static func encode(name: String, target: OwnerUpdateIOS.Target?) -> Data {
+    static func encode(name: String, target: OwnerUpdateWire.Target?) -> Data {
         var out = Data([UInt8(name.utf8.count)])
         out.append(contentsOf: name.utf8)
         out.append(target == nil ? 0 : 1)
-        if let target { out.append(OwnerUpdateIOS.encode(target: target)) }
+        if let target { out.append(OwnerUpdateWire.encode(target: target)) }
         return out
     }
 

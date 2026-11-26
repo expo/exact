@@ -195,7 +195,7 @@ package final class BlockHost {
     /// Take an owner's update from its container where it changed since the last (`samplesOwners`).
     private func sample(_ node: NodeView, in container: NSView) {
         guard samplesOwners, entries[node.id]?.owner == true else { return }
-        let update = OwnerUpdateMac.sample(container)
+        let update = OwnerUpdateMac.sample(container, session: presenter?.session?.view)
         guard toldUpdates[node.id] != update else { return }
         toldUpdates[node.id] = update
         pending[node.id] = update

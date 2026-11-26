@@ -86,5 +86,55 @@ final class OwnerUpdateMacTests: XCTestCase {
         XCTAssertNil(blocks.toldUpdates[node.id])
         XCTAssertNil(blocks.pending[node.id])
     }
+
+    /// D9 on AppKit: a pane's chain is its container, the split item it is, and the split controller above, and its
+    /// relations are the window's root, content view and content layout rectangle, and its screen.
+    func testAPanesChainAndRelationsAreAppKits() throws {
+        let (s, node, container, window) = try owner()
+        container.removeFromSuperview()
+        let split = NSSplitViewController(), pane = NSViewController(), other = NSViewController()
+        pane.view = container
+        other.view = NSView()
+        split.addSplitViewItem(NSSplitViewItem(viewController: other))
+        split.addSplitViewItem(NSSplitViewItem(viewController: pane))
+        window.contentViewController = split
+        window.setContentSize(NSSize(width: 600, height: 400))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let update = OwnerUpdateMac.sample(container, session: s.view)
+        XCTAssertEqual(update.chain.map(\.kinds), [OwnerUpdateMac.Kind.column, OwnerUpdateMac.Kind.split], "the item, then the split")
+        XCTAssertEqual(update.chain.map(\.target.id), [TargetIds.id(of: container), TargetIds.id(of: split.view)])
+        XCTAssertEqual(update.chain.first?.target.insets, OwnerUpdateMac.edges(container.safeAreaInsets))
+        let relations = Dictionary(uniqueKeysWithValues: update.relations.map { ($0.relation, $0.target) })
+        XCTAssertEqual(relations[OwnerUpdateMac.Relation.root]?.id, TargetIds.id(of: split.view), "the window's root controller")
+        XCTAssertEqual(relations[OwnerUpdateMac.Relation.window]?.id, TargetIds.id(of: try XCTUnwrap(window.contentView)))
+        let content = try XCTUnwrap(relations[OwnerUpdateMac.Relation.windowContent])
+        XCTAssertEqual(content.insets?.top ?? 0, window.frame.height - window.contentLayoutRect.maxY, accuracy: 0.5, "the title bar's depth")
+        XCTAssertGreaterThan(content.insets?.top ?? 0, 0)
+        if let screen = window.screen {
+            XCTAssertEqual(relations[OwnerUpdateMac.Relation.screen]?.insets, OwnerUpdateMac.edges(screen.safeAreaInsets))
+        }
+        XCTAssertNil(relations[OwnerUpdateMac.Relation.presenter], "no sheet's parent")
+        XCTAssertNil(s.runtime.ownerReports(updates: [(node.id, update.encode())]).error, "the kernel takes AppKit's relations")
+    }
+
+    /// D9's registration on AppKit, as on UIKit: a name is refused when invalid or taken, freed when disposed of, and
+    /// the kernel takes the registration.
+    func testARegistrationOnAppKitIsUIKits() throws {
+        let (s, _, _, window) = try owner()
+        let (map, other) = (NSView(), NSView())
+        window.contentView?.addSubview(map)
+        XCTAssertThrowsError(try ExactNativeTarget.register(name: "Map", view: map, in: s)) {
+            XCTAssertEqual($0 as? ExactNativeTarget.Refusal, .invalidName("Map"))
+        }
+        let held = try ExactNativeTarget.register(name: "map", view: map, in: s)
+        XCTAssertThrowsError(try ExactNativeTarget.register(name: "map", view: other, in: s)) {
+            XCTAssertEqual($0 as? ExactNativeTarget.Refusal, .taken("map"))
+        }
+        held.dispose()
+        XCTAssertNoThrow(try ExactNativeTarget.register(name: "map", view: other, in: s))
+        let record = ExactNativeTarget.encode(name: "pane", target: OwnerUpdateMac.target(map))
+        XCTAssertNil(s.runtime.ownerReports(registrations: [record]).error)
+        XCTAssertNotNil(s.runtime.ownerReports(registrations: [Data(record.prefix(record.count - 1))]).error)
+    }
 }
 #endif

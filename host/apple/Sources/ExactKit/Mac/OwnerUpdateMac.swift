@@ -1,15 +1,19 @@
 // One content owner's update (LLP 1123 D2) as AppKit gives it at one pass of its container's layout: the container
-// view's own `safeAreaInsets`, Exact's contributions to that view (`ContributionsMac`), the view's map into its
-// window and its configuration's identity, in the form both Apple hosts encode (`OwnerUpdateWire`). AppKit has no
-// software keyboard, reserved regions, segments or bar regions, so those stay unreported; the owner's ancestry,
-// targets and margins are its own steps.
+// view's own `safeAreaInsets`, Exact's contributions to that view (`ContributionsMac`), its containment ancestry and
+// relational targets (D9), the view's map into its window and its configuration's identity, in the form both Apple
+// hosts encode (`OwnerUpdateWire`). AppKit has no software keyboard, reserved regions, segments or bar regions, so
+// those stay unreported, nor a tab controller's content guide; the owner's margins are their own step.
 #if os(macOS)
 import AppKit
 
 enum OwnerUpdateMac {
     /// The update of the owner whose container is `view`. Exact's writes to the view are applied first, so the band
     /// and their effects describe the same layout (D11). Out of a window the view has no band, map or configuration.
-    static func sample(_ view: NSView) -> OwnerUpdateWire {
+    /// The kernel's `Kind::bit`s and `Relation::ALL` indices that AppKit has.
+    enum Kind { static let tab: UInt8 = 1 << 3, split: UInt8 = 1 << 4, column: UInt8 = 1 << 5 }
+    enum Relation { static let presenter: UInt8 = 0, session: UInt8 = 1, root: UInt8 = 2, window: UInt8 = 3, windowContent: UInt8 = 5, screen: UInt8 = 6 }
+
+    static func sample(_ view: NSView, session: NSView? = nil) -> OwnerUpdateWire {
         var update = OwnerUpdateWire()
         if let ledger = ContributionsMac.existing(on: view) {
             ledger.apply()
@@ -17,7 +21,17 @@ enum OwnerUpdateMac {
                 .init(node: $0.identity.node, operation: $0.identity.operation.rawValue, effect: edges($0.insets))
             }
         }
+        update.chain = chain(of: view)
         guard let window = view.window else { return update }
+        let related: [(UInt8, OwnerUpdateWire.Target?)] = [
+            (Relation.presenter, window.sheetParent.map { target($0.contentView) }),
+            (Relation.session, session.map { target($0) }),
+            (Relation.root, target(window.contentViewController?.view ?? window.contentView)),
+            (Relation.window, target(window.contentView)),
+            (Relation.windowContent, content(of: window)),
+            (Relation.screen, window.screen.map { screen($0, in: window) }),
+        ]
+        update.relations = related.compactMap { r, t in t.map { (relation: r, target: $0) } }
         update.band = edges(view.safeAreaInsets)
         update.windowMap = map(of: view, in: window)
         update.configuration = configuration(of: window)
@@ -25,6 +39,61 @@ enum OwnerUpdateMac {
     }
 
     static func edges(_ i: NSEdgeInsets) -> OwnerUpdateWire.Edges { .init(top: i.top, right: i.right, bottom: i.bottom, left: i.left) }
+
+    /// The owner's containment ancestry (D9, "The native chain"): its container view first, then the controllers
+    /// above it, as AppKit's `parent` gives them, each with the kinds it is. A split's item is a column.
+    static func chain(of view: NSView) -> [(target: OwnerUpdateWire.Target, kinds: UInt8)] {
+        let kinds = { (c: NSViewController) -> UInt8 in
+            (c is NSTabViewController ? Kind.tab : 0) | (c is NSSplitViewController ? Kind.split : 0) | (c.parent is NSSplitViewController ? Kind.column : 0)
+        }
+        let own = controller(of: view)
+        var chain = [(target(view), own.flatMap { $0.view === view ? kinds($0) : nil } ?? 0)]
+        var next = own.flatMap { $0.view === view ? $0.parent : $0 }
+        while let c = next {
+            chain.append((target(c.viewIfLoaded), kinds(c)))
+            next = c.parent
+        }
+        return chain
+    }
+
+    /// The controller whose view holds `view`, the nearest on its responder chain.
+    private static func controller(of view: NSView) -> NSViewController? {
+        var next: NSResponder? = view
+        while let r = next, !(r is NSWindow) {
+            if let c = r as? NSViewController { return c }
+            next = r.nextResponder
+        }
+        return nil
+    }
+
+    /// `view` as a target (D9): its insets in its own coordinates and its frame in its window's space, none while it
+    /// is out of a window.
+    static func target(_ view: NSView?) -> OwnerUpdateWire.Target {
+        guard let view else { return .init(id: 0, insets: nil, frame: nil) }
+        guard let window = view.window else { return .init(id: TargetIds.id(of: view), insets: nil, frame: nil) }
+        return .init(id: TargetIds.id(of: view), insets: edges(view.safeAreaInsets), frame: rect(view.convert(view.bounds, to: nil), in: window))
+    }
+
+    /// The window's content layout rectangle as a target (D9's `window-content`): the window's frame, inset to the part
+    /// no title bar or toolbar covers.
+    static func content(of window: NSWindow) -> OwnerUpdateWire.Target {
+        let frame = CGRect(origin: .zero, size: window.frame.size), inner = window.contentLayoutRect
+        return .init(id: TargetIds.id(of: window), insets: .init(top: frame.height - inner.maxY, right: frame.width - inner.maxX, bottom: inner.minY, left: inner.minX),
+                     frame: frame)
+    }
+
+    /// The window's screen as a target (D9's `screen`): its safe area, beside the camera housing, and its frame in the
+    /// window's space.
+    static func screen(_ screen: NSScreen, in window: NSWindow) -> OwnerUpdateWire.Target {
+        let s = screen.frame, w = window.frame
+        return .init(id: TargetIds.id(of: screen), insets: edges(screen.safeAreaInsets),
+                     frame: CGRect(x: s.minX - w.minX, y: w.maxY - s.maxY, width: s.width, height: s.height))
+    }
+
+    /// A rectangle in the window's base coordinates in its space: its origin at the top left, y down.
+    static func rect(_ r: CGRect, in window: NSWindow) -> CGRect {
+        CGRect(x: r.minX, y: window.frame.height - r.maxY, width: r.width, height: r.height)
+    }
 
     /// The view's map from its bounds' origin into its window's space, D6's `"window"` space on AppKit: the window's
     /// frame with its origin at the top left and y down, as UIKit's window is, through AppKit's own conversion.

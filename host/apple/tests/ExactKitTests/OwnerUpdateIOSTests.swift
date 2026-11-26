@@ -125,7 +125,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
 
     func testTheKernelTakesARegistrationAndRefusesATruncatedOne() throws {
         let session = try fixture()
-        let target = OwnerUpdateIOS.target(window)
+        let target = OwnerUpdateIOS.wire(OwnerUpdateIOS.target(window))
         let record = ExactNativeTarget.encode(name: "map", target: target)
         XCTAssertNil(session.runtime.ownerReports(registrations: [record]).error)
         XCTAssertNil(session.runtime.ownerReports(registrations: [ExactNativeTarget.encode(name: "map", target: nil)]).error)
@@ -353,7 +353,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual([UInt8](OwnerUpdateIOS().encode())[14], 0)
         XCTAssertEqual([UInt8](OwnerUpdateIOS(keyboard: .dismissed).encode())[14], 1)
         // A registration: the name's length and bytes, then the target after a presence byte
-        let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
+        let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: .init(top: 30, right: 0, bottom: 0, left: 0), frame: nil))
         w = [3] + Array("map".utf8) + [1]
         u64(9); u64(2); w.append(1); f(30, 0, 0, 0); w.append(0)
         XCTAssertEqual([UInt8](registration), w)
