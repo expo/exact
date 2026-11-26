@@ -2217,7 +2217,7 @@ A failed request reports its reason through `pictureinpictureerror`.
 | --- | --- |
 | Web JS | Reads `document.pictureInPictureEnabled`. Headed Chromium ran the Contract button, the element events, repeat entry, exit and removal with a bundled MP4. Its own controls delivered one enter and one leave. A request from a task without user activation received `NotAllowedError`. |
 | Web wasm | Reads false and reports a request error. |
-| Android reader | An enabled APK reads the device’s picture-in-picture feature. On API 35 and 36 emulators the button pinned the player. Expansion, system close, command exit and removal each delivered one leave. Rotation kept the activity pinned. A request followed immediately by exit delivered one enter and one leave. |
+| Android reader | An enabled APK reads the device’s picture-in-picture feature. On API 35 and 36 emulators the button pinned the player. Expansion, system close, command exit and removal each delivered one leave. Rotation kept the activity pinned. A request followed immediately by exit delivered one enter and one leave. Removing the node between system entry and the activity callback lost both events on both emulators. |
 | iOS | Reads false and reports that the command is unavailable on iOS. AVKit’s control reports enter, leave and failure. Delegate callbacks passed on iOS 27.2 and 26.5 simulators. The iOS events have not been run on a physical iPhone. |
 | macOS | The fixture received the named command refusal. The Mac’s ordinary video uses AVPlayerView. |
 | tvOS | The host declares the command unavailable. No tvOS drive was run. |
