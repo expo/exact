@@ -59,6 +59,14 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   }
 }
 
+/** The readers in `root`, in document order: each element whose own style uses an observation's input, a family's
+ * `var(--exact-…)` (D9). The web's targets write each element's style inline, so its `style` attribute says what it
+ * reads; one that only declares an input, as an ancestor's value, reads none. Activation (stage 5) takes them at each
+ * commit; tests until then. */
+export function readers(root = document) {
+  return [...root.querySelectorAll(FAMILIES.map((f) => `[style*="var(--exact-${f}-"]`).join(", "))];
+}
+
 /** The rule under which a round's values start no transition: important in the page's first cascade layer, which wins
  * over every important declaration of the page's own sheets, layered after it or unlayered (CSS Cascade 5, "Cascade
  * Layers"). */
