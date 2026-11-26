@@ -133,3 +133,56 @@ fn a_routes_configuration_follows_the_window() {
     let _ = p.after_commit();
     assert_ne!(configuration(&p), before);
 }
+
+/// A desktop shell's (Linux's, Windows's): with no bars and no window insets, each route's band stays 0 through a
+/// resize while its configuration follows the window, and a route that leaves its stack has no update.
+#[test]
+fn a_desktop_shells_routes_keep_bands_of_zero_and_retire_with_their_stack() {
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(APP),
+        Nothing,
+        (900., 600.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let home = update(&p, "route-home");
+    assert_eq!(home.band, Some([0.0; 4]), "0, not unavailable");
+    p.resize(1200., 800.);
+    let _ = p.after_commit();
+    let resized = update(&p, "route-home");
+    assert_eq!(resized.band, Some([0.0; 4]));
+    assert_ne!(
+        resized.configuration, home.configuration,
+        "the page's size is its configuration's"
+    );
+    tap(&mut p, "open").unwrap();
+    let _ = p.after_commit();
+    let detail = update(&p, "route-detail");
+    assert_eq!(detail.band, Some([0.0; 4]));
+    let kernel = p.host.runner_mut().kernel_mut();
+    let route = kernel
+        .node_by_key(kernel.find_by_test_id("route-detail")[0])
+        .unwrap()
+        .id;
+    assert!(
+        kernel.update_owner(route, detail).is_ok(),
+        "the kernel takes it"
+    );
+    tap(&mut p, "back").unwrap();
+    let settled = p.host().now() + 2000.;
+    p.tick(settled);
+    let _ = p.after_commit();
+    let kernel = p.host().kernel();
+    let gone = kernel
+        .find_by_test_id("route-detail")
+        .first()
+        .and_then(|k| kernel.node_by_key(*k))
+        .map(|n| n.id);
+    assert!(
+        p.owner_updates().iter().all(|(v, _)| Some(*v) != gone),
+        "no update once it has left its stack"
+    );
+}

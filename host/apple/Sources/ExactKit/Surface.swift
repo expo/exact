@@ -81,9 +81,7 @@ extension NodeView {
             s.authoredMask = composedMask(shaped: outline)
             host.mask = s.authoredMask
         }
-        #if os(iOS) || os(tvOS)
         sizeMaterial()
-        #endif
         if started { surfaceChanged() }
     }
 
@@ -101,17 +99,16 @@ extension NodeView {
         if s.clippedSelf { clipsToBounds = clipsItself }
         s.removeFromSuperlayer()
         CATransaction.commit()
-        #if os(iOS) || os(tvOS)
         sizeMaterial()
-        #endif
         surfaceChanged()
     }
 
-    #if os(iOS) || os(tvOS)
     /// The box a material (glass or a blur) fills: the surface's shown box
     /// while a layout transition resizes it, else `bounds`. Its corners and
     /// clip are resolved at this size (`applyMaterialRadius`).
     var materialBox: CGRect { surface.map { CGRect(origin: .zero, size: $0.frame.size) } ?? bounds }
+
+    #if os(iOS) || os(tvOS)
 
     /// The material's frame in what holds it: its glass slot's content view,
     /// or the node.

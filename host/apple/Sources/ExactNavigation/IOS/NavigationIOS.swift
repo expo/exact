@@ -1215,6 +1215,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // Pointer handlers bubble along the declared authored chain (`authoredNodes`),
         // which follows `MountRelay` portals and ignores ancestor `disabled` and
         // modal-background inertness (matching `PointerRecognizer` in PointerIOS.swift).
+        #if os(iOS)
         let startNode = hit.flatMap(NodeView.innermost)
         let hearsPointer = hit.map {
             presenter.authoredNodes(from: $0).contains { node in
@@ -1222,6 +1223,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                     && !node.handlers.isDisjoint(with: ["pointerdown", "pointermove", "pointerup", "pointercancel"])
             }
         } ?? false
+        #else
+        let hearsPointer = false
+        #endif
         if (hearsPointer || hearsPan) && blocksPopPan { overSwipe = true }
         return NavigationRules.panMayBegin(startX: edgeX, overSwipeRight: overSwipe, velocity: popVelocity)
     }

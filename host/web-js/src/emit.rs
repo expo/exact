@@ -1196,14 +1196,7 @@ impl Em<'_> {
                     self.markdown(i, &e, &format!("()=>{source}"), plan.code(b.expr));
                 }
                 // Refused SVG literals still run their binding to journal the refusal.
-                let svg_animation = node_type.is_svg_element()
-                    && b.kind == BindingKind::Style
-                    && matches!(
-                        exact_kernel::StyleId::from_bit(b.id as u32),
-                        Some(
-                            exact_kernel::StyleId::Animation | exact_kernel::StyleId::ExitAnimation
-                        )
-                    );
+                let svg_animation = self.needs_svg_animation_guard(node_type, b.kind, b.id);
                 if !svg_animation
                     && !(b.kind == BindingKind::Prop
                         && b.id == PropId::AccessibilityKeyShortcuts as u16

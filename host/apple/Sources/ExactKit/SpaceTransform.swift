@@ -168,10 +168,12 @@ extension NodeView {
         var turned: [NodeView] = []
         var v: NSView? = self
         while let n = v, n !== top {
-            if let node = n as? NodeView, node.plane != nil { turned.append(node) }
+            if let node = n as? NodeView {
+                if node !== self, let g = node.glassGeometry, g.a <= 0 || g.d <= 0 { return NSPoint(x: -1e9, y: -1e9) }
+                if node.plane != nil { turned.append(node) }
+            }
             v = n.superview
         }
-        guard !turned.isEmpty else { return convert(p, from: top) }
         var p = p, at = top
         for node in turned.reversed() {
             guard let sup = node.superview, let h = node.plane else { continue }
@@ -179,13 +181,18 @@ extension NodeView {
             p = NodeView.onPlane(sup.convert(p, from: at), h) ?? NSPoint(x: -1e9, y: -1e9)
             at = node
         }
-        return convert(p, from: at)
+        let local = convert(p, from: at)
+        if let g = glassGeometry {
+            guard g.a > 0, g.d > 0 else { return NSPoint(x: -1e9, y: -1e9) }
+            return local.applying(g.inverted())
+        }
+        return local
     }
 
     /// `p` in this node's coordinates in `top`'s (the window's when nil):
     /// `descend` the other way.
     func ascend(_ p: NSPoint, to top: NSView?) -> NSPoint {
-        var p = p, v: NSView = self
+        var p = glassGeometry.map { p.applying($0) } ?? p, v: NSView = self
         while v !== top, let sup = v.superview {
             p = (v as? NodeView)?.plane.map { NodeView.map($0, p) } ?? v.convert(p, to: sup)
             v = sup
@@ -196,7 +203,10 @@ extension NodeView {
     /// Whether this node or one above it is drawn off its frame.
     var drawnOffFrame: Bool {
         var v: NSView? = self
-        while let n = v { if (n as? NodeView)?.plane != nil { return true }; v = n.superview }
+        while let n = v {
+            if let node = n as? NodeView, node.plane != nil || node.glassGeometry.map({ $0 != .identity }) == true { return true }
+            v = n.superview
+        }
         return false
     }
 }
@@ -243,7 +253,7 @@ extension NodeView {
         #if os(iOS) || os(tvOS)
         placement != nil || placementHidden
         #else
-        placement != nil || placementHidden || plane != nil
+        placement != nil || placementHidden || plane != nil || glassGeometry.map { $0 != .identity } == true
         #endif
     }
 

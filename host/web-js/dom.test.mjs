@@ -621,3 +621,102 @@ test('zoom.js measures non-HTMLElement (<svg>) children using applied zoom scale
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the render DOM parses animation-name from the animation shorthand', () => {
+  const style = createDocument().createElement('div').style;
+  for (const [value, want] of [
+    ['fade 300ms both', 'fade'],
+    ['300ms ease-in-out 2 alternate both slide-in', 'slide-in'],
+    ['fade 300ms, cubic-bezier(0.4, 0, 0.2, 1) 1s spin infinite', 'fade, spin'],
+    ['steps(4, end) 200ms -50ms pulse paused', 'pulse'],
+    ['300ms "ease" both', '"ease"'],
+    ['ease linear 1s', 'linear'],
+    ['none', 'none'],
+    ['none 0.5s forwards', 'none'],
+    ['forwards 0.5s none', 'none'],
+    ['fade 0.5s none', 'fade'],
+    ['none 0.5s fade', 'fade'],
+    ['none 0.5s forwards fade', ''],
+    ['300ms', 'none'],
+    ['', ''],
+    ['var(--anim)', ''],
+    ['fade -100ms', ''],
+    ['one two 1s', ''],
+  ]) {
+    style.animation = value;
+    expect(style.animationName, JSON.stringify(value)).toBe(want);
+  }
+  style.animationName = 'direct';
+  expect(style.animationName).toBe('direct');
+  style.animation = 'fade 1s';
+  expect(style.animationName).toBe('fade');
+  style.animation = '';
+  expect(style.animationName).toBe('');
+});
+
+test('web-build with markdown and an animated SVG child compiles even alongside 3D keyframes (#1874)', () => {
+  const root = resolve(import.meta.dir, '../..');
+  const dir = mkdtempSync(resolve(root, 'target/md-svg-anim-test-'));
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'MdSvg', app: { id: 'com.example.mdsvg', name: 'MdSvg' }, host: { web: {} } }));
+    // Case 1: plain SVG fade + markdown under `--render none` (issue #1874 exact repro, no 3D keyframes).
+    writeFileSync(resolve(dir, 'app.contract'), `keyframes fade
+  from opacity=0
+  to opacity=1
+
+component App
+  view
+    column
+      svg width=24 height=24 viewBox="0 0 24 24"
+        circle cx=12 cy=12 r=10 animation="fade 300ms both"
+      text "Hello" markup="markdown"
+`);
+    const outPlain = resolve(dir, 'dist-plain');
+    const plain = spawnSync(process.execPath, [resolve(root, 'host/web-js/build.mjs'), dir, '--out', outPlain, '--render', 'none'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    expect(plain.status, plain.stdout + plain.stderr).toBe(0);
+    expect(plain.stdout).toContain('1 Markdown sources compiled');
+    expect(readFileSync(resolve(outPlain, 'index.html'), 'utf8')).toContain('<script type="application/vnd.exact.markdown">');
+
+    // Case 2: 3D keyframes + computed SVG animations + markdown under `--render js` exercises dom.js animationName parsing.
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=build
+
+keyframes fade
+  from opacity=0
+  to opacity=1
+
+keyframes flip
+  from rotate="y 0deg"
+  to rotate="y 180deg"
+
+component App
+  state good = "fade"
+  view
+    column
+      view animation="flip 300ms both"
+        text "Card"
+      svg width=24 height=24 viewBox="0 0 24 24"
+        circle cx=12 cy=12 r=10 animation="fade 300ms both"
+        path d="M0 0L10 10" animation=\`\${good} 200ms both\`
+      text "**Hello** world" markup="markdown"
+`);
+    const out = resolve(dir, 'dist');
+    const built = spawnSync(process.execPath, [resolve(root, 'host/web-js/build.mjs'), dir, '--out', out, '--render', 'js'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    expect(built.stdout).toContain('1 Markdown sources compiled');
+    const html = readFileSync(resolve(out, 'index.html'), 'utf8');
+    expect(html).toContain('<script type="application/vnd.exact.markdown">');
+    expect(html).toContain('animation:fade 200ms both');
+    // Verify the runtime SVG spatial-rotation guard itself executes in dom.js and refuses spatial keyframes.
+    const serverBundle = readFileSync(resolve(out, '.gen/app.js'), 'utf8');
+    expect(serverBundle).toContain('style.animationName.split');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 180_000);
