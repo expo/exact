@@ -603,6 +603,7 @@ impl<D: DataSource> Presenter<D> {
             .into_iter()
             .chain(crate::pads::due())
             .chain(self.host.motion_due_ms().filter(|due| *due > now))
+            .chain(self.wheel_settle_due().filter(|due| *due > now))
             .chain(self.image_turn_due_in_ms().map(|ms| now + ms))
             .chain(self.surfaces.performance_due_in_ms().map(|ms| now + ms))
             .reduce(f64::min)

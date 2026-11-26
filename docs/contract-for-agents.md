@@ -2862,7 +2862,11 @@ lifts (from where its momentum would carry the scroll) or once a mouse wheel
 stops, on a scroller that has its `scroll-snap-type` when it first shows (one
 that gains it later, or a reused list row that lacked it, glides as AppKit
 flings it); Android aims its fling there; a Linux or Windows wheel moves one position
-a notch, finer ticks adding up to a notch first. On iOS, areas whose snap
+a notch, and finer ticks (a touchpad's, a notch of one line) scroll freely and, once
+the wheel has been still for 300 ms, ease there as the Mac's notches do, released
+where they began and a flick their way once they moved a notch (the agent's wheel,
+and any wheel under a driver's clock, still adds finer ticks up to a notch first).
+On iOS, areas whose snap
 positions (alignment and `scroll-margin` applied) are each multiple of the
 scrollport, every one `scroll-snap-stop="always"` with nothing insetting the
 snapport, page as UIKit's `isPagingEnabled` (SwiftUI's `.paging`) does. An oversized area stays freely scrollable while it covers the snapport.

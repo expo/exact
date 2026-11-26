@@ -2,7 +2,9 @@
 //! definition every native host shares): along one axis, the offsets a
 //! scroller's snap areas rest at, and which of them a scroll that ends rests
 //! at. Android's reader aims its fling with them ([`Presenter::reader_snaps`],
-//! `Scrolling.kt`'s `snapRest`); a desktop wheel snaps here (`wheel.rs`).
+//! `Scrolling.kt`'s `snapRest`); a desktop wheel snaps here (`wheel.rs`): a
+//! notch at once, finer ticks once the wheel is still, as the Mac's
+//! (`ScrollSnapMac.swift`'s `snapAfterWheel`).
 //! Apple's is `host/apple/Sources/ExactKit/ScrollSnap.swift`.
 use super::reveal::Geometry;
 use super::*;
@@ -111,6 +113,38 @@ pub(super) type WheelFree = ((f32, f32), (f32, f32));
 /// A browser's wheel notch, in points (the Linux host's `input::LINE`): ticks that add
 /// up to one are a flick.
 const WHEEL_NOTCH: f32 = 40.0;
+
+/// How long a run of ticks finer than a notch is still before it settles,
+/// ms: the Mac host's `ScrollEnd.quiet`, the web glue's `QUIET`.
+const WHEEL_QUIET: f64 = 300.0;
+
+/// Ticks finer than a notch on one scroller, one after another: where the
+/// port was when they began, where the last left it, and when, on the
+/// display's clock.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WheelRun {
+    start: (f32, f32),
+    last: (f32, f32),
+    at: f64,
+}
+
+/// Per snapping scroller, what its notches left ([`Presenter::wheel_snapped`])
+/// and the run of finer ticks waiting to settle ([`Presenter::wheel_ran`]).
+#[derive(Default)]
+pub(super) struct WheelSnap {
+    free: BTreeMap<ViewId, WheelFree>,
+    runs: BTreeMap<ViewId, WheelRun>,
+    /// The agent's wheel is moving: each tick snaps as it comes
+    /// ([`Presenter::wheel`]).
+    pub(super) each_tick: bool,
+}
+
+impl WheelSnap {
+    pub(super) fn clear(&mut self) {
+        self.free.clear();
+        self.runs.clear();
+    }
+}
 
 /// How near a `proximity` snap's position must be to where the scroll would
 /// rest: a third of the snapport.
@@ -798,7 +832,8 @@ impl<D: DataSource> Presenter<D> {
     /// the wheel would have put it goes on from there unsnapped while the
     /// scroller stays where the last wheel left it, so ticks too short to
     /// reach another position add up; ticks that add up to a wheel notch are
-    /// a flick their way.
+    /// a flick their way. A notch, or any tick under a driver's clock: finer
+    /// ticks on the display's clock settle once still ([`Self::wheel_ran`]).
     pub(super) fn wheel_snapped(
         &mut self,
         id: ViewId,
@@ -806,7 +841,9 @@ impl<D: DataSource> Presenter<D> {
         to: (f32, f32),
         max: (f32, f32),
     ) -> (f32, f32) {
-        let free = match self.wheel_free.get(&id) {
+        // A notch ends a run of finer ticks.
+        self.wheel_snap.runs.remove(&id);
+        let free = match self.wheel_snap.free.get(&id) {
             Some(&(free, left)) if left == from => (
                 (free.0 + to.0 - from.0).clamp(0.0, max.0.max(0.0)),
                 (free.1 + to.1 - from.1).clamp(0.0, max.1.max(0.0)),
@@ -850,8 +887,100 @@ impl<D: DataSource> Presenter<D> {
             if rests.0 != from.0 { rests.0 } else { free.0 },
             if rests.1 != from.1 { rests.1 } else { free.1 },
         );
-        self.wheel_free.insert(id, (free, rests));
+        self.wheel_snap.free.insert(id, (free, rests));
         rests
+    }
+
+    /// Whether a wheel tick `(dx, dy)` on a snapping scroller moves it
+    /// freely and settles once the wheel is still ([`Self::wheel_ran`]): one
+    /// finer than a notch (a touchpad's, a smooth wheel's, a notch of one
+    /// line) while the display owns the clock. Each tick of a touchpad's
+    /// stroke snapping on its own held a proximity scroller where it was and
+    /// ran a mandatory one a position for every notch's length of travel.
+    pub(super) fn wheel_settles(&self, (dx, dy): (f32, f32)) -> bool {
+        dx.abs().max(dy.abs()) < WHEEL_NOTCH
+            && !self.wheel_snap.each_tick
+            && self.live_time().is_some()
+    }
+
+    /// A tick finer than a notch moved scroller `id` from `from` to `to`: it
+    /// joins the run under way, or begins one where the port was, as one
+    /// does if something else moved the port since the run's last tick.
+    pub(super) fn wheel_ran(&mut self, id: ViewId, from: (f32, f32), to: (f32, f32)) {
+        let Some(at) = self.live_time() else {
+            return;
+        };
+        self.wheel_snap.free.remove(&id);
+        let start = match self.wheel_snap.runs.get(&id) {
+            Some(run) if run.last == from => run.start,
+            _ => from,
+        };
+        let run = WheelRun {
+            start,
+            last: to,
+            at,
+        };
+        self.wheel_snap.runs.insert(id, run);
+    }
+
+    /// When the first run under way has been still long enough to settle.
+    pub(crate) fn wheel_settle_due(&self) -> Option<f64> {
+        (self.wheel_snap.runs.values())
+            .map(|run| run.at + WHEEL_QUIET)
+            .reduce(f64::min)
+    }
+
+    /// Each run still since `now - WHEEL_QUIET` settles: its scroller eases
+    /// to the rest the rule picks on each axis it moved along, released
+    /// where the run began, a flick its way once it moved a notch, as the
+    /// Mac's `snapAfterWheel` picks it. A port something else moved since the
+    /// run's last tick stays where it is.
+    pub(super) fn settle_wheels(&mut self, now: f64) {
+        let quiet: Vec<(ViewId, WheelRun)> = (self.wheel_snap.runs.iter())
+            .filter(|(_, run)| now >= run.at + WHEEL_QUIET)
+            .map(|(id, run)| (*id, *run))
+            .collect();
+        for (id, run) in quiet {
+            self.wheel_snap.runs.remove(&id);
+            let at = self.scroll_of(id);
+            if at != run.last || self.host.kernel().node(id).is_none() {
+                continue;
+            }
+            let mut rest = at;
+            for vertical in [false, true] {
+                let (f, start, r) = if vertical {
+                    (at.1, run.start.1, &mut rest.1)
+                } else {
+                    (at.0, run.start.0, &mut rest.0)
+                };
+                if f == start {
+                    continue;
+                }
+                let Some(snap) = self.snap(id, vertical) else {
+                    continue;
+                };
+                let way = if (f - start).abs() >= WHEEL_NOTCH {
+                    (f - start).signum()
+                } else {
+                    0.0
+                };
+                let mandatory = snap.mandatory;
+                if let Some(to) = flicked(&snap.areas, f, start, (start, way), mandatory, snap.port)
+                {
+                    *r = to;
+                }
+            }
+            if rest == at {
+                continue;
+            }
+            if self.reveal_glides(None) {
+                self.begin_glide(id, at, rest);
+                self.dirty = true;
+            } else {
+                // Reduced motion: it lands at once.
+                self.scroll_to(id, rest);
+            }
+        }
     }
 
     /// Each of scrollers `ids`' snap, for a reader that aims its fling

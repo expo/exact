@@ -156,6 +156,8 @@ impl<D: DataSource> Presenter<D> {
     /// its list's window); a virtualized list's port only, its reports
     /// giving the glide's destination until it lands (LLP 1070.000 §11).
     pub(crate) fn step_glides(&mut self, now: f64) {
+        // A wheel's run that has gone still begins its glide (`snap.rs`).
+        self.settle_wheels(now);
         if self.glides.running.is_empty() {
             return;
         }

@@ -232,9 +232,9 @@ pub struct Presenter<D: DataSource> {
     pub(crate) host: Host<D>,
     /// The scroller the last wheel moved.
     last_wheel: Option<ViewId>,
-    /// Per snapping scroller, where its wheel would have put it unsnapped and
-    /// where it put it (`snap.rs`).
-    wheel_free: BTreeMap<ViewId, snap::WheelFree>,
+    /// Per snapping scroller, what its wheel's notches left and the run of
+    /// finer ticks waiting to settle (`snap.rs`).
+    wheel_snap: snap::WheelSnap,
     /// The snap geometry each scroller last had a chance to settle in.
     snap_layout: snap::Layouts,
     /// The display's clock while it owns time, given to every host (`clock.rs`)
@@ -652,7 +652,7 @@ impl<D: DataSource> Presenter<D> {
         brush.canvases.drawings = host.canvas_snapshots().clone();
         let mut p = Presenter {
             last_wheel: None,
-            wheel_free: BTreeMap::new(),
+            wheel_snap: Default::default(),
             snap_layout: Default::default(),
             host,
             executor,
@@ -1356,28 +1356,6 @@ impl<D: DataSource> Presenter<D> {
                 }
                 self.svg_hit(&hit, x, y)
             })
-    }
-
-    /// The agent's wheel: over the node's center.
-    pub fn wheel(&mut self, id: ViewId, dx: f32, dy: f32) -> Result<String, String> {
-        if !dx.is_finite() || !dy.is_finite() {
-            return Err("wheel needs finite deltas".into());
-        }
-        if !self.alert_allows(id) || self.host.route_visibility(id).1 {
-            return Err(format!("view {id} is hidden or inert"));
-        }
-        let b = self
-            .box_of(id)
-            .ok_or_else(|| format!("no view {id} on screen"))?;
-        let (x, y) = (b.rect.0 + b.rect.2 / 2.0, b.rect.1 + b.rect.3 / 2.0);
-        self.wheel_at(x, y, dx, dy);
-        Ok(format!(
-            "{{\"tapped\":{id},\"wheel\":[{},{}],\"at\":[{},{}]}}",
-            num(dx as f64),
-            num(dy as f64),
-            num(r2(x)),
-            num(r2(y))
-        ))
     }
 
     /// The agent's `tap <list> into <key>` (LLP 1070.000 §5): the runner's

@@ -442,7 +442,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter.rs",
       "Presenter::boxes Presenter::compat Presenter::damage_rects Presenter::dirty Presenter::executor_fd Presenter::focus Presenter::hit Presenter::host " +
       "Presenter::hosts Presenter::image_fd Presenter::images Presenter::node_count Presenter::page Presenter::paragraph Presenter::pending Presenter::rect_of " +
-      "Presenter::repaint Presenter::scroll_of Presenter::text Presenter::viewport Presenter::wants_display_frames Presenter::wheel"],
+      "Presenter::repaint Presenter::scroll_of Presenter::text Presenter::viewport Presenter::wants_display_frames"],
+    ["painted:host/painted/src/presenter/wheel.rs", "Presenter::wheel"],
     ["painted:host/painted/src/presenter/access.rs", "Presenter::access_reset Presenter::access_told Presenter::access_tree Presenter::reader_access"],
     ["painted:host/painted/src/presenter/access/surface.rs", "PopupAccess::nodes Presenter::popup_access"],
     ["painted:host/painted/src/presenter/ahead.rs", "Presenter::foresee_press Presenter::foreseen_at Presenter::forget_press Presenter::scratch"],
@@ -1273,7 +1274,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/scrollers.rs", "Presenter::claims_at Presenter::hidden_scrollers Presenter::module_ancestor Presenter::scroll_bounds_of Presenter::set_scroll_offset Presenter::touch_kept"],
     ["painted:host/painted/src/presenter/select.rs", "Presenter::menu_key Presenter::select_key Presenter::selected_row"],
     ["painted:host/painted/src/presenter/shortcuts.rs", "Presenter::shortcut"],
-    ["painted:host/painted/src/presenter/snap.rs", "Presenter::advance_snap_layout Presenter::remember_snap_layout Presenter::resnap_before_paint Presenter::changed_snap_ids Presenter::snap_input_busy Presenter::snap_busy Presenter::snap_motion_landed Presenter::snap_probe_needed Presenter::snap_requested"],
+    ["painted:host/painted/src/presenter/snap.rs", "Presenter::advance_snap_layout Presenter::remember_snap_layout Presenter::resnap_before_paint Presenter::changed_snap_ids Presenter::snap_input_busy Presenter::snap_busy Presenter::snap_motion_landed Presenter::snap_probe_needed Presenter::snap_requested Presenter::settle_wheels"],
     ["painted:host/painted/src/presenter/stage/touch.rs", "Presenter::preview_target Presenter::settle_sheet Presenter::sheet_drag_directions Presenter::stage_up"],
     ["painted:host/painted/src/presenter/svg_hit.rs", "Presenter::drawn_in Presenter::svg_hit"],
     ["painted:host/painted/src/presenter/swipe.rs", "Presenter::begin_swipe"],

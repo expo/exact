@@ -205,4 +205,99 @@ mod tests {
             );
         }
     }
+
+    /// Snapping scrollers under a precision touchpad's ticks (a twelfth of a
+    /// line, 4 points, every 8 ms) on the display's clock: the ticks move
+    /// them freely, and once the wheel has been still for 300 ms each eases
+    /// to where the shared rule rests it. A notch still snaps at once.
+    #[test]
+    fn fine_ticks_move_a_snap_scroller_freely_and_settle_once_still() {
+        use exact_painted::{presenter::PainterChoice, Presenter};
+        use std::{cell::Cell, rc::Rc};
+        let source = r#"component App
+  view
+    column width=400 height=900
+      scroll testId="near" width=400 height=400 scroll-snap-type="y"
+        column
+          for i in [0, 1, 2, 3, 4] key=i
+            view width=400 height=400 flex-shrink=0 scroll-snap-align="start"
+      scroll testId="pager" width=400 height=400 scroll-snap-type="y mandatory"
+        column
+          for i in [0, 1, 2, 3, 4] key=i
+            view width=400 height=400 flex-shrink=0 scroll-snap-align="start"
+"#;
+        let plan = contract::compile(source).unwrap().encode();
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            (),
+            (400., 900.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let wall = Rc::new(Cell::new(0.));
+        let read = wall.clone();
+        p.set_live_clock(Some(Rc::new(move || read.get())));
+        let frame = |p: &mut Presenter<()>, at: f64| {
+            wall.set(at);
+            p.tick(at);
+            assert_eq!(p.advance(at), None);
+        };
+        frame(&mut p, 0.);
+        p.frame();
+        let now = Cell::new(0.);
+        // `ticks` ticks of `lines` each, 8 ms apart; the offsets they leave.
+        let stroke = |p: &mut Presenter<()>, y: f32, lines: f32, ticks: usize| {
+            let id = p.scrollers_at(200., y).chain[0].id;
+            (0..ticks)
+                .map(|_| {
+                    now.set(now.get() + 8.);
+                    frame(p, now.get());
+                    let chain = p.scrollers_at(200., y).chain;
+                    let delta = notches((0., lines), [3, 3], &chain, p.viewport());
+                    p.wheel_at(200., y, delta.0, delta.1);
+                    p.scroll_of(id).1
+                })
+                .collect::<Vec<_>>()
+        };
+        let touchpad = 1. / 12.;
+        let (near, pager) = (200., 600.);
+        let free = |ticks: usize| (1..=ticks).map(|i| 4. * i as f32).collect::<Vec<_>>();
+        for (y, ticks, rest) in [
+            // 240: no position within a third of the port (133), so it stays.
+            (near, 60, 240.),
+            // 300: 100 short of the second view's, so it eases there.
+            (near, 75, 400.),
+            // A pager moves one page for the stroke, not one each 40 points.
+            (pager, 60, 400.),
+            // Short of a notch it is no flick: back to where it began.
+            (pager, 5, 0.),
+        ] {
+            let id = p.scrollers_at(200., y).chain[0].id;
+            p.scroll_to(id, (0., 0.));
+            let offsets = stroke(&mut p, y, touchpad, ticks);
+            assert_eq!(offsets, free(ticks), "the ticks move it freely");
+            let last = wall.get();
+            frame(&mut p, last + 299.);
+            assert_eq!(p.scroll_of(id).1, free(ticks)[ticks - 1], "still settling");
+            for t in [300., 450., 600., 650.] {
+                frame(&mut p, last + t);
+            }
+            assert_eq!(p.scroll_of(id).1, rest, "y={y}, {ticks} ticks");
+            now.set(last + 650.);
+        }
+        // A notch of three lines (48 points) moves the pager a page at once.
+        let id = p.scrollers_at(200., pager).chain[0].id;
+        p.scroll_to(id, (0., 0.));
+        assert_eq!(stroke(&mut p, pager, 1., 2), [400., 800.]);
+        // The agent's wheel, its drive reading the offset back at once, snaps
+        // each tick as it comes: two of 20 add up to a notch.
+        p.scroll_to(id, (0., 0.));
+        p.wheel(id, 0., 20.).unwrap();
+        assert_eq!(p.scroll_of(id).1, 0.);
+        p.wheel(id, 0., 20.).unwrap();
+        assert_eq!(p.scroll_of(id).1, 400.);
+    }
 }

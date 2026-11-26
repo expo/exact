@@ -101,6 +101,33 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// The agent's wheel: over the node's center. Its drive reads the offset
+    /// back at once, so on a snapping scroller each of its ticks snaps as it
+    /// comes, as under a driver's clock, never waiting for a still wheel
+    /// (`snap.rs`).
+    pub fn wheel(&mut self, id: ViewId, dx: f32, dy: f32) -> Result<String, String> {
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err("wheel needs finite deltas".into());
+        }
+        if !self.alert_allows(id) || self.host.route_visibility(id).1 {
+            return Err(format!("view {id} is hidden or inert"));
+        }
+        let b = self
+            .box_of(id)
+            .ok_or_else(|| format!("no view {id} on screen"))?;
+        let (x, y) = (b.rect.0 + b.rect.2 / 2.0, b.rect.1 + b.rect.3 / 2.0);
+        self.wheel_snap.each_tick = true;
+        self.wheel_at(x, y, dx, dy);
+        self.wheel_snap.each_tick = false;
+        Ok(format!(
+            "{{\"tapped\":{id},\"wheel\":[{},{}],\"at\":[{},{}]}}",
+            num(dx as f64),
+            num(dy as f64),
+            num(r2(x)),
+            num(r2(y))
+        ))
+    }
+
     /// A wheel at a point (the web's sign: a positive `dy` scrolls down).
     /// A phase-less tick is its own gesture and is not split (LLP 1070 G2,
     /// Chrome's measured tick): the innermost scroll container under the point
@@ -253,12 +280,13 @@ impl<D: DataSource> Presenter<D> {
         } else {
             off.1
         };
-        let (nx, ny) = if self
-            .host
-            .kernel()
-            .node(id)
-            .is_some_and(|n| n.style.scroll_snap_type != exact_kernel::ScrollSnapType::None)
-        {
+        let snaps = (self.host.kernel().node(id))
+            .is_some_and(|n| n.style.scroll_snap_type != exact_kernel::ScrollSnapType::None);
+        let (nx, ny) = if snaps && self.wheel_settles((dx, dy)) {
+            // A finer tick moves it freely; the run settles once still (`snap.rs`).
+            self.wheel_ran(id, off, (nx, ny));
+            (nx, ny)
+        } else if snaps {
             self.wheel_snapped(id, off, (nx, ny), max)
         } else {
             (nx, ny)
