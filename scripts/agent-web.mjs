@@ -861,6 +861,7 @@ async function openWebUnlocked({
           // velocity read from them sees the pause; the move's own time ends at the clock's.
           const caught = async (ms) => { contact.t = Math.max(contact.t, (contact.origin + (await ask({ op: 'tags' })).clock - ms) / 1000); };
           if (kind === 'move') {
+            const from = { x: contact.x, y: contact.y };
             const to = { x: opts.x ?? contact.x + (opts.dx ?? 0), y: opts.y ?? contact.y + (opts.dy ?? 0) };
             const ms = Math.max(0, opts.ms ?? 0);
             await caught(ms);
@@ -869,13 +870,15 @@ async function openWebUnlocked({
               checkDragDeadline();
               const t = i / steps;
               contact.t += (ms || 16) / steps / 1000;
-              const at = { x: contact.x + (to.x - contact.x) * t, y: contact.y + (to.y - contact.y) * t };
+              const at = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+              // CDP delivers commands in order. A release submitted while this move awaits its reply uses this sample.
+              Object.assign(contact, at);
               if (mouse) await button('mouseMoved', at, contact.t, 1);
               else await finger('touchMove', [at], contact.t);
               if (ms) await sleep(ms / steps);
             }
             checkDragDeadline();
-            contact = { ...contact, ...to, mouse, modifiers: held };
+            contact.modifiers = held;
             await frame();
             return { phase: 'move', at: [to.x, to.y], delivery: 'platform' };
           }

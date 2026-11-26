@@ -263,7 +263,8 @@ settle again before checking that `state.navigation.popover` is null.
 qualify a real long press. `scripts/smoke-touch.mjs` covers ordinary and
 projected grouped-list sources in both timing modes.
 
-To check a preview before release, put `during "expect state moves >= 1"` on the moving leg. On macOS, the web and the Linux and Windows painted hosts, this reads the committed move once. The runner can also check a visible result with `expect tree`, `layout` or `sample` at the same waypoint. iOS refuses checkpoint expectations because XCTest schedules the lift before the runner can confirm the read finished. Android refuses them pending device verification.
+To check a preview before release, put `during "expect state moves >= 1"` on the moving leg. On macOS, the web and the Linux and Windows painted hosts, this reads the committed move once. The runner can also check a visible result with `expect tree`, `layout` or `sample` at the same waypoint. iOS refuses checkpoint expectations because XCTest schedules the lift before the runner can confirm the read finished. Android refuses them until its driver can confirm the committed waypoint before lift.
+
 A real drag with `during` ops fails when the touch runner finishes before a
 dispatch-log read sees the touch begin. The failure carries the aim, the injection
 result and the log, and says whether the touch began and lifted. The log's `t` and

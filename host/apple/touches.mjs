@@ -600,23 +600,30 @@ const dragScope = new AsyncLocalStorage();
 export class DragTimeout extends Error {}
 export function checkDragDeadline() { const check = dragScope.getStore(); check?.(); return !!check; }
 
-export async function withDragDeadline(end, work) {
+export async function withDragDeadline(end, work, signal) {
   checkDragDeadline();
-  if (end === undefined) return work();
+  if (end === undefined && !signal) return work();
   const limit = DRAG_BOUNDS.total;
   let timer, open = true;
   const timeout = () => new DragTimeout(`drag: checkpoint timed out after ${limit} ms`);
   const parent = dragScope.getStore();
-  const check = () => { parent?.(); if (!open || performance.now() >= end) throw timeout(); };
+  const check = () => {
+    parent?.();
+    signal?.throwIfAborted();
+    if (!open || performance.now() >= end) throw timeout();
+  };
+  const stopped = Promise.withResolvers();
+  const cancel = () => stopped.reject(signal.reason);
   try {
     check();
-    const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(timeout()), Math.ceil(end - performance.now())); });
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (Number.isFinite(end)) timer = setTimeout(() => stopped.reject(timeout()), Math.ceil(end - performance.now()));
     const finishedReads = () => { check(); clearTimeout(timer); end = Infinity; };
-    const result = await Promise.race([expired, dragScope.run(check, () => work(finishedReads))]);
+    const result = await Promise.race([stopped.promise, dragScope.run(check, () => work(finishedReads))]);
     check();
     return result;
   } catch (error) { check(); throw error; }
-  finally { open = false; clearTimeout(timer); }
+  finally { open = false; clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
 }
 
 /**

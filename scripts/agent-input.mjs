@@ -4,7 +4,7 @@ import { partTap, tapRefusal, layoutBox } from './agent-inspect.mjs';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { namedRefusal } from './agent-aim.mjs';
-import { requireDragOwner, dragTap, heldDown, heldPhase, holdTap, folderTree } from './agent-drag.mjs';
+import { cancelActiveDrag, requireDragOwner, dragTap, heldDown, heldPhase, holdTap, folderTree } from './agent-drag.mjs';
 import { checkDragDeadline } from '../host/apple/touches.mjs';
 import { refuseDisabled } from './agent-test.mjs';
 import {
@@ -428,6 +428,11 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
      * and a carrier that cannot hold a contact answers `delivery: "unsupported"` rather than faking one. */
     async pointer(phase, opts = {}, land = true) {
       checkDragDeadline();
+      if (phase === 'cancel') {
+        pointerArguments(phase, opts);
+        const release = cancelActiveDrag(s);
+        if (release) return release;
+      }
       requireDragOwner(s);
       // One sample at most each `FRAME_MS`, as the carriers space a timed move; a sample refused partway, or a contact
       // the carrier ended, answers as the move. A clock the display holds (live frame capture, `--live`) refuses the

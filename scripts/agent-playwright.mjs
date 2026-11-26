@@ -204,12 +204,14 @@ export function playwrightPointer({ name, move, down, up, wait }) {
     }
     if (!contact) throw new Error('no contact is down');
     if (kind === 'move') {
+      const from = { ...contact };
       const to = { x: opts.x ?? contact.x + (opts.dx ?? 0), y: opts.y ?? contact.y + (opts.dy ?? 0) };
       const ms = Math.max(0, opts.ms ?? 0), steps = Math.max(1, Math.round(ms / 16));
       for (let i = 1; i <= steps; i++) {
         checkDragDeadline();
         const t = i / steps;
-        await move(contact.x + (to.x - contact.x) * t, contact.y + (to.y - contact.y) * t);
+        contact = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+        await move(contact.x, contact.y);
         if (ms && !opts.virtual) await wait(ms / steps);
       }
       checkDragDeadline();

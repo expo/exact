@@ -80,11 +80,25 @@ const expectations = new WeakSet();
 const dragOwners = new WeakMap();
 const deliveringPhase = new AsyncLocalStorage();
 const guardedCarriers = new WeakSet();
+const pendingPhases = new WeakMap();
 
 // Public input cannot replace the contact while its driver is waiting for a move or landing.
 export function requireDragOwner(session) {
   const active = dragOwners.get(session.carrier ?? session);
   if (active && active !== deliveringPhase.getStore()) throw new Error('a drag owns the contact until it lifts');
+}
+
+// Only the caller outside the gesture can interrupt it. Its cancel receives the carrier’s release receipt.
+export function cancelActiveDrag(session) {
+  if (checkDragDeadline() || deliveringPhase.getStore()) return;
+  return dragOwners.get(session.carrier ?? session)?.cancel?.();
+}
+
+// A cancel can overtake a move already inside the carrier. The next press waits for those
+// submissions to finish, including a release whose acknowledgement came after its timeout.
+function drainInput(carrier) {
+  const pending = pendingPhases.get(carrier);
+  if (pending?.size) return withDragDeadline(performance.now() + DRAG_BOUNDS.total, () => Promise.allSettled([...pending]));
 }
 
 // A library caller can send raw input on a carrier shared by successive sessions.
@@ -96,16 +110,34 @@ export function guardDragInput(carrier) {
     carrier.ask = async (req, ...args) => {
       checkDragDeadline();
       if (req.op === 'tap' || req.op === 'type') requireDragOwner(carrier);
-      return ask(req, ...args);
+      const reply = await ask(req, ...args);
+      checkDragDeadline();
+      return reply;
     };
   }
   if (typeof carrier.input === 'function') {
-    const input = carrier.input.bind(carrier);
-    carrier.input = async (...args) => {
+    const input = carrier.input.bind(carrier), pending = new Set();
+    pendingPhases.set(carrier, pending);
+    carrier.input = async (id, phase, ...args) => {
       checkDragDeadline();
       requireDragOwner(carrier);
-      return input(...args);
+      if (phase === 'down' && pending.size) {
+        await drainInput(carrier);
+        checkDragDeadline();
+        requireDragOwner(carrier);
+      }
+      const operation = input(id, phase, ...args);
+      if (deliveringPhase.getStore()) pending.add(operation);
+      try {
+        const reply = await operation;
+        checkDragDeadline();
+        return reply;
+      } finally { pending.delete(operation); }
     };
+  }
+  if (typeof carrier.close === 'function') {
+    const close = carrier.close.bind(carrier);
+    carrier.close = (...args) => { checkDragDeadline(); return close(...args); };
   }
 }
 
@@ -346,11 +378,14 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     return noted(await s.landed({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...real, ...still(r, target), ...await reorderNotes(s, mark)]);
   }
   if (carrier.touches) {
-    let playing = true;
+    const key = s.carrier ?? s, owner = {};
+    requireDragOwner(s);
+    dragOwners.set(key, owner);
+    const playing = () => dragOwners.get(key) === owner;
     const held = (op) => async () => {
       checkDragDeadline();
       s.held = target;
-      try { return await op(); } finally { if (playing) s.held = null; }
+      try { return await deliveringPhase.exit(op); } finally { if (playing()) s.held = null; }
     };
     let r;
     // A still drag's ops first wait up to `REACH_MS` for the touch to reach its view, inside the finger's time: the
@@ -368,12 +403,12 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     let carry = 0;
     const tick = timing !== 'platform' ? (ms) => {
       carry = Math.max(carry, s.now - base - asked(ms));
-      return heldTick(s, base + asked(ms) + carry, target, () => playing);
+      return heldTick(s, base + asked(ms) + carry, target, playing);
     } : undefined;
     const path = opts.path?.map(l => ({ ...l, during: (l.during ?? []).map(held) }));
-    try { r = await carrier.input(node.id, 'drag', { at: from ? start : undefined, drag: { ...drag, hold: hold + reach, during: during.map(held), ...(tick ? { tick } : {}), ...(path ? { path } : {}) } }); }
+    try { r = await deliveringPhase.run(owner, () => carrier.input(node.id, 'drag', { at: from ? start : undefined, drag: { ...drag, hold: hold + reach, during: during.map(held), ...(tick ? { tick } : {}), ...(path ? { path } : {}) } })); }
     catch (error) { throw await tapRefusal(s, target, error); }
-    finally { playing = false; s.held = null; }
+    finally { dragOwners.delete(key); s.held = null; }
     return noted(await s.landed({ ...r, ...(r.drag ? { drag: { ...r.drag, hold } } : {}), target, ...(scrolled ? { scrolled } : {}), carrier: host, mode: timing }), await reorderNotes(s, mark));
   }
   // The carrier's phases, each reply checked: an error or a refusal releases the contact and throws.
@@ -381,15 +416,28 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   // A phase's note (a refused write, said once a drive) is the drag's: its reply carries it (`noted`).
   const phaseNotes = [];
   const lastCheckpoint = legs.findLastIndex(leg => leg.during.length);
-  const owner = {};
+  const controller = new AbortController(), released = Promise.withResolvers();
+  const drain = drainInput(carrier);
+  if (drain) await drain;
+  const owner = {
+    cancel() {
+      controller.abort(new Error('drag cancelled'));
+      return released.promise.then(reply => {
+        if (!reply) throw new Error('the carrier did not confirm the cancel');
+        return reply;
+      });
+    },
+  };
+  let releaseReply;
   requireDragOwner(s);
   if (s.contact) throw new Error('a contact is already down; use `tap up` or `tap cancel` first');
-  if (lastCheckpoint >= 0) dragOwners.set(s.carrier ?? s, owner);
+  dragOwners.set(s.carrier ?? s, owner);
   let deadline = lastCheckpoint >= 0 ? performance.now() + DRAG_BOUNDS.total : undefined;
   // Only a carrier phase can inject input. Checkpoint callbacks run outside its ownership scope.
-  const deliver = (by, work) => withDragDeadline(by, () => deliveringPhase.run(owner, work));
+  const within = work => withDragDeadline(deadline, work, controller.signal);
+  const deliver = work => within(() => deliveringPhase.run(owner, work));
   const phase = async (name, opts) => {
-    const r = await deliver(deadline, () => s.pointer(name, opts));
+    const r = await deliver(() => s.pointer(name, opts));
     if (r.error || r.delivery === 'unsupported') throw new Error(`drag: ${name}: ${r.error ?? r.reason ?? 'unsupported'}`);
     if (r.landError) throw new Error(`drag: ${name} was delivered; landing what it started failed: ${r.landError}`);
     if (deadline !== undefined && (r.closed || r.contact === false)) throw new Error(`drag: ${name}: the contact ended before the checkpoint`);
@@ -402,7 +450,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     // contact already is the mouse.
     // `modifiers` are held from the press to the lift (#107: a Shift-drag extends a selection).
     // On iOS only a `pan` node's recognized contact drags (`pan`): a finger held elsewhere would move nothing.
-    try { down = await deliver(deadline, () => carrier.input(node.id, 'down', { x: start[0], y: start[1], ...(mouse && !['macos', 'mac', 'host'].includes(host) ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(['ios', 'host-ios'].includes(host) ? { pan: true } : {}) })); }
+    try { down = await deliver(() => carrier.input(node.id, 'down', { x: start[0], y: start[1], ...(mouse && !['macos', 'mac', 'host'].includes(host) ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(['ios', 'host-ios'].includes(host) ? { pan: true } : {}) })); }
     catch (error) { diagnosePress = true; throw error; }
     if (down.error) {
       diagnosePress = true;
@@ -438,7 +486,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
         await phase('move', { dx: dx * part, dy: dy * part, ms: travel });
         leg.dx -= dx * part; leg.dy -= dy * part; leg.over -= travel;
       }
-      const lifted = await deliver(deadline, () => carrier.ask({ op: 'tap', phase: 'reorderHold' }));
+      const lifted = await deliver(() => carrier.ask({ op: 'tap', phase: 'reorderHold' }));
       if (lifted.error) throw new Error(`drag: ${lifted.error}`);
       if (press > still) await phase('hold', { ms: press - still, ...seek });
     } else if (press) await phase('hold', { ms: press, ...seek });
@@ -451,7 +499,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
           await phase('move', { dx: leg.dx, dy: leg.dy, ms: leg.over });
           pressNeedsLanding = false;
         } else if (pressNeedsLanding && leg.during.some(op => expectations.has(op))) {
-          const landed = await withDragDeadline(deadline, () => s.landed(down));
+          const landed = await within(() => s.landed(down));
           if (landed.landError) throw new Error(`landing the press failed: ${landed.landError}`);
           if (landed.closed) throw new Error('the window closed before the checkpoint');
           pressNeedsLanding = false;
@@ -459,7 +507,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
         before = s.now;
         for (const op of leg.during) {
           s.held = target;
-          try { done.push(await withDragDeadline(deadline, () => op())); } finally { s.held = null; }
+          try { done.push(await within(op)); } finally { s.held = null; }
         }
       } catch (error) {
         if (leg.during.some(op => expectations.has(op)) || error instanceof DragTimeout) {
@@ -476,18 +524,19 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   } catch (error) {
     // Never leave the finger down: cancel, else lift (AppKit has no cancel). If neither is confirmed the contact stays recorded, and says so.
     // A `down` that threw may still have pressed: release at the carrier, whose own contact decides.
-    const expired = error instanceof DragTimeout;
-    const bounded = lastCheckpoint >= 0;
+    const interrupted = controller.signal.aborted || error instanceof DragTimeout;
+    controller.abort(error);
+    const bounded = lastCheckpoint >= 0 || interrupted;
     if (!down && bounded) s.contact = { x: start[0], y: start[1] };
     else if (!down) for (const name of ['cancel', 'up']) await carrier.input(null, name, {}).catch(() => null);
     for (const name of ['cancel', 'up']) {
       if (!s.contact) break;
       // An ordinary failure still lands the release. After timeout, each release attempt gets time to acknowledge.
       const releaseBy = bounded ? Math.max(deadline ?? 0, performance.now() + 1000) : undefined;
-      const r = await deliver(releaseBy, () => s.pointer(name, {}, !expired)).catch(() => null);
-      if (r && !r.error && r.delivery !== 'unsupported') s.contact = null;
+      const r = await withDragDeadline(releaseBy, () => deliveringPhase.run(owner, () => s.pointer(name, {}, !interrupted))).catch(() => null);
+      if (r && !r.error && r.delivery !== 'unsupported') { releaseReply = r; s.contact = null; }
     }
-    if (bounded && ((!down && expired) || s.contact) && s.close) {
+    if (bounded && ((!down && interrupted) || s.contact) && s.close) {
       try {
         await withDragDeadline(performance.now() + 2000, () => s.close());
         s.contact = null;
@@ -495,9 +544,13 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
       } catch (closeError) { error.message += `; closing the session failed: ${closeError.message}`; }
     }
     if (s.contact) error.message += '; the contact could not be released (tap cancel, or close the session)';
-    if (diagnosePress && !expired) throw await tapRefusal(s, target, error);
+    if (diagnosePress && !interrupted) throw await tapRefusal(s, target, error);
     throw error;
-  } finally { if (lastCheckpoint >= 0) dragOwners.delete(s.carrier ?? s); }
+  } finally {
+    controller.abort(new Error('the drag has ended'));
+    dragOwners.delete(s.carrier ?? s);
+    released.resolve(releaseReply ?? up);
+  }
   return noted(await s.tagged({ tapped: node.id, target, ...(scrolled ? { scrolled } : {}), at: down.at, drag: said, lifted: up.at, ...(done.length ? { during: done } : {}), delivery: down.delivery, carrier: host, mode: timing }), [...new Set(phaseNotes), ...await reorderNotes(s, mark)]);
 }
 

@@ -1182,3 +1182,34 @@ test('fingers tapped together are one runner request and four touches in the log
   await expect(edge.result).rejects.toThrow('outside the viewport');
   expect(edge.sent).toEqual([]);
 });
+
+test('manual cancel releases a stalled final hold and its late landing cannot lift the next drag', async () => {
+  const { sessionInput } = await import('./agent-input.mjs');
+  const holding = Promise.withResolvers(), landing = Promise.withResolvers(), reading = Promise.withResolvers(), finish = Promise.withResolvers();
+  const phases = [], carrier = { async input(id, phase) { phases.push(phase); return { at: [50, 50], delivery: 'presenter' }; } };
+  const s = {
+    carrier, now: 0,
+    async layout() { return { nodes: [{ id: 7, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 100, h: 100 } }; },
+    async op() { return { lines: [], next: 0 }; },
+    async tagged(reply) { return reply; },
+    async landed(reply) {
+      if (reply.phase === 'hold') { holding.resolve(); await landing.promise; }
+      return reply;
+    },
+  };
+  s.pointer = sessionInput(s, { host: 'linux', carrier, timing: 'platform' }).pointer;
+  const drag = opts => dragTap({ s, carrier, node: { id: 7 }, host: 'linux', target: 'area', timing: 'platform' }, { dx: 0, dy: 0, ...opts });
+  const first = drag({ during: [() => 'first'], hold: 10 }).catch(error => error.message);
+  try {
+    await holding.promise;
+    expect((await s.pointer('cancel')).delivery).toBe('presenter');
+    expect(s.contact).toBeNull();
+    expect(await first).toContain('cancelled');
+    const second = drag({ during: [() => { reading.resolve(); return finish.promise; }] });
+    await reading.promise;
+    landing.resolve();
+    finish.resolve('second');
+    expect((await second).during).toEqual(['second']);
+    expect(phases).toEqual(['down', 'hold', 'cancel', 'down', 'up']);
+  } finally { landing.resolve(); finish.resolve(); }
+});
