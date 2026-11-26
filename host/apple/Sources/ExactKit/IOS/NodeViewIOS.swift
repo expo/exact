@@ -1346,6 +1346,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             up = v.superview
         }
         sv.alwaysBounceVertical = sv.scrollsY && !nested && (!fits || !carousel)
+        // A row that scrolls only sideways bounces sideways whatever its content's width, as SwiftUI's horizontal scroll
+        // view does: a short shelf of cards still gives under a swipe
+        if sv.scrollsX, !sv.scrollsY, !sv.alwaysBounceHorizontal { sv.alwaysBounceHorizontal = true }
     }
 
     // Giving the route's bottom cover to its scroller can extend the frame under
