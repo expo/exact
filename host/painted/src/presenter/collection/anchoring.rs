@@ -277,9 +277,12 @@ impl<D: DataSource> Presenter<D> {
     pub(crate) fn publish_scroll(&mut self) {
         self.restore_scroll_anchors();
         self.arm_scroll_anchors();
+        // Where a claimed scroller's content is, its displacement (LLP 1123 D14); its scroll events keep its CSS offset
+        let displaced = self.displaced_scroll(&self.scroll);
+        let shown = displaced.as_ref().unwrap_or(&self.scroll);
         let runner = self.host.runner_mut();
         runner.scrolled(None, f64::from(self.page.0), f64::from(self.page.1));
-        for (id, (left, top)) in &self.scroll {
+        for (id, (left, top)) in shown {
             runner.scrolled(Some(*id), f64::from(*left), f64::from(*top));
         }
         self.place_split();

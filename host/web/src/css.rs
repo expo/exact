@@ -1437,7 +1437,7 @@ mod writer_tests {
             names.join(" "),
             "opacity 1s ease 0s,all 0s ease 0s,stroke-dashoffset r color background-color fill stroke cx cy x y \
              rx ry border-color --exact-tint box-shadow font-weight font-stretch \
-             font-variation-settings d filter "
+             font-variation-settings d filter clip-path "
         );
     }
 }

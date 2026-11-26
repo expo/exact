@@ -76,11 +76,98 @@ class Node {
 class Text extends Node { constructor(t) { super(3); this.data = String(t); } get textContent() { return this.data; } html() { return esc(this.data); } }
 class Comment extends Node { constructor() { super(8); } get textContent() { return ''; } html() { return ''; } }
 class Fragment extends Node { constructor() { super(11); } }
+// CSS Animations 1 §4.2: extract the `animation-name` list from an `animation` shorthand.
+const ANIM_TIMING = new Set(['ease', 'linear', 'ease-in', 'ease-out', 'ease-in-out', 'step-start', 'step-end']);
+const ANIM_DIR = new Set(['normal', 'reverse', 'alternate', 'alternate-reverse']);
+const ANIM_FILL = new Set(['forwards', 'backwards', 'both']);
+const ANIM_PLAY = new Set(['running', 'paused']);
+const ANIM_WIDE = new Set(['initial', 'inherit', 'unset', 'revert', 'revert-layer']);
+const ANIM_TIME = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?m?s$/i;
+const ANIM_NUM = /^(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+function animationNames(raw) {
+  const text = raw.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+  if (!text) return '';
+  if (ANIM_WIDE.has(text.toLowerCase())) return text.toLowerCase();
+  const layers = [];
+  let depth = 0, quote = '', start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { if (--depth < 0) return ''; }
+    else if (c === ',' && depth === 0) { layers.push(text.slice(start, i)); start = i + 1; }
+  }
+  if (depth !== 0 || quote) return '';
+  layers.push(text.slice(start));
+  const names = [];
+  for (const layer of layers) {
+    const tokens = [];
+    let t0 = -1;
+    for (let i = 0; i <= layer.length; i++) {
+      const c = layer[i];
+      if (quote) { if (c === '\\') i++; else if (c === quote) quote = ''; continue; }
+      if (c === '"' || c === "'") { if (t0 < 0) t0 = i; quote = c; continue; }
+      if (c === '(') { if (t0 < 0) t0 = i; depth++; continue; }
+      if (c === ')') { depth--; continue; }
+      if ((c === undefined || /\s/.test(c)) && depth === 0) {
+        if (t0 >= 0) { tokens.push(layer.slice(t0, i)); t0 = -1; }
+      } else if (t0 < 0) t0 = i;
+    }
+    if (!tokens.length) return '';
+    let timing = false, iter = false, dir = false, fill = '', play = false, times = 0, name = null;
+    for (const token of tokens) {
+      const lower = token.toLowerCase();
+      if (lower.startsWith('var(')) return '';
+      if (token[0] === '"' || token[0] === "'") { if (name !== null) return ''; name = token; continue; }
+      if (token.includes('(')) {
+        if (lower.startsWith('cubic-bezier(') || lower.startsWith('steps(') || lower.startsWith('linear(')) {
+          if (timing) return '';
+          timing = true;
+          continue;
+        }
+        return '';
+      }
+      if (ANIM_TIME.test(token)) {
+        if ((times === 0 && token[0] === '-') || ++times > 2) return '';
+        continue;
+      }
+      if (!iter && (lower === 'infinite' || ANIM_NUM.test(token))) { iter = true; continue; }
+      if (!timing && ANIM_TIMING.has(lower)) { timing = true; continue; }
+      if (!dir && ANIM_DIR.has(lower)) { dir = true; continue; }
+      if (lower === 'none') {
+        if (!fill) { fill = 'none'; continue; }
+        if (name === null) { name = 'none'; continue; }
+        return '';
+      }
+      if (ANIM_FILL.has(lower)) {
+        if (!fill) { fill = 'explicit'; continue; }
+        if (fill === 'none' && name === null) { fill = 'explicit'; name = 'none'; continue; }
+      }
+      if (!play && ANIM_PLAY.has(lower)) { play = true; continue; }
+      if (name !== null) return '';
+      name = token;
+    }
+    names.push(name ?? 'none');
+  }
+  return names.join(', ');
+}
 class Style {
   constructor() { this.map = new Map(); }
   setProperty(k, v) { if (v !== '' && v != null) this.map.set(k, String(v)); }
   removeProperty(k) { this.map.delete(k); }
   getPropertyValue(k) { return this.map.get(k) ?? ''; }
+  get animation() { return this.getPropertyValue('animation'); }
+  set animation(v) {
+    this.removeProperty('animation-name');
+    if (v === '' || v == null) this.removeProperty('animation');
+    else this.setProperty('animation', v);
+  }
+  get animationName() { return this.getPropertyValue('animation-name') || animationNames(this.getPropertyValue('animation')); }
+  set animationName(v) {
+    if (v === '' || v == null) this.removeProperty('animation-name');
+    else this.setProperty('animation-name', v);
+  }
   set fontSize(v) { this.setProperty('font-size', v); } set fontWeight(v) { this.setProperty('font-weight', v); }
   set fontStyle(v) { this.setProperty('font-style', v); } set fontFamily(v) { this.setProperty('font-family', v); }
   set textDecoration(v) { this.setProperty('text-decoration', v); } set opacity(v) { this.setProperty('opacity', v); }

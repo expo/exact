@@ -44,7 +44,12 @@ fn use_doubling_stops_at_the_expansion_limit() {
     let s = resolve(&k, svg);
     assert_eq!(s.over, Some(Limit::Expansion));
     assert!(s.items.is_empty(), "a scene over its limit draws nothing");
-    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let budget = if cfg!(debug_assertions) { 30 } else { 5 };
+    assert!(
+        started.elapsed().as_secs() < budget,
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[test]
@@ -84,7 +89,12 @@ fn a_use_box_stops_at_the_expansion_limit() {
     let started = std::time::Instant::now();
     let s = resolve(&k, svg);
     assert_eq!(s.over, Some(Limit::Expansion));
-    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let budget = if cfg!(debug_assertions) { 30 } else { 5 };
+    assert!(
+        started.elapsed().as_secs() < budget,
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[test]

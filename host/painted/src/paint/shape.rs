@@ -125,6 +125,20 @@ impl HitClip {
     }
 }
 
+/// The clip a box shows at its size: the one a transition moves (LLP 1003.003 D7), else its row's.
+pub(super) fn shown_clip<'n>(
+    scene: &super::Scene<'_>,
+    node: &'n exact_kernel::NodeRef<'_>,
+    width: f32,
+    height: f32,
+) -> std::borrow::Cow<'n, exact_kernel::clip::ClipPath> {
+    match (scene.clips)(node.id) {
+        // A moving clip is a path, which its size does not resolve
+        Some(moving) => std::borrow::Cow::Owned(moving),
+        None => node.style.rare.clip_path.resolved(width, height),
+    }
+}
+
 pub(super) fn clip_hits(
     boxes: &mut [super::PaintedBox],
     css: &exact_kernel::clip::ClipPath,

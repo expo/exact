@@ -144,7 +144,7 @@ fn empty_collection_padding_resolves_lengths_and_percentages() {
         )
         .unwrap();
         assert!(error.is_none());
-        let facts = geometry(host.kernel(), &host.collections()[0], 400.).unwrap();
+        let facts = geometry(host.kernel(), &host.collections()[0], 400., None).unwrap();
         assert_eq!(facts.width, 100., "{padding}");
         assert_eq!(facts.cross, cross, "{padding}");
         assert_eq!(facts.origin, 0., "{padding}");
@@ -187,7 +187,7 @@ fn a_negative_resolved_padding_is_zero_on_either_axis() {
         .unwrap();
         assert!(error.is_none());
         let snapshot = host.collections()[0].clone();
-        let facts = geometry(host.kernel(), &snapshot, 400.).unwrap();
+        let facts = geometry(host.kernel(), &snapshot, 400., None).unwrap();
         assert_eq!((facts.origin, facts.padding), (0., [0.; 2]), "{list}");
         let feedback = CollectionFeedback {
             view: snapshot.view,
@@ -204,5 +204,52 @@ fn a_negative_resolved_padding_is_zero_on_either_axis() {
         };
         host.collection_feedback_filled(feedback, CollectionFill::default())
             .unwrap_or_else(|e| panic!("{list}: {e:?}"));
+    }
+}
+
+/// @ref LLP 1123 D14 — a claimed list reports its reached scrollport as its port, its insets in its padding before and
+/// after the content, and the range that gives: a 100-point list reaching 40 before and 60 after with insets of 40 and
+/// 100 is a 200-point port with padding 40 and 100, and 40 more of range; on either axis.
+#[test]
+fn a_claimed_list_reports_its_reached_port_and_its_insets_as_padding() {
+    struct Rows;
+    impl DataSource for Rows {
+        fn query(
+            &mut self,
+            _: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<exact_runner::Value, exact_runner::DataError> {
+            Ok(exact_runner::Value::list(
+                (0..50)
+                    .map(|i| exact_runner::Value::Number(i as f64))
+                    .collect(),
+            ))
+        }
+    }
+    let vertical = crate::safe_area::ScrollClaim {
+        reach: [40., 0., 60., 0.],
+        insets: [40., 0., 100., 0.],
+    };
+    let horizontal = crate::safe_area::ScrollClaim {
+        reach: [0., 60., 0., 40.],
+        insets: [0., 100., 0., 40.],
+    };
+    for (list, claim) in [
+        ("list virtualized=true width=200 height=100", vertical),
+        ("list virtualized=true display=\"flex\" width=100 height=200 overflow-x=\"scroll\" overflow-y=\"hidden\"", horizontal),
+    ] {
+        let source = format!("component App\n  resource rows = rows() as shape number[]\n  view\n    column width=200\n      {list}\n        for x in rows key=x\n          text `${{x}}` width=20 height=20\n");
+        let plan = contract::compile(&source).unwrap();
+        let (host, error) = Host::boot(&plan.encode(), Rows, Box::new(exact_kernel::MonospaceMeasurer::default()), 400., 500.)
+            .unwrap();
+        assert!(error.is_none());
+        let snapshot = host.collections()[0].clone();
+        let plain = geometry(host.kernel(), &snapshot, 400., None).unwrap();
+        let claimed = geometry(host.kernel(), &snapshot, 400., Some(claim)).unwrap();
+        assert_eq!((plain.main(), plain.origin, plain.padding), (100., 0., [0.; 2]), "{list}");
+        assert_eq!((claimed.main(), claimed.origin, claimed.padding), (200., 40., [40., 100.]), "{list}");
+        // The insets add 140 to the range and the reach takes 100 off it
+        assert_eq!(claimed.max, plain.max + 40., "{list}");
+        assert_eq!(claimed.port_cross(), plain.port_cross(), "the cross axis as laid out");
     }
 }

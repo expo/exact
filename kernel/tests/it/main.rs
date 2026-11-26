@@ -17,6 +17,7 @@ mod browser_scroll_padding;
 mod browser_sticky;
 mod browser_zoom;
 mod canvas;
+mod clip_motion;
 mod clock_sync;
 mod compare;
 mod content_region;

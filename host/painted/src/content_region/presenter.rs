@@ -91,6 +91,10 @@ impl<D: DataSource> Presenter<D> {
                 self.paint_frame(FrameTarget::Geometry, false, true);
                 if self.last_frame_succeeded {
                     if resnap {
+                        #[cfg(test)]
+                        {
+                            self.snap_layout.probe_paints += 1;
+                        }
                         self.resnap_before_paint();
                     }
                     self.reveal_before_paint();
@@ -230,6 +234,7 @@ impl<D: DataSource> Presenter<D> {
             self.focus,
         );
         let model_scroll = deferred.then(|| self.collection_paint_scroll()).flatten();
+        let displaced = self.displaced_scroll(model_scroll.as_ref().unwrap_or(&self.scroll));
         // Display submission temporarily takes the boxes that place the menu.
         let menu = self.menu_paint().or_else(|| self.display.menu.clone());
         let selection = self.focus.map(|id| self.field_selection(id));
@@ -254,7 +259,8 @@ impl<D: DataSource> Presenter<D> {
             scaled_presented: host.scaled_presented(),
             paths: &|id| host.presented_path(id),
             filters: &|id| host.presented_filter(id),
-            scroll: model_scroll.as_ref().unwrap_or(&self.scroll),
+            clips: &|id| host.presented_clip(id),
+            scroll: (displaced.as_ref().or(model_scroll.as_ref())).unwrap_or(&self.scroll),
             page,
             images: &self.images.bitmaps,
             focus: self.focus,

@@ -632,11 +632,18 @@ enum ContentEncoding {
 
 impl ResponseInfo {
     pub fn new(headers: &http::HeaderMap, body_mode: BodyMode) -> Self {
-        let content_encoding = headers
-            .get(header::CONTENT_ENCODING)
-            .and_then(|v| v.to_str().ok())
-            .map(ContentEncoding::from)
-            .unwrap_or(ContentEncoding::None);
+        // RFC 9110 §6.4.1 / §8.7: HEAD, 1xx, 204 and 304 responses carry no message
+        // body to decode and must keep representation headers (Content-Encoding,
+        // Content-Length) intact instead of attempting decompression on empty bytes.
+        let content_encoding = if body_mode == BodyMode::NoBody {
+            ContentEncoding::None
+        } else {
+            headers
+                .get(header::CONTENT_ENCODING)
+                .and_then(|v| v.to_str().ok())
+                .map(ContentEncoding::from)
+                .unwrap_or(ContentEncoding::None)
+        };
 
         let (mime_type, charset) = headers
             .get(header::CONTENT_TYPE)

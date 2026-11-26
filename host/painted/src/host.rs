@@ -117,6 +117,7 @@ pub struct Host<D: DataSource> {
     /// What changed for the painter's kept rows since its last invalidation.
     pub(crate) row_dirty: crate::paint::rows::Dirty,
     pub(crate) scroll_anchors: crate::scroll_anchor::State,
+    pub(crate) snap_changes: crate::snap_changes::State,
     /// The nodes whose `:hover` look holds, the one whose `:focus-visible`
     /// does (LLP 1121 D8), and the state held (LLP 1122 D8; the presenter's,
     /// `presenter/feedback.rs`, `presenter/held.rs`): a new host holds none.
@@ -362,6 +363,7 @@ impl<D: DataSource> Host<D> {
             flow_damage: Default::default(),
             row_dirty: Default::default(),
             scroll_anchors: Default::default(),
+            snap_changes: Default::default(),
             looks_shown: Default::default(),
             height_bindings: Default::default(),
             transform_bindings: Default::default(),
@@ -411,6 +413,7 @@ impl<D: DataSource> Host<D> {
         for id in host.preorder() {
             if let Some(node) = host.runner.kernel().node(id) {
                 host.keys.insert(node.key, id);
+                host.snap_changes.seed(&node);
                 host.values.field(&node);
                 host.runner.kernel().motion_sync_node(node.key, &mut sync);
             }
@@ -517,8 +520,7 @@ impl<D: DataSource> Host<D> {
         &self.runner
     }
 
-    /// The runner, mutably: a capability arm holds its device requests there
-    /// (LLP 1069.007 D3).
+    /// The runner, mutably: a capability arm holds its device requests there (LLP 1069.007 D3).
     pub fn runner_mut(&mut self) -> &mut Runner<D> {
         &mut self.runner
     }
@@ -747,7 +749,7 @@ impl<D: DataSource> Host<D> {
         }
         .or_else(|| self.paint.view_dark(node.key));
         shown.lowered = self.lowered_mask(node.key);
-        shown.reach = self.safe_area.reach(node.key);
+        (shown.reach, shown.scroll, shown.extension) = self.safe_area.of(node.key);
         // @ref LLP 1061 D7, LLP 1121 D8 — the press and the looks that hold;
         // the painter samples the background and ink independently.
         let looks = self.looks_shown.on(id);
@@ -1115,8 +1117,7 @@ impl<D: DataSource> Host<D> {
     /// A symbol picture (`symbol:<role>`) a commit made, renewed or touched
     /// takes the natural size the image sync reports for it (LLP 1011 §3),
     /// before this commit's layout: not in a second layout
-    /// once the sync after the commit reports it (every list row built
-    /// with an icon paid one).
+    /// once the sync after the commit reports it (every list row built with an icon paid one).
     fn size_new_symbols(&mut self, receipts: &[Timed]) {
         let kernel = self.runner.kernel_mut();
         if !kernel.has_type(exact_kernel::NodeType::Image) {
@@ -1299,6 +1300,7 @@ impl<D: DataSource> Host<D> {
         let mut paint = error.is_some() || self.content_region.is_some();
         for t in receipts {
             let r = &t.receipt;
+            self.snap_changes.commit(self.runner.kernel(), r);
             self.navigation
                 .split
                 .renewed(self.runner.kernel(), &r.renewed);

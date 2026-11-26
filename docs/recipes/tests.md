@@ -41,11 +41,9 @@ test "a duplicate stays a draft and the list survives reload"
 
 ## Before you call it done
 
-`verify` checks launch, test ends and relaunch in light and dark on web and iOS.
-Answer alerts to check beneath at the largest text size.
-A `squeezed` scroller reports port and content extents. Web reloads flag changed
-saved values even under alerts. An `aria-invalid` field is a draft.
-End a test per screen. Shots go in `.exact/verify/`.
-In app.json: `"verify": {"accept":
-[{"finding": "contrast", "node": "<testId>", "why": "…"}]}`.
+`verify` checks launch, test ends, relaunch light/dark on web & iOS (`verify ios <glob>`, `--duo none` scope; end full).
+Answer alerts for largest text. A `squeezed` scroller gives port/content extents.
+Web reloads flag changed saved values; `aria-invalid` fields are drafts.
+End a test per screen. Shots: `.exact/verify/`.
+In app.json: `"verify": {"accept": [{"finding": "contrast", "node": "<testId>", "why": "…"}]}`.
 `agent web --storage s1 …` keeps its store.

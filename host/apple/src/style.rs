@@ -833,6 +833,8 @@ pub struct Shown {
     paint: [Option<exact_motion::Value>; Property::PAINT.len()],
     /// The presented `filter`.
     pub filter: Option<exact_kernel::svg::filter::FilterList>,
+    /// The presented `clip-path` the engine samples (LLP 1003.003 D7).
+    pub clip: Option<exact_kernel::clip::ClipPath>,
 }
 
 impl Shown {
@@ -844,7 +846,7 @@ impl Shown {
 
     /// Whether anything is presented over the rows.
     pub fn moving(&self) -> bool {
-        self.paint.iter().any(Option::is_some) || self.filter.is_some()
+        self.paint.iter().any(Option::is_some) || self.filter.is_some() || self.clip.is_some()
     }
 
     /// Set one paint property's presented value.
@@ -871,6 +873,10 @@ fn paint_over(computed: &mut StyleProps, shown: &Shown) {
     if let Some(f) = &shown.filter {
         computed.filter = f.clone();
         computed.mask.set(StyleId::Filter);
+    }
+    if let Some(c) = &shown.clip {
+        computed.rare.clip_path = c.clone();
+        computed.mask.set(StyleId::ClipPath);
     }
     if let Some(c) = shown.get(Property::Color) {
         computed.text_color = fixed(c);

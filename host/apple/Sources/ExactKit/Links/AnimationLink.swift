@@ -26,6 +26,9 @@ package protocol BoxAnimating: AnyObject {
     /// `id`'s box paints its background colour on `fill` (nil for its own layer), as a box's extension holds its
     /// picture (LLP 1123 D13): its background-colour animations play there.
     func setFill(_ id: UInt32, _ fill: CALayer?, clock: Double?)
+    /// `id`'s translate and scale animations play on `proxy` (nil for its own layer), which the node samples each
+    /// frame: a grouped glass on macOS takes its transform by geometry, which a layer animation never moves.
+    func setTransformProxy(_ id: UInt32, _ proxy: CALayer?, clock: Double?)
 }
 
 /// No CSS animations: no box animates.
@@ -33,6 +36,7 @@ package final class NoBoxAnimations: BoxAnimating {
     package init() {}
     package func animations(_ id: UInt32, _ payload: [String: Any], layer: CALayer?, clock: Double?) {}
     package func setFill(_ id: UInt32, _ fill: CALayer?, clock: Double?) {}
+    package func setTransformProxy(_ id: UInt32, _ proxy: CALayer?, clock: Double?) {}
     package func boxVisibility(_ id: UInt32, hidden: Bool, clock: Double?) {}
     package func seek(clock: Double?) {}
     package func animatesBox(_ id: UInt32) -> Bool { false }

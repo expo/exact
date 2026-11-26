@@ -86,7 +86,7 @@ test('an APK carries each GPU library the bake built, by the name Cargo gave it,
 
 const releaseJavaEnv = androidJavaEnv(process.env);
 const releaseSdk = androidSdk(process.env);
-test.skipIf(!process.env.ANDROID_NDK_HOME && !existsSync(resolve(releaseSdk, 'ndk')))('a development APK data image maps each edited blob at 16-byte alignment', () => {
+test.skipIf(!(process.env.ANDROID_NDK_HOME && existsSync(process.env.ANDROID_NDK_HOME)) && !existsSync(resolve(releaseSdk, 'ndk')))('a development APK data image maps each edited blob at 16-byte alignment', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-data-'));
   try {
     mkdirSync(resolve(dir, 'plans'));

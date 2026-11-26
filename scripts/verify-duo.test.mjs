@@ -18,36 +18,55 @@ test('the Duo: the one named, else the one booted, else the first; never a guess
 
 /** A session whose folds, turns and taps are recorded; `takes` false for the angles the app does not take, `device` how the test
  *  left it turned. */
-function session({ fields = [], takes = () => true, keyboard = true, url = () => '/', focused = (id) => id, device = 1 } = {}) {
+function session({ fields = [], takes = () => true, keyboard = true, url = () => '/', focused = (id) => id, device = 1, closedAtStart = false } = {}) {
   const did = [];
   let on = null;
-  return { did, fold: async (degrees) => { did.push(degrees); return takes(degrees) ? {} : { settled: false, reason: 'hinge' }; }, clock: async () => ({}),
+  let angle = closedAtStart ? 0 : undefined, inner = closedAtStart ? false : undefined, ready = closedAtStart;
+  return { did, fold: async (degrees) => { did.push(degrees); if (takes(degrees)) { angle = degrees; inner = degrees !== 0; ready = true; return {}; } return { settled: false, reason: 'hinge' }; }, clock: async () => ({}),
     rotate: async (to) => { did.push(to); device = 1; },
     tree: async () => ({ nodes: fields.map((f, id) => ({ id, type: 'TextInput', props: { testId: f.name }, focused: on != null && id === focused(on) })) }),
-    op: async ({ op }) => (op === 'layout' ? { device } : { items: fields.map((f, id) => ({ id, control: 'field', x: 0, w: 300, h: 34, ...f })) }),
+    op: async ({ op }) => (op === 'layout' ? { device, angle, inner, ready } : { items: fields.map((f, id) => ({ id, control: 'field', x: 0, w: 300, h: 34, ...f })) }),
     tap: async (id) => { did.push(`tap ${id}`); on = id; }, state: async () => ({ keyboard: { visible: on != null && keyboard }, navigation: { url: url(on != null) } }) };
 }
-const poses = async (s, check = async (pose) => pose) => { const runs = [], notes = []; await readPoses(s, check, { runs, notes }); return { read: runs, notes, did: s.did }; };
+const poses = async (s, check = async (pose) => pose) => { const runs = [], notes = []; const res = await readPoses(s, check, { runs, notes }); return { read: runs, notes, did: s.did, atClosed: res.atClosed }; };
 
 test('a screen is read closed, open and half open, then closed with the keyboard up on its lowest field', async () => {
   const three = ['closed', 'open', 'half open'];
-  expect(await poses(session())).toEqual({ read: three, notes: [], did: [0, 180, 130, 0] });
+  // No eligible field in closed pose: skip folding back to 0° for keyboard pass.
+  expect(await poses(session())).toEqual({ read: three, notes: [], did: [0, 180, 130], atClosed: false });
+  // Already closed and upright at session start: skip the initial 0° fold too.
+  expect(await poses(session({ closedAtStart: true }))).toEqual({ read: three, notes: [], did: [180, 130], atClosed: false });
   const fields = [{ name: 'title', y: 90 }, { name: 'last', y: 600 }, { name: 'clipped', y: 640, vis: { x: 0, y: 640, w: 300, h: 20 } },
     { name: 'done', y: 640, disabled: true }, { name: 'under', y: 650, cover: { kind: 'bar' } }];
-  expect(await poses(session({ fields }))).toEqual({ read: [...three, 'closed, keyboard up'], notes: [], did: [0, 180, 130, 0, 'tap 1'] });
+  expect(await poses(session({ fields }))).toEqual({ read: [...three, 'closed, keyboard up'], notes: [], did: [0, 180, 130, 0, 'tap 1'], atClosed: true });
+  expect(await poses(session({ fields, closedAtStart: true }))).toEqual({ read: [...three, 'closed, keyboard up'], notes: [], did: [180, 130, 0, 'tap 1'], atClosed: true });
   // A field that raises none, one that loses the focus, and one whose focus leaves the screen are notes
   expect((await poses(session({ fields, keyboard: false }))).notes).toEqual(['the keyboard: none rose for last']);
   expect((await poses(session({ fields, focused: () => 0 }))).notes).toEqual(['the keyboard: last did not keep the focus']);
-  expect(await poses(session({ fields, url: (up) => (up ? '/search' : '/') }))).toEqual({ read: three, notes: ['closed, keyboard up: not read: the app is at /search, not /'], did: [0, 180, 130, 0, 'tap 1'] });
+  expect(await poses(session({ fields, url: (up) => (up ? '/search' : '/') }))).toEqual({ read: three, notes: ['closed, keyboard up: not read: the app is at /search, not /'], did: [0, 180, 130, 0, 'tap 1'], atClosed: true });
   // A test can end turned
-  expect((await poses(session({ device: 4 }))).did).toEqual([0, 'portrait', 180, 130, 0]);
+  expect((await poses(session({ device: 4 }))).did).toEqual([0, 'portrait', 180, 130]);
   // What a check could not read is said, and the rest is read
   const partly = await poses(session(), async (pose) => { if (pose === 'open') throw new Error('gone\nmore'); return pose; });
   expect([partly.read, partly.notes]).toEqual([['closed', 'half open'], ['open: not read: gone']]);
   // A pose the app did not take, or a fold that failed, is said, and not read; where it did not close upright, no pose is
-  expect(await poses(session({ takes: (d) => d !== 0 }))).toEqual({ read: [], notes: ['closed: the app did not take the pose'], did: [0] });
+  expect(await poses(session({ takes: (d) => d !== 0 }))).toEqual({ read: [], notes: ['closed: the app did not take the pose'], did: [0], atClosed: false });
   expect((await poses(session({ takes: (d) => { if (d === 180) throw new Error('busy'); return true; } }))).notes).toEqual(['open: busy']);
-  expect(await poses(session({ takes: (d) => d !== 130 }))).toEqual({ read: ['closed', 'open'], notes: ['half open: the app did not take the pose'], did: [0, 180, 130, 0] });
+  expect(await poses(session({ takes: (d) => d !== 130 }))).toEqual({ read: ['closed', 'open'], notes: ['half open: the app did not take the pose'], did: [0, 180, 130], atClosed: false });
+  // A throwing closed-pose field probe still reads open/half-open and conservatively runs the final closed probe.
+  let probeThrows = true;
+  const flaky = session({ fields: [{ name: 'late', y: 400 }] });
+  const origOp = flaky.op;
+  flaky.op = async (req) => { if (req.op === 'check' && probeThrows) { probeThrows = false; throw new Error('transient'); } return origOp(req); };
+  expect(await poses(flaky)).toEqual({ read: [...three, 'closed, keyboard up'], notes: [], did: [0, 180, 130, 0, 'tap 0'], atClosed: true });
+  // If opening introduces a field on the same route, negative closed-pose field evidence is invalidated and keyboard pass runs.
+  let openedOnce = false;
+  const reveals = session();
+  const origFold = reveals.fold, origRevealsOp = reveals.op;
+  reveals.fold = async (deg) => { if (deg === 180) openedOnce = true; return origFold(deg); };
+  reveals.op = async (req) => (req.op === 'layout' ? origRevealsOp(req) : { items: openedOnce ? [{ id: 0, control: 'field', x: 0, y: 400, w: 300, h: 34, name: 'revealed' }] : [] });
+  reveals.tree = async () => ({ nodes: openedOnce ? [{ id: 0, type: 'TextInput', props: { testId: 'revealed' }, focused: true }] : [] });
+  expect(await poses(reveals)).toEqual({ read: [...three, 'closed, keyboard up'], notes: [], did: [0, 180, 130, 0, 'tap 0'], atClosed: true });
 });
 
 test('the report: what the other simulator did not say, by its pose; a test that fails here fails the run; why none was read counts for nothing', () => {

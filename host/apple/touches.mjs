@@ -292,6 +292,9 @@ const simDefaults = (udid, args, timeout = 10000) => new Promise((done) => {
 });
 const accessibilityRecord = udid => resolve(homedir(), '.cache/exact/simulator-accessibility', `${udid}.json`);
 const hostedAccessibilityLock = udid => resolve(simulatorTempDirectory(), `exact-hosted-accessibility-${udid}.lock`);
+const heldAccessibilityRecord = udid => resolve(simulatorTempDirectory(), `exact-held-accessibility-${udid}.json`);
+const heldAccessibilityLease = udid => resolve(simulatorTempDirectory(), `exact-held-accessibility-${udid}.lock`);
+const heldAccessibility = new Map();
 /** A hosted XCTest holds this while its temporary ApplicationAccessibilityEnabled is on, including between launches. */
 export function markHostedAccessibility(udid, before) {
   const path = hostedAccessibilityLock(udid);
@@ -302,6 +305,124 @@ export function markHostedAccessibility(udid, before) {
 function hostedAppAccessibility(udid) {
   const path = hostedAccessibilityLock(udid);
   return lockHeld(path, { exclusive: true }) ? { ApplicationAccessibilityEnabled: readFileSync(path, 'utf8') || undefined } : null;
+}
+
+function liveTouchBaseline(udid) {
+  try {
+    if (!touchOwnerLive(readFileSync(touchLockPath(udid), 'utf8'))) return null;
+    const rec = JSON.parse(readFileSync(accessibilityRecord(udid), 'utf8'));
+    return { before: rec?.ApplicationAccessibilityEnabled ?? null };
+  } catch { return null; }
+}
+
+/** Turn `ApplicationAccessibilityEnabled` on once for a whole multi-launch leg (e.g. `verify ios`),
+ * recording the pre-existing value on disk and taking a shared flock lease so concurrent processes (including
+ * touch sessions and hosted XCTests) restore only when the last live holder releases, and a crash heals next run.
+ * While held, `withAccessibilityRuntime` for the same simulator keeps its display lock and skips defaults spawns. */
+export async function holdAccessibilityRuntime(udid, { enabled = 'try', run = simDefaults } = {}) {
+  const noop = { active: false, async release() {} };
+  if (!udid || !enabled) return noop;
+  const key = 'ApplicationAccessibilityEnabled', args = [AX, key];
+  const recordPath = heldAccessibilityRecord(udid), leasePath = heldAccessibilityLease(udid);
+  return withAccessibilityLock(udid, async () => {
+    let saved = null;
+    try { saved = JSON.parse(readFileSync(recordPath, 'utf8')); } catch { /* none from a prior or live run */ }
+    const touch = liveTouchBaseline(udid), hosted = hostedAppAccessibility(udid);
+    const otherLive = lockHeld(leasePath, { exclusive: true }) || touch != null || hosted != null;
+    let current;
+    try { current = await accessibilityKeys(udid, run); }
+    catch (error) {
+      if (enabled !== 'try') throw error;
+      console.error(`note: ${error.message}; launched without UIKit's accessibility runtime, so the accessibility tree is not read`);
+      return noop;
+    }
+    const before = saved ? saved.before
+      : touch ? touch.before
+      : hosted ? (hosted.ApplicationAccessibilityEnabled ?? null)
+      : (current[key] ?? null);
+    if (current[key] !== '1') {
+      mkdirSync(dirname(recordPath), { recursive: true });
+      if (!otherLive || !saved) writeFileSync(recordPath, JSON.stringify({ before }));
+      const set = await run(udid, ['write', ...args, '-bool', 'true']);
+      if (set.status !== 0) {
+        if (!otherLive && !saved) rmSync(recordPath, { force: true });
+        if (enabled !== 'try') throw new Error(`simulator accessibility: ${set.err}`);
+        console.error(`note: simulator accessibility: ${set.err}; launched without UIKit's accessibility runtime, so the accessibility tree is not read`);
+        return noop;
+      }
+    } else if (!otherLive && saved) {
+      // Recovering from a previous killed leg: keep its recorded original baseline.
+      writeFileSync(recordPath, JSON.stringify({ before }));
+    } else if (!saved) {
+      mkdirSync(dirname(recordPath), { recursive: true });
+      writeFileSync(recordPath, JSON.stringify({ before }));
+    }
+    let releaseLease = takeLock(leasePath, { shared: true, noFollow: true });
+    let releaseHosted;
+    try { releaseHosted = markHostedAccessibility(udid, before ?? ''); }
+    catch (error) { releaseLease(); throw error; }
+    heldAccessibility.set(udid, (heldAccessibility.get(udid) ?? 0) + 1);
+    let releaseStarted = false, restored = false;
+    const decLocal = () => {
+      if (releaseStarted) return;
+      releaseStarted = true;
+      const left = (heldAccessibility.get(udid) ?? 1) - 1;
+      if (left <= 0) heldAccessibility.delete(udid); else heldAccessibility.set(udid, left);
+    };
+    const readOriginal = () => {
+      try { return JSON.parse(readFileSync(recordPath, 'utf8')).before; } catch { return before; }
+    };
+    const otherHolders = () => lockHeld(leasePath, { exclusive: true }) || hostedAppAccessibility(udid) != null || liveTouchBaseline(udid) != null;
+    const restoreSync = () => {
+      if (restored) return;
+      restored = true;
+      decLocal();
+      try {
+        releaseLease?.(); releaseLease = null;
+        releaseHosted?.(); releaseHosted = null;
+        if (!otherHolders()) {
+          const orig = readOriginal();
+          if (orig !== '1') {
+            const r = spawnSync('xcrun', ['simctl', 'spawn', udid, 'defaults', ...(orig != null ? ['write', ...args, '-bool', orig === '1' ? 'true' : 'false'] : ['delete', ...args])], { encoding: 'utf8', timeout: 5000 });
+            if (r.status === 0 || (orig == null && /Could not find key|not found/.test(r.stderr ?? ''))) rmSync(recordPath, { force: true });
+          } else {
+            rmSync(recordPath, { force: true });
+          }
+        }
+      } finally { releaseLease?.(); releaseLease = null; releaseHosted?.(); releaseHosted = null; }
+    };
+    return {
+      active: true,
+      restoreSync,
+      async release() {
+        if (releaseStarted) return;
+        decLocal();
+        let restoreError = null;
+        try {
+          await withAccessibilityLock(udid, async () => {
+            if (restored) return;
+            releaseLease?.(); releaseLease = null;
+            releaseHosted?.(); releaseHosted = null;
+            if (!otherHolders()) {
+              const orig = readOriginal();
+              if (orig !== '1') {
+                const r = await run(udid, orig != null ? ['write', ...args, '-bool', orig === '1' ? 'true' : 'false'] : ['delete', ...args]);
+                if (r.status === 0 || (orig == null && /Could not find key|not found/.test(r.err))) rmSync(recordPath, { force: true });
+                else restoreError = new Error(`simulator accessibility could not be restored: ${r.err}`);
+              } else {
+                rmSync(recordPath, { force: true });
+              }
+            }
+            restored = true;
+          });
+        } finally {
+          releaseLease?.(); releaseLease = null;
+          releaseHosted?.(); releaseHosted = null;
+        }
+        if (restoreError) throw restoreError;
+      },
+    };
+  });
 }
 
 const checkedAccessibility = new Map((process.env.EXACT_IOS_TEST_CHECKED || '').split(',').filter(Boolean).map(entry => entry.split(':')));
@@ -368,6 +489,9 @@ export async function checkSimulatorAccessibility(dir, app) {
  * will not say or take the setting is launched without the runtime, with a note, where `true` refuses. */
 export async function withAccessibilityRuntime(udid, enabled, launch, { run = simDefaults, check = true, touches = false } = {}) {
   return withAccessibilityLock(udid, async () => {
+    // When an outer leg (`holdAccessibilityRuntime`) already holds `ApplicationAccessibilityEnabled` on this simulator,
+    // keep the display lock around `launch()` while skipping the three per-launch `simctl spawn defaults` round-trips.
+    if (enabled && !touches && heldAccessibility.get(udid) > 0) return launch();
     const status = checkedAccessibility.get(udid);
     const inspect = check && status !== 'warned';
     if (!enabled && (!inspect || (!touches && status))) return launch();

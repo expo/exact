@@ -29,6 +29,9 @@ const PATH_D: u8 = Property::D as u8 + 1;
 /// `filter` (LLP 1003.002 D1): its property's code, past `d`'s.
 const FILTER: u8 = Property::Filter as u8 + 1;
 
+/// A box's `clip-path` (LLP 1003.003 D1): its property's code, past `filter`'s.
+const CLIP_PATH: u8 = Property::ClipPath as u8 + 1;
+
 /// Round `n` up to a multiple of 8.
 pub const fn align8(n: usize) -> usize {
     (n + 7) & !7
@@ -375,6 +378,7 @@ impl<'a> Reader<'a> {
                 BORDER_COLOR => TransitionProperty::BorderColor,
                 PATH_D => TransitionProperty::Property(Property::D),
                 FILTER => TransitionProperty::Property(Property::Filter),
+                CLIP_PATH => TransitionProperty::Property(Property::ClipPath),
                 p => TransitionProperty::Property(
                     Property::from_wire(p - 1)
                         .filter(|p| *p != Property::ShadowColor)
@@ -755,7 +759,7 @@ mod tests {
         // Recomputed when the schema changes; the digest test prints the value.
         // Apple JSON record and inline style declarations participate (LLP 1172.001 E4),
         // even when the EXWF codec bytes above stay unchanged.
-        assert_eq!(SCHEMA_DIGEST, 0xaf83d3e2ef4020ca);
+        assert_eq!(SCHEMA_DIGEST, 0xf48f0de3a1d4435d);
     }
 
     #[test]

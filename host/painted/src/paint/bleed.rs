@@ -70,3 +70,39 @@ pub(super) fn geometry(geometry: &BoxGeometry) -> BoxGeometry {
         bleed: [0.0; 4],
     }
 }
+
+impl Painter {
+    /// A box's colour-only extension (LLP 1123 D13): its background colour `color` over its border box `rect` outset
+    /// by its extension, less `painted`, what its own surface covers, in up to four rectangles that meet without
+    /// overlapping, so a translucent colour paints once. Nothing for a box with no colour; no box of its own, so it
+    /// takes no hits and is no accessibility element. Gradients and images stay inside the box.
+    pub(super) fn extension_strip(
+        &mut self,
+        shown: &Presented,
+        color: [u8; 4],
+        painted: Rect4,
+        rect: Rect4,
+        ts: Transform,
+    ) {
+        if shown.extension == [0.0; 4] || color[3] == 0 {
+            return;
+        }
+        let (ex, ey, ew, eh) = super::presented::outset(rect, shown.extension);
+        let (x0, y0, x1, y1) = (
+            painted.0.max(ex),
+            painted.1.max(ey),
+            (painted.0 + painted.2).min(ex + ew),
+            (painted.1 + painted.3).min(ey + eh),
+        );
+        let strips = [
+            (ex, ey, ew, y0 - ey),
+            (ex, y1, ew, ey + eh - y1),
+            (ex, y0, x0 - ex, y1 - y0),
+            (x1, y0, ex + ew - x1, y1 - y0),
+        ];
+        for strip in strips.into_iter().filter(|r| r.2 > 0.0 && r.3 > 0.0) {
+            self.backend.fill(&Shape::rect(strip), color, ts);
+        }
+        self.damage.unsupported = true;
+    }
+}

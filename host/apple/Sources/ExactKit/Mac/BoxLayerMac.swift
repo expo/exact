@@ -272,35 +272,42 @@ extension NodeView {
     }
 
     /// As on UIKit (`Backdrop.swift`): a scroller's children are its scroll view's document's, so the scroll view
-    /// takes the corner that clips them, a painted menu's panel's while the panel is there, else its author's one
-    /// radius (`BoxPlan.scrollRadius`) at the padding edge. With no border that edge is the scroll view's bounds and
-    /// its layer's radius says it. With one the curve lies inside the bounds and the scroll view masks its layer
-    /// with it (`ChainingScrollView.clip(toPaddingEdge:inset:)`), so a translucent border shows the box's ground and
-    /// not the children. The scroll view stays the node's own subview, at the border box. A layout transition's
+    /// takes the corner that clips them, a painted menu's panel's while the panel is there, else its author's corners
+    /// at the padding edge. With no border and one circular or Apple-continuous radius on all four corners
+    /// (`BoxPlan.scrollRadius`), that edge is the scroll view's bounds and its layer's radius says it. With a border,
+    /// partial, differing or elliptical corners, or another `corner-shape`, the scroll view masks its layer with the
+    /// padding edge (`ChainingScrollView.clip(toPaddingEdge:inset:)`), so a translucent border shows the box's ground
+    /// and not the children. The scroll view stays the node's own subview, at the border box. A layout transition's
     /// surface masks the scroll view itself until it ends (`Surface.swift`).
     func syncScrollCorner() {
         guard let scroll else { return }
-        var radius: CGFloat = 0, curve = CALayerCornerCurve.circular, widths: [CGFloat] = [0, 0, 0, 0]
+        var radius: CGFloat = 0, curve = CALayerCornerCurve.circular, widths: [CGFloat] = [0, 0, 0, 0], edge: CGPath?
         if materialView != nil, paintedMenuRadius != nil {
             radius = effectiveCornerSizes(in: bounds).first?.width ?? 0
-        } else {
+        } else if NSEdgeInsetsEqual(reach, NSEdgeInsetsZero) {
             let p = boxPlan
-            (radius, curve) = (p.scrollRadius, p.scrollRadius > 0 ? p.curve : .circular)
-            if radius > 0 { widths = p.widths.map(devicePixels) }
+            let sizes = cornerSizes(in: bounds)
+            let borderWidths = p.widths.map(devicePixels)
+            if borderWidths.contains(where: { $0 > 0 }) {
+                widths = borderWidths
+                let inner = CGRect(x: widths[3], y: widths[0], width: max(0, bounds.width - widths[1] - widths[3]),
+                                   height: max(0, bounds.height - widths[0] - widths[2]))
+                // Each radius less the borders beside it. No radius of a layer the size of the border box is that curve.
+                edge = BorderPaint.roundedRect(inner, BorderPaint.contentRadii(sizes, outer: bounds, inner: inner),
+                                               shape: CornerShape(style["corner_shape"]))
+            } else if !clipsItself, sizes.contains(where: { $0.width > 0 && $0.height > 0 }) {
+                if p.scrollRadius > 0 {
+                    radius = p.scrollRadius
+                    curve = p.curve
+                } else {
+                    edge = BorderPaint.roundedRect(bounds, sizes, shape: CornerShape(style["corner_shape"]))
+                }
+            }
         }
         let inset = NSEdgeInsets(top: widths[0], left: widths[3], bottom: widths[2], right: widths[1])
         if surface != nil {
             scroll.clipInsets = inset
             return
-        }
-        var edge: CGPath?
-        if widths.contains(where: { $0 > 0 }) {
-            let inner = CGRect(x: widths[3], y: widths[0], width: max(0, bounds.width - widths[1] - widths[3]),
-                               height: max(0, bounds.height - widths[0] - widths[2]))
-            // Each radius less the borders beside it. No radius of a layer the size of the border box is that curve.
-            edge = BorderPaint.roundedRect(inner, BorderPaint.contentRadii(cornerSizes(in: bounds), outer: bounds, inner: inner),
-                                           shape: CornerShape(style["corner_shape"]))
-            radius = 0
         }
         scroll.clip(toPaddingEdge: edge, inset: inset)
         guard radius > 0 || (scroll.layer?.cornerRadius ?? 0) > 0 else { return }

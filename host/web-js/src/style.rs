@@ -1476,7 +1476,7 @@ mod font_family_error_tests {
             4,
             bridge::BridgeError::StyleKind {
                 style: StyleId::FontFamily,
-                value: exact_plan::Value::Str("Inter, sans-serif".into()),
+                value: exact_plan::Value::str("Inter, sans-serif"),
             },
         );
         assert!(

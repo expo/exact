@@ -386,7 +386,10 @@ extension NodeView {
     /// scale takes them off until it lands.
     package func applyTransform() {
         let flying = flightLook?.scale != nil
-        anchorLayer(centre: presenter?.boxAnimations.playsTransform(id, flying: flying, clock: presenter?.session?.clock) == true)
+        routeGlassTransform()
+        let ownsTransform = presenter?.boxAnimations.playsTransform(id, flying: flying, clock: presenter?.session?.clock) == true
+        layerOwnsTransform = ownsTransform
+        anchorLayer(centre: ownsTransform)
         defer { refreshPressTranslation() }
         defer { overflowClipGeometryChanged() }
         let before = layer?.transform ?? CATransform3DIdentity
@@ -395,6 +398,8 @@ extension NodeView {
         defer { if !backdropOperations.isEmpty { applyBackdrop() } }
         // A frame's web view takes its scale by geometry (`FrameScaleMac.swift`).
         defer { if web != nil { placeWeb() } }
+        // A grouped glass takes the transform by geometry (`GlassGeometryMac.swift`).
+        defer { if materialView != nil { sizeMaterial() } }
         // Flying scaled whole in its clip (LLP 1013.000 D4.4): the flight's
         // scale only, about the layer's origin, the clip's top left.
         if let s = flightLook?.scale {
@@ -418,6 +423,10 @@ extension NodeView {
         let anchor = layer?.anchorPoint ?? .zero
         let origin = transformOriginPoint
         let o = CGPoint(x: origin.x - bounds.width * anchor.x, y: origin.y - bounds.height * anchor.y)
+        if glassGeometry != nil {
+            applyGlassPress()
+            return
+        }
         let geometry = frameGeometryScale
         let s = CGPoint(x: scale.x / geometry.x * pressFactor, y: scale.y / geometry.y * pressFactor)
         if let space = spaceTransform(origin: o, scale: s, shift: lift) {

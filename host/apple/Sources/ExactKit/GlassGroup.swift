@@ -45,13 +45,26 @@ final class GlassGroups {
         let live = groups.count > 0
         guard live || active else { return }
         active = live
+        #if os(macOS)
+        var reconciled: [NodeView] = []
+        #endif
         for _ in 0..<3 {
             var changed = false
             for node in glass.allObjects {
-                if node.reconcileGlass() { changed = true }
+                guard node.reconcileGlass() else { continue }
+                changed = true
+                #if os(macOS)
+                reconciled.append(node)
+                #endif
             }
             if !changed { break }
         }
+        #if os(macOS)
+        // Reconcile transform routing whenever isolation or group membership changed (`GlassGeometryMac.swift`).
+        for node in glass.allObjects where node.glassRoutingChanged || reconciled.contains(where: { $0 === node }) {
+            node.applyTransform()
+        }
+        #endif
         #if os(iOS) || os(tvOS)
         morph()
         #endif
@@ -138,7 +151,8 @@ extension NodeView {
     /// platform would not honour (D4): opacity below 1 or a mask on any view
     /// from the node up, clipping on any view above it (its own bounds hold
     /// its glass), and a canvas's overlay, whose alpha the capture changes
-    /// between batches. Hidden views and transforms are honoured.
+    /// between batches. Hidden views and transforms are honoured; on macOS a
+    /// glass's own 2D transform by its geometry (`GlassGeometryMac.swift`).
     func glassPath() -> (container: NodeView?, reasons: [String]) {
         var reasons: [String] = []
         func note(_ r: String) { if !reasons.contains(r) { reasons.append(r) } }

@@ -97,6 +97,7 @@ pub mod presenter;
 pub mod raster;
 mod safe_area;
 mod scroll_anchor;
+mod snap_changes;
 pub mod snapshot;
 mod sound;
 mod surface_haptics;

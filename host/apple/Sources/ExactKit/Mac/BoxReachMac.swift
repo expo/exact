@@ -43,11 +43,12 @@ extension NodeView {
     /// (`clipsItself`).
     func reachScroll() {
         guard let sv = scroll else { return }
-        if clipsToBounds != clipsItself { clipsToBounds = clipsItself }
+        if surface?.clippedSelf != true, clipsToBounds != clipsItself { clipsToBounds = clipsItself }
         ScrollInsetsMac.moving(sv) {
             sv.frame = scrollFrame
             fitScroll()
         }
+        syncScrollCorner()
     }
 
     /// A click at `point`, in the superview's coordinates, in a scroller's reached strip outside its box: its scroll

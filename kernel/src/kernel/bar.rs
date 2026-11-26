@@ -200,6 +200,24 @@ impl crate::Kernel {
     }
 }
 
+impl crate::Kernel {
+    /// The bars on the scroller `view`'s scrollport (D12), in tree order: what a painted host draws
+    /// in place above its content. None while the kernel lays no bars on scrollports
+    /// ([`Kernel::set_scrollport_bars`]); a walk of the boxes styled as bars, few.
+    pub fn scrollport_bars(&self, view: ViewId) -> Vec<ViewId> {
+        let arena = &self.arena;
+        let Some(slot) = arena.slot_of(view) else {
+            return Vec::new();
+        };
+        let styled = arena.observations.bars.styled.iter();
+        let mut bars: Vec<u32> = styled
+            .filter(|&b| arena.parent(b) == Some(slot) && arena.on_scrollport(b))
+            .collect();
+        bars.sort_by_key(|&b| arena.children(slot).iter().position(|&c| c == b));
+        bars.into_iter().map(|b| arena.local_id(b)).collect()
+    }
+}
+
 impl NodeArena {
     /// Whether `slot` is a bar on its parent's scrollport, which stays in place as the parent's
     /// content scrolls and is drawn above it (D12).
@@ -352,7 +370,7 @@ pub(crate) fn reserved(arena: &NodeArena, parent: u32, via: Option<u32>) -> [f32
     depths
 }
 
-impl super::Kernel {
+impl crate::Kernel {
     /// Measure what each parent of a bar under `root` observes inside its border on the layout
     /// just made, past which its slots begin (D12), keep each measurement where `keep`, and
     /// return the parents whose slots it moves by more than half a device pixel, on an edge

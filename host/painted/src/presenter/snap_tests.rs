@@ -888,3 +888,54 @@ fn a_perpendicular_drag_preserves_the_other_axis_pending_rest() {
     present(&mut p);
     assert_eq!(p.scroll_of(pager), (900., 80.));
 }
+
+#[test]
+fn enabling_mandatory_snap_settles_the_first_picture() {
+    let source = READER_PAGER
+        .replace("if inserted", "if false")
+        .replace("\"x mandatory\"", "(inserted ? \"x mandatory\" : \"none\")");
+    let mut p = boot(&source);
+    assert_eq!(p.snap_layout.probe_paints, 0);
+    let pager = reader_pager(&mut p);
+    p.scroll_to(pager, (260., 0.));
+    present(&mut p);
+    assert_eq!(p.scroll_of(pager), (260., 0.));
+    p.tap(id(&p, "insert")).unwrap();
+    present(&mut p);
+    assert_eq!(p.box_of(pager).unwrap().scroll, Some((400., 0.)));
+    let words = p.reader_scrollers(&[], 1.).unwrap();
+    let row = words
+        .chunks_exact(9)
+        .find(|s| s[0] == pager as i32)
+        .unwrap();
+    assert_eq!(f32::from_bits(row[3] as u32), 400.);
+    assert!(!p.snap_probe_needed());
+}
+
+#[test]
+fn enabling_mandatory_with_a_scroll_request_settles_the_request() {
+    for bound in [false, true] {
+        let mut source = READER_PAGER
+            .replace("if inserted", "if false")
+            .replace("\"x mandatory\"", "(inserted ? \"x mandatory\" : \"none\")");
+        if bound {
+            source = source.replace(
+                "testId=\"pager\"",
+                "testId=\"pager\" scrollLeft=(inserted ? 260 : 0)",
+            );
+        }
+        let mut p = boot(&source);
+        let pager = reader_pager(&mut p);
+        p.tap(id(&p, "insert")).unwrap();
+        if !bound {
+            p.scroll_to(pager, (260., 0.));
+        }
+        present(&mut p);
+        assert_eq!(p.scroll_of(pager), (400., 0.), "bound={bound}");
+        assert!(p.pending_model_scroll(pager).is_none());
+        assert!(!p.snap_probe_needed());
+    }
+}
+
+#[path = "snap_change_tests.rs"]
+mod changes;

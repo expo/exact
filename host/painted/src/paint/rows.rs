@@ -33,6 +33,9 @@ pub struct Dirty {
     renewed: Vec<NodeKey>,
     /// When the latest commit landed, ms (where a numeric roll starts).
     committed: Option<f64>,
+    /// A list a transition moves (a `d`, a `filter`, a clip) presented a
+    /// new value: a retained region's picture of it is stale.
+    moving: bool,
 }
 
 impl Dirty {
@@ -77,6 +80,13 @@ impl Dirty {
     /// A node whose presentation changed.
     pub fn node(&mut self, key: NodeKey) {
         self.hard.push(key);
+    }
+
+    /// A node whose list value a transition moves presented a new one
+    /// (LLP 1003.003 D7): its row, and a retained region's picture, redraw.
+    pub fn moving(&mut self, key: NodeKey) {
+        self.hard.push(key);
+        self.moving = true;
     }
 }
 
@@ -384,6 +394,7 @@ impl Painter {
 
     /// Invalidate the rows reached by the host's changes.
     pub(crate) fn rows_dirty(&mut self, kernel: &Kernel, dirty: Dirty) {
+        self.region_motion += u64::from(dirty.moving);
         if dirty.destroyed {
             self.canvases
                 .readbacks
@@ -792,7 +803,7 @@ impl Painter {
             }
             c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
             // A reaching box paints past its row's recorded bounds: painted again each frame (LLP 1123 D13)
-            c.refused |= shown.reach != [0.; 4];
+            c.refused |= shown.claimed();
         }
     }
 

@@ -54,10 +54,12 @@ impl Painter {
         // A native button's children are its face, painted above (LLP 1069.011 D5).
         let native =
             node.node_type == NodeType::Control && node.props.str(PropId::Type) == Some("button");
+        // @ref LLP 1123 D12 — a scroller's own bars, painted after its content and in place
+        let bars = walk.scene.kernel.scrollport_bars(node.id);
         let mut children: Vec<_> = node
             .children()
             .into_iter()
-            .filter(|id| Some(*id) != lift && !native)
+            .filter(|id| Some(*id) != lift && !native && !bars.contains(id))
             .collect();
         // @ref LLP 1083.000 D5 — a canvas's placed children first, by
         // projective depth, as the web gives them negative indices by
@@ -107,7 +109,40 @@ impl Painter {
         if let Some(child) = lift {
             self.node(walk, child, ts, child_offset, child_rect);
         }
+        if !bars.is_empty() {
+            self.scrollport_bars(walk, node, &bars, ts, child_offset, child_rect);
+        }
         self.kept.pop_space();
+    }
+
+    /// A scroller's own bars (LLP 1123 D12), above its content: unmoved by its scroll offset and clipped to its
+    /// laid-out padding box, which a reach does not grow, so its content scrolls under them while they keep their place.
+    fn scrollport_bars(
+        &mut self,
+        walk: &mut Walk<'_, '_>,
+        node: &NodeRef<'_>,
+        bars: &[ViewId],
+        ts: Transform,
+        child_offset: PaintOffset,
+        child_rect: Option<Rect4>,
+    ) {
+        let scroll = walk.scene.scroll.get(&node.id).copied().unwrap_or_default();
+        let (sx, sy) = super::grid::scroll_offset(scroll, self.grid());
+        let offset = (child_offset.0 - sx, child_offset.1 - sy);
+        let (x, y, w, h) = self.drawn_rect(node, offset);
+        let (l, t, r, b) = walk
+            .scene
+            .kernel
+            .resolved_border(node.key)
+            .unwrap_or_default();
+        let port = (x + l, y + t, (w - l - r).max(0.), (h - t - b).max(0.));
+        let own = super::bbox(ts, port);
+        let clip = child_rect.map_or(own, |c| super::intersect(c, own));
+        self.backend.push_clip(&Shape::rect(port), ts);
+        for &bar in bars {
+            self.node(walk, bar, ts, offset, Some(clip));
+        }
+        self.backend.pop_clip();
     }
 
     /// The row a list carries within itself, painted after its siblings.

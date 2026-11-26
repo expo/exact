@@ -43,7 +43,8 @@
 //! named by `transition` (never `@keyframes` yet), so it is outside
 //! [`Property::ALL`]; a `transition` row carries it by its own code.
 //! `filter` is the same (LLP 1003.002): its slot holds a progress, and the
-//! two lists at its ends are [`crate::filter::FilterValue`]s.
+//! two lists at its ends are [`crate::filter::FilterValue`]s. So is a box's
+//! `clip-path` (LLP 1003.003), whose ends are [`crate::clip::ClipValue`]s.
 
 /// One animatable property.
 #[repr(u8)]
@@ -117,16 +118,21 @@ pub enum Property {
     /// transition's progress from one list to the next; the lists are
     /// [`crate::filter::FilterValue`]s the engine keeps beside it.
     Filter = 29,
+    /// CSS `clip-path` on a box, a `path()` (LLP 1003.003). Its slot's value
+    /// is a running transition's progress from one clip to the next; the
+    /// clips are [`crate::clip::ClipValue`]s the engine keeps beside it.
+    ClipPath = 30,
 }
 
 impl Property {
     /// The property numbered `slot` (its discriminant): every property,
-    /// [`Property::Layout`], [`Property::D`] and [`Property::Filter`] included.
+    /// [`Property::Layout`] and the transition-only lists included.
     pub(crate) fn from_slot(slot: u32) -> Property {
         match slot {
             27 => Property::Layout,
             28 => Property::D,
             29 => Property::Filter,
+            30 => Property::ClipPath,
             slot => Property::ALL[slot as usize],
         }
     }
@@ -167,13 +173,14 @@ impl Property {
     pub const COUNT: usize = 27;
 
     /// How many properties the engine has slots for: the wire's, then
-    /// [`Property::Layout`], [`Property::D`] and [`Property::Filter`].
-    pub const SLOTS: usize = Property::COUNT + 3;
+    /// [`Property::Layout`], then [`Property::TRANSITION_ONLY`].
+    pub const SLOTS: usize = Property::COUNT + 4;
 
     /// The properties `transition` names that no keyframe carries, so
-    /// outside [`Property::ALL`]: a path's `d` and `filter`, each a list
-    /// the engine moves as a progress (LLP 1055.000 D15, LLP 1003.002).
-    pub const TRANSITION_ONLY: [Property; 2] = [Property::D, Property::Filter];
+    /// outside [`Property::ALL`]: a path's `d`, `filter` and a box's
+    /// `clip-path`, each a list the engine moves as a progress (LLP 1055.000
+    /// D15, LLP 1003.002, LLP 1003.003).
+    pub const TRANSITION_ONLY: [Property; 3] = [Property::D, Property::Filter, Property::ClipPath];
 
     /// The paint properties: repainted, never laid out. A native host's
     /// paint pass owns them (LLP 1062 D2): CSS's box colours and
@@ -227,6 +234,7 @@ impl Property {
             Property::Layout => "layout",
             Property::D => "d",
             Property::Filter => "filter",
+            Property::ClipPath => "clip-path",
         }
     }
 

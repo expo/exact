@@ -1140,8 +1140,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Whether a pop recognizer's swipe, starting at `start` in `view` (a
     /// pan's) with `velocity`, may pop: the showing stack's (a tab's, or a
     /// sheet's over it), by its own depth, with an enabled back control in
-    /// its active route (D1), and not a pan a `swiperight` node or a canvas
-    /// owns, nor more vertical than horizontal.
+    /// its active route (D1), and not a pan a `swiperight` node, a canvas, or
+    /// a pointer/pan hit chain whose intersected `touch-action` excludes a
+    /// rightward pan (LLP 1057.001 §1 rules 1–2) owns, nor more vertical than
+    /// horizontal.
     func popMayBegin(_ gestureRecognizer: UIGestureRecognizer, from start: CGPoint?, in view: UIView?, velocity: CGPoint) -> Bool {
         // tvOS has no interactive pop gesture.
         #if os(tvOS)
@@ -1171,18 +1173,68 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             return false
         }
         guard let start, let view else { return true }
-        var overSwipeRight = false
-        var hit = view.hitTest(start, with: nil)
+        let rtl = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let popX: CGFloat = rtl ? -1 : 1
+        let popDirection = CGPoint(x: popX, y: 0)
+        let edgeX = rtl ? view.bounds.width - start.x : start.x
+        let popVelocity = CGPoint(x: popX * velocity.x, y: velocity.y)
+        let hit = view.hitTest(start, with: nil)
         if CanvasInputs.owns(hit) { return false }
-        while let current = hit {
-            // A rightward pan is a `swiperight` node's, and a `swipeleft`
-            // node's while its swipe is caught left of rest, on its way back.
-            if let node = current as? NodeView, node.handlers.contains("swiperight")
-                || (node.handlers.contains("swipeleft") && node.translate.x < -0.5) { overSwipeRight = true; break }
-            if current === view { break }
-            hit = current.superview
+        // Intersect CSS `touch-action` along the placed/authored ancestor chain
+        // through the nearest scroll container inclusive (Pointer Events §9.2;
+        // LLP 1057.001 §1 rule 2), and check UIKit-hierarchy swipe/`pan` owners.
+        var overSwipe = false
+        var hearsPan = false
+        var blocksPopPan = false
+        var intersectPan = true
+        var passedInput = false
+        var current = hit
+        while let cur = current {
+            if let node = cur as? NodeView {
+                if intersectPan {
+                    if !node.allowsTouchPan(popDirection) { blocksPopPan = true }
+                    if Self.isScrollContainer(node) { intersectPan = false }
+                }
+                let action = node.style["touch_action"]?.string ?? "auto"
+                let swipeOwnsDirection = action == "auto" || action == "manipulation" || !node.allowsTouchPan(popDirection)
+                let swipeMatches = rtl
+                    ? (node.handlers.contains("swipeleft") || (node.handlers.contains("swiperight") && node.translate.x > 0.5))
+                    : (node.handlers.contains("swiperight") || (node.handlers.contains("swipeleft") && node.translate.x < -0.5))
+                if !node.disabled, !node.inert, swipeMatches, swipeOwnsDirection {
+                    overSwipe = true
+                }
+                let panActive = node.window != nil ? SwipeInput.allows(node) : (!node.disabled && !node.inert && !node.isHidden && node.isUserInteractionEnabled)
+                if panActive, node.handlers.contains("pan"), swipeOwnsDirection,
+                   !node.hitsNativeEditor(hit), !passedInput {
+                    hearsPan = true
+                }
+                if node.field != nil || node.textArea != nil { passedInput = true }
+            }
+            current = presenter.authoredParent(of: cur) ?? cur.superview
         }
-        return NavigationRules.panMayBegin(startX: start.x, overSwipeRight: overSwipeRight, velocity: velocity)
+        // Pointer handlers bubble along the declared authored chain (`authoredNodes`),
+        // which follows `MountRelay` portals and ignores ancestor `disabled` and
+        // modal-background inertness (matching `PointerRecognizer` in PointerIOS.swift).
+        #if os(iOS)
+        let startNode = hit.flatMap(NodeView.innermost)
+        let hearsPointer = hit.map {
+            presenter.authoredNodes(from: $0).contains { node in
+                !node.disabled && !(node === startNode ? node.inert : node.authoredInert)
+                    && !node.handlers.isDisjoint(with: ["pointerdown", "pointermove", "pointerup", "pointercancel"])
+            }
+        } ?? false
+        #else
+        let hearsPointer = false
+        #endif
+        if (hearsPointer || hearsPan) && blocksPopPan { overSwipe = true }
+        return NavigationRules.panMayBegin(startX: edgeX, overSwipeRight: overSwipe, velocity: popVelocity)
+    }
+
+    private static func isScrollContainer(_ node: NodeView) -> Bool {
+        if node.scrollView != nil { return true }
+        let scrolls: Set<String> = ["auto", "scroll", "hidden"]
+        return scrolls.contains(node.style["overflow_x"]?.string ?? "")
+            || scrolls.contains(node.style["overflow_y"]?.string ?? "")
     }
 
     /// UIKit's push or pop on `nav`, while it runs: its coordinator presents
