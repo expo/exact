@@ -2322,3 +2322,11 @@ and the Linux headless CPU renderer without claiming display frame timing.
 - Reload a JS dev page when its producer restarts at an equal or lower sequence. Leave build 1 open, restart the loop with different content at the same port and the same sequence, and reconnect. The tab keeps the old document.
 - Restore the command and replacement test fixtures' runtime dependencies. Run the saved-scheme and held-press cases in `host/web-js/commands.test.mjs` and `host/web/replacement.test.mjs` for the missing `clock`, `HAS_PACKAGE_VIEWS` and `shortcutKeyboard`.
 - Measure the real gallery and numbered wasm browser tests separately on a warm and a cold checkout. Record missing browser coverage when neither engine is installed and the tests return without a drive.
+
+- On UIKit, put a `pointerdown` and `pointerup` listener on each of two sibling cells. Touch one cell with each finger and lift both. The app receives two downs and two ups while a single list listener sees one pair (expo/exact#1804).
+- `bun scripts/completion-inventory.mjs --check` on 113258eb6 reports six stale painted classifications for access helpers and `drag_of`.
+- On an iPad trackpad, pinch off-center over a moving grid and compare the focal point at release with the last gesture change (#1804).
+- On a grouped UIKit list, drift a pinching pair, stagger the lifts and compare the collection view's release and settled offsets (#1804).
+- On UIKit, add a pinch listener to a child after the first touchdown inside it. Land the second finger there, spread and count releases on the child and its already-bound parent (#1804).
+- On UIKit, land a third finger during a scrolling pinch, lift the original pair, then move and fling with the third finger. Compare its travel with an ordinary one-finger fling (#1804).
+- Put a web `contenteditable=""` or `contenteditable="plaintext-only"` region beneath a pinch listener and check that pinching inside it leaves the gesture with the editor (#1804).

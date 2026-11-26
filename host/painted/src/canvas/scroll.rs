@@ -156,6 +156,27 @@ impl<D: DataSource + Default> CanvasHost<D> {
             .map(|k| words[3 + 11 * k] as exact_kernel::ViewId)
             .collect();
         words.extend(self.p.reader_snaps(&ids, self.scale));
+        let session = self.p.brush.native_session;
+        let hears = match self.pinch_plan {
+            Some((known, hears)) if known == session => hears,
+            _ => {
+                let hears = self.p.host.runner().plan().handlers.iter().any(|h| {
+                    matches!(
+                        h.event,
+                        exact_plan::EventKind::Pinch | exact_plan::EventKind::Pinchrelease
+                    )
+                });
+                self.pinch_plan = Some((session, hears));
+                hears
+            }
+        };
+        if hears {
+            words[0] |= 128;
+            let owners = self.pinch_path(x, y);
+            let size = owners.len() as i32;
+            words.extend(owners);
+            words.push(size);
+        }
         words
     }
 
@@ -253,6 +274,41 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if let Some(error) = self.p.reader_refresh(id) {
             self.p.host_mut().log(error);
         }
+    }
+
+    /// Enabled listeners on this touchdown path, innermost first. Keys are scoped to the native session.
+    pub fn pinch_path(&mut self, x: f32, y: f32) -> Vec<i32> {
+        self.p
+            .pinch_listeners(x / self.scale, y / self.scale)
+            .into_iter()
+            .flat_map(|(key, session)| {
+                [
+                    key.index as i32,
+                    key.generation as i32,
+                    session as i32,
+                    (session >> 32) as i32,
+                ]
+            })
+            .collect()
+    }
+
+    /// A scale detector sample in Android window pixels.
+    pub fn pinch(
+        &mut self,
+        target: (exact_kernel::NodeKey, u64),
+        released: bool,
+        scale: f32,
+        x: f32,
+        y: f32,
+    ) {
+        self.p.report_pinch(
+            target,
+            released,
+            scale.into(),
+            (x / self.scale).into(),
+            (y / self.scale).into(),
+            self.now(),
+        );
     }
 
     /// The reader's pinch of zoomable scroller `id` (LLP 1057.001.000 §5):

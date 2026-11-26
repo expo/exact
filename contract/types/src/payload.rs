@@ -43,6 +43,7 @@ fn payload(event: &str, control: Option<&str>) -> Vec<(&'static str, &'static st
         ("navigate", _) => one("location", "string", "the location"),
         ("scroll", _) => numbers(&["scrollLeft", "scrollTop"]),
         ("resize", _) => numbers(&["width", "height"]),
+        ("pinch" | "pinchrelease", _) => numbers(&["scale", "x", "y"]),
         ("pan", _) => numbers(&["dx", "dy"]),
         ("panrelease", _) => numbers(&["vx", "vy"]),
         ("heightrelease", _) => numbers(&["height", "velocity"]),

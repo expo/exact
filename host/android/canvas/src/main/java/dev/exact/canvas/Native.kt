@@ -202,6 +202,9 @@ object Native {
     @JvmStatic external fun refresh(id: Int)
     /** The fling a drag of scroller [id] threw stopped: at rest, caught by a finger, or ended by the app's scroll. */
     @JvmStatic external fun flingEnded(id: Int)
+    @JvmStatic external fun pinchPath(x: Float, y: Float): IntArray
+    @JvmStatic external fun pinch(index: Int, generation: Int, session: Long, released: Boolean, scale: Float, x: Float, y: Float)
+
     /** A pinch of zoomable scroller [id] (LLP 1057.001.000 §5; [Zooming]): [phase] 0 it began, 1 it scaled by
      * [factor] while its focal point moved from ([x0], [y0]) to ([x1], [y1]) px, 2 it ended. */
     @JvmStatic external fun zoom(id: Int, phase: Int, factor: Float, x0: Float, y0: Float, x1: Float, y1: Float)

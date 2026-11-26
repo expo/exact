@@ -95,6 +95,14 @@ package struct SafeIndicatorTerm {
 /// wheel (the agent's) applies the web's chaining rule itself
 /// (`AgentIOS.swift`).
 package class ScrollView: UIScrollView, SafeIndicators {
+    #if os(iOS)
+    var pinchLift: PinchLift? {
+        didSet {
+            if let oldValue { panGestureRecognizer.removeTarget(oldValue, action: #selector(PinchLift.panChanged)) }
+            if let pinchLift { panGestureRecognizer.addTarget(pinchLift, action: #selector(PinchLift.panChanged)) }
+        }
+    }
+    #endif
     var scrollingNode: NodeView? { (superview as? NodeView) ?? (self as? Viewport)?.documentNode }
     /// Where it last came to rest along x and y, and on which snap area (`ScrollSnapIOS.swift`).
     var snapRested = [ScrollSnap.Rested(), ScrollSnap.Rested()]

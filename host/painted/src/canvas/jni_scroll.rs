@@ -124,6 +124,47 @@ macro_rules! canvas_jni_scroll {
             };
         }
 
+        /// Listener keys for a finger as it lands.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_pinchPath(
+            env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            x: f32,
+            y: f32,
+        ) -> $crate::canvas::jni_sys::jintArray {
+            ints(env, &with(|h| h.pinch_path(x, y)).unwrap_or_default())
+        }
+
+        /// The scale detector's sample beside the reader's own scroll.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_pinch(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            index: i32,
+            generation: i32,
+            session: i64,
+            released: $crate::canvas::jni_sys::jboolean,
+            scale: f32,
+            x: f32,
+            y: f32,
+        ) {
+            with(|h| {
+                h.pinch(
+                    (
+                        $crate::canvas::ModuleKey {
+                            index: index as u32,
+                            generation: generation as u32,
+                        },
+                        session as u64,
+                    ),
+                    released != 0,
+                    scale,
+                    x,
+                    y,
+                )
+            });
+        }
+
         /// The reader's pinch of zoomable scroller `id`
         /// (`CanvasHost::zoom`; px).
         #[no_mangle]

@@ -136,6 +136,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             settling: false,
             force: false,
             scroll_hold: super::scroll::ScrollHold::default(),
+            pinch_plan: None,
             input_clock: Default::default(),
             prefetching: false,
             quiet: None,

@@ -628,6 +628,8 @@ pub(crate) fn handler_attr(name: &str) -> bool {
             | "scrolldragend"
             | "pan"
             | "panrelease"
+            | "pinch"
+            | "pinchrelease"
             | "heightrelease"
             | "transformgeometry"
             | "transformrelease"
@@ -843,6 +845,7 @@ fn refine_params_from_view(
                             "scroll" | "pan" | "panrelease" | "heightrelease" | "resize" => {
                                 vec![Ty::Number, Ty::Number]
                             }
+                            "pinch" | "pinchrelease" => vec![Ty::Number; 3],
                             "transformgeometry" => vec![Ty::Number; 4],
                             "transformrelease" => vec![Ty::Number; 6],
                             "reorderdrop" => vec![Ty::String, Ty::Option(Box::new(Ty::String))],

@@ -2273,6 +2273,7 @@ host.
 | One `MarkdownSelection` | `select` on the Markdown editor (`textarea markup="markdown"`) |
 | One `InputEvent` | `select` on a text field or any other `textarea` ([form controls](#form-controls-radio-inputevent-setselectionrange)) |
 | Two numbers | `pan`, `panrelease`, `heightrelease` |
+| Three numbers | `pinch`, `pinchrelease` (scale, viewport x, viewport y) |
 | A string, an `option<string>`, then optionally a `ReorderEvent` | `reorderdrop`, on a vertical `list virtualized=true` only: the dragged row's key, then the key it lands before (`none` at the end); an action taking one more parameter also hears `ReorderEvent { from, to }`, the two lists' `id`s (equal within one list; LLP 1094 D2) |
 | Four numbers | `transformgeometry` |
 | Six numbers | `transformrelease` |
@@ -2501,6 +2502,17 @@ many visits). On macOS a way withheld is no swipe AppKit tracks, so no
 web's history is the browser's, and the other hosts ignore it. Transform geometry/release
 bindings are required as a pair. See
 [`handler_arity`](../contract/analyze/src/lib.rs) and the corresponding corpus/tests.
+
+Any node, including a `list` or `scroll`, can bind `pinch=action` and
+`pinchrelease=action` independently. Each appends `(scale, x, y)` after any
+bound arguments. Scale is positive and relative to the initial span (1). The focal point
+uses `PointerEvent.clientX` and `clientY` coordinates. Movement reports
+`pinch`. The first lift ends the pair with one `pinchrelease` with the scale and focal point
+from the last moment both fingers were down. Cancellation releases at scale 1. Both
+bindings observe alongside one-finger scrolling and pointer events. On the JS web
+target use `touch-action="pan-y"` for a vertical list. Where CSS allows browser
+pinch zoom, the browser owns the gesture. Once the browser cancels a touch to
+scroll, a second finger cannot start a reporting pinch with that touch.
 
 ### Pointer
 

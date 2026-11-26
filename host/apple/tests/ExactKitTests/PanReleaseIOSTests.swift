@@ -38,6 +38,22 @@ final class PanReleaseIOSTests: XCTestCase {
         for (state, x) in steps { pan.phase = state; pan.moved = CGPoint(x: x, y: 0); node.layoutPanning(pan) }
     }
 
+    func testReportingPinchObservesAlongsideTheScrollPan() throws {
+        let (_, node) = host(["pinchrelease"])
+        let pinch = try XCTUnwrap(node.extras?.reportingPinch)
+        let scroll = UIScrollView().panGestureRecognizer
+        XCTAssertFalse(pinch.cancelsTouchesInView)
+        XCTAssertFalse(pinch.delaysTouchesBegan)
+        XCTAssertFalse(pinch.delaysTouchesEnded)
+        XCTAssertFalse(pinch.canPrevent(scroll))
+        XCTAssertFalse(pinch.canBePrevented(by: scroll))
+        XCTAssertTrue(pinch.gestureRecognizer(pinch, shouldRecognizeSimultaneouslyWith: scroll))
+        node.handlers = ["pinch"]
+        XCTAssertTrue(node.extras?.reportingPinch === pinch)
+        node.handlers = []
+        XCTAssertNil(pinch.view)
+    }
+
     func testAnEndedPanReleasesOnceAfterItsFinalDeltaAtUIKitsVelocity() throws {
         let (p, node) = host(["pan", "panrelease"])
         XCTAssertNotNil(node.layoutPanRecognizer)

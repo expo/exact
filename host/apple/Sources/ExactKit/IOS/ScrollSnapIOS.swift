@@ -19,6 +19,13 @@ extension NodeView {
         }
         var start = dragStart(scrollView)
         #if os(iOS)
+        if let scroll = scrollView as? ScrollView, let lift = scroll.pinchLift {
+            scroll.pinchLift = nil
+            if lift.endsPinch {
+                targetContentOffset.pointee = scroll.contentOffset
+                listVelocity = .zero
+            }
+        }
         if let list = (heightRecognizer as? SheetScrollGesture)?.listDrag(in: scrollView) {
             start.y = list.start
             if list.atStart {

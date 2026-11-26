@@ -136,3 +136,20 @@ fn a_cancelled_pan_releases_at_rest() {
     p.pointer_up(160., 100., 500.).unwrap();
     assert_eq!(out(&p), vec![60., 60., 0., 2., 1.]);
 }
+
+#[test]
+fn reporting_pinch_holds_the_common_listener() {
+    let source = SOURCE.replace("pan=moved panrelease=released", "pinch=sample pinchrelease=sample")
+        .replace("  action pressed", "  action sample(scale, cx, cy)\n    x = scale\n    vx = cx\n    vy = cy\n    releases = releases + 1\n  action pressed");
+    let source = source.replace("text \"drag me\"", "box width=100 height=100 pinch=sample");
+    let mut p = boot(&source);
+    let child_path = p.pinch_listeners(10., 10.);
+    let sibling_path = p.pinch_listeners(200., 20.);
+    let target = sibling_path[0];
+    assert_eq!(child_path.len(), 2);
+    assert_eq!(child_path[1], target);
+    assert_ne!(child_path[0], target);
+    p.report_pinch(target, false, 1.5, 90., 30., 10.);
+    p.report_pinch(target, true, 1., 94., 33., 20.);
+    assert_eq!(out(&p), [1., 94., 33., 2., 0.]);
+}

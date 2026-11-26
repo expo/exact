@@ -83,6 +83,66 @@ impl<D: DataSource> Presenter<D> {
         None
     }
 
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn pinch_listeners(&mut self, x: f32, y: f32) -> Vec<(exact_kernel::NodeKey, u64)> {
+        let Some(hit) = self.hit(x, y) else {
+            return Vec::new();
+        };
+        let kernel = self.host.kernel();
+        let mut at = Some(hit);
+        let mut owners = Vec::new();
+        if self.host.route_visibility(hit).1 {
+            return owners;
+        }
+        while let Some(id) = at {
+            let Some(node) = kernel.node(id) else { break };
+            let events = self.host.runner().handlers_of(id);
+            if node.props.bool(PropId::Disabled) != Some(true)
+                && (events.contains(&EventKind::Pinch) || events.contains(&EventKind::Pinchrelease))
+            {
+                owners.push((node.key, self.brush.native_session));
+            }
+            if matches!(node.node_type, NodeType::TextInput | NodeType::Control) {
+                break;
+            }
+            at = self.listener_parent(kernel, id);
+        }
+        owners
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn report_pinch(
+        &mut self,
+        (key, session): (exact_kernel::NodeKey, u64),
+        released: bool,
+        scale: f64,
+        x: f64,
+        y: f64,
+        now: f64,
+    ) {
+        if session != self.brush.native_session || !self.host.retained_action_eligible(key) {
+            return;
+        }
+        let Some(id) = self.host.kernel().node_by_key(key).map(|n| n.id) else {
+            return;
+        };
+        let (kind, event) = if released {
+            (EventKind::Pinchrelease, Event::PinchRelease(scale, x, y))
+        } else {
+            (EventKind::Pinch, Event::Pinch(scale, x, y))
+        };
+        if self.host.runner().handlers_of(id).contains(&kind) {
+            self.dirty = true;
+            if let Some(error) = self
+                .host
+                .dispatch_at(id, event, now)
+                .or(self.after_commit())
+            {
+                self.host.log(error);
+            }
+        }
+    }
+
     /// The record of a viewport point as `view` sees it, from its content
     /// box, and the viewport point itself (`clientX`, LLP 1094 D11): the
     /// button that changed (DOM's number, -1 for none) and those held.

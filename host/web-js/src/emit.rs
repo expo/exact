@@ -1385,6 +1385,7 @@ impl Em<'_> {
                 | EventKind::Scroll
                 | EventKind::Refresh
                 | EventKind::Pan
+                | EventKind::Pinch | EventKind::Pinchrelease
                 | EventKind::Toggle
                 | EventKind::Cancel
                 | EventKind::Close
@@ -1443,8 +1444,7 @@ impl Em<'_> {
                 format!("{action}.t(()=>[{}])", args.join(","))
             };
             // The motion and input pieces' events (rt.js), only where used.
-            let piece = crate::events::piece(h.event);
-            if let Some(piece) = piece {
+            if let Some(piece) = crate::events::piece(h.event) {
                 let f = self.uses.rt(piece);
                 let _ = write!(self.out, "{f}({e},{handler});");
                 continue;

@@ -632,6 +632,7 @@ uint32_t exact_share_land(ExactRuntime rt);
  * 19 = media (UTF-8 event name, newline, payload; numeric times in seconds),
  * 21 = select (formats + newline + mixed 0/1 + newline + unavailable + newline + link);
  * 22 = refresh (the platform's pull-to-refresh control fired; no payload);
+ * 67 = pinch, 68 = pinchrelease (UTF-8 scale,clientX,clientY).
  * 28 = panrelease (UTF-8 vx,vy; px/s, once when a pan that began ends; a
  *      cancelled contact releases at 0,0; LLP 1057 §10.6);
  * 29 = pointerdown, 30 = pointerup, 31 = pointermove, 65 = pointercancel (UTF-8

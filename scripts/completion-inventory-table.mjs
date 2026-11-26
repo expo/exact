@@ -130,9 +130,9 @@ export const classifications = [
       "Java_dev_exact_canvas_Native_touching"],
     ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_key Java_dev_exact_canvas_Native_namedKey"],
     ["painted:host/painted/src/canvas/jni_pad.rs", "Java_dev_exact_canvas_Native_pad"],
-    ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_scrollDrag Java_dev_exact_canvas_Native_sheetDrag Java_dev_exact_canvas_Native_snapTarget"],
+    ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_pinch Java_dev_exact_canvas_Native_pinchPath Java_dev_exact_canvas_Native_scrollDrag Java_dev_exact_canvas_Native_sheetDrag Java_dev_exact_canvas_Native_snapTarget"],
     ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::back CanvasHost::back_progress CanvasHost::key CanvasHost::named_key CanvasHost::open CanvasHost::pad"],
-    ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::drag_began CanvasHost::drag_ended CanvasHost::fling_ended CanvasHost::moved CanvasHost::refresh CanvasHost::scrolled CanvasHost::scrollers CanvasHost::sheet_drag CanvasHost::snap_target CanvasHost::snaps_around CanvasHost::under"],
+    ["painted:host/painted/src/canvas/scroll.rs", "CanvasHost::drag_began CanvasHost::drag_ended CanvasHost::fling_ended CanvasHost::moved CanvasHost::pinch CanvasHost::pinch_path CanvasHost::refresh CanvasHost::scrolled CanvasHost::scrollers CanvasHost::sheet_drag CanvasHost::snap_target CanvasHost::snaps_around CanvasHost::under"],
     ["painted:host/painted/src/height_binding.rs", "Host::dispatch_height_held"],
     ["painted:host/painted/src/holds.rs", "Host::dispatch_held Host::dispatch_retained"],
     ["painted:host/painted/src/host.rs", "Host::boot_decoded Host::dispatch_at Host::dispatch_now"],
@@ -183,7 +183,7 @@ export const classifications = [
       "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_dropped Presenter::drag_event Presenter::drag_flush " +
       "Presenter::drag_left Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_owner " +
       "Presenter::drop_released Presenter::dropped Presenter::field_drop"],
-    ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
+    ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch Presenter::report_pinch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
     ["painted:host/painted/src/presenter/replacement.rs", "Presenter::buttons_released Presenter::pointer_released Presenter::reader_touch Presenter::set_touching"],
     ["painted:host/painted/src/presenter/height_drag.rs", "Presenter::take_height_scroll_release"],
@@ -469,7 +469,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/painter.rs",
       "Presenter::apple_painter_can_draw Presenter::apple_painter_retry_deadline Presenter::apple_painter_starting Presenter::apple_window_frame " +
       "Presenter::attach_apple_layer Presenter::attach_painter_window Presenter::displayed_process_ms Presenter::prepare_window_show Presenter::suspend_window_painter"],
-    ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_node"],
+    ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pinch_listeners Presenter::pointer_node"],
     ["painted:host/painted/src/presenter/preferences.rs", "Presenter::dark"],
     ["painted:host/painted/src/presenter/remote.rs", "Presenter::container Presenter::remote"],
     ["painted:host/painted/src/presenter/retained_action.rs", "Presenter::retained_captured_route"],

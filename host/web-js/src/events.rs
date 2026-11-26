@@ -27,6 +27,8 @@ pub(crate) fn piece(event: EventKind) -> Option<&'static str> {
         EventKind::Swiperight => Some("onSwipe"),
         EventKind::Swipeleft => Some("onSwipeLeft"),
         EventKind::Pan => Some("onPan"),
+        EventKind::Pinch => Some("onPinch"),
+        EventKind::Pinchrelease => Some("onPinchRelease"),
         EventKind::Panrelease => Some("onPanRelease"),
         EventKind::Select => Some("onSelect"),
         EventKind::Heightrelease => Some("onHeight"),

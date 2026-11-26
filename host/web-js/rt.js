@@ -72,6 +72,7 @@ export * from './resources.js';
 export * from './tree.js';
 export * from './events.js';
 export * from './pieces.js';
+export { onPinch, onPinchRelease } from './pinch.js';
 export * from './mount.js';
 export * from './strings.js';
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.

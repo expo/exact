@@ -553,6 +553,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "scrolldragstart" => AttrTarget::Handler("scrolldragstart"),
         "scrolldragend" => AttrTarget::Handler("scrolldragend"),
         "pan" => AttrTarget::Handler("pan"),
+        "pinch" => AttrTarget::Handler("pinch"),
+        "pinchrelease" => AttrTarget::Handler("pinchrelease"),
         "panrelease" => AttrTarget::Handler("panrelease"),
         "navigate" => AttrTarget::Handler("navigate"),
         // @ref LLP 1115.000 D5.5 — the history swipe the host tracks.
@@ -1051,9 +1053,7 @@ pub fn renamed(old: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-// A list's row-size estimate is the virtualized list's host policy (LLP 1010
-// §6.5); the fixed-height windowed list it once also named is deleted (LLP
-// 1070 stage 1), so a hint without `virtualized=true` says how to migrate.
+// A row estimate on the former fixed-height list needs a migration to `virtualized=true` (LLP 1010 §6.5, LLP 1070 stage 1).
 pub(crate) fn validate_list(
     tag: &str,
     expanded: &[contract_syntax::Attr],

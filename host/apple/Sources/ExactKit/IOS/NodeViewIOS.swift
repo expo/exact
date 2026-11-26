@@ -131,6 +131,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             if handlers.contains("scroll") || handlers.contains("scrollend") { needScroll() }
             #if !os(tvOS)
             updateDiscreteSwipe()
+            updateReportingPinch()
             if handlers.contains("hover"), hoverRecognizer == nil {
                 let g = UIHoverGestureRecognizer(target: self, action: #selector(hovering(_:)))
                 // Hover observes pointer movement; it must never hold or cancel
@@ -720,6 +721,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package var grid: GridPlace?
 
     package func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        #if os(iOS)
+        if let scroll = scrollView as? ScrollView, scroll.pinchLift?.hasContact == false { scroll.pinchLift = nil }
+        #endif
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
         presenter?.elementScrolls.userScrolled(scrollView) // its own scroller, or a grouped list's collection
         guard scrollView === self.scrollView else { return }

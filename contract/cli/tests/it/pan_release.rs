@@ -94,3 +94,77 @@ fn panrelease_takes_two_numeric_payload_parameters() {
     let untyped = "component App\n  state x = 0\n  action done(vx, vy)\n    x = vx + vy\n  view\n    box panrelease=done\n";
     contract::compile(untyped).unwrap();
 }
+
+#[test]
+fn pinch_bindings_append_scale_and_viewport_point_on_any_node() {
+    for tag in ["box", "scroll", "list"] {
+        let src = format!("component App\n  state result = 0\n  action report(base, s, x, y)\n    result = base + s + x + y\n  view\n    {tag} height=100 testId=\"target\" pinch=report(100) pinchrelease=report(200)\n");
+        let mut runner = Runner::boot(
+            contract::compile(&src).unwrap(),
+            boxed(Empty),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let key = runner.kernel().find_by_test_id("target")[0];
+        let id = runner.kernel().node_by_key(key).unwrap().id;
+        for (kind, want) in [(67, 116), (68, 216)] {
+            runner
+                .dispatch(id, Event::of_host_kind(kind, "2,5,9").unwrap())
+                .unwrap();
+            assert!(exact_runner::agent::state(&runner).contains(&format!("\"result\":{want}")));
+            for bad in [
+                "0,5,9", "-1,5,9", "inf,5,9", "NaN,5,9", "1,NaN,9", "2,3", "2,3,4,5",
+            ] {
+                assert!(Event::of_host_kind(kind, bad).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn pinch_takes_three_numbers_and_warns_when_browser_owns_zoom() {
+    for binding in ["pinch", "pinchrelease"] {
+        let source = |params: &str, css: &str| {
+            format!("component App\n  state heard = false\n  action report({params})\n    heard = true\n  view\n    scroll height=100 {binding}=report touch-action=\"{css}\"\n")
+        };
+        let explicit = source("s, x, y", "auto");
+        for (case, warning) in [
+            (explicit.replace(" touch-action=\"auto\"", ""), true),
+            (
+                explicit.replace(
+                    "    scroll",
+                    "    column touch-action=\"pan-y\"\n      scroll",
+                ),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                super::warnings::warned(&case)
+                    .iter()
+                    .any(|(id, _)| id == "lower-pinch-touch-action"),
+                warning
+            );
+        }
+        for bad in ["s, x", "s, x, y, z", "s: string, x: number, y: number"] {
+            assert!(contract::compile(&source(bad, "pan-y")).is_err());
+        }
+        for (css, warning) in [
+            ("auto", true),
+            ("pinch-zoom", true),
+            ("manipulation", true),
+            ("pan-y", false),
+            ("none", false),
+        ] {
+            let findings = super::warnings::warned(&source("s, x, y", css));
+            assert_eq!(
+                findings
+                    .iter()
+                    .any(|(name, _)| name == "lower-pinch-touch-action"),
+                warning,
+                "{binding} {css}"
+            );
+        }
+    }
+}

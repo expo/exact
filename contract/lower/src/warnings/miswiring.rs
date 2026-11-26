@@ -485,3 +485,52 @@ pub(super) fn image_source(positional: Option<&Expr>, fresh: bool, out: &mut Vec
         span: *span,
     });
 }
+
+pub(super) fn browser_zoom(attrs: &[Attr], styles: &[contract_syntax::StyleDecl]) -> bool {
+    if !attrs
+        .iter()
+        .any(|a| matches!(a.name.as_str(), "class" | "touch-action"))
+    {
+        return true;
+    }
+    let classes = crate::class::rows(
+        attrs,
+        &|name| {
+            styles
+                .iter()
+                .find(|s| s.name == name)
+                .map(|s| s.attrs.as_slice())
+        },
+        &[],
+    )
+    .ok()
+    .flatten();
+    let value = attrs
+        .iter()
+        .rev()
+        .find(|a| a.name == "touch-action")
+        .or_else(|| {
+            classes
+                .as_ref()?
+                .1
+                .iter()
+                .rev()
+                .find(|a| a.name == "touch-action")
+        });
+    let Some(value) = value else { return true };
+    let Expr::Str(s, _) = &value.value else {
+        return false;
+    };
+    exact_kernel::TouchAction::from_name(s).is_some_and(|action| action.pinch_zoom())
+}
+
+pub(super) fn pinch(attrs: &[Attr]) -> Option<LowerError> {
+    let handler = attrs
+        .iter()
+        .find(|a| matches!(a.name.as_str(), "pinch" | "pinchrelease"))?;
+    Some(LowerError {
+        id: "lower-pinch-touch-action",
+        span: handler.span,
+        message: "the browser can take pinch zoom here. Use touch-action=\"pan-y\" for a vertical scroller that reports a touch pinch on the web".into(),
+    })
+}

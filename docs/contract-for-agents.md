@@ -5617,6 +5617,9 @@ Computed animation longhands cannot accompany a literal list in `animation` or
 another longhand. For a list that changes with state, compute the complete `animation`
 shorthand, including each animation's play state or duration.
 
+A touch pinch reports its scale and viewport midpoint alongside a scroll.
+Use `pinchrelease` to [change a grid’s columns](#changing-a-grids-columns) when either finger lifts.
+
 For drawing and pointer-tracking, `pointerdown`, `pointermove` and `pointerup`
 hand an action that takes it a `PointerEvent` (`offsetX`/`offsetY` from the
 node's content box, `button` and `buttons`, `pressure`, `pointerType`,
@@ -5745,6 +5748,42 @@ Windows and the terminal have no tip system and show none: put nothing essential
 A plan that binds `tip` links the `tips` capability (TipKit and SwiftUI on Apple). The
 driver's `state.tips` lists each tip's TipKit status, whether it shows and what it points
 at. Recipe: `tips`.
+
+#### Changing a grid's columns
+
+Pocket Lab groups frames into fixed-height rows keyed by row number. Give
+each cell its frame's stable id (`frame-0`, `frame-1`, …). Before changing
+columns, read the hit cell and its vertical position inside the grid. The
+keyed scroll restores that position for the frame's new row. Its column
+follows its index in the new layout. This example uses an untransformed
+list with zero border and padding. The wheel's offsets are from its content box.
+
+```contract
+component Grid
+  state columns = 4
+  state wheelColumns = 4
+  action reflow(next: number, x: number, y: number)
+    let cell = match elementsFromPoint(x, y).filter(id => id.startsWith("frame-")).at(0) { case some(id) => id, case none => "" }
+    let index = match parseNumber(cell.slice(6)) { case some(n) => n, case none => -1 }
+    if index >= 0 and next != columns
+      let top = frame(cell).y - frame("grid").y
+      columns = next
+      scrollIntoView("grid", floor(index / next), offset=-top)
+  action pinched(scale: number, x: number, y: number)
+    reflow(min(7, max(2, round(columns / scale))), x, y)
+    wheelColumns = columns
+  action wheelZoom(e: WheelEvent)
+    if e.ctrlKey and e.deltaY != 0
+      preventDefault()
+      wheelColumns = min(7, max(2, wheelColumns + e.deltaY / 100))
+      reflow(round(wheelColumns), frame("grid").x + e.offsetX, frame("grid").y + e.offsetY)
+  view
+    list id="grid" appearance="none" virtualized=true height="100%" touch-action="pan-y" pinchrelease=pinched wheel=wheelZoom
+      for r in range(ceil(10000 / columns)) key=r
+        row
+          for c in range(min(columns, 10000 - r * columns)) key=c
+            box id=`frame-${r * columns + c}` width=`${100 / columns}%` height=80
+```
 
 #### A list inside a draggable sheet on iOS
 

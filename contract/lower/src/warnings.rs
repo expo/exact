@@ -105,11 +105,12 @@ fn guards_in<'a>(guards: &[&'a Expr], bindings: Binds<'_>) -> Vec<&'a Expr> {
         .collect()
 }
 
-type WarningContext<'a> = (bool, Option<&'a str>, Vec<&'a Expr>);
+type WarningContext<'a> = (bool, Option<&'a str>, Vec<&'a Expr>, bool);
 
 fn warning_regions<'a>(
     node: Visit<'a>,
-    (in_root, back, guards): &WarningContext<'a>,
+    (in_root, back, guards, browser_zoom): &WarningContext<'a>,
+    styles: &[contract_syntax::StyleDecl],
 ) -> [Option<WarningContext<'a>>; 2] {
     let (in_root, mut back) = (*in_root, *back);
     if let Some((_, _, attrs)) = node.element() {
@@ -117,15 +118,25 @@ fn warning_regions<'a>(
         if keyed && !in_root {
             back = literal(attrs, "navigationBack").filter(|name| !name.is_empty());
         }
-        let inner = (in_root || keyed, back, guards.clone());
+        let inner = (
+            in_root || keyed,
+            back,
+            guards.clone(),
+            *browser_zoom && miswiring::browser_zoom(attrs, styles),
+        );
         return [Some(inner), None];
     }
     let [then_bindings, else_bindings] = node.bindings();
     let mut then = guards_in(guards, then_bindings);
     then.extend(node.condition().into_iter().flat_map(ruled_out));
     [
-        Some((in_root, back, then)),
-        Some((in_root, back, guards_in(guards, else_bindings))),
+        Some((in_root, back, then, *browser_zoom)),
+        Some((
+            in_root,
+            back,
+            guards_in(guards, else_bindings),
+            *browser_zoom,
+        )),
     ]
 }
 
@@ -145,13 +156,16 @@ pub(crate) fn with_text_styles(
     let controlled = roles::controlled(&checked_view);
     crate::menu_rows::notes(&checked_view, &mut out);
     crate::symbols::tints(&root.view, checked.file, lowered, &mut out);
-    let start = (false, None, Vec::new());
+    let start = (false, None, Vec::new(), true);
     let visits = checked_view
         .structure()
-        .walk_regions_with(start, warning_regions);
+        .walk_regions_with(start, |node, context| {
+            warning_regions(node, context, &checked.file.styles)
+        });
     let (mut seen, mut platform) = (BTreeSet::new(), Vec::new());
+    let mut seen_pinch = BTreeSet::new();
     let mut seen_buttons = BTreeSet::new();
-    for (visit, (in_root, back, guards)) in visits {
+    for (visit, (in_root, back, guards, browser_zoom)) in visits {
         if let Some((tag, positional, attrs)) = visit.element() {
             // A component used twice is inlined twice: one line for its source.
             let span = visit.span();
@@ -175,6 +189,14 @@ pub(crate) fn with_text_styles(
             out.extend(roles::keys(attrs, visit, span, &controlled).filter(|_| fresh));
             if fresh {
                 line_height::multiplier(attrs, &mut out);
+            }
+            if browser_zoom
+                && attrs
+                    .iter()
+                    .any(|a| matches!(a.name.as_str(), "pinch" | "pinchrelease"))
+                && miswiring::browser_zoom(attrs, &checked.file.styles)
+            {
+                out.extend(miswiring::pinch(attrs).filter(|w| seen_pinch.insert(w.span)));
             }
             let keyed = has(attrs, "navigationKey");
             // @ref LLP 1116.010 D5 — a name or a key that meets nothing.
@@ -1269,7 +1291,10 @@ mod tests {
         let checking = Checking::new(&checked);
         let element = checking.expanded().structure().roots().next().unwrap();
         let guard = Expr::Str(String::new(), Span::default());
-        let context = (true, Some("back"), vec![&guard]);
-        assert_eq!(warning_regions(element, &context), [Some(context), None]);
+        let context = (true, Some("back"), vec![&guard], true);
+        assert_eq!(
+            warning_regions(element, &context, &[]),
+            [Some(context), None]
+        );
     }
 }

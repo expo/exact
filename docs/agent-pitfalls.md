@@ -288,6 +288,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Lists and scrolling
 
+- Bind both `pinchrelease` and `wheel` on a grid that changes columns.
+  An iPad trackpad uses UIKit's pinch recognizer. A Mac or browser trackpad
+  delivers a Control-held wheel. For touchscreen browsers give a vertical
+  list `touch-action="pan-y"` so browser pinch zoom leaves the pair to the page.
+
 - **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
   order.** A whole document in one `text` (an article, a long Markdown note) is
   one string to Core Text, and Core Text does not shape a string longer than a

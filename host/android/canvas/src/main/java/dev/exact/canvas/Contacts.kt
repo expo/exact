@@ -32,6 +32,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
     private var longPresses = 0
     private var contextPending = false
     private var serial = 0
+    private val reportingPinch = ReportingPinch(view)
     private var waiting = false
     private var stopped = false
     private var engine = false
@@ -133,6 +134,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
     fun started() { if (view.started) drain() }
 
     fun stop() {
+        reportingPinch.cancel()
         stopped = true; serial++; waiting = false
         view.textSelection.stop()
         hold(null)
@@ -211,6 +213,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
                     if (engine) hold(first)
                     scrolling.under(scrollToken, words)
                     val flags = words.getOrElse(0) { 0 }
+                    reportingPinch.arm(first.getPointerId(0), words)
                     claims = flags and 31
                     val at = 3 + 11 * words.getOrElse(1) { 0 } + (if (flags and 32 != 0) 5 else 0)
                     longPresses = longPressesIn(words)
@@ -232,6 +235,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
             }
             return true
         }
+        reportingPinch.observe(e)
         if (candidate != null) {
             candidateEvents.add(MotionEvent.obtain(e))
             val dx = abs(e.x - downX); val dy = abs(e.y - downY)

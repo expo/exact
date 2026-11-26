@@ -998,7 +998,7 @@ impl<D: DataSource> Bridge<D> {
             // a file drag's enter (55) and leave (56), a paste with files (57), an iframe's record (58), an atom's press (59),
             // the history swipe the Mac tracks (60), swipeleft (61), a scroll
             // drag's start (62) and release (63), pointercancel (65) and swipe (66) (`Event::of_host_kind`).
-            6 | 10 | 13 | 19 | 20 | 21 | 28..=38 | 40..=44 | 46..=48 | 50..=63 | 65 | 66 => {
+            6 | 10 | 13 | 19 | 20 | 21 | 28..=38 | 40..=44 | 46..=48 | 50..=63 | 65..=68 => {
                 match Event::of_host_kind(kind, &payload) {
                     Ok(event) => event,
                     Err(error) => return self.refuse(error),
