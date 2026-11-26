@@ -6,6 +6,10 @@
 - Request an image panel on a cold page and call exit in the same press. The pending import drops the panel before its panel-specific exit rule can run (#1799).
 - With A already pinned on Android, request an unloaded B. The activity expands A before reporting B's missing picture (#1799).
 - Hide a second video's portal while Android is expanding the first video to switch players. Check whether the second video's still-mounted handler receives a refusal (#1799).
+- Start iOS video PiP from AVKit and remove the node before the queued enter runs. Repeat with a replacement that reuses its view id before the old leave. Check both allocations' handlers and their snapshot on a physical iPhone (#1799).
+- Remove a Chromium video before its pending PiP request resolves. Register native enter and leave listeners after the framework's listeners and compare their order with the Contract readout (#1799).
+- Present the iOS full-screen controller and start and end full screen using its controls. Compare the reported fullscreen state with the inline controller's transitions (#1799).
+- Create an iOS VideoView before its session is attached, then attach it and use the PiP control. Check that the queued enter and leave reach that session (#1799).
 - On a browser without PiP, request two different images in one press. The second image hears an error and the first hears none (#1799).
 - Pin a video in a keyed row, rename its label from Old to New, then remove the row. Its late native leave handler reads Old (#1799).
 - Compile a request for a literal video's `presentation="window"` beside an image with a computed id. Writing the image id as a different literal restores the named option diagnostic (#1799).
