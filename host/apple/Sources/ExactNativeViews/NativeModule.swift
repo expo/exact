@@ -338,28 +338,6 @@ final class NativeEntry {
     }
 }
 
-#if os(iOS) || os(tvOS)
-/// A fixed-size native child need not get UIKit layout when only an ancestor
-/// moves. Re-arm it after a geometry batch, once per changed window geometry.
-struct NativeWorldLayout {
-    private struct Geometry: Equatable {
-        let frame: CGRect
-        let scale: CGFloat
-        let window: ObjectIdentifier
-    }
-    private var previous: Geometry?
-
-    mutating func refresh(_ view: UIView) {
-        guard let window = view.window else { previous = nil; return }
-        let next = Geometry(frame: view.convert(view.bounds, to: window),
-                            scale: window.screen.scale, window: ObjectIdentifier(window))
-        guard next != previous else { return }
-        previous = next
-        view.setNeedsLayout()
-    }
-}
-#endif
-
 private final class NativeWait { var data: Data?; var error: String?; var done = false }
 
 /// Process-wide: the one artifact, and every live nonce → its manager.
@@ -1222,6 +1200,9 @@ final class NativeViews: NativeModuleHosting {
     func laidOut(_ owner: NodeView) {
         guard let entry = entries[owner.id], let view = entry.view else { return }
         if entry.sizing && owner.bounds.isEmpty { return }
+        #if os(iOS) || os(tvOS)
+        if crop.holds(view) { return } // its own size until the box's animation ends
+        #endif
         entry.sizing = false
         #if os(iOS) || os(tvOS)
         // A host-made controller's view lies on the content box, which the native view fills (`NativeScreens`)
@@ -1238,6 +1219,18 @@ final class NativeViews: NativeModuleHosting {
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         #endif
     }
+
+    #if os(iOS) || os(tvOS)
+    private let crop = NativeCrop()
+
+    func resize(_ owner: NodeView, inAnimation resize: () -> Void) {
+        guard owner.overflowClips, let entry = entries[owner.id], let view = entry.view,
+              !entry.sizing, view.window != nil else { return resize() }
+        crop.resize(view, in: owner, resize) { [weak self, weak entry] in
+            if let owner = entry?.owner { UIView.performWithoutAnimation { self?.laidOut(owner) } }
+        }
+    }
+    #endif
 
     #if os(iOS) || os(tvOS)
     /// Whether `owner`'s module view declined a touch at `point` that it

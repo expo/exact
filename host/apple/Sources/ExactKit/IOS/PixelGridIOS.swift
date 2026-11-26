@@ -171,7 +171,12 @@ extension Presenter {
         v.transform = .identity
         // A box that does not scroll is drawn past its frame by its reach (LLP 1123 D13)
         let reached = v.reached(place)
-        v.frame = reached?.frame ?? (groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn)
+        let framed = reached?.frame ?? (groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn)
+        if v.kind == "native", framed.size != v.frame.size, UIView.inheritedAnimationDuration > 0, let natives = session?.natives {
+            natives.resize(v) { v.frame = framed }
+        } else if v.frame != framed {
+            v.frame = framed
+        }
         if let origin = reached?.origin ?? (v.reach != .zero && v.scrollView == nil ? .zero : nil), v.bounds.origin != origin { v.bounds.origin = origin }
         v.textRasterGeometryChanged()
         v.scroll?.frame = v.scrollFrame
