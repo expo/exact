@@ -375,3 +375,57 @@ fn a_claimed_list_follows_the_claims_end() {
     settle(&mut p);
     assert_eq!(p.scroll_of(view).1, released - 100.);
 }
+
+/// @ref LLP 1123 D14 — a claimed list reveals a row in its clear region: under a claim reaching 40 above with an inset of
+/// 40 there, its content shown at its offset, `scrollIntoView` puts row 10, 240 down, at the clear region's top, the
+/// laid-out top, at offset 240, not under the reach at 280, as iOS aligns within what its bars cover.
+#[test]
+fn a_claimed_list_reveals_a_row_in_its_clear_region() {
+    struct Rows;
+    impl DataSource for Rows {
+        fn query(
+            &mut self,
+            _: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<exact_runner::Value, exact_runner::DataError> {
+            Ok(exact_runner::Value::list(
+                (0..40)
+                    .map(|i| exact_runner::Value::Number(i as f64))
+                    .collect(),
+            ))
+        }
+    }
+    let source = r#"component App
+  resource rows = rows() as shape number[]
+  view
+    list virtualized=true height=180 width=200 testId="feed"
+      for x in rows key=x
+        text `row ${x}` height=24
+"#;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(source),
+        Rows,
+        (400., 500.),
+        1.,
+        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let settle = |p: &mut Presenter<Rows>| {
+        for _ in 0..16 {
+            assert!(p.pump(p.host.now()).is_none());
+            if p.dirty() {
+                let _ = p.frame();
+            }
+        }
+    };
+    settle(&mut p);
+    let key = p.host.kernel().find_by_test_id("feed")[0];
+    let view = p.host.kernel().node_by_key(key).unwrap().id;
+    assert!(p.set_scroll_claim(view, Some(([40., 0., 60., 0.], [40., 0., 100., 0.]))));
+    settle(&mut p);
+    p.into_view(view, "10", "start", "nearest").unwrap();
+    settle(&mut p);
+    assert_eq!(p.scroll_of(view).1, 240.);
+}
