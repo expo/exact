@@ -123,6 +123,53 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         appeared?()
     }
     required init?(coder: NSCoder) { nil }
+
+    /// D4's controller allocation and vertical bar, from the route's node (LLP 1123): the edges and bars its view lies
+    /// under, and on iOS 27.1 whether its bars may move into the vertical bar, which UIKit's containers take from the
+    /// child that shows, and which of its bar items and the tab bar compress first there; and D8's minimum margins.
+    func followAllocation() {
+        followMinimumMargins(of: node)
+        let props = node.props
+        let edges = Self.extendedEdges(props["navigationExtendedLayout"])
+        if edgesForExtendedLayout != edges { edgesForExtendedLayout = edges }
+        let opaque = props["navigationExtendsUnderOpaqueBars"] == "true"
+        if extendedLayoutIncludesOpaqueBars != opaque { extendedLayoutIncludesOpaqueBars = opaque }
+        #if os(iOS)
+        guard #available(iOS 27.1, *) else { return }
+        let disabled = props["navigationVerticalBar"] == "disabled"
+        if verticalBarDisabled != disabled {
+            verticalBarDisabled = disabled
+            setNeedsUpdateOfVerticalBarConfiguration()
+        }
+        let compression: UIVerticalBarCompressionBehavior = switch props["navigationVerticalBarCompression"] {
+        case "prefers-bar-items": .prefersBarItems
+        case "prefers-tab-bar": .prefersTabBar
+        default: .automatic
+        }
+        if navigationItem.verticalBarCompressionBehavior != compression { navigationItem.verticalBarCompressionBehavior = compression }
+        #endif
+    }
+
+    /// `navigationExtendedLayout`'s edges: `all` unsaid, `none`, or the edges it names.
+    static func extendedEdges(_ word: String?) -> UIRectEdge {
+        guard let word, word != "all" else { return .all }
+        return word.split(separator: " ").reduce(into: []) { edges, edge in
+            switch edge {
+            case "top": edges.insert(.top)
+            case "left": edges.insert(.left)
+            case "bottom": edges.insert(.bottom)
+            case "right": edges.insert(.right)
+            default: break
+            }
+        }
+    }
+
+    #if os(iOS)
+    /// Whether the route said `navigationVerticalBar="disabled"`.
+    private var verticalBarDisabled = false
+    @available(iOS 27.1, *)
+    override var preferredVerticalBarBehavior: UIVerticalBarBehavior { verticalBarDisabled ? .disabled : .automatic }
+    #endif
     // The bar's height changed (a push to an inline title, a rotation, a
     // hatch): the route's content area follows (LLP 1075.003 §3.5), once
     // Exact's own writes settle (LLP 1123 D11).

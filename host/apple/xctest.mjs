@@ -209,6 +209,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/bar-face-scheme.contract'), '-o', env[`${prefix}_BAR_FACE_SCHEME_PLAN`] = resolve(dir, 'bar-face-scheme.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/dialog-sheet-reads.contract'), '-o', env[`${prefix}_DIALOG_SHEET_READS_PLAN`] = resolve(dir, 'dialog-sheet-reads.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/route-backdrop.contract'), '-o', env[`${prefix}_ROUTE_BACKDROP_PLAN`] = resolve(dir, 'route-backdrop.plan')]);
+  // RouteAllocationIOSTests': a route's controller allocation and vertical bar (LLP 1123 D4).
+  contract([resolve(root, 'host/apple/tests/fixtures/route-allocation.contract'), '-o', env[`${prefix}_ROUTE_ALLOCATION_PLAN`] = resolve(dir, 'route-allocation.plan')]);
   // AspectFitIOSTests': a first root fitted to the window's aspect-fit guide (LLP 1123 D16).
   contract([resolve(root, 'host/apple/tests/fixtures/aspect-fit.contract'), '-o', env[`${prefix}_ASPECT_FIT_PLAN`] = resolve(dir, 'aspect-fit.plan')]);
   // PopoverRouteIOSTests': a route presented as a popover anchored to a button (LLP 1123 D7).

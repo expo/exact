@@ -352,7 +352,10 @@ package final class ArrangementHost {
 
     private func refreshContentSizes() {
         for entry in entries.values {
-            for holder in entry.holders { holder.contentChanged() }
+            for holder in entry.holders {
+                holder.followMinimumMargins(of: holder.node)
+                holder.contentChanged()
+            }
         }
     }
 

@@ -631,22 +631,22 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "document" => AttrTarget::Prop(p("scrollDocument")),
         "virtualized" => AttrTarget::Prop(p("virtualized")),
         "testId" => AttrTarget::Prop(p("testId")),
-        "navigationKey" | "navigationBack" | "navigationHistory" => AttrTarget::Prop(p(name)),
-        "navigationPresentation" | "navigationDetent" => AttrTarget::Prop(p(name)),
-        "navigationInitialDetent" | "navigationGrabber" => AttrTarget::Prop(p(name)),
-        "navigationSelectedDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
-        "navigationEdgeAttachedInCompactHeight" => AttrTarget::Prop(p(name)),
-        "navigationScrollExpands" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
+        // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
+        // `none` for a full-bleed screen.
+        "navigationKey" | "navigationBack" | "navigationBar" => AttrTarget::Prop(p(name)),
+        "navigationGrabber" | "navigationDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
+        "navigationPresentation" | "navigationVerticalBar" => AttrTarget::Prop(p(name)),
+        "navigationHistory" | "navigationEdgeAttachedInCompactHeight" => AttrTarget::Prop(p(name)),
+        "navigationInitialDetent" | "navigationExtendsUnderOpaqueBars" => AttrTarget::Prop(p(name)),
+        "navigationSelectedDetent" | "navigationPopoverOverlapsSource" => AttrTarget::Prop(p(name)),
+        "navigationScrollExpands" | "navigationVerticalBarCompression" => AttrTarget::Prop(p(name)),
+        "navigationUndimmedDetent" | "navigationPopoverAdaptation" => AttrTarget::Prop(p(name)),
         "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
-        "navigationPopoverMargins" | "navigationPopoverAdaptation" => AttrTarget::Prop(p(name)),
-        "navigationPopoverOverlapsSource" => AttrTarget::Prop(p(name)),
+        "navigationPopoverMargins" | "navigationExtendedLayout" => AttrTarget::Prop(p(name)),
         // @ref LLP 1125 D11 — the Screen Wake Lock API's one type, on any element.
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.
         "orientationlock" => AttrTarget::Prop(p("orientationlock")),
-        // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
-        // `none` for a full-bleed screen.
-        "navigationBar" => AttrTarget::Prop(p("navigationBar")),
         "navigationSource" | "sharedElement" | "arrangement" => AttrTarget::Prop(p(name)),
         // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
         "portal" => AttrTarget::Prop(p("portal")),

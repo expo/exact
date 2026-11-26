@@ -594,6 +594,7 @@ extension NavigationHost {
             // (no header, a hidden one, one that is not a bar's), or no bar
             // where the route says so or has nothing to go back to.
             c.pushed = index + front > 0 || detail
+            c.followAllocation()
             let transparent = RouteGeometry.transparentBar(c.node)
             let (shape, bar) = barShape(of: c, in: nav)
             let shows = bar != .hidden

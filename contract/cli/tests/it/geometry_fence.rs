@@ -218,4 +218,10 @@ fn a_fact_that_shapes_a_popover_or_fits_the_window_is_refused() {
         "{SHAPES}component App\n  resource g = exactGeometry(\"hero\") as shape G\n  derive wide = match g.frame {{ case some(f) => f.width > 400, case none => false }}\n  view\n    column viewport-fit=\"cover\" -exact-safe-area-aspect-fit=(wide ? \"16 / 9\" : \"none\") width=\"100%\" height=\"100%\"\n      column id=\"hero\"\n"
     );
     refused(&fit, "`-exact-safe-area-aspect-fit` follows `wide`");
+    // A route's allocation and its bars' place move the route (LLP 1123 D4)
+    let bar = route("", "").replace(
+        "inset=0\n",
+        "inset=0 navigationVerticalBar=(wide ? \"disabled\" : \"automatic\")\n",
+    );
+    refused(&bar, "`navigationVerticalBar` follows `wide`");
 }

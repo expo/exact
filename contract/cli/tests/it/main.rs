@@ -207,6 +207,7 @@ mod named_windows;
 mod names;
 mod native_buttons;
 mod native_state;
+mod navigation_allocation;
 mod navigation_bar;
 mod navigation_detent;
 mod navigation_popover;

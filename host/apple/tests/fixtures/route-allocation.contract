@@ -1,0 +1,14 @@
+// RouteAllocationIOSTests (LLP 1123 D4, D8): a route whose controller allocation, vertical bar and minimum margins follow
+// its state.
+routes nav
+  home "/"
+component App
+  state plain = true
+  action toggle()
+    plain = !plain
+  view
+    main navigationKey=`${top(nav).id}`
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationExtendedLayout=(plain ? "top bottom" : "all") navigationExtendsUnderOpaqueBars=(plain ? "true" : "false") navigationVerticalBar=(plain ? "disabled" : "automatic") navigationVerticalBarCompression=(plain ? "prefers-tab-bar" : "automatic") -exact-respects-system-minimum-layout-margins=(plain ? "false" : "true")
+          button testId="toggle" press=toggle()
+            text "Toggle"
