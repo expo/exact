@@ -111,6 +111,10 @@ public struct Batch {
     /// The split rule of the stack main last asked about, read on the owner
     /// as the runtime made this batch, which can change it (`Runtime.splitAsked`).
     package var split: SplitRead?
+    /// Whether `split` differs from what the last batch read carried for the
+    /// same stack: a layout-only change (such as a list's direction) can leave
+    /// wire ops empty while changing whether the stack splits.
+    package var splitChanged = false
     /// With a router op, its top visit and the location of the visit beneath
     /// it (`exact_location_beneath`, empty at a stack's root), read on the
     /// owner as the runtime made this batch.
@@ -125,7 +129,7 @@ public struct Batch {
     /// viewless contents, page facts, the native control state it carries or
     /// the navigation roots' tabs, whose placement the views may not carry.
     /// The presenter resolves an orientation request separately.
-    package var changesScreen: Bool { !ops.isEmpty || controls || facts || rootTabs != nil || routeInspectors != nil || controlReads?.isEmpty == false }
+    package var changesScreen: Bool { !ops.isEmpty || controls || facts || rootTabs != nil || routeInspectors != nil || controlReads?.isEmpty == false || splitChanged }
     package init(ops: [BatchOp], timers: Bool, motion: Bool, clock: Double?, error: String?, timerDueMs: Double? = nil, pending: Bool = false, busy: Bool = false) {
         self.ops = ops; self.timers = timers; self.motion = motion; self.clock = clock
         self.error = error; self.timerDueMs = timerDueMs; self.pending = pending
@@ -223,8 +227,10 @@ package final class Runtime {
     /// batch read gave it (`Batch.controlReads`): a batch carries what changed.
     package var controlTypes: [UInt32: String] = [:], controlsRead: [UInt32: ControlRead] = [:]
     /// On the owner, the stack whose split rule a batch that can change it
-    /// carries (`Batch.split`): the one main last asked the runtime about.
+    /// carries (`Batch.split`): the one main last asked the runtime about, and
+    /// the last JSON read for it (`Batch.splitChanged`).
     package var splitAsked: (view: UInt32, retained: UInt32)?
+    package var splitReadJson: (view: UInt32, json: Data)?
     package init(hooks: RuntimeHooks = .headless) {
         self.hooks = hooks
         rt = Owner.shared.sync {
@@ -299,6 +305,14 @@ package final class Runtime {
             installTopLayer(open, modal: modal, backdrop: backdrop)
             return body()
         }, busy: Runtime.busy)
+    }
+    package func postWithTopLayer(caller: String = #function, layout: Bool = false,
+                                  done: @escaping (RuntimeCompletion) -> Void, _ body: @escaping () -> Batch) {
+        var top: TopLayerGeometry = ([], nil, nil)
+        post(caller: caller, layout: layout, prepare: { top = self.topLayer?() ?? ([], nil, nil) }, done: done) { [self] _ in
+            installTopLayer(top.frames, modal: top.modal, backdrop: top.backdrop)
+            return body()
+        }
     }
     private func installTopLayer(_ open: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?) {
         let ids = open.map(\.0)

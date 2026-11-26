@@ -43,6 +43,25 @@ fn a_scheme_line_is_a_scheme_source() {
 }
 
 #[test]
+fn a_connect_source_is_the_origin_the_grant_admits() {
+    // The grant admits the origin the URL Standard parses; a source spelt
+    // otherwise is one CSP ignores (CSP3 `host-char` is ASCII), or another host.
+    let policy = csp(
+        "net.fetch https://bücher.test\nnet.fetch https://*.Bücher.test\n\
+         net.fetch https://api.test:\nnet.fetch http://0x7f.1:8080\n\
+         net.websocket wss://Feed.test:443/s?q",
+        Path::new("/nonexistent"),
+    );
+    assert!(
+        policy.contains(
+            "connect-src 'self' https://xn--bcher-kva.test https://*.xn--bcher-kva.test \
+             https://api.test http://127.0.0.1:8080 wss://feed.test;"
+        ),
+        "{policy}"
+    );
+}
+
+#[test]
 fn a_local_network_line_admits_local_names_and_no_address_range() {
     // LLP 1133.036 D5: no CSP source names a private range, so a served page
     // reaches `.local` names by the line and an address only by a line naming it.

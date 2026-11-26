@@ -176,6 +176,8 @@ pub(crate) fn with_text_styles(
         .walk_regions_with(start, warning_regions);
     let (mut seen, mut platform) = (BTreeSet::new(), Vec::new());
     let mut seen_buttons = BTreeSet::new();
+    let mut seen_alert_font = BTreeSet::new();
+    let mut role_cache = crate::alert_role::RoleCache::default();
     let (var_tokens, mut undeclared) =
         (crate::var_tokens::FileTokens::new(checked.file), Vec::new());
     for (visit, (in_root, back, guards, view_bindings)) in visits {
@@ -198,7 +200,7 @@ pub(crate) fn with_text_styles(
                 roles::button(tag, attrs, visit, span, &guards)
                     .filter(|w| seen_buttons.insert((w.id, w.span))),
             );
-            out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
+            // A later specialization of a component may be the first whose role reaches alertdialog.
             out.extend(
                 roles::alert_font(
                     tag,
@@ -207,11 +209,15 @@ pub(crate) fn with_text_styles(
                     root,
                     &view_bindings,
                     &checked.file.fns,
+                    &mut role_cache,
                 )
-                .filter(|_| fresh),
+                .filter(|w| seen_alert_font.insert(w.span)),
             );
-            out.extend(roles::level_without_heading(tag, attrs, span).filter(|_| fresh));
-            out.extend(roles::keys(attrs, visit, span, &controlled).filter(|_| fresh));
+            if fresh {
+                out.extend(roles::dialog_role(tag, attrs, span));
+                out.extend(roles::level_without_heading(tag, attrs, span));
+                out.extend(roles::keys(attrs, visit, span, &controlled));
+            }
             if fresh {
                 line_height::multiplier(attrs, &mut out);
                 if tag == "video" && !has(attrs, "metadata") {

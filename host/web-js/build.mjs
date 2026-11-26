@@ -823,7 +823,7 @@ const uploadsImport = "import { ledger, requestKey } from './uploads.js';";
 // 1047.002 D3).
 const storageGrants = tsGrantSet.entries.some(([, , grant]) => ['fs-read', 'fs-write', 'sqlite-open'].includes(grant?.[0]));
 const storageFlag = 'const STORAGE_GRANTED = true;';
-const tsData = readFileSync(resolve(here, 'ts-data.js'), 'utf8');
+const tsData = localImports(readFileSync(resolve(here, 'ts-data.js'), 'utf8'));
 for (const line of [uploadsImport, storageFlag, streamImport]) if (!tsData.includes(line)) throw new Error(`host/web-js/ts-data.js: build.mjs replaces a line it no longer has: ${line}`);
 if (ts) writeFileSync(resolve(gen, 'ts-data.js'), localImports((seamLazy ? "import './held-hooks.js';\n" : '') + tsData.replace("'__APP_TS__'", () => JSON.stringify(pageAppTs))
   .replace(uploadsImport, streams ? uploadsImport : "import { data as runtime } from './rt.js'; const ledger = runtime.uploads, requestKey = () => undefined;")

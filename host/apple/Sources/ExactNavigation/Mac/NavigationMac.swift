@@ -107,6 +107,7 @@ final class NavigationHost {
     }
 
     private func project(_ batch: Batch, reparented: Set<UInt32>, concerned: Bool?) {
+        split.hearSplit(batch)
         let gating = presenter.inputGates.touched(by: batch, reparented: reparented)
         var subtrees = gating.subtrees
         // Whether a header can have changed: what the window's bar reads again for.

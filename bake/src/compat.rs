@@ -1272,21 +1272,26 @@ fn crate_beside(app_dir: &Path, name: &str) -> Option<PathBuf> {
     })
 }
 
-/// `[package] name` of a Cargo manifest, read without a TOML parser.
+/// `[package] name` of a Cargo manifest, read without a TOML parser, a
+/// comment after the header or the name left out as Cargo leaves it.
 fn package_name(manifest: &str) -> Option<String> {
     let mut in_package = false;
     for line in manifest.lines().map(str::trim) {
+        // A package name holds no `#` or quote, so a comment ends at either.
+        let line = line.split('#').next().unwrap_or_default().trim();
         if line.starts_with('[') {
-            in_package = line == "[package]";
+            in_package = line.split_whitespace().collect::<String>() == "[package]";
         } else if in_package {
             let value = line
                 .strip_prefix("name")
                 .and_then(|rest| rest.trim_start().strip_prefix('='));
             if let Some(value) = value {
+                let value = value.trim().trim_start_matches(['"', '\'']);
                 return Some(
                     value
-                        .trim()
-                        .trim_matches(|c| c == '"' || c == '\'')
+                        .split(['"', '\''])
+                        .next()
+                        .unwrap_or_default()
                         .to_string(),
                 );
             }

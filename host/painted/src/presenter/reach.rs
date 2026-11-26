@@ -71,6 +71,27 @@ impl<D: DataSource> Presenter<D> {
         changed
     }
 
+    /// Tell the runner what list `view`'s claim covers of its reached port at its start and end on `axis`, its insets
+    /// (LLP 1123 D14), before each of its reports, so `scrollIntoView` aligns a row in its clear region, as iOS tells
+    /// what its bars cover (`listCovered`); none unclaimed.
+    pub(super) fn tell_covered(&mut self, view: ViewId, axis: exact_runner::ListAxis) {
+        let Some(key) = self.host.kernel().node(view).map(|n| n.key) else {
+            return;
+        };
+        let i = self
+            .host
+            .safe_area
+            .scroll_claim(key)
+            .map_or([0.; 4], |c| c.insets);
+        let covered = match axis {
+            exact_runner::ListAxis::Vertical => [i[0], i[2]],
+            exact_runner::ListAxis::Horizontal => [i[3], i[1]],
+        };
+        self.host
+            .runner_mut()
+            .set_list_covered(view, covered.map(f64::from));
+    }
+
     /// Whether `view` follows its end (`scrollFollowEnd`) and rests there, within a point of its farthest offset down.
     fn rests_at_end(&self, view: ViewId) -> bool {
         let follows = self

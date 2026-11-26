@@ -8,7 +8,7 @@ import { place, remove, shimText } from './exact-install.mjs';
 
 const app = { name: 'notes', displayName: 'Notes', id: 'com.exact.notes', manifest: {} };
 let dir;
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => { if (dir) { rmSync(dir, { recursive: true, force: true }); dir = undefined; } });
 
 /** A bundle with `id` and one file, `marker`, holding `text`. */
 function bundle(path, id, text) {

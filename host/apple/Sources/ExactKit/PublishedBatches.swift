@@ -109,8 +109,9 @@ extension ExactSession {
             while stage != nil { finishStage() }
             guard !landing, ownerInFlight || hasPublished() || !pending.isEmpty else { return }
             Owner.shared.sync {}
+            let hadWork = hasPublished() || !pending.isEmpty
             landFill()
-            if stage == nil, !hasPublished(), pending.isEmpty { return }
+            if stage == nil, !hasPublished(), pending.isEmpty, !(ownerInFlight && hadWork) { return }
         }
     }
 

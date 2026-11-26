@@ -62,6 +62,42 @@ extension ExactSession {
         runtime.later(calls) { [weak self] batch in self?.publish(.notice, batch) }
     }
 
+    /// Report native bar or tab covers without blocking main while owner work
+    /// or startup data activation is in flight (#1375).
+    func tellCovers(_ covers: [(UInt32, HostCover?)]) {
+        whenIdle(bound: true) { [unowned self] in
+            if ExactEnv.postsLiveWork, clock == nil, ownerInFlight || dataPreparing, !Owner.shared.isServingMain {
+                guard !runtime.holds("coversAsync(_:done:)") else { return }
+                let cause = coversCause
+                coversInFlight += 1
+                runtime.coversAsync(covers) { [weak self] completion in self?.publish(.covers(cause), completion) }
+            } else {
+                applyUnlessEmpty(runtime.covers(covers))
+            }
+        }
+    }
+
+    /// Report content owners' local insets without blocking main while owner
+    /// work or startup data activation is in flight (#1375).
+    func tellLocalInsets(_ changes: [(UInt32?, [CGFloat]?)]) {
+        whenIdle(bound: true) { [unowned self] in
+            if ExactEnv.postsLiveWork, clock == nil, ownerInFlight || dataPreparing, !Owner.shared.isServingMain {
+                guard !runtime.holds("localInsetsAsync(_:done:)") else { return }
+                let cause = coversCause
+                coversInFlight += 1
+                runtime.localInsetsAsync(changes) { [weak self] completion in self?.publish(.covers(cause), completion) }
+            } else {
+                applyUnlessEmpty(runtime.localInsets(changes))
+            }
+        }
+    }
+
+    func landedCovers(stale: Bool = false) {
+        coversLanding -= 1
+        guard stale else { return runWaitingWork() }
+        scheduleWaitingWork()
+    }
+
     /// `tellPage` for a notice; at once unless the data source is activating
     /// and this generation's `onLine` reading is known.
     func tellPageSoon() {

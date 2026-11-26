@@ -1092,6 +1092,9 @@ impl Store {
         self.view = Some(view);
         self.running = Some(staged.entry);
         self.running_seq = staged.seq;
+        // The boot refusal was this process's earlier generation; the one it
+        // runs now is blessed by its own first pixel.
+        self.refused = None;
         Ok(())
     }
 

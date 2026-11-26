@@ -5,16 +5,6 @@
 import UIKit
 import ExactKit
 
-/// A split rule the owner read (`SplitRead`), decoded.
-struct HeardSplit {
-    let read: SplitRead
-    let rule: StackSplit?
-    init(_ read: SplitRead, rule: StackSplit?? = nil) {
-        self.read = read
-        self.rule = rule ?? StackSplit(json: read.json)
-    }
-}
-
 extension NavigationHost {
     /// The runner's rule for the stack whose first route is `root`
     /// (`Runtime.stackSplit`), where the device admits its split (`admitted`): nil for a

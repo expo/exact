@@ -1456,6 +1456,7 @@ impl<D: DataSource> Presenter<D> {
                 animating: gliding.is_some(),
                 ..CollectionFill::default()
             };
+            self.tell_covered(view, g.axis);
             match self.host.collection_feedback_filled(feedback, fill) {
                 Ok(true) => {
                     let after = self.sync_commit();

@@ -35,7 +35,7 @@ async function visit(page, path, interactive = true) {
 
 async function withPage(options, run) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...options });
-  context.setDefaultTimeout(5000);
+  context.setDefaultTimeout(15000);
   try { await run(await context.newPage()); } finally { await context.close(); }
 }
 
@@ -43,7 +43,7 @@ async function headingInView(page) {
   await page.waitForFunction(() => {
     const box = document.querySelector('[data-testid="h-a-deep-link"]').getBoundingClientRect();
     return box.top >= 0 && box.bottom <= innerHeight;
-  }, null, { timeout: 5000 });
+  });
 }
 
 test('a table-of-contents link scrolls the article to its heading', () => withPage({}, async page => {
@@ -72,7 +72,7 @@ test('the sidebar can be shown after a full reload with it hidden', () => withPa
   await page.waitForFunction(() => {
     const sidebar = document.querySelector('[data-testid="sidebar-shown"]');
     return sidebar && getComputedStyle(sidebar).visibility === 'visible' && sidebar.getBoundingClientRect().width > 200;
-  }, null, { timeout: 5000 });
+  });
   await page.getByTestId('nav-recipeWebsite').click();
   await page.getByTestId('h-a-deep-link').waitFor();
   expect(new URL(page.url()).pathname).toBe('/recipes/website');

@@ -2767,7 +2767,7 @@ or `open({host, seed: 42, locale: "fr-CA", timeZone: "America/Toronto", epoch: "
 a test file writes them as launch lines (`epoch "2026-09-21T14:13:20Z"`, `time-zone "America/Toronto"`,
 [authored tests](contract-grammar.md#authored-tests)), which override the flags.
 
-<a id="mac-iframe-magnification"></a>
+### Enlarge an iframe on macOS
 
 On macOS, `scale` enlarges an `iframe` after WebKit lays out the guest. Use it to
 keep line breaks during a transform. Size the parent to reserve the space. A
@@ -2831,6 +2831,8 @@ iOS and other hosts ignore the word.
 On macOS the first displayed frame after a resize or zoom remains unknown to Exact.
 A WebKit snapshot completes when its image is ready, even in a hidden window.
 [Apple’s snapshot API](https://developer.apple.com/documentation/webkit/wksnapshotconfiguration/afterscreenupdates)
+
+### Drive and attach to a running app
 
 On the web (same-origin frames), macOS and iOS, `tap live at 40 80` presses
 40 points right and 80 down from the top left of the iframe named `live`.

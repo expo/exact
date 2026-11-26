@@ -15,7 +15,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
-import { createDocument, esc } from './dom.js';
+import { createCSS, createDocument, esc } from './dom.js';
 import { cachingFetch, directives, FRESH } from './http-cache.mjs';
 import { canonical, matchPattern, mountedHref, withBase } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
@@ -372,7 +372,7 @@ export function renderer(dist, { closed = false, buildOrigin, read = path => rea
         return salted(name, a) ? made.then(result => { read.random = true; return result; }) : made;
       } }), getRandomValues: view => { const filled = crypto.getRandomValues(view); if (filled.byteLength > 0) read.random = true; return filled; },
       randomUUID: drew(() => crypto.randomUUID()) },
-      WebAssembly, atob, btoa, Event: class {}, CustomEvent: class {}, __exactRender: true, __files: files,
+      WebAssembly, atob, btoa, CSS: createCSS(), Event: class {}, CustomEvent: class {}, __exactRender: true, __files: files,
       // A draw a Rust module reports (rust-data.js)
       __exactDrew: () => { read.random = true; },
       ...(closed ? { __exactMarkdown: new Map() } : {}),

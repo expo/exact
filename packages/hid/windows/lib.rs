@@ -277,6 +277,13 @@ fn stop_reader(reader: std::thread::JoinHandle<()>, cancel: impl Fn()) {
     let _ = reader.join();
 }
 
+/// A feature report as `receiveFeatureReport` answers it, from the bytes the system read, whose first is always the
+/// report id: a numbered report keeps its id first, as WebHID's does, and an unnumbered one is its data alone, without
+/// the 0 the system leads it with.
+fn feature_report(read: &[u8], id: u8) -> &[u8] {
+    if id == 0 { read.get(1..).unwrap_or_default() } else { read }
+}
+
 fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -360,13 +367,14 @@ impl Hid {
             return json!({ "error": "NotAllowedError", "message": "the collection has no such report" });
         }
         let mut buf = vec![0u8; len];
-        buf[0] = args["reportId"].as_u64().unwrap_or(0) as u8;
+        let id = args["reportId"].as_u64().unwrap_or(0) as u8;
+        buf[0] = id;
         if kind == 'g' {
             // SAFETY: a buffer of the collection's feature report length, the id in its first byte.
             if unsafe { HidD_GetFeature(o.handle.0, buf.as_mut_ptr(), len as u32) } == 0 {
                 return json!({ "error": "NotAllowedError", "message": std::io::Error::last_os_error().to_string() });
             }
-            return json!({ "data": base64(&buf[1..]) });
+            return json!({ "data": base64(feature_report(&buf, id)) });
         }
         let Some(data) = args["data"].as_str().and_then(unbase64) else {
             return json!({ "error": "TypeError" });
@@ -520,5 +528,14 @@ mod tests {
         enter.send(()).unwrap();
         stop_reader(reader, cancel);
         assert!(!device.0.lock().unwrap().0, "the reader left its read");
+    }
+
+    /// `receiveFeatureReport` answers as the web does: a numbered report with its id first, an unnumbered one
+    /// without the 0 the system leads it with.
+    #[test]
+    fn a_feature_report_keeps_its_id_only_when_it_has_one() {
+        assert_eq!(feature_report(&[1, 0x63, 0xff], 1), [1, 0x63, 0xff]);
+        assert_eq!(feature_report(&[0, 0x63, 0xff], 0), [0x63, 0xff]);
+        assert_eq!(feature_report(&[], 0), [0u8; 0]);
     }
 }

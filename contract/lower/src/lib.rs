@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 mod alert_parts;
+mod alert_role;
 pub mod anatomy;
 mod aspect_fit;
 mod atoms;
@@ -337,6 +338,8 @@ pub(crate) struct Lowerer<'a> {
     pub(crate) guards: Vec<Expr>,
     /// Enclosing view `match`/`for` bindings (`Some(subject)` for `match some(x)`, `None` for `for`).
     pub(crate) view_bindings: Vec<(String, Option<Expr>)>,
+    /// Memoized `alertdialog` role evaluation for root `state`s/`derive`s and state assigners.
+    pub(crate) role_cache: alert_role::RoleCache<'a>,
     /// Which menu container, if any, supplies the element being lowered as a row.
     menu_parent: Option<menu_rows::Parent>,
     /// Where the element being lowered sits relative to a navigation root.
@@ -506,6 +509,7 @@ fn lower_with_sites(
         button_context: None,
         guards: Vec::new(),
         view_bindings: Vec::new(),
+        role_cache: alert_role::RoleCache::default(),
         menu_parent: None,
         nav_place: Default::default(),
         host_transforms: Default::default(),

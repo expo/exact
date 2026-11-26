@@ -873,7 +873,7 @@ package final class Presenter {
     /// and makes its correction without the presenter's whole finalization
     /// pass, unless work waits on a batch (a focus, a callback, a scroll).
     private func applySnapshots(_ batch: Batch) -> Bool {
-        guard !applying, !pageGeometryOwed, batch.error == nil, !batch.controls, batch.rootTabs == nil, !batch.ops.isEmpty, batch.ops.allSatisfy({ $0.op == .collections }),
+        guard !applying, !pageGeometryOwed, batch.error == nil, !batch.controls, batch.rootTabs == nil, !batch.splitChanged, !batch.ops.isEmpty, batch.ops.allSatisfy({ $0.op == .collections }),
               waiting.isEmpty, pendingScrolls.isEmpty, pendingFocus == nil else { return false }
         collections.beginBatch(batch)
         collections.endBatch()

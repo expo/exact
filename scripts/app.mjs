@@ -43,7 +43,7 @@ export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, refuseStdLockfile, c
 import { configTarget, nativePackageConfig } from '../js/bake/src/package-config.mjs';
 export { gpuModules } from './app-shells.mjs';
 import { installProblems } from './install-page.mjs';
-import { gameDefaults, lintGame, prepareGame } from '../game/app/shells.mjs';
+import { gameCargoEnv, gameDefaults, lintGame, prepareGame } from '../game/app/shells.mjs';
 import { generatedInputFiles } from '../game/inputs.mjs';
 import { shareTargetProblems, webShareTarget } from './share-target.mjs';
 import { bakedSettings, noteBunLoaded, settingChanges } from '../js/bake/src/__exact_env.mjs';
@@ -1240,7 +1240,7 @@ export function buildBake(app, platform, target, options = {}) {
   env.EXACT_RUST_BINDINGS = '1';
   const privacyManifests = apple ? [capturePrivacyManifest(resolve(app.dir, 'PrivacyInfo.xcprivacy'))] : [], watch = target.includes('apple-watchos');
   if(platform==='web'||watch){env=webToolchainEnv(env,{linksWasm:target==='wasm32-unknown-unknown'&&!options.check});refuseStdLockfile(env,app.dir,app.name);}
-  if(options.analysis && env.EXACT_UPDATE_TRUST==='production')env.EXACT_BAKE_ANALYSIS='1';else delete env.EXACT_BAKE_ANALYSIS;
+  if(app.manifest.game)env=gameCargoEnv(env);if(options.analysis && env.EXACT_UPDATE_TRUST==='production')env.EXACT_BAKE_ANALYSIS='1';else delete env.EXACT_BAKE_ANALYSIS;
   mkdirSync(env.EXACT_BAKE_OUTPUT,{recursive:true});
   if(platform!=='web')prepareLibrary(app.dir,target); // a package's library, fetched and checked before Cargo links it (LLP 1154 D3)
   const rustBundle=prepareRustBundle(app,platform,target,env);

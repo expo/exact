@@ -392,3 +392,112 @@ export async function answer(name: string): Promise<any> {
     } finally { child.kill(); await child.exited; }
   }).finally(() => slow.stop(true));
 }, 120000);
+
+test('build-time prerender succeeds without a CSS global for bound line-height, translate, scale and url() refs', async () => {
+  const source = `routes nav
+  home "/" render=build
+
+component App
+  state leading = "24px"
+  state badPercent = "150%"
+  state badComment = "1.5/**/"
+  state badUpperPx = "24PX"
+  state badInitial = "initial"
+  state badNormalComment = "normal/**/"
+  state badCalcLh = "calc(12px + 12px)"
+  state badMinLh = "min(24px, 30px)"
+  state pos = "10px 20px"
+  state mathPos = "calc(10px + 20px) 5px"
+  state adjPos = "calc(10px)calc(20px)"
+  state viPos = "10vi 5px"
+  state badPos = "10px 20px 30px 40px"
+  state badCalcPos = "calc(bogus) 20px"
+  state zoom = "1.25 0.5"
+  state mathZoom = "calc(1 + 1)"
+  state sqrtZoom = "sqrt(4)"
+  state badZoom = "2 3 4 5"
+  state offset = "4px 6px"
+  state badOffset = "none 2px"
+  state filtered = true
+  action noop
+    let x = 1
+  view
+    main
+      svg width=20 height=20
+        defs
+          filter id="mask-box"
+            feGaussianBlur stdDeviation=1
+        rect width=10 height=10 filter=(filtered ? "url(#mask-box)" : "none") testId="filtered"
+      text "ok" testId="ok" line-height=leading
+      text "bad-percent" testId="bad-percent" line-height=badPercent
+      text "bad-comment" testId="bad-comment" line-height=badComment
+      text "bad-upper" testId="bad-upper" line-height=badUpperPx
+      text "bad-initial" testId="bad-initial" line-height=badInitial
+      text "bad-normal-comment" testId="bad-normal-comment" line-height=badNormalComment
+      text "bad-calc-lh" testId="bad-calc-lh" line-height=badCalcLh
+      text "bad-min-lh" testId="bad-min-lh" line-height=badMinLh
+      view press=noop testId="moved" translate=pos scale=zoom
+        :active
+          translate = offset
+          -exact-press-scale = 0.96
+      view press=noop testId="math-moved" translate=mathPos scale=mathZoom
+        :active
+          translate = offset
+          -exact-press-scale = 0.96
+      view press=noop testId="adj-moved" translate=adjPos scale=sqrtZoom
+        :active
+          translate = offset
+          -exact-press-scale = 0.96
+      view press=noop testId="vi-moved" translate=viPos scale=zoom
+        :active
+          translate = offset
+          -exact-press-scale = 0.96
+      view press=noop testId="invalid" translate=badPos scale=badZoom
+        :active
+          translate = badOffset
+          -exact-press-scale = 0.96
+      view press=noop testId="invalid-calc" translate=badCalcPos scale=badZoom
+        :active
+          translate = badOffset
+          -exact-press-scale = 0.96
+`;
+  await builtPages(source, null, ({ status, output, dist }) => {
+    expect(status, output).toBe(0);
+    const page = readFileSync(resolve(dist, 'index.html'), 'utf8');
+    const styleOf = (id) => new RegExp(`data-testid="${id}"[^>]*style="([^"]*)"`).exec(page)?.[1] ?? '';
+    expect(styleOf('ok')).toContain('line-height:24px');
+    for (const id of ['bad-percent', 'bad-comment', 'bad-upper', 'bad-initial', 'bad-normal-comment', 'bad-calc-lh', 'bad-min-lh']) {
+      expect(styleOf(id), id).toContain('line-height:unset');
+    }
+    expect(styleOf('moved')).toContain('--exact-translate-x:10px');
+    expect(styleOf('moved')).toContain('--exact-translate-y:20px');
+    expect(styleOf('moved')).toContain('--exact-base-translated:1');
+    expect(styleOf('moved')).toContain('--exact-scale:1.25');
+    expect(styleOf('moved')).toContain('--exact-scale-y:0.5');
+    expect(styleOf('moved')).toContain('--exact-press-translate:4px 6px');
+    expect(styleOf('math-moved')).toContain('--exact-translate-x:calc(10px + 20px)');
+    expect(styleOf('math-moved')).toContain('--exact-translate-y:5px');
+    expect(styleOf('math-moved')).toContain('--exact-base-translated:1');
+    expect(styleOf('math-moved')).toContain('--exact-scale:calc(1 + 1)');
+    expect(styleOf('math-moved')).toContain('--exact-scale-y:calc(1 + 1)');
+    expect(styleOf('adj-moved')).toContain('--exact-translate-x:calc(10px)');
+    expect(styleOf('adj-moved')).toContain('--exact-translate-y:calc(20px)');
+    expect(styleOf('adj-moved')).toContain('--exact-base-translated:1');
+    expect(styleOf('adj-moved')).toContain('--exact-scale:sqrt(4)');
+    expect(styleOf('vi-moved')).toContain('--exact-translate-x:10vi');
+    expect(styleOf('vi-moved')).toContain('--exact-translate-y:5px');
+    expect(styleOf('vi-moved')).toContain('--exact-base-translated:1');
+    for (const id of ['invalid', 'invalid-calc']) {
+      expect(styleOf(id), id).toContain('--exact-translate-x:0px');
+      expect(styleOf(id), id).toContain('--exact-translate-y:0px');
+      expect(styleOf(id), id).not.toContain('--exact-base-translated:1');
+      expect(styleOf(id), id).toContain('--exact-scale:1');
+      expect(styleOf(id), id).toContain('--exact-scale-y:1');
+      expect(styleOf(id), id).not.toContain('--exact-press-translate:');
+    }
+    const filterId = /<filter[^>]*id="([^"]+)"[^>]*data-exact-id="mask-box"|<filter[^>]*data-exact-id="mask-box"[^>]*id="([^"]+)"/.exec(page);
+    const generated = filterId?.[1] ?? filterId?.[2];
+    expect(generated).toBeTruthy();
+    expect(styleOf('filtered')).toContain(`filter:url(#${generated})`);
+  });
+}, 120000);

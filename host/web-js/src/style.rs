@@ -1448,7 +1448,7 @@ pub(super) fn transition_map(entries: &str, press: bool, shift: bool) -> String 
 
 /// The live offset and its CSS axes; `none` removes the composition selector.
 pub(crate) fn press_translation_writes() -> Vec<(String, String, Option<String>)> {
-    let valid = r#"v=>{const t=String(v??'').trim();return /^(?:[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?|none)(?:\s+[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?)?$/i.test(t)&&CSS.supports('translate',t)&&!/^none$/i.test(t)?t:null}"#;
+    let valid = r#"v=>{const t=String(v??'').trim();return /^(?:[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?(?:px|%)|[+-]?(?:0+(?:\.0+)?|\.0+)(?:e[+-]?\d+)?)(?:\s+(?:[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?(?:px|%)|[+-]?(?:0+(?:\.0+)?|\.0+)(?:e[+-]?\d+)?))?$/i.test(t)&&(typeof CSS==='undefined'||!CSS.supports||CSS.supports('translate',t))?t:null}"#;
     let mut writes = vec![(
         "--exact-press-translate".into(),
         String::new(),

@@ -404,13 +404,23 @@ pub(super) fn alert_font<'a>(
     root: &'a contract_syntax::Component,
     view_bindings: &[(&'a str, Option<&'a Expr>)],
     fns: &'a [contract_syntax::FnDecl],
+    role_cache: &mut crate::alert_role::RoleCache<'a>,
 ) -> Option<LowerError> {
-    let role = crate::menus::alertdialog_role(attrs, root, view_bindings, &|name| {
-        fns.iter()
-            .find(|f| f.name == name)
-            .map(|f| (f.params.as_slice(), &f.body))
-    });
-    if role == crate::menus::AlertRole::Never || !(tag == "dialog" || has(attrs, "popover")) {
+    if !(tag == "dialog" || has(attrs, "popover")) {
+        return None;
+    }
+    let role = crate::alert_role::alertdialog_role(
+        attrs,
+        root,
+        view_bindings,
+        &|name| {
+            fns.iter()
+                .find(|f| f.name == name)
+                .map(|f| (f.params.as_slice(), &f.body))
+        },
+        role_cache,
+    );
+    if role == crate::alert_role::AlertRole::Never {
         return None;
     }
     let class = crate::class::rows(

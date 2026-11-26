@@ -196,7 +196,14 @@ class Element extends Node {
   get childElementCount() { return this.childNodes.filter(c => c.nodeType === 1).length; }
   get firstElementChild() { return this.childNodes.find(c => c.nodeType === 1) ?? null; }
   getElementsByTagName(tag) { return this.childNodes.flatMap(c => c.nodeType === 1 ? [...(tag === '*' || c.localName === tag ? [c] : []), ...c.getElementsByTagName(tag)] : []); }
-  querySelectorAll() { return []; } querySelector() { return null; } contains() { return false; }
+  querySelectorAll() { return []; }
+  querySelector(sel) {
+    const m = /^\[data-exact-id="((?:\\.|[^"\\])*)"\]$/.exec(sel);
+    if (!m) return null;
+    const target = unescapeCssAttr(m[1]);
+    return this.getElementsByTagName('*').find(el => el.getAttribute('data-exact-id') === target) ?? null;
+  }
+  contains() { return false; }
   // A tag and attributes only (`[a]`, `[a=v]`, `[a~=v]`, the value quoted or not), comma-separated: rt.js `on` asks
   // whether a press is native, and navigation.js `markBars` reads a header as `barItems` does.
   matches(sel) {
@@ -280,6 +287,218 @@ const fontPx = (value, inherited) => {
 const HERO_PRIORITY = 'high';
 // The `visibility` values an element can set; any other (`unset`, `inherit`) takes its parent's.
 const VISIBILITIES = new Set(['visible', 'hidden', 'collapse']);
+
+// CSS Values 4 §10 + CSSOM §2.1: minimal `CSS` global for SSR (`render.mjs`), matching browser
+// `CSS.supports` for the properties the JS runtime validates (`line-height`, `translate`, `scale`)
+// and `CSS.escape` for scoped `url(#...)` lookups.
+const CSS_NUM = '[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?';
+const CSS_LEN_UNIT =
+  'px|rem|em|ex|rex|cap|rcap|ch|rch|ic|ric|lh|rlh|[sld]?v[whib]|[sld]?vmin|[sld]?vmax|cm|mm|q|in|pc|pt|cq[whib]|cqmin|cqmax';
+const CSS_NUM_RE = new RegExp('^' + CSS_NUM + '$', 'i');
+const CSS_PCT_RE = new RegExp('^' + CSS_NUM + '%$', 'i');
+const CSS_LEN_RE = new RegExp('^' + CSS_NUM + '(?:' + CSS_LEN_UNIT + ')$', 'i');
+const CSS_ZERO_RE = /^[+-]?(?:0+(?:\.0+)?|\.0+)(?:e[+-]?\d+)?$/i;
+const CSS_TOKEN_RE = new RegExp(`^(?:(${CSS_NUM})(?:(${CSS_LEN_UNIT})|(%))?|([a-z0-9-]+)\\(|([(),*/+-]))`, 'i');
+const CSS_MATH_SAME = new Set(['calc', 'abs', 'min', 'max', 'clamp', 'hypot', 'mod', 'rem', 'round']);
+const CSS_MATH_NUM = new Set(['sqrt', 'exp', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'pow', 'log', 'sign']);
+const CSS_ROUND_MODES = new Set(['nearest', 'up', 'down', 'to-zero']);
+function stripCssComments(text) {
+  let out = '', i = 0;
+  while (i < text.length) {
+    if (text[i] === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end < 0) return null;
+      out += ' ';
+      i = end + 2;
+    } else out += text[i++];
+  }
+  return out.trim();
+}
+function splitCssValues(text) {
+  const parts = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i <= text.length; i++) {
+    const c = text[i];
+    if (c === '(') {
+      if (start < 0) start = i;
+      depth++;
+    } else if (c === ')') {
+      if (--depth < 0) return null;
+      if (depth === 0 && start >= 0) {
+        parts.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    } else if ((c === undefined || /\s/.test(c)) && depth === 0) {
+      if (start >= 0) {
+        parts.push(text.slice(start, i));
+        start = -1;
+      }
+    } else if (start < 0) start = i;
+  }
+  return depth === 0 ? parts : null;
+}
+function combineCssType(a, b, mixLenPct) {
+  if (!a || !b) return null;
+  if (a === b) return a;
+  if (mixLenPct && a !== 'num' && b !== 'num') return 'lenpct';
+  return null;
+}
+function cssMathType(token, mixLenPct) {
+  let i = 0;
+  const skip = () => { while (i < token.length && /\s/.test(token[i])) i++; };
+  const parseSum = () => {
+    let left = parseProd();
+    if (!left) return null;
+    for (;;) {
+      const wsBefore = i;
+      skip();
+      const c = token[i];
+      if ((c === '+' || c === '-') && i > wsBefore && i + 1 < token.length && /\s/.test(token[i + 1])) {
+        i++;
+        left = combineCssType(left, parseProd(), mixLenPct);
+        if (!left) return null;
+      } else {
+        i = wsBefore;
+        return left;
+      }
+    }
+  };
+  const parseProd = () => {
+    let left = parseAtom();
+    if (!left) return null;
+    for (;;) {
+      const wsBefore = i;
+      skip();
+      const c = token[i];
+      if (c === '*' || c === '/') {
+        i++;
+        const right = parseAtom();
+        if (!right) return null;
+        if (c === '/') {
+          if (right !== 'num') return null;
+        } else if (left === 'num') left = right;
+        else if (right !== 'num') return null;
+      } else {
+        i = wsBefore;
+        return left;
+      }
+    }
+  };
+  const parseAtom = () => {
+    skip();
+    const m = CSS_TOKEN_RE.exec(token.slice(i));
+    if (!m) return null;
+    if (m[1]) {
+      i += m[0].length;
+      return m[2] ? 'len' : m[3] ? 'pct' : 'num';
+    }
+    if (m[5] === '(') {
+      i++;
+      const t = parseSum();
+      skip();
+      if (!t || token[i] !== ')') return null;
+      i++;
+      return t;
+    }
+    if (m[4]) {
+      const fn = m[4].toLowerCase();
+      const isSame = CSS_MATH_SAME.has(fn), isNum = CSS_MATH_NUM.has(fn);
+      if (!isSame && !isNum) return null;
+      i += m[0].length;
+      let acc = null, count = 0;
+      if (fn === 'round') {
+        skip();
+        const mode = /^([a-z-]+)\s*,/i.exec(token.slice(i));
+        if (mode && CSS_ROUND_MODES.has(mode[1].toLowerCase())) i += mode[0].length;
+      }
+      for (;;) {
+        const arg = parseSum();
+        if (!arg) return null;
+        if (isNum) {
+          if (fn === 'sign' || fn === 'atan2') {
+            acc = count === 0 ? arg : combineCssType(acc, arg, mixLenPct);
+            if (!acc) return null;
+          } else if (arg !== 'num') return null;
+        } else {
+          acc = count === 0 ? arg : combineCssType(acc, arg, mixLenPct);
+          if (!acc) return null;
+        }
+        count++;
+        skip();
+        if (token[i] === ',') { i++; continue; }
+        if (token[i] === ')') { i++; break; }
+        return null;
+      }
+      if ((fn === 'calc' || fn === 'abs' || fn === 'sqrt' || fn === 'exp' || fn === 'sin' || fn === 'cos'
+        || fn === 'tan' || fn === 'asin' || fn === 'acos' || fn === 'atan' || fn === 'sign') && count !== 1) return null;
+      if ((fn === 'pow' || fn === 'atan2' || fn === 'mod' || fn === 'rem') && count !== 2) return null;
+      if ((fn === 'log' || fn === 'round') && (count < 1 || count > 2)) return null;
+      if (fn === 'clamp' && count !== 3) return null;
+      return isNum ? 'num' : acc;
+    }
+    return null;
+  };
+  const head = /^([a-z0-9-]+)\(/i.exec(token);
+  if (!head || (!CSS_MATH_SAME.has(head[1].toLowerCase()) && !CSS_MATH_NUM.has(head[1].toLowerCase()))) return null;
+  const t = parseAtom();
+  skip();
+  return t && i === token.length ? t : null;
+}
+function cssSupports(prop, value) {
+  if (typeof prop !== 'string' || typeof value !== 'string') return false;
+  const p = prop.trim().toLowerCase(), clean = stripCssComments(value);
+  if (!clean) return false;
+  if (p === 'line-height') {
+    if (/^(?:normal|unset|inherit|initial|revert|revert-layer)$/i.test(clean)) return true;
+    if (CSS_NUM_RE.test(clean) || CSS_PCT_RE.test(clean) || CSS_LEN_RE.test(clean)) return true;
+    return cssMathType(clean, true) !== null;
+  }
+  if (p === 'translate') {
+    if (/^(?:none|unset|inherit|initial|revert|revert-layer)$/i.test(clean)) return true;
+    const parts = splitCssValues(clean);
+    if (!parts || parts.length < 1 || parts.length > 3) return false;
+    return parts.every((tok, idx) => {
+      if (CSS_LEN_RE.test(tok) || CSS_ZERO_RE.test(tok) || (idx < 2 && CSS_PCT_RE.test(tok))) return true;
+      const t = cssMathType(tok, idx < 2);
+      return idx < 2 ? t === 'len' || t === 'pct' || t === 'lenpct' : t === 'len';
+    });
+  }
+  if (p === 'scale') {
+    if (/^(?:none|unset|inherit|initial|revert|revert-layer)$/i.test(clean)) return true;
+    const parts = splitCssValues(clean);
+    if (!parts || parts.length < 1 || parts.length > 3) return false;
+    return parts.every(tok => {
+      if (CSS_NUM_RE.test(tok) || CSS_PCT_RE.test(tok)) return true;
+      const t = cssMathType(tok, false);
+      return t === 'num' || t === 'pct';
+    });
+  }
+  return false;
+}
+function cssEscape(value) {
+  const s = String(value);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 0) out += '\uFFFD';
+    else if ((code >= 1 && code <= 0x1f) || code === 0x7f || (i === 0 && code >= 0x30 && code <= 0x39)
+      || (i === 1 && code >= 0x30 && code <= 0x39 && s.charCodeAt(0) === 0x2d))
+      out += '\\' + code.toString(16) + ' ';
+    else if (i === 0 && s.length === 1 && code === 0x2d) out += '\\-';
+    else if (code >= 0x80 || code === 0x2d || code === 0x5f
+      || (code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a))
+      out += s[i];
+    else out += '\\' + s[i];
+  }
+  return out;
+}
+function unescapeCssAttr(s) {
+  return s.replace(/\\([0-9a-f]{1,6}\s?|.)/gi, (_, g) =>
+    /^[0-9a-f]+$/i.test(g.trim()) ? String.fromCodePoint(parseInt(g.trim(), 16)) : g);
+}
+export function createCSS() {
+  return { supports: cssSupports, escape: cssEscape };
+}
 
 /** A document for one render: `#exact-root` in a body, a head for metas. */
 export function createDocument(shell = '') {

@@ -14,7 +14,9 @@ pub(crate) fn csp(grants: &str, dist: &Path) -> String {
             continue;
         };
         if let Some(target) = words.next() {
-            // An origin is scheme://host[:port]: the target up to its path.
+            // An origin is the one the grant admits, as the URL Standard
+            // serializes it: an ASCII host (CSP3 `host-char`), an address
+            // in dotted decimal, no default or empty port, no path.
             // A scheme-wide line (`ws:`) is already a CSP scheme source.
             // `local-network` (LLP 1133.036 D5): CSP has no source for an
             // address range, and a scheme source would admit the internet,
@@ -25,9 +27,18 @@ pub(crate) fn csp(grants: &str, dist: &Path) -> String {
                 }
                 _ if target == "local-network" => Some("ws://*.local:* wss://*.local:*".to_owned()),
                 Some(s) if matches!(&*s, "http" | "https" | "ws" | "wss") => Some(s + ":"),
-                _ => target.split_once("://").map(|(scheme, rest)| {
-                    format!("{scheme}://{}", rest.split('/').next().unwrap_or(""))
-                }),
+                _ => {
+                    let (url, wild) = match target.split_once("://*.") {
+                        Some((scheme, rest)) => (format!("{scheme}://{rest}"), "://*."),
+                        None => (target.to_owned(), "://"),
+                    };
+                    url::Url::parse(&url)
+                        .ok()
+                        .filter(|url| url.username().is_empty() && url.password().is_none())
+                        .map(|url| url.origin())
+                        .filter(url::Origin::is_tuple)
+                        .map(|origin| origin.ascii_serialization().replacen("://", wild, 1))
+                }
             };
             if let Some(origin) = origin {
                 connect.push(' ');

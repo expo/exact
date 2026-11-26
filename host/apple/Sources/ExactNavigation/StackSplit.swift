@@ -50,6 +50,16 @@ struct StackSplit: Equatable {
     }
 }
 
+/// A split rule the owner read (`SplitRead`), decoded.
+struct HeardSplit {
+    let read: SplitRead
+    let rule: StackSplit?
+    init(_ read: SplitRead, rule: StackSplit?? = nil) {
+        self.read = read
+        self.rule = rule ?? StackSplit(json: read.json)
+    }
+}
+
 extension Runtime {
     /// Whether the stack whose root route is `view` splits, by the runner's
     /// rule; nil for one that pushes, and while the runner is busy.

@@ -1352,6 +1352,20 @@ fn the_named_data_crate_and_the_generated_lock_are_identity() {
     assert_ne!(locked, id(&dir, "ios"), "and its edit moves it");
 }
 
+/// The named data crate is found by its package name as Cargo reads it: a
+/// comment after the `[package]` header or the name is TOML's, not part of
+/// either, and a header may hold whitespace.
+#[test]
+fn a_comment_beside_the_package_name_still_names_the_data_crate() {
+    for manifest in [
+        "[package] # the app's records\nname = \"records\" # read by rust.data",
+        "[ package ]\nname = 'records'",
+    ] {
+        let name = super::package_name(manifest);
+        assert_eq!(name.as_deref(), Some("records"), "{manifest}");
+    }
+}
+
 /// A path crate outside the app's workspace is no member of it, so the
 /// closure is read from Cargo's full graph. An optional dependency there
 /// that Cargo did not enable (`unused`) counts with what it declares
