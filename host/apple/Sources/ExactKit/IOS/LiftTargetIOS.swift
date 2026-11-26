@@ -32,7 +32,7 @@ package enum LiftTarget {
     /// canvas's snapshot (`placedPreview`); for a node with a filter's picture of its own, which hides its layers and
     /// so leaves UIKit's copy of it empty; and where the path leaves nothing of the box.
     package static func clipLift(_ node: NodeView) -> (outline: UIBezierPath, ground: UIColor)? {
-        guard let clip = node.clipPath, rounded(node) == nil, node.placedAncestor?.placement == nil, node.filterPicture == nil else {
+        guard let clip = node.presentedClipPath, rounded(node) == nil, node.placedAncestor?.placement == nil, node.filterPicture == nil else {
             return nil
         }
         let cut = clip.normalized(using: node.clipRule).intersection(CGPath(rect: node.surface?.frame ?? node.bounds, transform: nil))

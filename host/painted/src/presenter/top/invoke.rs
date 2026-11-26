@@ -339,6 +339,184 @@ impl<D: DataSource> Presenter<D> {
         None
     }
 
+    /// A popover's inset anchor point from its authored `left` or `top` (LLP 1021 D2).
+    pub(super) fn popover_inset_point(
+        &self,
+        target: Option<NodeKey>,
+        modal: bool,
+    ) -> Option<(f32, f32)> {
+        let node = self.host.kernel().node_by_key(target?)?;
+        let style = node.computed_style(exact_kernel::StyleMask::INHERITED);
+        (!modal && node.props.str(PropId::Popover).is_some())
+            .then(|| area::inset_point(&style, &self.host.kernel().env_of(node.id), self.viewport))
+            .flatten()
+    }
+
+    /// Dispatch `toggle` (`closed` -> `open`, preserving any queued `old_open`)
+    /// before reading a popover's shape when it currently has no rows (e.g. rows
+    /// guarded by `if open` mounted by its own `toggle` handler), matching HTML
+    /// and iOS pull-down menus (#1877). Closes any other open surface first and
+    /// delivers its close toggle so replacement ordering is preserved.
+    pub(super) fn eager_open_popover_toggle(
+        &mut self,
+        target: Option<NodeKey>,
+        invoker: Option<ViewId>,
+        now_ms: f64,
+    ) -> (bool, Option<NodeKey>) {
+        let Some(key) = target else {
+            return (false, None);
+        };
+        if self.open_mode(key).is_some() {
+            return (false, None);
+        }
+        let listens = self.host.kernel().node_by_key(key).is_some_and(|n| {
+            !n.parent.is_some_and(|p| self.host.route_visibility(p).1)
+                && n.props.str(PropId::Popover).is_some()
+                && self
+                    .host
+                    .runner()
+                    .handlers_of(n.id)
+                    .contains(&EventKind::Toggle)
+        });
+        if !listens {
+            return (false, None);
+        }
+        let replaced_restore = if self.top_open() {
+            let restore = self.replace_surface(invoker, now_ms);
+            self.dispatch_toggles();
+            if self.top_open() {
+                return (false, restore);
+            }
+            restore
+        } else {
+            None
+        };
+        let Some(id) = self.host.kernel().node_by_key(key).and_then(|n| {
+            (!n.parent.is_some_and(|p| self.host.route_visibility(p).1)
+                && n.props.str(PropId::Popover).is_some())
+            .then_some(n.id)
+        }) else {
+            return (false, replaced_restore);
+        };
+        // Preserve any prior queued `old_open` (e.g. hide then show in one turn).
+        let old_open = self
+            .top
+            .toggles
+            .iter()
+            .position(|(k, _, _)| *k == key)
+            .is_some_and(|idx| self.top.toggles.remove(idx).1);
+        if let Some(error) = self
+            .host
+            .dispatch_at(
+                id,
+                Event::Toggle {
+                    old_open,
+                    new_open: true,
+                },
+                now_ms,
+            )
+            .or(self.after_commit())
+        {
+            self.host.log(error);
+        }
+        (true, replaced_restore)
+    }
+
+    /// Finish toggle accounting after an eager open toggle: drop duplicate open
+    /// toggles only while the target remains open, and otherwise deliver a
+    /// `open -> closed` toggle so author state reverts cleanly.
+    pub(super) fn settle_eager_toggle(&mut self, key: Option<NodeKey>, opened: bool) {
+        let Some(key) = key else {
+            return;
+        };
+        let still_open = opened && self.open_mode(key).is_some();
+        if still_open {
+            self.top.toggles.retain(|(k, _, new)| !(*k == key && *new));
+        } else {
+            self.top.toggles.retain(|(k, _, _)| *k != key);
+            self.top.toggles.push((key, true, false));
+        }
+    }
+
+    /// Revalidate a surface target after synchronous cancel/blur handlers in
+    /// `open_surface`: returns the fresh `(id, plan)` when still presentable,
+    /// otherwise restores focus and resolves the back layer.
+    pub(super) fn revalidate_surface(
+        &mut self,
+        key: NodeKey,
+        modal: bool,
+        restore_key: Option<NodeKey>,
+        request: Option<u32>,
+        now_ms: f64,
+    ) -> Option<(ViewId, super::Plan)> {
+        let valid = (!self.top_open())
+            .then(|| {
+                let node = self.host.kernel().node_by_key(key)?;
+                if node.parent.is_some_and(|p| self.host.route_visibility(p).1) {
+                    return None;
+                }
+                let plan = self.surface_plan(node.id, modal)?;
+                (!(modal && matches!(plan, super::Plan::Menu(_)))).then_some((node.id, plan))
+            })
+            .flatten();
+        if valid.is_some() {
+            return valid;
+        }
+        let back = restore_key
+            .and_then(|k| self.host.kernel().node_by_key(k).map(|n| n.id))
+            .filter(|id| self.focusable(*id) && self.focus_refusal(*id).is_none());
+        if !self.top_open() && self.focus.is_none() && back.is_some() {
+            if let Some(e) = self.set_focus(back, now_ms) {
+                self.host.log(e);
+            }
+        }
+        self.resolve_back_layer(request);
+        None
+    }
+
+    /// Finish opening a desktop overlay or painted modal through `alert_present`,
+    /// preserving any replaced surface's focus target and settling an eager toggle.
+    pub(super) fn present_overlay(
+        &mut self,
+        target: Option<NodeKey>,
+        name: &str,
+        (invoker, point): (Option<ViewId>, Option<(f32, f32)>),
+        modal: bool,
+        now_ms: f64,
+        (toggled, replaced): (bool, Option<NodeKey>),
+    ) -> bool {
+        let opened = self.alert_present(target, name, invoker, point, modal, now_ms);
+        if let (true, Some(r)) = (opened, replaced) {
+            if let Some(a) = self.alert.as_mut() {
+                a.restore = Some(r);
+            }
+        }
+        if toggled {
+            self.settle_eager_toggle(target, opened);
+        }
+        opened
+    }
+
+    /// Finish presenting a shell surface: step remote/desktop alerts, settle or
+    /// queue the toggle, and notify surface listeners.
+    pub(super) fn finish_surface_open(&mut self, key: NodeKey, toggled: bool) {
+        let desktop_alert = self.top.overlay.enabled
+            && self
+                .top
+                .open
+                .as_ref()
+                .is_some_and(|o| o.kind == super::SurfaceKind::Alert);
+        if self.remote() || desktop_alert {
+            self.surface_step(false);
+        }
+        if toggled {
+            self.settle_eager_toggle(Some(key), true);
+        } else {
+            self.queue_toggle(key, true);
+        }
+        self.surface_changed();
+    }
+
     /// How many long presses a node has taken, wrapping.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn long_presses(&self) -> u32 {

@@ -95,6 +95,8 @@ final class BoxMaskState {
     var layerMask: CALayer?
     var boxMask: CALayer?
     var effectMask: AnyObject?
+    /// The clip's shape layer while it is the layer's own mask ([`NodeView.noteClipLayer`]).
+    weak var clipLayer: CAShapeLayer?
     private static var slot = 0
     /// Its state, if `applyBoxMask` ever built one for it.
     static func existing(_ view: NodeView) -> BoxMaskState? { objc_getAssociatedObject(view, &slot) as? BoxMaskState }
@@ -103,5 +105,29 @@ final class BoxMaskState {
         let s = BoxMaskState()
         objc_setAssociatedObject(view, &slot, s, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         return s
+    }
+}
+
+extension NodeView {
+    /// Tell the box animations where the clip is (LLP 1003.003 D7): `mask`
+    /// when the layer's own mask is the clip's shape layer, which Core
+    /// Animation plays a moving clip on, else nil (no clip, or a mask that
+    /// holds it, a mask's own mask, which `CALayer.h` marks unsupported).
+    func noteClipLayer(_ mask: CALayer?) {
+        let clip = clipPath == nil ? nil : mask as? CAShapeLayer
+        let state = BoxMaskState.existing(self)
+        guard state?.clipLayer !== clip else { return }
+        (state ?? BoxMaskState.of(self)).clipLayer = clip
+        presenter?.boxAnimations.setClip(id, clip, clock: presenter?.session?.clock)
+    }
+
+    /// The clip as it shows: the path of the clip layer's presentation copy
+    /// while Core Animation plays a run on it, which `CALayer.h` calls a
+    /// close approximation of what shows, else the model's, which a copy
+    /// takes only at its next commit (LLP 1003.003 D7, D8).
+    package var presentedClipPath: CGPath? {
+        guard let clipPath else { return nil }
+        guard let clip = BoxMaskState.existing(self)?.clipLayer, clip.animationKeys()?.isEmpty == false else { return clipPath }
+        return clip.presentation()?.path ?? clipPath
     }
 }

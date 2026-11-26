@@ -648,7 +648,9 @@ fn a_morph_between_paths_of_one_shape_plays_in_core_animation() {
     assert_eq!(spec["t"], serde_json::json!([0, 1]));
     assert_eq!(spec["c"], serde_json::json!([[0.77, 0, 0.175, 1]]));
     assert_eq!(spec["d"], 0.5);
-    assert_eq!(spec["fill"], 3);
+    // Backwards fill holds the start through a delay; once it ends the
+    // model's path, the run's end, shows
+    assert_eq!(spec["fill"], 2);
     assert_eq!(spec["v"][1], flat["p"]);
     close(
         &spec["v"][0],

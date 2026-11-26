@@ -184,6 +184,9 @@ export function geometry(readers) {
   // An answer the layout moved since it was read, answered again; at the bound, held
   const check = (cause) => {
     chain = cause === "geometry" ? chain + 1 : 0;
+    // Only what a live instance reads now is kept: arguments a reader has left, and a reader gone, leave nothing
+    const live = new Set(Resources.filter((r) => r.source === "exactGeometry" && !r.gone).map((r) => key(r.name, r.asked)));
+    for (const k of told.keys()) if (!live.has(k)) told.delete(k);
     const moved = [...new Set([...told.values()].filter((t) => JSON.stringify(shapedAnswer(t.name, t.args, 0)) !== t.json).map((t) => t.name))];
     if (!moved.length) return;
     if (chain >= 8) return say("geometry-feedback: a geometry fact moved its own layout eight times in a row; its answers hold until another cause lays the page out (LLP 1123 D6)");
