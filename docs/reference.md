@@ -2205,6 +2205,21 @@ is `true` in a binary baked with production trust (for example, Apple's
 `--release`, `--distribution`, or `exact release`) and `false` in a development
 build.
 
+### Video picture in picture
+
+A URL-backed `video` uses the page commands `requestPictureInPicture(id)`
+and `exitPictureInPicture()`. Read `exactPage().pictureInPictureEnabled`
+to decide whether to show a custom button. The element reports a successful
+presentation with `enterpictureinpicture` and `leavepictureinpicture`.
+A failed request reports its reason through `pictureinpictureerror`.
+
+| Host | Command and verification |
+| --- | --- |
+| Web JS | Reads `document.pictureInPictureEnabled`. Headed Chromium ran the Contract button, the element events, repeat entry, exit and removal with a bundled MP4. |
+| Web wasm | Reads false and reports a request error. |
+| iOS, tvOS, macOS | The video command is unavailable. iOS PiP events have not been run on hardware. |
+| Painted Linux and Windows, terminal | Read false and report a request error. |
+
 ## Over-the-air updates
 
 The [recipe](recipes/over-the-air-updates.md) goes from a signing key to an

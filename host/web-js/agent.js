@@ -401,6 +401,8 @@ export function install(exact, { passive = false } = {}) {
         // A hatch's regions and parts, under their node (LLP 1075.003.000.001 §3.4, §3.5; hatches.js).
         if (exact.hatchRegions) nodes = nodes.map(n => { const o = exact.hatchRegions.of(views.get(n.id)); return o ? { ...n, ...o } : n; });
         nodes = nodes.map(n => { const ids = packaged(views.get(n.id))?.partIds?.(); return ids?.length ? { ...n, parts: ids.map(id => ({ id, live: true })) } : n; });
+        const floating = document.pictureInPictureElement;
+        if (floating) for (const n of nodes) if (views.get(n.id) === floating) n.pictureInPicture = { presentation: "system" };
         if (req.plan) for (const n of nodes) { const site = views.get(n.id)?.dataset?.site; if (site != null) n.site = Number(site); }
         return { nodes, roots, ...tags(), ...(req.plan && exact.plan ? { planDigest: exact.plan } : {}) };
       }

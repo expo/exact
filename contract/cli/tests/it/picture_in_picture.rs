@@ -173,3 +173,24 @@ fn the_window_options_are_checked() {
         assert!(error.contains("type-media-command"), "{statement}: {error}");
     }
 }
+
+#[test]
+fn a_video_accepts_the_events_and_refuses_each_image_option_by_name() {
+    let app = include_str!("../../../../scripts/fixtures/video-picture-in-picture.contract");
+    let app = format!("{app}      image \"poster.png\" id=`poster-${{status}}`\n");
+    contract::compile(&app).unwrap();
+    for option in [
+        "presentation=\"window\"",
+        "title=\"Preview\"",
+        "width=480",
+        "height=320",
+    ] {
+        let source = app.replace("(\"clip\")", &format!("(\"clip\", {option})"));
+        let error = contract::compile(&source).unwrap_err().to_string();
+        assert!(
+            error.contains("type-media-command")
+                && error.contains(option.split('=').next().unwrap()),
+            "{error}"
+        );
+    }
+}

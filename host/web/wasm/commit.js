@@ -646,7 +646,7 @@ function apply(batch) {
               e.exactStopped = true;
             }
           } else if (op.name === "requestPictureInPicture" || op.name === "exitPictureInPicture") {
-            const why = "the wasm target does not float an image; the JS target does", el = op.name === "requestPictureInPicture" ? liveById(String(op.args?.[0] ?? "")) : null;
+            const why = "the wasm target does not float images or videos; the JS target does", el = op.name === "requestPictureInPicture" ? liveById(String(op.args?.[0] ?? "")) : null;
             log(`${op.name} refused: ${why}`);
             /* the image hears the refusal after this batch, as its pictureinpictureerror (LLP 1042 §9); a reload in
                between reuses view ids, so only the same element in the same incarnation hears it */

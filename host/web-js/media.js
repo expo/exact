@@ -56,8 +56,18 @@ export function media(e, attrs) {
   e.exactMedia = { props, handlers: [] };
   if (attrs["data-app-src"]) appSource(e, attrs["data-app-src"]);
   if (attrs["data-app-poster"]) appPoster(e, attrs["data-app-poster"]);
+  const exitFloating = () => {
+    if (document.pictureInPictureElement === e) document.exitPictureInPicture().catch(() => {});
+  };
+  // A route or document can leave while the browser still owns its floating window.
+  const entered = () => e.$media.retired ? exitFloating() : window.addEventListener("pagehide", exitFloating);
+  const left = () => window.removeEventListener("pagehide", exitFloating);
+  e.addEventListener("enterpictureinpicture", entered);
+  e.addEventListener("leavepictureinpicture", left);
   onEnd(() => {
+    left();
     e.$media.retired = true;
+    exitFloating();
     e.$media.release?.();
     globalThis.exact?.removeMedia?.(e);
     // As the wasm host retires a video: stopped, its source let go.

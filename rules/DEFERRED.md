@@ -1421,9 +1421,12 @@ reading. Nothing that isn't HTML is added by it.
   `pictureinpictureerror`, on macOS (AVKit's sample-buffer source in the
   video arm) and the web's JS target; iOS, tvOS, the wasm target, Linux and
   Windows refuse it. Consumer: the T3 Code clone's server-rendered Browser
-  tab, which T3 Code floats from its JPEG stream. Still out: picture in
-  picture for a `video` by command (AVKit's controls reach it, LLP 1042
-  §3), a capability read for it, and iOS.
+  tab, which T3 Code floats from its JPEG stream.
+  **Expanded (panel, 2026-11-25).** AZ1 (#1799, LLP 1042 §9.3) admits
+  the commands and events for URL-backed video on the web's JS target and
+  Android, AVKit's own lifecycle events on iOS, and the page capability
+  `pictureInPictureEnabled` for a video command. Pocket Lab is the consumer.
+  The iOS command, automatic entry and commands for tracks remain deferred.
   **Expanded (Daehyeon Mun, 2026-11-02: picture in picture as "an
   author-requested floating window drawn by Exact", waiving the 2026-11-01
   ruling that kept AVKit's panel for it; take waived, none offered; LLP 1042

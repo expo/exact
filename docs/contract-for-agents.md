@@ -3788,6 +3788,16 @@ call `fastSeek(id, seconds)`, which seeks each time it runs. `load(id)` loads th
 source again: a retry after an `error`, or a file written since. Both name the
 element by its `id`, as `focus` does.
 
+For a URL-backed `video`, gate a custom PiP button on the bool field
+`pictureInPictureEnabled` of an `exactPage()` resource. Its press calls
+`requestPictureInPicture("clip")`. Bind `enterpictureinpicture` and
+`leavepictureinpicture` on the video to reflect the actual presentation,
+including a change from the player's own controls. A refused request fires
+`pictureinpictureerror(reason)`. The browser needs transient user activation.
+A task or a reply can start PiP only while that activation still holds.
+`exitPictureInPicture()` closes the floating video. The image options below
+apply only to images. [Host support](reference.md#video-picture-in-picture)
+
 Pictures that are not a video (a page a server streams as JPEG frames, a
 camera's stills) float in the platform's picture-in-picture window with
 `requestPictureInPicture("id")` on the `image` that shows them: the window

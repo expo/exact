@@ -131,6 +131,9 @@ impl Lowerer<'_> {
                         self.push(e);
                     }
                 }
+                if name == "requestPictureInPicture" && args.len() > 1 {
+                    video_window_options(&self.root.view, args)?;
+                }
                 if name == "share" {
                     share_pictures(&self.root.view, args)?;
                 }
@@ -269,6 +272,59 @@ fn share_pictures(view: &[Node], args: &[Expr]) -> Result<(), LowerError> {
             at,
         ),
         None => Ok(()),
+    }
+}
+
+/// A computed target is checked by the live host. A literal video target can be checked
+/// here, after component expansion has supplied its attributes.
+fn video_window_options(view: &[Node], args: &[Expr]) -> Result<(), LowerError> {
+    let Some(Expr::Str(target, _)) = args.iter().find(|a| !matches!(a, Expr::NamedArg(..))) else {
+        return Ok(());
+    };
+    let mut video = false;
+    for node in Node::walk(view) {
+        let Node::Element { tag, attrs, .. } = node else {
+            continue;
+        };
+        let Some(attr) = attrs.iter().rev().find(|a| a.name == "id") else {
+            continue;
+        };
+        match (tag.as_str(), &attr.value) {
+            ("video", Expr::Str(id, _)) if id == target => video = true,
+            ("image", id) if could_name(id, target) => return Ok(()),
+            _ => {}
+        }
+    }
+    if video {
+        if let Some(Expr::NamedArg(name, _, at)) =
+            args.iter().find(|arg| matches!(arg, Expr::NamedArg(..)))
+        {
+            return crate::err(
+                "type-media-command",
+                format!("`{name}` is an image window option and \"{target}\" is a video"),
+                *at,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn could_name(id: &Expr, target: &str) -> bool {
+    use contract_syntax::TemplatePart::Text;
+    match id {
+        Expr::Str(value, _) => value == target,
+        Expr::Template(parts, _) => {
+            let mut rest = target;
+            parts.iter().all(|part| match part {
+                Text(text) => rest.split_once(text.as_str()).is_some_and(|(_, after)| {
+                    rest = after;
+                    true
+                }),
+                _ => true,
+            }) && !matches!(parts.first(), Some(Text(prefix)) if !target.starts_with(prefix))
+                && !matches!(parts.last(), Some(Text(suffix)) if !target.ends_with(suffix))
+        }
+        _ => true,
     }
 }
 

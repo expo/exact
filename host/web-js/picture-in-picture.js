@@ -52,7 +52,7 @@ export function float(img, id, say, options = {}) {
   const watch = new MutationObserver(() => { if (!img.isConnected) current.stop(false); });
   watch.observe(document, { childList: true, subtree: true });
   current = {
-    img,
+    img, video, get entered() { return entered; },
     stop(heard) {
       if (active !== current) return;
       active = null;
@@ -80,6 +80,10 @@ export function float(img, id, say, options = {}) {
     .catch(error => { current.stop(false); refuse(error.name); });
 }
 
+export function cancelOpening() {
+  if (active && !active.entered) active.stop(false);
+}
+
 // The window's size before it takes the picture's aspect: the area of `width` by `height`
 // (480 by 320 where neither is given) at the picture's aspect, as the window opens.
 export function windowSize(options, natural) {
@@ -95,7 +99,7 @@ function floatWindow(img, options, refuse) {
   const watch = new MutationObserver(() => { if (!img.isConnected) current.stop(false); });
   let entered = false;
   current = {
-    img,
+    img, get entered() { return entered; },
     panel: options.presentation === "panel",
     stop(heard) {
       if (active !== current) return;
@@ -133,6 +137,9 @@ function floatWindow(img, options, refuse) {
  *  document.exitPictureInPicture() ends the document's one picture-in-picture element. A panel
  *  is a window of its own, as on macOS, and stays. */
 export function exit(say) {
-  if (!active || active.panel) return say("exitPictureInPicture ignored: no image is in the picture-in-picture window");
+  if (document.pictureInPictureElement && !document.pictureInPictureElement.srcObject) {
+    return document.exitPictureInPicture().catch(error => say(`exitPictureInPicture refused: ${error.name}`));
+  }
+  if (!active || active.panel) return say("exitPictureInPicture ignored: nothing is in the picture-in-picture window");
   active.stop(true);
 }
