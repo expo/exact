@@ -362,10 +362,11 @@ test.each(['library', 'plain', 'expect', 'landing', 'move'])('one drag deadline 
 
 test('a timed-out carrier move finishes before another contact is admitted', async () => {
   const move = Promise.withResolvers(), bound = DRAG_BOUNDS.total, phases = [];
-  const s = await open({ host: 'ios', device: true }, { openDevice: async () => ({
+  const s = await open({ host: 'ios', device: true, timing: 'platform' }, { openDevice: async () => ({
     host: 'ios', close: async () => {},
     async ask(req) {
       if (req.op === 'layout') return { nodes: [{ id: 7, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 100, h: 100 } };
+      if (req.op === 'tree') return { nodes: [{ id: 7, props: {} }] };
       return { lines: [], next: 0 };
     },
     async input(id, phase) {
