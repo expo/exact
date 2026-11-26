@@ -104,7 +104,8 @@ extension NavigationHost {
         guard let top = primaryOwner else { return }
         fitOwner()
         placeOwner()
-        top.view.layoutIfNeeded()
+        // A split UIKit is moving lays its columns out itself, in its animation
+        if split?.laysOutItself != true { top.view.layoutIfNeeded() }
     }
 }
 #endif

@@ -59,6 +59,11 @@ extension NavigationHost {
     #endif
 
     /// Whether the stack whose first route is `root` splits; nil while the runner is busy.
+    func columnLayoutHeld(_ nav: UINavigationController) -> Bool {
+        if let split, split.holds(nav), split.laysOutItself { return true }
+        return tabSplits.values.contains { $0.holds(nav) && $0.laysOutItself }
+    }
+
     func splits(_ root: RouteController?) -> Bool? { splitRule(root).map { $0 != nil } }
 
     /// The split's two columns, each a navigation controller of its own
@@ -147,7 +152,7 @@ extension NavigationHost {
         }
         // Slices published before a press's batch land ahead of it: only the presses' own batches end them
         if !split.presses.isEmpty, split.presses.allSatisfy(\.landed) { endPress(split, poll: false) }
-        ApplyProfile.time("nav.layout") { split.controller.view.layoutIfNeeded() }
+        if !split.laysOutItself { ApplyProfile.time("nav.layout") { split.controller.view.layoutIfNeeded() } }
         return false
     }
 

@@ -122,6 +122,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         case nil: false
         }
     }
+    /// UIKit is transferring navigation items between columns. Laying out their bars here can assert.
+    var laysOutItself: Bool { move != nil }
+
     /// Whether UIKit nests N1 in N0 now (collapsed, or collapsing).
     var nested: Bool { list.viewControllers.contains { $0 === detail } }
     /// Whether N1's routes are in the stack UIKit shows: in their column, or
