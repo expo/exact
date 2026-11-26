@@ -702,11 +702,11 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             // the web's space, all of it above the later section; a footer's
             // bottom inset is its own gap under the rows, and stays.
             var insets = section.contentInsets
-            // A fold's half band, as a hand-built split view's card stands
-            // clear of it, and the list's padding. The section's leading
-            // inset is on the left in either direction, as UIKit lays it.
-            insets.leading += self.foldReach.left + self.horizontalPadding.left
-            insets.trailing += self.foldReach.right + self.horizontalPadding.right
+            // The side safe area UIKit does not give the collection, a fold's half band, as a hand-built split view's
+            // card stands clear of it, and the list's padding. The leading inset is on the left in either direction.
+            let band = self.collection.sideBand
+            insets.leading += band.left + self.foldReach.left + self.horizontalPadding.left
+            insets.trailing += band.right + self.foldReach.right + self.horizontalPadding.right
             if let space, s?.hasHeader != true { insets.top = space }
             if s?.footer == nil {
                 if index + 1 < model.sections.count { if self.section(at: index + 1)?.spaceAbove != nil { insets.bottom = 0 } }

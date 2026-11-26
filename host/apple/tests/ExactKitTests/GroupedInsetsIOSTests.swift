@@ -46,6 +46,24 @@ final class GroupedInsetsIOSTests: GroupedListFixture {
         XCTAssertEqual(l.collection.horizontalScrollIndicatorInsets, horizontal, "and gone with it")
     }
 
+    /// LLP 1123 D13: the side safe area a list reaches over insets its cards through its sections, as UIKit insets a
+    /// hand-built list's under that safe area, while its own safe area stays UIKit's: a reported one UIKit did not give
+    /// lays the list out again on each frame its bars move, against a person's pan.
+    func testTheSidesAListReachesOverInsetItsCardsAndLeaveItsSafeAreaUIKits() throws {
+        let p = presenter { self.model() }
+        defer { window.isHidden = true }
+        let l = try list(p)
+        let safe = l.collection.safeAreaInsets, card = try cell(p, 10).frame
+        l.collection.sideSafeArea = (0, 84)
+        l.collection.layoutIfNeeded()
+        XCTAssertEqual(l.collection.safeAreaInsets, safe, "UIKit's own")
+        XCTAssertEqual(try cell(p, 10).frame.maxX, card.maxX - max(0, 84 - safe.right), accuracy: 0.5, "the card clears the side")
+        XCTAssertEqual(l.collection.consumedBand[1], max(84, safe.right), "the depth the cards are inset from")
+        l.collection.sideSafeArea = (0, 0)
+        l.collection.layoutIfNeeded()
+        XCTAssertEqual(try cell(p, 10).frame.maxX, card.maxX, accuracy: 0.5, "and back")
+    }
+
     func testARowsMarginsAndBackgroundInsetsReachItsCellThroughItsUpdates() throws {
         let p = presenter { self.model() }
         defer { window.isHidden = true }

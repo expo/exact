@@ -303,7 +303,7 @@ final class ScrollInsetsIOSTests: XCTestCase {
         // band with twice its depth in its own points, the insets it is written in
         let (_, owner) = try scrollView(in: scene)
         let band = owner.safeAreaInsets
-        XCTAssertGreaterThan(band.top, 0, "the device has a top band")
+        try XCTSkipIf(band.top < 1, "no top band on this device")
         let box = UIView(frame: CGRect(x: 0, y: 0, width: owner.bounds.width * 2, height: owner.bounds.height * 2))
         box.layer.anchorPoint = .zero
         box.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)

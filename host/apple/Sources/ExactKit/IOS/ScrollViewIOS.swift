@@ -48,6 +48,12 @@ package protocol SafeIndicators: UIScrollView {
     /// D14's writer writes the indicator insets whole (`ScrollInsetsIOS.write`), the side bands among its terms, and
     /// the term is none of them.
     var writtenWhole: Bool { get set }
+    /// The safe area its indicators keep within: UIKit's, and a grouped list's sides it reaches over too.
+    var indicatorSafeArea: UIEdgeInsets { get }
+}
+
+extension SafeIndicators {
+    package var indicatorSafeArea: UIEdgeInsets { safeAreaInsets }
 }
 
 /// What a scroll view's own safe area adds to its indicators' insets while UIKit's adjustment, which adds its top and
@@ -67,7 +73,7 @@ package struct SafeIndicatorTerm {
     package init() {}
 
     package mutating func sync(_ scroll: some SafeIndicators) {
-        let safe = scroll.safeAreaInsets
+        let safe = scroll.indicatorSafeArea
         let off = !scroll.writtenWhole && !scroll.automaticallyAdjustsScrollIndicatorInsets
         let vertical = off ? UIEdgeInsets(top: safe.top, left: 0, bottom: safe.bottom, right: 0) : .zero
         let horizontal = off ? safe : .zero
