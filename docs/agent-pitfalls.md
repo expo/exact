@@ -48,8 +48,8 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 - **Safari drops a declaration that names a viewport segment, its fallback included.** Safari on
   iOS 27.1 parses no `env()` with indices, so `width="env(viewport-segment-width 1 0, 100%)"` leaves
-  the width `auto`. It tells a page of no fold either: on an iPhone Duo the posture, the segments and
-  the window's size are the same at 180° and 90°. Fix: write a segment only where `exactViewport()`
+  the width `auto`. Nor does it tell a page about the hinge: on an iPhone Duo the posture, the
+  segments and the window's size are the same at 180° and 90°. Fix: write a segment only where `exactViewport()`
   reports two, as the [foldables recipe](recipes/foldables.md) does. (A page in Safari on an iPhone
   Duo simulator, 2026-11-24.)
 - **A layout-region inset is not a page gutter.** The web can report zero
@@ -60,8 +60,8 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 - **`gap`, `row-gap` and `column-gap` accept numeric lengths, not `calc()` or `env()`.**
   The compiler rejects a segment-based gap with `lower-attr-value: expected
-  nonnegative number`. Place fold panes by segment edges in a container aligned
-  with the viewport. Global segment lengths used as flex bases shrink across
+  nonnegative number`. Place the panes either side of the hinge by segment edges, in a
+  container aligned with the viewport. Global segment lengths used as flex bases shrink across
   the hinge if a header or footer reduces the container's space. Put that chrome
   inside a pane, and end a bottom pane at `bottom: 0`. For side-by-side
   panes, automatic left/right insets with flex start/end alignment preserve

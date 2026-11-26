@@ -226,7 +226,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a chat header with an avatar, and day pills|`chat-header`|
 |a voice note's waveform, a bubble's tail (SVG in a row)|`waveform-and-tail`|
 |data the app ships and only reads (a JSON file `app.ts` imports)|`shipped-data`|
-|a floating button, a pinned row, a scroll bar's place, the keyboard, an iPhone Duo's fold|`edges`|
+|a floating button, a pinned row, a scroll bar's place, the keyboard, an iPhone Duo's hinge|`edges`|
 |a long list or grid that loads more|`long-lists`|
 |a large local history with live arrivals and offline sends|[`large-live-list`](recipes/large-live-list.md)|
 |a document or article longer than a screen, a long Markdown note|`long-text`|

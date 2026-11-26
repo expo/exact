@@ -1,7 +1,7 @@
 // `check` (LLP 1116.003 D8): what is wrong with the presented screen, in text, so a builder need not read a
 // screenshot back to find it — text clipped against its box or squeezed to no width, a scroller squeezed to less than
 // a row, controls overlapping or covered by a bar, the keyboard or a sheet, a control or text outside the safe area or across
-// a fold (check-regions.mjs), targets under the platform's minimum,
+// the hinge (check-regions.mjs), targets under the platform's minimum,
 // horizontal overflow, text below a contrast floor, and a card whose fill is what lies behind it. The host observes
 // (host/web-js/check.js, AgentCheckIOS.swift: its presented boxes, ink, fills, clips and hit tests, and the fill painted
 // under each text, LLP 1116.006 D5); where no fill is known, the background a text stands on is read from a capture's
@@ -247,8 +247,8 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // others only where its lines are.
   const where = (it) => (it.control && !it.lines ? [shown(it, obs.keyboard)] : drawn(it));
   for (const { it, kind, detail } of regionFindings(obs)) {
-    const part = kind === 'fold' && host === 'ios' && detail.axis === 'x' && partAfterScroller(it, nodes, items);
-    if (part) add(kind, it, { ...detail, unit, part: part.id, beside: part.with }, `keep it on one side of the fold: a box that holds just ${named(part.id, nodes)}, then ${named(part.with, nodes)}, with \`arrangement="split"\`, stands the two either side of it, and shows ${named(part.id, nodes)}, its primary, alone where both do not fit; the box needs its own size and the route's whole width (contract vocab arrangement)`);
+    const part = kind === 'hinge' && host === 'ios' && detail.axis === 'x' && partAfterScroller(it, nodes, items);
+    if (part) add(kind, it, { ...detail, unit, part: part.id, beside: part.with }, `move it to one side of the hinge: put just ${named(part.id, nodes)} and then ${named(part.with, nodes)} in a box with its own size and the route's whole width, and split it only while the phone is open, with \`arrangement=(viewport.horizontalViewportSegments == 2 ? "split" : "none")\`. Open, the two then stand either side of the hinge; closed, they stay stacked, since a split on the outer display shows only ${named(part.id, nodes)} (contract vocab arrangement)`);
     else add(kind, it, { ...detail, unit }, regionHint(kind));
   }
   // A list's section header (`pinned`) lies over the rows passing under it, as UIKit pins it, and an announcement laid
@@ -279,7 +279,7 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // A control's own text covered with it is one finding: the control's.
   const coveredControls = found.filter((f) => f.kind === 'covered' && items.find((it) => it.id === f.id)?.control);
   const kept = found.filter((f) => !(f.kind === 'covered' && f.text != null && coveredControls.some((c) => c !== f && holds({ x: c.box[0], y: c.box[1], w: c.box[2], h: c.box[3] }, { x: f.box[0], y: f.box[1], w: f.box[2], h: f.box[3] }))));
-  const order = ['covered', 'edge', 'fold', 'squeezed', 'clipped', 'overflow', 'overlap', 'contrast', 'card', 'target'];
+  const order = ['covered', 'edge', 'hinge', 'squeezed', 'clipped', 'overflow', 'overlap', 'contrast', 'card', 'target'];
   return kept.sort((p, q) => order.indexOf(p.kind) - order.indexOf(q.kind) || p.box[1] - q.box[1] || p.box[0] - q.box[0]);
 }
 function parseHex(h) { const n = parseInt(String(h).slice(1, 7), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
@@ -348,7 +348,7 @@ export function line(f, nodes) {
   const what = {
     covered: () => d.offscreen ? `its middle is past ${d.under}, and nothing scrolls to it` : `its middle is under ${under(d.under)} at rest${d.bar ? ` (${d.bar})` : ''}, and nothing scrolls it clear`,
     edge: () => regionLine('edge', d, d.unit),
-    fold: () => regionLine('fold', d, d.unit),
+    hinge: () => regionLine('hinge', d, d.unit),
     clipped: () => d.need ? `its text is ${[d.need[0] ? `${d.need[0]} ${d.unit} wider` : '', d.need[1] ? `${d.need[1]} ${d.unit} taller` : ''].filter(Boolean).join(' and ')} than its box${d.clips ? ', which clips it' : ', and spills'}` : `${d.edge ? `the ${d.edge} of the screen` : named(d.by, nodes)} cuts ${[d.cut[0] ? `${d.cut[0]} ${d.unit} of its width` : '', d.cut[1] ? `${d.cut[1]} ${d.unit} of its height` : ''].filter(Boolean).join(' and ')}`,
     overflow: () => d.pad != null ? `runs ${d.past} ${d.unit} past ${named(d.of, nodes)}'s side: ${d.written != null ? `its width is ${d.written} of its parent's` : 'its content is as wide as its parent\'s'}, and its ${d.pad} ${d.unit} of padding${d.written != null ? ' and border' : ''} add to that (content-box sizing)` : d.of != null ? `runs ${d.past} ${d.unit} past ${named(d.of, nodes)}'s side, and nothing there scrolls or clips it` : `runs ${d.past} ${d.unit} past the ${d.width}-wide viewport's side, and nothing scrolls it`,
     target: () => `${d.tap.join('×')} ${d.unit} tap area (box ${f.box[2]}×${f.box[3]}), under the ${d.min}×${d.min} minimum`,
@@ -375,7 +375,7 @@ export function report(runs, trees, host) {
     const nodes = trees[i];
     const head = `check ${host} · ${run.scheme}${run.asked && run.asked !== run.scheme ? ` (asked ${run.asked}: the app keeps its own scheme)` : ''}${run.accepted?.length ? ` (${run.accepted.length} accepted)` : ''}`;
     if (run.incomplete) out.push(`${head}: incomplete (${run.incomplete})`);
-    else if (!run.findings.length) out.push(`${head}: no findings (text fits, nothing covered or overlapping, targets ≥ ${run.target}, no horizontal overflow${run.regions ? ', edges and folds clear' : ''}, contrast ≥ 4.5:1 or 3:1 large, cards show)`);
+    else if (!run.findings.length) out.push(`${head}: no findings (text fits, nothing covered or overlapping, targets ≥ ${run.target}, no horizontal overflow${run.regions ? ', nothing outside the safe area or across a hinge' : ''}, contrast ≥ 4.5:1 or 3:1 large, cards show)`);
     else {
       out.push(`${head}: ${run.findings.length} finding${run.findings.length === 1 ? '' : 's'}`);
       for (const f of run.findings.slice(0, SHOWN)) out.push(line(f, nodes));

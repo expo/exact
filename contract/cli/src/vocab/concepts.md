@@ -286,12 +286,12 @@ component App
 ```
 
 - A wide window shows the list beside its detail, as a split view does, where the first route asks
-  with `navigationSplit="split"`: 900 px and up or across a fold on the web, and on iOS UIKit's
+  with `navigationSplit="split"`: 900 px and up or across a hinge on the web, and on iOS UIKit's
   split view where UIKit shows both columns: an iPad, in a tab too, and the iPhone Duo open, outside
   a tab (LLP 1127); the Mac, the painted hosts and an iPad outside a tab split such a list unasked,
   and `"none"` pushes everywhere. The first route's rows push (a `link`, or a `press` that writes
   the router) and draw the `forward-chevron`; a chevron on a row that only selects is decoration. On
-  iOS and the web a narrow window pushes, unless a fold divides it on the web; the Mac splits at any
+  iOS and the web a narrow window pushes, unless a hinge divides it on the web; the Mac splits at any
   width. A row pressed while a detail shows pushes another; to swap the detail instead, `open`
   replaces when one shows: `nav = top(nav).name == "recipe" ? replace(nav, path("recipe", name)) :
   push(nav, path("recipe", name))`.
@@ -1801,7 +1801,7 @@ for the launch.
 
 More: docs/reference.md ("A setting a launch gives")
 
-## edges: insets, scroll bars, the keyboard and folds
+## edges: insets, scroll bars, the keyboard and the hinge
 names: insets, content inset, contentInset, scrollIndicatorInsets, scroll indicator, scroll bar, scrollbar, KeyboardAvoidingView, keyboard avoidance, keyboardVerticalOffset, keyboardLayoutGuide, iPhone Duo, Duo, fold, hinge, floating action button, FAB, bottom bar
 
 On a phone, measure none of these. Say what each part is, and the host keeps it clear of the bars, the home indicator and the docked keyboard:
@@ -1811,8 +1811,8 @@ On a phone, measure none of these. Say what each part is, and the host keeps it 
 - **A floating button** over a scroller that ends the route: placed by the safe area, as `add` is below.
 - **A field:** nothing. The focused one is shown above the keyboard (`contract vocab keyboard-and-focus`).
 - **A list beside its detail:** `contract vocab navigationSplit`.
-- **Two parts that stand together** (lyrics and their player, a map and its list), either side of a fold: `contract vocab arrangement`.
-- **One thing a fold must not cross** (a timer, a dial): a box that starts at the viewport's left edge, padded there as `Timer` is below, whose fallback is its padding with no fold; for a fold across, a box at its top and `env(viewport-segment-top 0 1, 24px)`. Panes on either side: `contract vocab foldables`.
+- **Two parts that stand together** (lyrics and their player, a map and its list), either side of the hinge while the phone is open: `contract vocab arrangement`.
+- **One thing the hinge must not run through** (a timer, a dial): a box that starts at the viewport's left edge, padded there as `Timer` is below, which falls back to its padding where there is no hinge; for a hinge across the screen, a box at its top and `env(viewport-segment-top 0 1, 24px)`. Panes on either side: `contract vocab foldables`.
 - **A colour behind the bars:** the route's `background-color`. A picture there: `contract vocab safe-area`.
 
 ```contract
@@ -1843,7 +1843,7 @@ component Timer
         text (running ? "Pause" : "Start")
 ```
 
-A keyboard's height, a bar's, a device's name or its size is none of the layout's. Where there is an iPhone Duo simulator, `verify ios` also reads an iPhone app's first screen and the screens its passing tests end on in its poses, and with the keyboard up where a field raises one: `edge` is what lies outside the safe area, `fold` what a fold crosses, `covered` what lies under a bar or the keys.
+A keyboard's height, a bar's, a device's name or its size is none of the layout's. Where there is an iPhone Duo simulator, `verify ios` also reads an iPhone app's first screen and the screens its passing tests end on in its poses, and with the keyboard up where a field raises one: `edge` is what lies outside the safe area, `hinge` what the hinge runs through while the phone is half open, `covered` what lies under a bar or the keys.
 
 More: `contract vocab safe-area`, docs/recipes/foldables.md, docs/recipes/keyboard-and-focus.md
 

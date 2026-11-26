@@ -1,8 +1,9 @@
 // Where the device keeps content clear (LLP 1188 D4): a control, or a text, that lies outside its owner's safe area where no
-// scroller can bring it in (`edge`), or across an active fold that no scroller holds it over (`fold`). The iOS host says, under UIKit's
-// own bars, whose safe area an item is in (`owner`, a place in `obs.owners`: the owner's box and its `safe` area, in the window),
-// whether a scroller holds it (`scrolls`) and how far one can move it from each edge (`room`), what its clips leave of it (`clip`),
-// and the window's active divisions, with the margins UIKit keeps clear (`obs.divisions`); this file judges.
+// scroller can bring it in (`edge`), or across an active division, the band UIKit keeps clear along the hinge while the phone
+// is half open, where no scroller holds it (`hinge`). The iOS host says, under UIKit's own bars, whose safe area an item is
+// in (`owner`, a place in `obs.owners`: the owner's box and its `safe` area, in the window), whether a scroller holds it
+// (`scrolls`) and how far one can move it from each edge (`room`), what its clips leave of it (`clip`), and the window's
+// active divisions, with the margins UIKit keeps clear (`obs.divisions`); this file judges.
 
 const EDGES = {
   top: { axis: 'y', at: (r) => r.y, inward: 1 },
@@ -27,7 +28,7 @@ function past(r, owner, edge) {
 /** Where two rectangles meet; a size of nothing or less where they do not. */
 export const meet = (a, b) => { const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y); return { x, y, w: Math.min(a.x + a.w, b.x + b.w) - x, h: Math.min(a.y + a.h, b.y + b.h) - y }; };
 
-/** The `edge` and `fold` findings of one observation: `{ it, kind, detail }`, at most one of each kind an item. */
+/** The `edge` and `hinge` findings of one observation: `{ it, kind, detail }`, at most one of each kind an item. */
 export function regionFindings(obs) {
   const found = [];
   for (const it of obs.items ?? []) {
@@ -43,11 +44,11 @@ export function regionFindings(obs) {
       .flatMap((edge) => rects.map((r) => past(r, owner, edge)).filter((p) => p && (it.room?.[edge] ?? 0) < p.by));
     const worst = edges.sort((a, b) => b.by - a.by)[0];
     if (worst) found.push({ it, kind: 'edge', detail: worst });
-    // What a scroller holds runs across a fold, as UIKit's own lists do: all of it where it has room to move, and in one that
-    // fits its rows, which cross the fold and are at least half as long as the safe area is
+    // What a scroller holds runs across the hinge, as UIKit's own lists do: all of it where it has room to move, and in one that
+    // fits its rows, which cross the hinge and are at least half as long as the safe area is
     const runs = (r, d) => (d.h >= d.w ? r.x < d.x && r.x + r.w > d.x + d.w && r.w * 2 >= owner.safe.w : r.y < d.y && r.y + r.h > d.y + d.h && r.h * 2 >= owner.safe.h);
-    const fold = it.room ? null : (obs.divisions ?? []).find((d) => rects.some((r) => { const m = meet(r, d); return m.w > 0.5 && m.h > 0.5 && !(it.scrolls && runs(r, d)); }));
-    if (fold) found.push({ it, kind: 'fold', detail: fold.h >= fold.w ? { axis: 'x', from: fold.x, to: fold.x + fold.w } : { axis: 'y', from: fold.y, to: fold.y + fold.h } });
+    const division = it.room ? null : (obs.divisions ?? []).find((d) => rects.some((r) => { const m = meet(r, d); return m.w > 0.5 && m.h > 0.5 && !(it.scrolls && runs(r, d)); }));
+    if (division) found.push({ it, kind: 'hinge', detail: division.h >= division.w ? { axis: 'x', from: division.x, to: division.x + division.w } : { axis: 'y', from: division.y, to: division.y + division.h } });
   }
   return found;
 }
@@ -64,7 +65,7 @@ export function clears(obs, b, a) {
 }
 
 /** A finding's own words, and what to do. */
-export const regionLine = (kind, d, unit) => kind === 'fold'
-  ? `the fold crosses it (${d.axis} ${Math.round(d.from)} to ${Math.round(d.to)} ${unit})`
+export const regionLine = (kind, d, unit) => kind === 'hinge'
+  ? `the hinge runs through it (${d.axis} ${Math.round(d.from)} to ${Math.round(d.to)} ${unit})`
   : `${Math.round(d.by)} ${unit} of it lie outside the safe area, which ends ${Math.round(d.depth)} ${unit} from the ${d.edge}`;
-export const regionHint = (kind) => (kind === 'fold' ? 'keep it on one side of the fold' : 'place it in the safe area') + ' (contract vocab edges)';
+export const regionHint = (kind) => (kind === 'hinge' ? 'move it to one side of the hinge' : 'place it in the safe area') + ' (contract vocab edges)';

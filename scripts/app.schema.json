@@ -1335,7 +1335,7 @@
             "additionalProperties": false,
             "required": ["finding", "node", "why"],
             "properties": {
-              "finding": { "type": "string", "enum": ["covered", "edge", "fold", "squeezed", "clipped", "overflow", "overlap", "contrast", "card", "target", "fixed-type", "fixed-symbol", "broken-words", "unnamed", "exposed-hidden", "outside-modal"] },
+              "finding": { "type": "string", "enum": ["covered", "edge", "hinge", "squeezed", "clipped", "overflow", "overlap", "contrast", "card", "target", "fixed-type", "fixed-symbol", "broken-words", "unnamed", "exposed-hidden", "outside-modal"] },
               "node": { "type": "string", "pattern": "^[^*]+\\*?$", "description": "A testId, or a non-empty prefix of one and a single trailing *: a bare * would accept the finding on every node." },
               "why": { "type": "string", "minLength": 1 }
             }

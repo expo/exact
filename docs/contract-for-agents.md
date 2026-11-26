@@ -241,7 +241,7 @@ Linux presenter (the driver's op also takes `resize <w> <h>`; a test step takes 
 `<w>x<h>`). iOS refuses a mid-drive `resize`; a size given at launch (`--size`, a
 test's `size` line) is laid out at that viewport, scaled to fit inside the device's safe
 area, so no safe-area inset, layout region or route's clearance is the device's, only
-what UIKit's bars cover. A fold is read where it crosses the viewport.
+what UIKit's bars cover. The hinge is read where it crosses the viewport.
 `close`, an operation and a test step, presses the window's close button as ⌘W
 or the red button would (the agent's window is never key, so a typed ⌘W reaches
 nothing): the window asks its `beforeunload` first, and the reply says
@@ -4538,10 +4538,14 @@ row arrangement="split" flex=1 min-height=0
 ```
 
 `"split"` puts the two side by side in a wide box, stacked in a tall one, and either side
-of a fold; `"overlay"` puts the primary over the secondary and, where a fold divides them,
-the primary at the trailing or the bottom. `"horizontal"` or `"vertical"` after either is
-the one axis it may use. A split that may not use the axis it needs, and one on an outer
-display, shows the primary alone, so what a person cannot do without goes in the primary.
+of the hinge; `"overlay"` puts the primary over the secondary and, where the hinge divides
+them, the primary at the trailing side or the bottom. `"horizontal"` or `"vertical"` after
+either is the one axis it may use. A split that may not use the axis it needs, and one on an
+outer display, shows the primary alone, so what a person cannot do without goes in the
+primary. To keep both on an iPhone Duo's outer display, split only while the phone is open,
+when the inner display has two segments side by side:
+`arrangement=(viewport.horizontalViewportSegments == 2 ? "split" : "none")`, with
+`viewport` read from `exactViewport()` as in [foldables](recipes/foldables.md).
 UIKit allocates the box's border box and stacks the panes, so padding goes on the panes,
 and their flex, `order` and `z-index` as the box's items are not read there. A new value updates the same controller, animated on screen;
 `"none"`, the default, is CSS.
@@ -4593,7 +4597,7 @@ height or a maximum height does not scroll. Give a pane that should fill its
 allocation a height such as `height="100%"`.
 
 UIKit lays an arrangement out under the iPhone Duo's side bar, its halves meeting at the
-fold, and each pane clears the bar itself. A route pads its content clear of the bar, so
+hinge, and each pane clears the bar itself. A route pads its content clear of the bar, so
 let the arrangement span the display with `-exact-safe-area="left right"` on the route
 and inset each pane's content by `var(--exact-safe-area-inset-left)` and
 `var(--exact-safe-area-inset-right)`, which in a pane are the pane's own. A pane scroller's
@@ -6272,8 +6276,8 @@ rectangles (`x`, `y`, `width`, `height`). `chrome` is the owner's: `verticalBarE
 vertical bar, shown or not), `sidebarAvailable` (whether the tab controller's sidebar is
 available, not whether it shows), `overscan` and the Mac's `auxiliaryTopLeftArea` and
 `auxiliaryTopRightArea`; it is `none` outside every owner. `regions` lists the reserved
-regions of the node's owner, or of the document: each has an `id`, a `kind` (`division`, as
-a fold's, or `occlusion`), a `frame` in the space read that includes its `margins`, the
+regions of the node's owner, or of the document: each has an `id`, a `kind` (`division`, the band
+along a hinge, or `occlusion`), a `frame` in the space read that includes its `margins`, the
 margins, and whether it is `active`; it is `[]` where the host reserves none and `none`
 where it has none to report, as before iOS 27.1. `keyboard` has the box's
 `guide` (the keyboard's rectangle while one shows, docked or undocked, and while it is
@@ -6344,7 +6348,7 @@ display's ratio; a game's render scale does not change it.
 logical points with the same document-inset meaning as `env(safe-area-inset-*)`.
 `segments` is a list of rectangles with numeric `x`, `y`, `width` and `height`
 fields in the layout viewport's coordinates, ordered by row then column. With
-no fold it contains the whole viewport. Declare the fields your app uses in a
+no hinge it contains the whole viewport. Declare the fields your app uses in a
 segment shape and `segments: Segment[]` in its viewport shape. Insets and
 rectangles update when the host's document geometry changes, in the same commit
 as the size a rotation brings.
@@ -6706,19 +6710,20 @@ one is a new binary there; editing a translation still ships as an update.
 
 `exactViewport().devicePosture` and the viewport segments are the web's
 ([foldables](recipes/foldables.md)). On the iOS 27.1 simulator UIKit moves an alert
-(an `alertdialog` with text) on either fold, and a page or form sheet (a sheet route
-or a modal `dialog`) on a book fold: folded like a book, an alert to the middle of
-the left segment and a page or form sheet to that segment, its right edge about 12
-points into the band (measured in left-to-right text); folded like a laptop, an
-alert to the bottom segment, while a page or form sheet still spans the fold. The
-tab bar stays clear of either fold. [Apple's adaptive-layout
+(an `alertdialog` with text) off the hinge whichever way the phone is folded, and a page
+or form sheet (a sheet route or a modal `dialog`) when it is folded like a book, the
+hinge down the screen: an alert to the middle of the left segment and a page or form
+sheet to that segment, its right edge about 12 points into the band (measured in
+left-to-right text). Folded like a laptop, the hinge across the screen, an alert moves
+to the bottom segment, while a page or form sheet still spans the hinge. The tab bar
+stays clear of the hinge either way. [Apple's adaptive-layout
 talk](https://developer.apple.com/videos/play/tech-talks/111463/) says instead that
-alerts move to the trailing side of a book fold and can move to the top of a laptop
-fold, and that action sheets, menus and popovers move clear too, which was not
-measured.
+alerts move to the trailing side when the phone is folded like a book and can move to
+the top when it is folded like a laptop, and that action sheets, menus and popovers move
+clear too, which was not measured.
 
-A route moved off a window edge is still padded as if it reached it: its top on a
-laptop fold, its right on a book fold's segment 0.
+A route moved off a window edge is still padded as if it reached it: its top when the
+phone is folded like a laptop, and its right on segment 0 when it is folded like a book.
 
 ## Inspection and testing
 
@@ -7477,8 +7482,8 @@ step inside a test.
 `prefer root-font-size "24"` sets the root text size in pixels for a large-text
 fixture. Other single-value page facts, such as `prefer online false`, follow
 the same launch, override and reload rules and use the drive's parser and name
-aliases. Hosts refuse facts they cannot substitute. Folds (`posture`, `segments`,
-`gap`) and mode pins require a drive.
+aliases. Hosts refuse facts they cannot substitute. The hinge's facts (`posture`,
+`segments`, `gap`) and mode pins require a drive.
 
 `prefer extension store.outcome="cancel"` sets a package substitute.
 A leading line supplies it before boot. A later step changes subsequent calls,

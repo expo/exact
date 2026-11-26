@@ -1,11 +1,11 @@
 # Recipe: foldables
 
-On a Duo, `fold 130` sets the hinge. Posture is `continuous` at 0° and
+On a Duo, `fold 130` bends the hinge. Posture is `continuous` at 0° and
 180°, `folded` at 90° and 130°. Android reports `folded` only when half open.
 Place panes by `horizontalViewportSegments` (columns) and `verticalViewportSegments`
 (rows). A flat separating hinge still gives two segments, the cover display one.
 `env(viewport-segment-<left|top|width|height> <x> <y>)` excludes the hinge band.
-Safari 27 reports no fold. For the Duo’s cover in landscape, write `fold 0` then
+Safari 27 reports no hinge. For the Duo’s cover in landscape, write `fold 0` then
 `rotate landscapeLeft`.
 
 ```contract
@@ -25,7 +25,7 @@ component Reply
         textarea value=draft input=write aria-label="Reply" testId="reply"
 ```
 
-On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo#Dynamic-layouts),
+At the hinge ([HIG](https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo#Dynamic-layouts),
 [Apple's talk](https://developer.apple.com/videos/play/tech-talks/111463/)):
 
 - Scrolling content can span the hinge; keep controls off it.
@@ -38,9 +38,9 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
   that pane, with its own Back if pushed; otherwise UIKit makes the bar.
 - Segment indices count from the left. Start on segment 1 in RTL.
 - Start the panes at the viewport's left edge. Duo Lab's Arrangement keeps panes below the header
-  with a `space-between` row across a fold, or a box ending at the fold and an `absolute` lower pane.
+  with a `space-between` row across the hinge, or a box ending at the hinge and an `absolute` lower pane.
   Inset controls from safe edges.
-- In a laptop fold, put authored controls on the bottom segment. Cap a bottom
+- Folded like a laptop, put authored controls on the bottom segment. Cap a bottom
   sheet's `max-height` at the room below its header and
   `calc(100% - env(viewport-segment-top 0 1))`, from the viewport origin.
   An iOS keyboard can leave that segment below the viewport and zero tall;
@@ -49,4 +49,4 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
 - Keep panes to retain text. A panel switch may end editing.
 - Panes move as UIKit's with `-exact-layout-transition="-exact-spring(439, 41.9, 1)"`; browsers drop
   `env()` early on opening (fall back to `exactViewport().segments`).
-- UIKit's alerts and sheets on a fold: [Folds on iOS](../contract-for-agents.md#folds-on-ios).
+- UIKit's alerts and sheets, folded: [Folds on iOS](../contract-for-agents.md#folds-on-ios).

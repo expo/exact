@@ -21,7 +21,7 @@ pub(crate) const WORDS: &[&str] = &[
 ];
 
 /// What `arrangement` takes, for its refusal and `contract vocab`.
-pub(crate) const TAKES: &str = "`arrangement` takes \"split\" (its two children side by side in a wide box, stacked in a tall one, and either side of a fold) or \"overlay\" (the first over the second, and either side of a fold), each alone or followed by \"horizontal\" or \"vertical\" (the one axis it may use), or \"none\" (the default: CSS's layout)";
+pub(crate) const TAKES: &str = "`arrangement` takes \"split\" (its two children side by side in a wide box, stacked in a tall one, and either side of the hinge) or \"overlay\" (the first over the second, and either side of the hinge), each alone or followed by \"horizontal\" or \"vertical\" (the one axis it may use), or \"none\" (the default: CSS's layout)";
 
 /// The attribute that arranges its box by a literal; a package view's own `arrangement` is the package's.
 fn arranged<'a>(tag: &str, attrs: &'a [Attr]) -> Option<&'a Attr> {

@@ -1,4 +1,4 @@
-// LLP 1188 D4: check's `edge` and `fold`, on the boxes measured on an iPhone Duo (iOS 27.1), open under a side bar.
+// LLP 1188 D4: check's `edge` and `hinge`, on the boxes measured on an iPhone Duo (iOS 27.1), open under a side bar.
 import { expect, test } from 'bun:test';
 import { judge, line } from './agent-check.mjs';
 import { byRule } from './verify-findings.mjs';
@@ -8,7 +8,7 @@ const BOOK = [{ x: 455.5, y: 0, w: 40, h: 669 }], LAPTOP = [{ x: 0, y: 455.5, w:
 const control = (id, x, y, w, h, more) => ({ id, owner: 0, control: 'button', sized: 'platform', x, y, w, h, ...more });
 const text = (id, x, y, w, h, more) => ({ id, owner: 0, text: 'Text', size: 17, x, y, w, h, ...more });
 const found = (items, obs = {}) => judge({ viewport: OPEN, owners: [OPEN], items, ...obs }, null, { host: 'ios' })
-  .filter((f) => f.kind === 'edge' || f.kind === 'fold').map((f) => `${f.kind} ${f.id}`).sort();
+  .filter((f) => f.kind === 'edge' || f.kind === 'hinge').map((f) => `${f.kind} ${f.id}`).sort();
 
 test('edge: what lies outside its owner\'s safe area, where no scroller can bring it in', () => {
   expect(found([
@@ -31,23 +31,23 @@ test('edge: what lies outside its owner\'s safe area, where no scroller can brin
   expect(found([control(1, 796, 0, 55, 100), control(2, 400, 619, 55, 34)], { keyboard: 660 })).toEqual(['edge 1', 'edge 2']); // an accessory bar's height is not
 });
 
-test('fold: what a division crosses and no scroller holds, by what its clips leave of it', () => {
+test('hinge: what a division crosses and no scroller holds, by what its clips leave of it', () => {
   const items = [
-    control(1, 210, 410, 217, 35), control(2, 440, 410, 217, 35), // a timer's Start, and its Reset across the fold
+    control(1, 210, 410, 217, 35), control(2, 440, 410, 217, 35), // a timer's Start, and its Reset across the hinge
     text(3, 307, 273, 253, 113), // its time
     text(4, 16, 100, 835, 20, { ink: { x: 16, y: 100, w: 200, h: 20 } }), // a short line in a box as wide as the page
     control(5, 16, 200, 835, 52, { scrolls: true, room: { bottom: 40 } }), // a row
     control(9, 16, 260, 835, 52, { scrolls: true }), // and one of a form that fits
-    control(10, 440, 320, 44, 44, { scrolls: true }), text(11, 383, 320, 188, 80, { scrolls: true }), // whose button lies in the fold, and whose time crosses it
+    control(10, 440, 320, 44, 44, { scrolls: true }), text(11, 383, 320, 188, 80, { scrolls: true }), // whose button lies in the division, and whose time crosses it
     control(6, 0, 0, 951, 669),
     control(8, 440, 560, 217, 35, { cover: { kind: 'alert', name: 'a system alert' } }),
     control(7, 440, 500, 217, 35, { cover: { kind: 'node', by: 9, name: 'View' } }), // a banner over its middle does not mend it
   ];
-  expect(found(items, { divisions: BOOK })).toEqual(['fold 10', 'fold 11', 'fold 2', 'fold 3', 'fold 7']);
+  expect(found(items, { divisions: BOOK })).toEqual(['hinge 10', 'hinge 11', 'hinge 2', 'hinge 3', 'hinge 7']);
   expect(found(items)).toEqual([]); // flat
   expect(found([control(1, 440, 410, 217, 35)], { divisions: [{ x: 455.5, y: 0, w: 40, h: 300 }] })).toEqual([]); // past the division's end
   const tall = { x: 0, y: 0, w: 669, h: 951, safe: { x: 0, y: 82, w: 669, h: 786 } };
-  expect(found([control(1, 111, 526, 217, 34), text(2, 208, 389, 253, 113)], { viewport: tall, owners: [tall], divisions: LAPTOP })).toEqual(['fold 2']);
+  expect(found([control(1, 111, 526, 217, 34), text(2, 208, 389, 253, 113)], { viewport: tall, owners: [tall], divisions: LAPTOP })).toEqual(['hinge 2']);
 });
 
 test('what a scroller can bring out from under a control that stays is no overlap', () => {
@@ -77,7 +77,7 @@ test('each says what it found and where to read what to write', () => {
     .map((f) => line(f, new Map([[1, { props: { testId: 'add' } }], [2, { props: { testId: 'reset' } }]])));
   expect(said).toEqual([
     '  edge     add [796,619 55×34]: 18 pt of it lie outside the safe area, which ends 34 pt from the bottom; place it in the safe area (contract vocab edges)',
-    '  fold     reset [440,410 217×35]: the fold crosses it (x 456 to 496 pt); keep it on one side of the fold (contract vocab edges)',
+    '  hinge    reset [440,410 217×35]: the hinge runs through it (x 456 to 496 pt); move it to one side of the hinge (contract vocab edges)',
   ]);
 });
 
@@ -104,7 +104,7 @@ test('a text scrolled under a control that stays is read where the control is no
   expect(contrast(add, { fg: [200, 200, 200, 1], room })).toEqual(['#ffffff']); // too light for the page, though its end is under Add
 });
 
-test('a fold across a part of more than one line after a scroller names an arrangement', () => {
+test('the hinge through a part of more than one line after a scroller names an arrangement', () => {
   const node = (id, parent, type, children = [], props = {}) => [id, { id, parent, type, children, props }];
   const nodes = new Map([
     node(1, null, 'View', [2, 3, 4, 5], { navigationKey: '1' }), node(2, 1, 'View', [], { testId: 'top' }), node(3, 1, 'ScrollView', [], { testId: 'score' }),
@@ -112,7 +112,7 @@ test('a fold across a part of more than one line after a scroller names an arran
     node(5, 1, 'View', [20, 21, 22], { testId: 'composer' }), node(20, 5, 'Input'), node(21, 5, 'View'), node(22, 5, 'View'),
   ]);
   const hints = (items, divisions = BOOK) => judge({ viewport: OPEN, owners: [OPEN], divisions, items }, null, { host: 'ios', nodes })
-    .filter((f) => f.kind === 'fold').map((f) => `${f.id} ${f.detail.part ?? ''} ${/vocab (\w+)/.exec(f.hint)[1]}`);
+    .filter((f) => f.kind === 'hinge').map((f) => `${f.id} ${f.detail.part ?? ''} ${/vocab (\w+)/.exec(f.hint)[1]}`);
   expect(hints([text(10, 300, 520, 300, 20), control(11, 300, 560, 100, 44), control(12, 470, 560, 100, 44)]))
     .toEqual(['10 4 arrangement', '12 4 arrangement']); // the player's title and its Next, on two lines
   expect(hints([control(11, 300, 560, 100, 44), control(12, 470, 560, 100, 44)])).toEqual(['12  edges']); // one line: a bar
@@ -121,22 +121,22 @@ test('a fold across a part of more than one line after a scroller names an arran
   const player = [text(10, 300, 520, 300, 20), control(11, 300, 560, 100, 44), control(12, 470, 560, 100, 44)];
   expect(hints([control(20, 16, 600, 700, 44), control(21, 730, 600, 100, 44), control(22, 16, 900, 44, 44, { cover: { kind: 'offscreen' } })]))
     .toEqual(['20  edges']); // a composer with a control below the screen
-  expect(hints(player.map((it) => ({ ...it, y: it.y - 100 })), LAPTOP)).toEqual(['11  edges', '12  edges']); // a fold across
-  const f = judge({ viewport: OPEN, owners: [OPEN], divisions: BOOK, items: player }, null, { host: 'ios', nodes }).find((x) => x.kind === 'fold' && x.id === 10);
-  expect(f.hint).toBe('keep it on one side of the fold: a box that holds just player, then score, with `arrangement="split"`, stands the two either side of it, and shows player, its primary, alone where both do not fit; the box needs its own size and the route\'s whole width (contract vocab arrangement)');
+  expect(hints(player.map((it) => ({ ...it, y: it.y - 100 })), LAPTOP)).toEqual(['11  edges', '12  edges']); // a hinge across the screen
+  const f = judge({ viewport: OPEN, owners: [OPEN], divisions: BOOK, items: player }, null, { host: 'ios', nodes }).find((x) => x.kind === 'hinge' && x.id === 10);
+  expect(f.hint).toBe('move it to one side of the hinge: put just player and then score in a box with its own size and the route\'s whole width, and split it only while the phone is open, with `arrangement=(viewport.horizontalViewportSegments == 2 ? "split" : "none")`. Open, the two then stand either side of the hinge; closed, they stay stacked, since a split on the outer display shows only player (contract vocab arrangement)');
   for (const [where, change] of [['in a dialog', (n) => n.get(4).props.semanticTag = 'dialog'], ['in a scroller', (n) => n.get(1).type = 'ScrollView'],
     ['already arranged', (n) => n.get(1).props.arrangement = 'split'], ['beside a route', (n) => n.get(3).props.navigationKey = '2'], ['portaled', (n) => n.get(4).props.portal = 'elsewhere'],
     ['in a root that scrolls', (n) => { n.set(0, { id: 0, parent: null, type: 'ScrollView', children: [1], props: {} }); n.get(1).parent = 0; }]]) {
     const copy = new Map([...nodes].map(([id, n]) => [id, { ...n, props: { ...n.props } }]));
     change(copy);
-    const g = judge({ viewport: OPEN, owners: [OPEN], divisions: BOOK, items: player }, null, { host: 'ios', nodes: copy }).find((x) => x.kind === 'fold' && x.id === 10);
+    const g = judge({ viewport: OPEN, owners: [OPEN], divisions: BOOK, items: player }, null, { host: 'ios', nodes: copy }).find((x) => x.kind === 'hinge' && x.id === 10);
     expect(`${where}: ${/vocab (\w+)/.exec(g.hint)[1]}`).toBe(`${where}: edges`);
   }
 });
 
 test('a rule\'s findings whose remedies are on two pages are two groups', () => {
-  const l = (who, page) => `  fold     ${who} [0,0 9×9]: the fold crosses it (x 456 to 496 pt); keep it on one side of the fold (contract vocab ${page})`;
+  const l = (who, page) => `  hinge    ${who} [0,0 9×9]: the hinge runs through it (x 456 to 496 pt); move it to one side of the hinge (contract vocab ${page})`;
   const out = byRule([l('save', 'edges'), l('next', 'arrangement'), l('time', 'edges'), l('play', 'arrangement'), l('send', 'edges')]);
-  expect(out.filter((x) => /^  \S+ ×\d+$/.test(x))).toEqual(['  fold ×3', '  fold ×2']);
+  expect(out.filter((x) => /^  \S+ ×\d+$/.test(x))).toEqual(['  hinge ×3', '  hinge ×2']);
   expect(out[1]).toContain('save'); expect(out[4]).toContain('next');
 });
