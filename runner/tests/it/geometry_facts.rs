@@ -473,8 +473,9 @@ component App
 
 #[test]
 fn an_owners_chrome_reaches_its_boxes_geometry() {
-    // The chrome an owner's host reports reaches a box in the owner at the next layout, each
-    // quantity the host does not have `none`; outside every owner there is none
+    // The chrome an owner's host reports reaches a box in the owner at the next layout, an
+    // auxiliary area placed in the box's space and each quantity the host does not have `none`;
+    // outside every owner there is none
     use exact_kernel::{BlockAxis, HostBlock, OwnerChrome, OwnerUpdate, VerticalBarEdge};
     let mut r = boot(
         "shape Chrome
@@ -512,6 +513,8 @@ component App
         chrome: Some(OwnerChrome {
             vertical_bar_edge: Some(VerticalBarEdge::Trailing),
             sidebar_available: None,
+            auxiliary_top_left: Some([0.0, 0.0, 30.0, 20.0]),
+            auxiliary_top_right: None,
         }),
         ..OwnerUpdate::default()
     };
@@ -520,7 +523,15 @@ component App
     r.refresh_geometry().unwrap();
     let chrome = some(&fields(&r, "g")[1]);
     assert_eq!(chrome[0], Value::some(Value::str("trailing")));
-    assert!(chrome[1..].iter().all(|v| *v == Value::Option(None)));
+    let area = some(&chrome[3]);
+    assert_eq!(
+        (number(&area[2]), number(&area[3])),
+        (30.0, 20.0),
+        "the top left's area"
+    );
+    for none in [1, 2, 4] {
+        assert_eq!(chrome[none], Value::Option(None), "field {none}");
+    }
     assert_eq!(fields(&r, "o")[1], Value::Option(None));
 }
 

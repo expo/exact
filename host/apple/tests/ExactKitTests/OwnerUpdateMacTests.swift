@@ -71,6 +71,17 @@ final class OwnerUpdateMacTests: XCTestCase {
         XCTAssertGreaterThan(margins.root.top, update.band?.top ?? 0, "from the safe area under the title bar")
         XCTAssertNil(margins.minimum)
         XCTAssertNil(margins.readableWidth)
+        // The screen's auxiliary areas in the owner's space, empty where the screen has no camera housing
+        let screen = try XCTUnwrap(window.screen), chrome = try XCTUnwrap(update.chrome)
+        XCTAssertNil(chrome.verticalBarEdge)
+        XCTAssertNil(chrome.sidebarAvailable)
+        if let area = screen.auxiliaryTopLeftArea {
+            let local = container.convert(window.convertFromScreen(area), from: nil)
+            XCTAssertEqual(chrome.auxiliaryTopLeft, local, "beside the housing, in the owner's space")
+        } else {
+            XCTAssertEqual(chrome.auxiliaryTopLeft, .zero, "none on this screen")
+        }
+        XCTAssertEqual(chrome.auxiliaryTopRight, screen.auxiliaryTopRightArea == nil ? .zero : chrome.auxiliaryTopRight)
         _ = blocks.takeUpdates()
         // A toolbar shown at the same size moves the band and the configuration, sampled in the container's layout
         window.toolbar = NSToolbar(identifier: "owner-update")

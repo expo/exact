@@ -53,9 +53,14 @@ package struct OwnerUpdateWire: Equatable {
         package init(distance: CGFloat, start: CGFloat, end: CGFloat) { (self.distance, self.start, self.end) = (distance, start, end) }
     }
 
+    /// The owner's chrome (D6): UIKit's vertical bar edge and sidebar availability, and AppKit's auxiliary areas beside
+    /// the screen's camera housing in the owner's space, each `nil` where the toolkit has none.
     package struct Chrome: Equatable {
-        package var verticalBarEdge: Int?, sidebarAvailable: Bool?
-        package init(verticalBarEdge: Int?, sidebarAvailable: Bool?) { (self.verticalBarEdge, self.sidebarAvailable) = (verticalBarEdge, sidebarAvailable) }
+        package var verticalBarEdge: Int?, sidebarAvailable: Bool?, auxiliaryTopLeft: CGRect?, auxiliaryTopRight: CGRect?
+        package init(verticalBarEdge: Int?, sidebarAvailable: Bool?, auxiliaryTopLeft: CGRect? = nil, auxiliaryTopRight: CGRect? = nil) {
+            (self.verticalBarEdge, self.sidebarAvailable) = (verticalBarEdge, sidebarAvailable)
+            (self.auxiliaryTopLeft, self.auxiliaryTopRight) = (auxiliaryTopLeft, auxiliaryTopRight)
+        }
     }
 
     package struct Region: Equatable {
@@ -96,7 +101,8 @@ package struct OwnerUpdateWire: Equatable {
     /// kinds; the relations after theirs, each its relation and target; the margins after a presence byte, the root
     /// view's and a plain view's, then the minimum and the readable width, each after its own. The keyboard is a byte, 0 unreported,
     /// 1 dismissed or 2 shown, and a shown one's frame, x, y, width, height, and a docked byte. Then the segments,
-    /// each edge's bar region, the chrome, its vertical bar edge and its sidebar's availability each optional, the
+    /// each edge's bar region, the chrome, its vertical bar edge, its sidebar's availability and its auxiliary areas each
+    /// optional, the
     /// window map, its six terms in `CGAffineTransform`'s order, the configuration's identity (`u64`) and the reserved
     /// regions after their count, each its identity, kind, frame, margins and an active byte.
     package func encode() -> Data {
@@ -153,6 +159,8 @@ package struct OwnerUpdateWire: Equatable {
         optional(chrome) { c in
             optional(c.verticalBarEdge) { u8(UInt8($0)) }
             optional(c.sidebarAvailable) { u8($0 ? 1 : 0) }
+            optional(c.auxiliaryTopLeft, rect)
+            optional(c.auxiliaryTopRight, rect)
         }
         optional(windowMap) { m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach(f32) }
         optional(configuration, u64)

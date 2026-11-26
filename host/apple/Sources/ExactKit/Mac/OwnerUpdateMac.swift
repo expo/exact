@@ -1,8 +1,9 @@
 // One content owner's update (LLP 1123 D2) as AppKit gives it at one pass of its container's layout: the container
 // view's own `safeAreaInsets`, Exact's contributions to that view (`ContributionsMac`), its containment ancestry and
-// relational targets (D9), its margins (D8), the view's map into its window and its configuration's identity, in the
-// form both Apple hosts encode (`OwnerUpdateWire`). AppKit has no software keyboard, reserved regions, segments or bar
-// regions, so those stay unreported, nor a tab controller's content guide, a system minimum or a readable width.
+// relational targets (D9), its margins (D8), its chrome's auxiliary areas (D6), the view's map into its window and its
+// configuration's identity, in the form both Apple hosts encode (`OwnerUpdateWire`). AppKit has no software keyboard,
+// reserved regions, segments or bar regions, so those stay unreported, nor a tab controller's content guide, a system
+// minimum, a readable width, a vertical bar or a tab sidebar.
 #if os(macOS)
 import AppKit
 
@@ -35,6 +36,7 @@ enum OwnerUpdateMac {
         update.relations = related.compactMap { r, t in t.map { (relation: r, target: $0) } }
         update.band = edges(view.safeAreaInsets)
         update.margins = margins(of: view, less: update.contributions)
+        update.chrome = chrome(of: view, in: window)
         update.windowMap = map(of: view, in: window)
         update.configuration = configuration(of: window)
         return update
@@ -53,6 +55,21 @@ enum OwnerUpdateMac {
         return .init(root: .init(top: m[0] - added.top, right: m[1] - added.right, bottom: m[2] - added.bottom, left: m[3] - added.left),
                      plain: .init(top: m[0] - safe.top, right: m[1] - safe.right, bottom: m[2] - safe.bottom, left: m[3] - safe.left),
                      minimum: nil, readableWidth: nil)
+    }
+
+    /// The owner's chrome (D6): the unobscured areas of its window's screen beside the camera housing, top left and top
+    /// right (`NSScreen.auxiliaryTopLeftArea`, `auxiliaryTopRightArea`), in the owner view's space, origin at its top
+    /// left and y down, an empty rectangle where the screen has none there; none of UIKit's quantities. Off a screen it
+    /// has none.
+    static func chrome(of view: NSView, in window: NSWindow) -> OwnerUpdateWire.Chrome? {
+        guard let screen = window.screen else { return nil }
+        let place = { (area: NSRect?) -> CGRect in
+            guard let area else { return .zero }
+            let local = view.convert(window.convertFromScreen(area), from: nil)
+            return view.isFlipped ? local : CGRect(x: local.minX, y: view.bounds.height - local.maxY, width: local.width, height: local.height)
+        }
+        return .init(verticalBarEdge: nil, sidebarAvailable: nil, auxiliaryTopLeft: place(screen.auxiliaryTopLeftArea),
+                     auxiliaryTopRight: place(screen.auxiliaryTopRightArea))
     }
 
     /// The owner's containment ancestry (D9, "The native chain"): its container view first, then the controllers

@@ -344,7 +344,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         w.append(2); f(0, 538, 402, 336); w.append(1)
         w.append(0)
         w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
-        w += [1, 1, 2, 1, 0]
+        w += [1, 1, 2, 1, 0, 0, 0]
         w.append(1); f(0.9, 0.1, 0.2, 0.8, 5, 62)
         w.append(1); u64(7)
         w.append(1); u32(1); u64(11); w.append(0); f(175, 0, 40, 844); f(0, 10, 0, 10); w.append(0)
