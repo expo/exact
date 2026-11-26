@@ -61,6 +61,8 @@ internal class Scrolling(private val view: ExactView) {
         var pointsX = 0f; var pointsY = 0f; var maxPointsX = 0f; var maxPointsY = 0f
         /** The offset of the recording, in device pixels. */
         var drawnX = 0f; var drawnY = 0f
+        /** How far past its offset its content is painted under a claim (LLP 1123 D14), in points; 0 unclaimed. */
+        var claimX = 0f; var claimY = 0f
         /** What the reader moved it by that no stream it has taken includes yet. */
         var pendX = 0f; var pendY = 0f
         /** The reader has moved it: its rows are placed here, not by exact2's moves. */
@@ -665,7 +667,7 @@ internal class Scrolling(private val view: ExactView) {
                 points = (points + delta / scale).coerceIn(0f, max)
             }
         }
-        return paintedOffset(points * scale)
+        return paintedOffset((points + if (sideways) s.claimX else s.claimY) * scale)
     }
 
     // Match the painter's 1/64-pixel quantization and half-up rounding (paint/grid.rs).
@@ -689,12 +691,20 @@ internal class Scrolling(private val view: ExactView) {
     fun told(w: IntArray) {
         scale = f(w[0])
         var i = 1
+        val stated = HashSet<Int>()
         while (i + STATEMENT_WORDS <= w.size) {
+            val claimed = w[i + 1] and CLAIMED_FLAG != 0
+            if (claimed && i + STATEMENT_WORDS + CLAIM_WORDS > w.size) break
             val s = scrollers.getOrPut(w[i]) { Scroller(w[i]) }
+            stated.add(s.id)
             s.flags = w[i + 1]
             s.pointsX = f(w[i + 3]); s.pointsY = f(w[i + 4])
             s.drawnX = f(w[i + 5]); s.drawnY = f(w[i + 6])
             s.maxPointsX = f(w[i + 7]); s.maxPointsY = f(w[i + 8])
+            // A claimed scroller's record: its content painted past its offset, and its reached port, as the claim
+            // moves them, which a touch's answer told only as it began
+            s.claimX = if (claimed) f(w[i + 9]) else 0f; s.claimY = if (claimed) f(w[i + 10]) else 0f
+            if (claimed) s.port.set(f(w[i + 11]), f(w[i + 12]), f(w[i + 11]) + f(w[i + 13]), f(w[i + 12]) + f(w[i + 14]))
             s.nowX = s.pointsX * scale; s.nowY = s.pointsY * scale
             s.maxX = s.maxPointsX * scale; s.maxY = s.maxPointsY * scale
             if (s.told && w[i + 2] != s.rev) {
@@ -709,13 +719,12 @@ internal class Scrolling(private val view: ExactView) {
             s.told = true
             // A refresh this reader's pull began ends when the app's `refreshing` that followed it does.
             s.pull?.takeIf { it.spinning && !it.leaving }?.let { if (s.refreshing) s.seen = true else if (s.seen) unpull(s) }
-            i += STATEMENT_WORDS
+            i += STATEMENT_WORDS + if (claimed) CLAIM_WORDS else 0
         }
         // A scroller the statement no longer has is gone (its node went, or a driver took it over): what the reader
         // kept for it goes with it.
-        val count = (w.size - 1) / STATEMENT_WORDS
-        if (scrollers.size <= count) return
-        for (s in scrollers.values.filter { s -> s.told && (0 until count).none { w[1 + it * STATEMENT_WORDS] == s.id } }) {
+        if (scrollers.size <= stated.size) return
+        for (s in scrollers.values.filter { s -> s.told && s.id !in stated }) {
             scrollers.remove(s.id)
             sent.removeAll { it.s === s }
             s.clearBar(); s.clearPull()
@@ -1100,6 +1109,9 @@ internal class Scrolling(private val view: ExactView) {
 
     internal companion object {
         private const val STATEMENT_WORDS = 9
+        /** A statement's claimed scroller, whose claim's record of [CLAIM_WORDS] follows (`presenter/scrollers.rs`). */
+        const val CLAIMED_FLAG = 1024
+        private const val CLAIM_WORDS = 6
         /** A touch's answer: the scroller zooms, and a double tap there zooms it (`presenter/scrollers.rs`). */
         const val ZOOM_FLAG = 256
         const val DOUBLE_TAP_FLAG = 512
