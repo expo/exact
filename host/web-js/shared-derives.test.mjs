@@ -687,3 +687,161 @@ component Meter
   }
   expect(reports[0]).toEqual(reports[1]);
 }, 60000);
+
+test('components with state, branches and internal loops share one mount across nesting depths', async () => {
+  const source = `shape Item
+  id: string
+  name: string
+
+component App
+  state tab: string = "a"
+  state show: bool = true
+  state items: Item[] = [Item(id="1", name="One"), Item(id="2", name="Two")]
+  state opts: Item[] = [Item(id="x", name="Alpha"), Item(id="y", name="Beta")]
+  view
+    column
+      if show
+        column
+          for item in items key=item.id
+            Dropdown(id=\`d2-\${item.id}\`, title=item.name, options=opts)
+      if tab == "a"
+        column
+          if show
+            column
+              for item in items key=item.id
+                Dropdown(id=\`d3-\${item.id}\`, title=item.name, options=opts)
+
+component Dropdown
+  props
+    id: string
+    title: string
+    options: Item[]
+  state open: bool = false
+  state picked: string = "none"
+  action toggle
+    open = !open
+  action pick(name: string)
+    picked = name
+    open = false
+  view
+    column aria-label="Dropdown box"
+      button press=toggle testId=\`btn-\${id}\`
+        text \`\${title}:\${picked}\`
+      if open
+        column aria-label="Dropdown choice"
+          for opt in options key=opt.id
+            button press=pick(opt.name) testId=\`opt-\${id}-\${opt.id}\`
+              text opt.name
+`;
+  await pageFor(source, async (page, js) => {
+    expect(js.split('"Dropdown box"')).toHaveLength(2);
+    expect(js.split('"Dropdown choice"')).toHaveLength(2);
+    expect(await page.getByTestId('btn-d2-1').textContent()).toBe('One:none');
+    expect(await page.getByTestId('btn-d3-2').textContent()).toBe('Two:none');
+    await page.getByTestId('btn-d2-1').click();
+    await page.getByTestId('opt-d2-1-x').click();
+    expect(await page.getByTestId('btn-d2-1').textContent()).toBe('One:Alpha');
+    expect(await page.getByTestId('btn-d2-2').textContent()).toBe('Two:none');
+    expect(await page.getByTestId('btn-d3-1').textContent()).toBe('One:none');
+    await page.getByTestId('btn-d3-2').click();
+    await page.getByTestId('opt-d3-2-y').click();
+    expect(await page.getByTestId('btn-d3-2').textContent()).toBe('Two:Beta');
+    expect(await page.getByTestId('btn-d2-1').textContent()).toBe('One:Alpha');
+  });
+}, 60000);
+
+test('shared mounts cross match payload arms and inlined nested loops keep outer items', async () => {
+  const source = `shape Group
+  id: string
+  name: string
+  cells: string[]
+
+component App
+  state first = some("Ready")
+  state second = some("Next")
+  state groups: Group[] = [Group(id="a", name="A", cells=["1", "2"]), Group(id="b", name="B", cells=["3"])]
+  action swap
+    first = some("Done")
+    second = some("After")
+  view
+    column
+      button "Swap" press=swap testId="swap"
+      match first
+        case some(value)
+          Badge(label=value)
+        case none
+          text "Empty"
+      match second
+        case some(value)
+          Badge(label=value)
+        case none
+          text "Empty"
+      for group in groups key=group.id
+        column
+          for cell in group.cells key=cell
+            text \`\${group.name}:\${cell}\` testId=\`cell-\${group.id}-\${cell}\`
+
+component Badge
+  props
+    label: string
+  view
+    box aria-label="Shared badge"
+      text \`[\${label}]\`
+`;
+  await pageFor(source, async (page, js) => {
+    expect(js.split('"Shared badge"')).toHaveLength(2);
+    expect(await page.getByLabel('Shared badge').allTextContents()).toEqual(['[Ready]', '[Next]']);
+    expect(await page.getByTestId('cell-a-1').textContent()).toBe('A:1');
+    expect(await page.getByTestId('cell-a-2').textContent()).toBe('A:2');
+    expect(await page.getByTestId('cell-b-3').textContent()).toBe('B:3');
+    await page.getByTestId('swap').click();
+    expect(await page.getByLabel('Shared badge').allTextContents()).toEqual(['[Done]', '[After]']);
+  });
+}, 60000);
+
+test('virtualized rows keep outer item getters and nested owned state in DOM and logical text', async () => {
+  const source = `component App
+  state groups = range(80)
+  view
+    list virtualized=true height=160 estimated-item-height=40 testId="vlist"
+      for group in groups key=group
+        Row(group=group)
+
+component Row
+  props
+    group: number
+  state shown = group >= 50
+  derive tag = \`R\${group}\`
+  view
+    column height=40 testId=\`row-\${group}\`
+      for cell in ["X", "Y"] key=cell
+        text \`\${group}:\${cell}:\${tag}\` testId=\`cell-\${group}-\${cell}\`
+      if shown
+        Detail(group=group, tag=tag)
+
+component Detail
+  props
+    group: number
+    tag: string
+  state count = 1
+  derive label = \`\${tag}-D\${group}-\${count}\`
+  view
+    text label testId=\`detail-\${group}\`
+`;
+  await pageFor(source, async (page, js) => {
+    expect(await page.getByTestId('cell-0-X').textContent()).toBe('0:X:R0');
+    expect(await page.getByTestId('cell-0-Y').textContent()).toBe('0:Y:R0');
+    expect(await page.getByTestId('cell-1-X').textContent()).toBe('1:X:R1');
+    expect(js).not.toMatch(/const (\$a\d+)=\{\.\.\.\1\}/);
+    // Project an unmounted row above 50 through the compiled logical text callback.
+    const unmounted = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="vlist"]');
+      const flatten = nodes => nodes.flatMap(([k, props, kids]) => [
+        ...(k === 1 && props.text != null ? [props.text] : []),
+        ...flatten(kids),
+      ]);
+      return flatten(el.$list.o.text(() => 60, () => 60));
+    });
+    expect(unmounted).toEqual(['60:X:R60', '60:Y:R60', 'R60-D60-1']);
+  });
+}, 60000);

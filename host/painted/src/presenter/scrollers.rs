@@ -137,8 +137,17 @@ const REFRESHING: i32 = 32;
 /// there zooms it (D5).
 const ZOOM: i32 = 256;
 const DOUBLE_TAP: i32 = 512;
+/// Bit 10, in a statement only: a claimed scroller (LLP 1123 D14), whose
+/// statement carries six more words, its claim's record.
+#[cfg(any(target_os = "android", test))]
+const CLAIMED: i32 = 1024;
 #[cfg(any(target_os = "android", test))]
 const STATEMENT_WORDS: usize = 9;
+/// A claimed scroller's record: the displacement its content is painted at
+/// past its offset, in points, x then y, and its reached port in pixels, x,
+/// y, width and height.
+#[cfg(any(target_os = "android", test))]
+const CLAIM_WORDS: usize = 6;
 
 fn scrolls(o: Overflow) -> bool {
     matches!(o, Overflow::Scroll | Overflow::Auto)
@@ -605,11 +614,7 @@ impl<D: DataSource> Presenter<D> {
     pub(crate) fn reader_places_group(&self, id: ViewId, scale: f32) -> bool {
         self.reader.last_scale == scale
             && self.reader_knows(id)
-            && self
-                .reader
-                .last
-                .chunks_exact(STATEMENT_WORDS)
-                .any(|s| s[0] as ViewId == id && s[1] & NODE != 0)
+            && statements(&self.reader.last).any(|s| s[0] as ViewId == id && s[1] & NODE != 0)
     }
 
     /// The scrollers the clamp leaves alone: each a list kept while its route is hidden (a
@@ -731,7 +736,12 @@ impl<D: DataSource> Presenter<D> {
     /// move needs acknowledging. Nine words per scroller.
     /// Id, flags, revision, then pairs of float bits for the current logical
     /// offset in points, recorded offset in pixels, and logical maximum in
-    /// points. An omitted scroller is gone: the reader forgets it.
+    /// points. A claimed scroller (flag [`CLAIMED`]) has its claim's record
+    /// after them: the displacement its content is painted at past its offset
+    /// in points, its recording's offset being that displaced one, and its
+    /// reached port in pixels, so the reader places its rows and its edges
+    /// as the claim moves them (LLP 1123 D14). An omitted scroller is gone:
+    /// the reader forgets it.
     #[cfg(any(target_os = "android", test))]
     pub fn reader_scrollers(
         &mut self,
@@ -758,8 +768,18 @@ impl<D: DataSource> Presenter<D> {
                 let pixel = |v| crate::paint::grid::device_pixel(v, scale) as f32;
                 (pixel(at.0), pixel(at.1))
             });
-            out.extend([id as i32, self.reader_flags(&s), rev as i32]);
+            let claim = self.host.presented(id).scroll;
+            let flags = self.reader_flags(&s) | if claim.is_some() { CLAIMED } else { 0 };
+            out.extend([id as i32, flags, rev as i32]);
             out.extend([s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1].map(bits));
+            if let Some(c) = claim {
+                let displaced = c.displacement((0., 0.));
+                let port = self
+                    .box_of(id)
+                    .map_or([0.; 4], |b| shown(b.for_hit().rect, b.clip));
+                out.extend([displaced.0, displaced.1].map(bits));
+                out.extend(port.map(|v| bits(v * scale)));
+            }
         }
         if !missed && out == self.reader.last && scale == self.reader.last_scale {
             return None;
@@ -821,6 +841,23 @@ impl<D: DataSource> Presenter<D> {
 }
 
 /// A box within its clip: x, y, width, height.
+/// Each statement of `words`, a claimed one with its claim's record.
+#[cfg(any(target_os = "android", test))]
+fn statements(words: &[i32]) -> impl Iterator<Item = &[i32]> {
+    let mut rest = words;
+    std::iter::from_fn(move || {
+        let len = STATEMENT_WORDS
+            + if rest.get(1)? & CLAIMED != 0 {
+                CLAIM_WORDS
+            } else {
+                0
+            };
+        let (one, after) = rest.split_at_checked(len)?;
+        rest = after;
+        Some(one)
+    })
+}
+
 fn shown(r: Rect4, clip: Option<Rect4>) -> [f32; 4] {
     let Some(c) = clip else {
         return [r.0, r.1, r.2, r.3];

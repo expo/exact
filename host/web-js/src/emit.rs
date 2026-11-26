@@ -1211,7 +1211,7 @@ impl Em<'_> {
             let at = self.out.len();
             let f = if let Some((_, read)) = heading.iter().flatten().find(|(index, _)| *index == k)
             {
-                self.status_read(i, &e, &b, read.clone())
+                self.status_read(i, &e, &b, scope, read.clone())
             } else {
                 let f = self
                     .bound(i, &e, &b, scope)
@@ -1470,14 +1470,21 @@ impl Em<'_> {
             let _ = write!(self.out, "{tp}({e},{e}=>{{");
         }
         let mut slot = None;
-        self.template_scope(status_owner || (panel && self.dev_reload), |em| {
-            if virtualized {
-                em.collection_children(i, &e, scope, &edges)
-            } else {
-                slot = em.mount_children(i, &parent_of_children, scope, !status_owner)?;
-                Ok(())
-            }
-        })?;
+        self.status_scope(
+            i,
+            &e,
+            status_owner,
+            panel && self.dev_reload,
+            scope,
+            |em, sc| {
+                if virtualized {
+                    em.collection_children(i, &e, sc, &edges)
+                } else {
+                    slot = em.mount_children(i, &parent_of_children, sc, !status_owner)?;
+                    Ok(())
+                }
+            },
+        )?;
         self.live_time(i, element, &e, scope)?;
         if panel {
             self.out.push_str("});");
