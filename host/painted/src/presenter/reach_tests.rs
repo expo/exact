@@ -83,6 +83,11 @@ fn a_reaching_box_paints_and_takes_hits_past_its_border_box() {
     assert!(p.set_box_reach(card, None));
     assert_eq!(p.hit(17., 37.), Some(id(&p, "clip")));
     assert!(p.frame().data() == empty, "as before the reach");
+    // A fractional reach takes its hits as far as it paints, to the pixel's edge: the card ends at 120, and reaching
+    // 0.5 past it paints and takes the hits to 121
+    assert!(p.set_box_reach(card, Some([0., 0.5, 0., 0.])));
+    assert_eq!(pixel(&mut p, 120., 50.), [255, 0, 0]);
+    assert_eq!(p.hit(120.75, 50.), Some(card));
 }
 
 /// A 300-point scroller at (0, 100) over ten 100-point rows, each its own colour.
@@ -381,6 +386,48 @@ fn a_claimed_zoomable_scroller_takes_the_claims_range() {
     assert_eq!(max(&p).1, 700.);
     assert!(p.set_scroll_claim(port, Some(([40., 0., 60., 0.], [0.; 4]))));
     assert_eq!(max(&p).1, 600.);
+}
+
+/// A claimed zoomable scroller pinches within the claim's range and about the content it shows under the fingers: 1000
+/// over 300 with a bottom inset of 100 rests at 800 through a pinch that scales by 1, and with a top reach of 40 and
+/// inset of 100, its content shown 60 short of its offset, a pinch to 2 about 150 down keeps content point 290 there.
+#[test]
+fn a_claimed_zoomable_scroller_pinches_in_the_claims_range_about_what_it_shows() {
+    let source = r##"component App
+  view
+    box width="100%" height="100%" position="relative"
+      scroll testId="port" position="absolute" left=0 top=100 width=300 height=300 -exact-max-zoom=4
+        box width=300 height=1000 background-color="#ff0000"
+"##;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.frame();
+    let port = id(&p, "port");
+    assert!(p.set_scroll_claim(port, Some(([0.; 4], [0., 0., 100., 0.]))));
+    p.scroll_to(port, (0., 800.));
+    assert_eq!(p.scroll_of(port), (0., 800.));
+    p.zoom_pinch_began(port);
+    p.zoom_pinched(port, 1., (150., 250.), (150., 250.));
+    assert_eq!(
+        p.scroll_of(port),
+        (0., 800.),
+        "the pinch keeps the claim's range"
+    );
+    p.zoom_pinch_ended(port);
+    assert!(p.set_scroll_claim(port, Some(([40., 0., 0., 0.], [100., 0., 0., 0.]))));
+    p.scroll_to(port, (0., 200.));
+    p.zoom_pinch_began(port);
+    p.zoom_pinched(port, 2., (150., 250.), (150., 250.));
+    // Shown from 140, so 290 under the fingers; at 2, 580 shown there from 430, the offset 490, and across, 150 at 2
+    assert_eq!(p.scroll_of(port), (150., 490.));
 }
 
 /// A claimed scroller's thumb lies at its CSS offset, not its content's displacement: at the end of its range the

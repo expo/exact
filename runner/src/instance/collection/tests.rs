@@ -592,18 +592,22 @@ fn binary_feedback_roundtrips_and_rejects_malformed_reports() {
         old[..4].copy_from_slice(&version.to_le_bytes());
         assert!(CollectionFeedback::decode(&old).is_err());
     }
-    // The padding the host laid out (LLP 1010 §6.9) is a length: a negative
-    // or nonfinite one is refused at either end
-    for (end, bad) in [0, 1]
-        .into_iter()
-        .flat_map(|end| [(end, -1.0), (end, f64::NAN)])
-    {
-        let mut sent = bytes.clone();
-        sent[56 + end * 8..64 + end * 8].copy_from_slice(&bad.to_le_bytes());
-        assert!(CollectionFeedback::decode(&sent).is_err());
-        let mut wrong = f.clone();
-        wrong.padding[end] = bad;
-        assert!(wrong.encode().is_err());
+    // The padding the host laid out (LLP 1010 §6.9) is signed, a negative
+    // content inset in it (LLP 1123 D14): a nonfinite one is refused at either
+    // end, and a negative one taken
+    for end in [0, 1] {
+        for (value, taken) in [(-1.0, true), (f64::NAN, false), (f64::INFINITY, false)] {
+            let mut sent = bytes.clone();
+            sent[56 + end * 8..64 + end * 8].copy_from_slice(&value.to_le_bytes());
+            assert_eq!(
+                CollectionFeedback::decode(&sent).is_ok(),
+                taken,
+                "{end} {value}"
+            );
+            let mut wrong = f.clone();
+            wrong.padding[end] = value;
+            assert_eq!(wrong.encode().is_ok(), taken, "{end} {value}");
+        }
     }
     let mut fast = filled.clone();
     fast[80..88].copy_from_slice(&f64::INFINITY.to_le_bytes());

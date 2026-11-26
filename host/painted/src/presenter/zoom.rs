@@ -221,8 +221,12 @@ impl<D: DataSource> Presenter<D> {
         };
         let key = node.key;
         let before = self.scroll_of(id);
-        let to_offset = fit.about(from, before, focal, to);
-        let max = fit.max(to);
+        // Under a claim (LLP 1123 D14) the content is painted displaced from its offset, so the point under `focal` is
+        // the content's there less that displacement, and the range is the claim's
+        let claim = self.host.safe_area.scroll_claim(key);
+        let shown = claim.map_or((0., 0.), |c| c.displacement((0., 0.)));
+        let to_offset = fit.about(from, before, (focal.0 + shown.0, focal.1 + shown.1), to);
+        let max = claimed_max(fit.max(to), claim);
         let next = (to_offset.0.clamp(0., max.0), to_offset.1.clamp(0., max.1));
         let was = self.brush.zoom.insert(id, to);
         if was == Some(to) && next == before {
@@ -399,14 +403,14 @@ impl<D: DataSource> Presenter<D> {
     /// Move `id` to `to` as the person's scroll, clamped.
     fn scroll_container_to(&mut self, id: ViewId, to: (f32, f32)) {
         let before = self.scroll_of(id);
-        let Some(bounds) = self
-            .host
-            .kernel()
+        let kernel = self.host.kernel();
+        let Some((mut bounds, key)) = kernel
             .node(id)
-            .and_then(|n| self.brush.zoom_bounds(self.host.kernel(), &n))
+            .and_then(|n| self.brush.zoom_bounds(kernel, &n).map(|b| (b, n.key)))
         else {
             return;
         };
+        bounds.max = claimed_max(bounds.max, self.host.safe_area.scroll_claim(key));
         let next = bounds.clamp(to);
         if next == before {
             return;
@@ -829,6 +833,13 @@ impl<D: DataSource> Presenter<D> {
             .to_string(),
         )
     }
+}
+
+/// A zoomable scroller's farthest offset `max` under its claim, `claim` (LLP 1123 D14): its insets past its reached
+/// port, as its scroll bounds are.
+fn claimed_max(max: (f32, f32), claim: Option<crate::safe_area::ScrollClaim>) -> (f32, f32) {
+    let (dx, dy) = claim.map_or((0., 0.), |c| c.range_change());
+    ((max.0 + dx).max(0.), (max.1 + dy).max(0.))
 }
 
 #[cfg(test)]

@@ -310,6 +310,9 @@ extension Presenter {
             session?.log("scrollIntoView \"\(args.first ?? "")\" refused: no live node with that id")
             return
         }
+        for case let node as NodeView in sequence(first: target.superview, next: { $0?.superview }) where node.scrollView != nil {
+            node.askedToScroll()
+        }
         guard canScrollIntoView(target), !applying else {
             elementScrolls.hold(target, name, args)
             session?.log("scrollIntoView \"\(name)\" waits for its target to mount or its pending layout to finish")
@@ -339,7 +342,7 @@ extension Presenter {
         // reveals arrive, and where it is now, in the last of them.
         for (index, sv) in scrollers.enumerated() {
             // A newer request owns the scroller: a position Exact carries for it gives way, instant or animated
-            ((sv as? ScrollView)?.scrollingNode ?? (sv as? GroupedScroller)?.scrollingNode)?.dropCarriedScroll()
+            if let node = (sv as? ScrollView)?.scrollingNode ?? (sv as? GroupedScroller)?.scrollingNode { node.dropCarriedScroll(); node.afterScrollAnimation = nil }
             // The inner ports, weakly, for a destination asked again later.
             let inners = scrollers[..<index].map { inner in { [weak inner] in inner } }
             let projected = projection(target, through: inners.compactMap { $0() }, grouped: grouped, block: block, inline: inline)
