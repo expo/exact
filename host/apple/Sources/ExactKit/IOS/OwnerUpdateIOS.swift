@@ -266,103 +266,38 @@ package struct OwnerUpdateIOS: Equatable {
                       frame: attached ? view.convert(view.bounds, to: nil) : nil)
     }
 
-    /// The update in the kernel's wire form (`OwnerUpdate::encode`): each field in order, an
-    /// optional one after a presence byte, a list after its `u32` length, little-endian;
-    /// insets top, right, bottom, left. A contribution is its node, its operation and its
-    /// effect. The keyboard is a byte, 0 unreported, 1 dismissed or 2 shown, and a shown one's frame,
-    /// x, y, width, height, and a docked byte. Each edge's bar
-    /// region, top, right, bottom, left, follows the segments, and the chrome, its vertical bar
-    /// edge and its sidebar's availability each optional, follows them, and then the window map, its
-    /// six terms in `CGAffineTransform`'s order, the configuration's identity (`u64`) and the reserved
-    /// regions after their count, each its identity, kind, frame, margins and an active byte.
-    package func encode() -> Data {
-        var out = Data()
-        func u8(_ v: UInt8) { out.append(v) }
-        func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        func f32(_ v: CGFloat) { u32(Float(v).bitPattern) }
-        func edges(_ i: UIEdgeInsets) { [i.top, i.right, i.bottom, i.left].forEach(f32) }
-        func optional<T>(_ value: T?, _ each: (T) -> Void) {
-            u8(value == nil ? 0 : 1)
-            if let value { each(value) }
-        }
-        func target(_ t: Target) { out.append(Self.encode(target: t)) }
-        optional(band, edges)
-        u32(UInt32(contributions.count))
-        for c in contributions {
-            u32(c.identity.node)
-            u8(c.identity.operation.rawValue)
-            edges(c.effect)
-        }
-        u32(UInt32(chain.count))
-        for entry in chain {
-            target(entry.target)
-            u8(entry.kinds)
-        }
-        u32(UInt32(relations.count))
-        for r in relations {
-            u8(r.relation)
-            target(r.target)
-        }
-        optional(margins) { m in
-            edges(m.root)
-            edges(m.plain)
-            edges(m.minimum)
-            f32(m.readableWidth)
-        }
+    /// The kernel's encoding of the update (`OwnerUpdateWire.encode`).
+    package func encode() -> Data { wire.encode() }
+
+    /// The update in the form both Apple hosts encode.
+    package var wire: OwnerUpdateWire {
+        var w = OwnerUpdateWire()
+        w.band = band.map(Self.edges)
+        w.contributions = contributions.map { .init(node: $0.identity.node, operation: $0.identity.operation.rawValue, effect: Self.edges($0.effect)) }
+        w.chain = chain.map { (Self.wire($0.target), $0.kinds) }
+        w.relations = relations.map { ($0.relation, Self.wire($0.target)) }
+        w.margins = margins.map { .init(root: Self.edges($0.root), plain: Self.edges($0.plain), minimum: Self.edges($0.minimum), readableWidth: $0.readableWidth) }
         switch keyboard {
-        case .unreported: u8(0)
-        case .dismissed: u8(1)
-        case .shown(let k):
-            u8(2)
-            [k.frame.minX, k.frame.minY, k.frame.width, k.frame.height].forEach(f32)
-            u8(k.docked ? 1 : 0)
+        case .unreported: w.keyboard = .unreported
+        case .dismissed: w.keyboard = .dismissed
+        case .shown(let k): w.keyboard = .shown(frame: k.frame, docked: k.docked)
         }
-        optional(segments) { fold in
-            u8(UInt8(fold.cols))
-            u8(UInt8(fold.rows))
-            for r in fold.rects { [r.minX, r.minY, r.width, r.height].forEach(f32) }
-        }
-        for region in barRegions {
-            optional(region) { r in [r.distance, r.sides.0, r.sides.1].forEach(f32) }
-        }
-        optional(chrome) { c in
-            optional(c.verticalBarEdge) { u8(UInt8($0)) }
-            optional(c.sidebarAvailable) { u8($0 ? 1 : 0) }
-        }
-        optional(windowMap) { m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach(f32) }
-        optional(configuration, u64)
-        optional(regions) { regions in
-            u32(UInt32(regions.count))
-            for r in regions {
-                u64(r.id)
-                u8(r.kind)
-                [r.frame.minX, r.frame.minY, r.frame.width, r.frame.height].forEach(f32)
-                edges(r.margins)
-                u8(r.active ? 1 : 0)
-            }
-        }
-        return out
+        w.segments = segments.map { .init(cols: UInt8($0.cols), rows: UInt8($0.rows), rects: $0.rects) }
+        w.barRegions = barRegions.map { $0.map { .init(distance: $0.distance, start: $0.sides.0, end: $0.sides.1) } }
+        w.chrome = chrome.map { .init(verticalBarEdge: $0.verticalBarEdge, sidebarAvailable: $0.sidebarAvailable) }
+        w.windowMap = windowMap
+        w.configuration = configuration
+        w.regions = regions?.map { .init(id: $0.id, kind: $0.kind, frame: $0.frame, margins: Self.edges($0.margins), active: $0.active) }
+        return w
     }
+
+    static func edges(_ i: UIEdgeInsets) -> OwnerUpdateWire.Edges { .init(top: i.top, right: i.right, bottom: i.bottom, left: i.left) }
+    static func wire(_ t: Target) -> OwnerUpdateWire.Target { .init(id: t.id, generation: t.generation, insets: t.insets.map(edges), frame: t.frame) }
 }
 
 extension OwnerUpdateIOS {
-    /// A target in the kernel's wire form: its id and generation (`u64` each), its insets after
-    /// a presence byte, top, right, bottom, left, and its frame after one, x, y, width, height.
-    static func encode(target t: Target) -> Data {
-        var out = Data()
-        func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        func f32s(_ values: [CGFloat]) {
-            for v in values { withUnsafeBytes(of: Float(v).bitPattern.littleEndian) { out.append(contentsOf: $0) } }
-        }
-        u64(t.id)
-        u64(t.generation)
-        out.append(t.insets == nil ? 0 : 1)
-        if let i = t.insets { f32s([i.top, i.right, i.bottom, i.left]) }
-        out.append(t.frame == nil ? 0 : 1)
-        if let f = t.frame { f32s([f.minX, f.minY, f.width, f.height]) }
-        return out
-    }
+    /// A target in the kernel's wire form (`OwnerUpdateWire.encode(target:)`).
+    static func encode(target t: Target) -> Data { OwnerUpdateWire.encode(target: wire(t)) }
 }
 
 /// The width UIKit keeps text to (LLP 1123 D8), read from a hidden view that no margins clamp:

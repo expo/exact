@@ -92,7 +92,10 @@ package final class ContributionsMac {
         let ours = entries.reduce(NSEdgeInsetsZero) { Self.plus($0, $1.insets) }
         written = ours
         let next = Self.plus(app, ours)
-        if !Self.same(view.additionalSafeAreaInsets, next) { view.additionalSafeAreaInsets = next }
+        guard !Self.same(view.additionalSafeAreaInsets, next) else { return }
+        view.additionalSafeAreaInsets = next
+        // AppKit gives the view its new safe area without laying it out, where its owner's update is taken (`OwnerUpdateMac`)
+        view.needsLayout = true
     }
 
     private static func same(_ a: NSEdgeInsets, _ b: NSEdgeInsets) -> Bool {
