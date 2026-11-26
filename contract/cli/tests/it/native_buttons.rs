@@ -567,10 +567,12 @@ fn a_label_guard_does_not_reach_the_next_sibling() {
     assert_unlabelled_warning(&src.replace("appearance=\"auto\"", "appearance=\"none\""));
 }
 
+/// LLP 1069.011 D6: the author places and sizes a native button's box, and its layout transition moves it by its
+/// centre (LLP 1063)
 #[test]
-fn its_box_carries_place_size_opacity_transforms_and_accent_only() {
+fn its_box_carries_place_size_motion_opacity_transforms_and_accent_only() {
     boot(&app(
-        "button appearance=\"auto\" press=go key=keys width=120 margin-top=8 align-self=\"center\" display=(busy ? \"none\" : \"flex\") opacity=0.5 translate=\"4px 0px\" accent-color=\"#34c759\" transition=\"opacity 200ms\" animation=\"fade 300ms\"\n  text \"Go\"",
+        "button appearance=\"auto\" press=go key=keys width=120 margin-top=8 align-self=\"center\" display=(busy ? \"none\" : \"flex\") opacity=0.5 translate=\"4px 0px\" accent-color=\"#34c759\" transition=\"opacity 200ms\" animation=\"fade 300ms\" -exact-layout-transition=\"-exact-spring(290, 34, 1)\"\n  text \"Go\"",
     ));
     for body in [
         "button appearance=\"auto\" press=go background-color=\"#ff0000\"\n  text \"Go\"",
@@ -928,6 +930,10 @@ fn the_default_is_native_and_explicit_none_is_bare() {
         ("", true),
         ("appearance=\"auto\"", true),
         ("appearance=\"none\"", false),
+        (
+            "-exact-layout-transition=\"-exact-spring(290, 34, 1)\"",
+            true,
+        ),
     ] {
         assert_eq!(
             appearance_of(&app(&format!("button {attrs} testId=\"b\"\n  text \"Go\""))),
@@ -1167,6 +1173,11 @@ fn bare_reasons_live_only_in_the_development_map_and_migration_uses_merged_rows(
         ),
         (
             "button display=(n == 0 ? \"none\" : \"flex\") testId=\"b\"\n  text \"Go\"",
+            false,
+        ),
+        // A layout transition only moves the native button between its places
+        (
+            "button -exact-layout-transition=\"-exact-spring(290, 34, 1)\" testId=\"b\"\n  text \"Go\"",
             false,
         ),
     ] {

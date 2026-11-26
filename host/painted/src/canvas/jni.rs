@@ -242,6 +242,18 @@ macro_rules! canvas_jni {
                 with(|h| h.set_window(told));
             }
 
+            /// The software keyboard's bottom inset in pixels as its inset
+            /// animation shows it, each frame while one runs, and a negative
+            /// depth once it ends (LLP 1123 D7), on the host's thread.
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_keyboardProgress(
+                _env: *mut JNIEnv,
+                _class: jclass,
+                depth: jint,
+            ) {
+                with(|h| h.set_keyboard_progress(depth));
+            }
+
             /// The device's colours (LLP 1115.001 D4): Material 3's colour
             /// roles, light then dark in `presenter::Material`'s order, followed
             /// by the contrast level and available device accent swatches.

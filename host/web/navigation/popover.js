@@ -74,14 +74,47 @@ function dialogCommand(event) {
   if (event.command === "show-modal" && closingDialogs.has(event.currentTarget)) clearDialogExit(event.currentTarget);
 }
 
+const authoredDialogObservers = new WeakMap();
+
+/** A `dialog` whose runtime `role` became `"alertdialog"` with non-alert children keeps its authored box rather than alert styling. */
+function markAuthoredAlertDialog(dialog) {
+  const authored = dialog.getAttribute("role") === "alertdialog"
+    && [...dialog.children].some((child) =>
+      child.localName !== "button"
+      && child.localName !== "input"
+      && !child.hasAttribute("data-exact-text")
+      && !child.hasAttribute("data-alertpart"));
+  dialog.toggleAttribute("data-exact-authored-dialog", authored);
+}
+
+function unwatchAuthoredAlertDialog(dialog) {
+  authoredDialogObservers.get(dialog)?.disconnect();
+  authoredDialogObservers.delete(dialog);
+  dialog.removeAttribute("data-exact-authored-dialog");
+}
+
+function watchAuthoredAlertDialog(dialog) {
+  markAuthoredAlertDialog(dialog);
+  if (authoredDialogObservers.has(dialog)) return;
+  const observer = new MutationObserver(() => {
+    if (dialog.open) markAuthoredAlertDialog(dialog);
+    else unwatchAuthoredAlertDialog(dialog);
+  });
+  observer.observe(dialog, { attributes: true, attributeFilter: ["role"], childList: true });
+  authoredDialogObservers.set(dialog, observer);
+  dialog.addEventListener("close", () => unwatchAuthoredAlertDialog(dialog), { once: true });
+}
+
 // A dialog stays in the top layer during its authored exit. Its native close then returns focus and fires the event.
 export function modalCommand(element, id, method, say) {
   if (element instanceof HTMLDialogElement) {
     if (method === "close") {
       if (!leaveDialog(element)) element.close();
     } else if (closingDialogs.has(element)) clearDialogExit(element);
-    else if (!element.open) element.showModal();
-    else say(`showModal "${id}" ignored: dialog is already open`);
+    else if (!element.open) {
+      watchAuthoredAlertDialog(element);
+      element.showModal();
+    } else say(`showModal "${id}" ignored: dialog is already open`);
   } else if (element?.popover != null && element.getAttribute("role") === "alertdialog") {
     if (method === "close") element.hidePopover();
     else if (!element.matches(":popover-open")) element.showPopover();
@@ -163,9 +196,13 @@ export function placePopovers() {
   globalThis.document?.addEventListener?.("beforetoggle", (e) => {
     if (e.target.localName === "dialog") {
       if (e.newState === "open") {
+        watchAuthoredAlertDialog(e.target);
         e.target.addEventListener("cancel", requestDialogExit);
         e.target.addEventListener("command", dialogCommand);
-      } else if (closingDialogs.has(e.target)) clearDialogExit(e.target);
+      } else {
+        unwatchAuthoredAlertDialog(e.target);
+        if (closingDialogs.has(e.target)) clearDialogExit(e.target);
+      }
     }
     if (e.target.hasAttribute("popover") && e.newState === "open") {
       popoverSources.set(e.target, e.source ?? null);

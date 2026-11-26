@@ -2861,8 +2861,9 @@ to UIKit's projected rest when a drag ends; macOS eases there when a trackpad
 lifts (from where its momentum would carry the scroll) or once a mouse wheel
 stops, on a scroller that has its `scroll-snap-type` when it first shows (one
 that gains it later, or a reused list row that lacked it, glides as AppKit
-flings it); Android aims its fling there; a Linux or Windows wheel moves one position
-a notch, finer ticks adding up to a notch first. On iOS, areas whose snap
+flings it); Android aims its fling there; on Linux and Windows a whole wheel
+notch moves one position at once, and finer ticks scroll freely and glide to
+rest once the wheel stops. On iOS, areas whose snap
 positions (alignment and `scroll-margin` applied) are each multiple of the
 scrollport, every one `scroll-snap-stop="always"` with nothing insetting the
 snapport, page as UIKit's `isPagingEnabled` (SwiftUI's `.paging`) does. An oversized area stays freely scrollable while it covers the snapport.
@@ -3109,10 +3110,11 @@ custom circle.
 `appearance="none"` without `buttonStyle`. It is a styleable host-policy prop;
 its names and allowable branches
 are checked against `schema.json`'s `buttonStyles`. Backgrounds, borders,
-shadows, filters, `font-family`, other typography or inner layout and
-`-exact-press-scale` are refused with `lower-button-style-attr`, naming a custom
-`button` as the alternative. A native button still takes size, place, opacity
-and transform rows. Hosts implementing the measure hook supply its fitting
+shadows, filters, `font-family`, `overflow` and `direction` are refused with
+`lower-button-style-attr`, naming a custom `button` as the alternative. A native button still takes size, place, opacity
+and transform rows, and `-exact-layout-transition`: it takes its new size at
+once and moves by its centre, so a button pinned by one edge that changes width
+shows that edge off its place until the move settles. Hosts implementing the measure hook supply its fitting
 size before the first frame, including height-for-width; hosts without it
 keep the existing intrinsic-size report. Test the actual
 platform look; macOS can report stand-ins for gap, subtitle and wrapping.

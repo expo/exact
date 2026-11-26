@@ -105,11 +105,29 @@ pub struct Snap {
     pub areas: Vec<SnapArea>,
 }
 
-/// Where a wheel would have put a scroller unsnapped, and where it put it.
-pub(super) type WheelFree = ((f32, f32), (f32, f32));
+/// Quiet window (ms) after the last fine wheel tick before a snapping scroller
+/// settles, matching macOS's `ScrollEnd.quiet` and Chromium's wheel-end timer.
+const WHEEL_SNAP_QUIET_MS: f64 = 100.0;
 
-/// A browser's wheel notch, in points (the Linux host's `input::LINE`): ticks that add
-/// up to one are a flick.
+/// Reverse travel (pt) from the farthest offset reached during a fine wheel run
+/// that cancels its forward flick direction.
+const WHEEL_PULLBACK_SLOP: f32 = 8.0;
+
+/// An unsettled fine-tick wheel gesture on a snapping scroller.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WheelSnap {
+    key: exact_kernel::NodeKey,
+    start: (f32, f32),
+    last: (f32, f32),
+    min: (f32, f32),
+    max: (f32, f32),
+    moved: (bool, bool),
+    due: f64,
+}
+
+/// A browser's wheel notch, in points (the Linux host's `input::LINE`): a whole
+/// notch on an idle scroller moves one snap position at once; finer ticks
+/// scroll freely and settle once the wheel goes quiet.
 const WHEEL_NOTCH: f32 = 40.0;
 
 /// How near a `proximity` snap's position must be to where the scroll would
@@ -396,6 +414,7 @@ impl<D: DataSource> Presenter<D> {
     fn snap_input_busy(&self, id: ViewId) -> bool {
         let inside = |node| node == id || self.is_inside(node, id);
         self.snap_input_active(id)
+            || self.wheel_snap_pending(id)
             || self.gliding(id)
             || self.zoom_animating(id)
             || self
@@ -793,65 +812,319 @@ impl<D: DataSource> Presenter<D> {
         })
     }
 
-    /// A wheel moved scroller `id` from `from` to `to`, within `max`: where
-    /// it rests instead, on each axis it moved along and snaps along. Where
-    /// the wheel would have put it goes on from there unsnapped while the
-    /// scroller stays where the last wheel left it, so ticks too short to
-    /// reach another position add up; ticks that add up to a wheel notch are
-    /// a flick their way.
+    fn wheel_now(&self) -> f64 {
+        self.live_time().unwrap_or_else(|| self.host.now())
+    }
+
+    fn wheel_snap_preempted(&self, id: ViewId) -> bool {
+        let inside = |node| node == id || self.is_inside(node, id);
+        self.pending_model_scroll(id).is_some()
+            || self.gliding(id)
+            || self.zoom_animating(id)
+            || self.scroll_held(id)
+            || self
+                .control_contact
+                .is_some_and(|(node, _, _)| inside(node))
+            || self.brush.scrollbars.drag.is_some_and(|(key, _, _)| {
+                self.host
+                    .kernel()
+                    .node_by_key(key)
+                    .is_some_and(|n| n.id == id)
+            })
+            || !self.reader_dragging()
+                && [self.contact_hit(), self.pointer_held]
+                    .into_iter()
+                    .flatten()
+                    .any(|key| {
+                        self.host
+                            .kernel()
+                            .node_by_key(key)
+                            .is_some_and(|n| inside(n.id))
+                    })
+    }
+
+    fn wheel_snap_valid(&self, id: ViewId, w: &WheelSnap) -> bool {
+        self.scroll_of(id) == w.last
+            && self.host.kernel().node(id).is_some_and(|n| n.key == w.key)
+            && !self.wheel_snap_preempted(id)
+    }
+
+    /// Whether a layout change since `id`'s last snap requires `resnap_before_paint`
+    /// before its scroll completion fires.
+    pub(super) fn snap_resnap_pending(&self, id: ViewId) -> bool {
+        let stamp = self.host.kernel().layout_stamp();
+        let at = self.scroll_of(id);
+        [(false, at.0), (true, at.1)]
+            .into_iter()
+            .any(|(vertical, cur)| {
+                self.snap_layout
+                    .axes
+                    .get(&(id, vertical))
+                    .is_some_and(|axis| {
+                        axis.stamp != stamp
+                            && axis.absent != Some(stamp)
+                            && (self
+                                .host
+                                .kernel()
+                                .node(id)
+                                .is_some_and(|n| n.style.scroll_snap_type.mandatory())
+                                || axis.rested(cur).is_some())
+                    })
+            })
+    }
+
+    /// Carry an unsettled fine-tick run's coordinates across an anchor or clamp rebase.
+    pub(super) fn rebase_wheel_snap(&mut self, id: ViewId, was: (f32, f32), now: (f32, f32)) {
+        let Some(w) = self.wheel_snap.get_mut(&id) else {
+            return;
+        };
+        let shift = |v: f32, from: f32, to: f32| if v == from { to } else { v + to - from };
+        w.start = (
+            shift(w.start.0, was.0, now.0),
+            shift(w.start.1, was.1, now.1),
+        );
+        w.last = (shift(w.last.0, was.0, now.0), shift(w.last.1, was.1, now.1));
+        w.min = (shift(w.min.0, was.0, now.0), shift(w.min.1, was.1, now.1));
+        w.max = (shift(w.max.0, was.0, now.0), shift(w.max.1, was.1, now.1));
+    }
+
+    /// Whether scroller `id` has an active fine-tick wheel gesture awaiting settle.
+    pub(super) fn wheel_snap_pending(&self, id: ViewId) -> bool {
+        self.wheel_snap
+            .get(&id)
+            .is_some_and(|w| self.wheel_snap_valid(id, w))
+    }
+
+    /// Whether any snapping scroller is awaiting its fine-tick wheel settle.
+    pub(super) fn has_active_wheel_snap(&self) -> bool {
+        self.wheel_snap
+            .iter()
+            .any(|(&id, w)| self.wheel_snap_valid(id, w))
+    }
+
+    /// Earliest deadline at which an unsettled fine-tick wheel gesture snaps.
+    pub(crate) fn wheel_snap_due(&self) -> Option<f64> {
+        self.wheel_snap
+            .iter()
+            .filter(|(&id, w)| self.wheel_snap_valid(id, w))
+            .map(|(_, w)| w.due)
+            .reduce(f64::min)
+    }
+
+    /// A wheel moved scroller `id` from `from` to `to` with input delta `delta`.
+    /// A whole notch (`>= WHEEL_NOTCH`) on an idle scroller moves one snap
+    /// position at once, as a browser's mouse wheel does. Finer ticks — and
+    /// later ticks during an open fine-tick run — scroll freely and settle once
+    /// the wheel goes quiet for `WHEEL_SNAP_QUIET_MS`. Returns the new offset
+    /// and whether a fine-tick wheel gesture remains open on `id`.
     pub(super) fn wheel_snapped(
         &mut self,
         id: ViewId,
         from: (f32, f32),
         to: (f32, f32),
-        max: (f32, f32),
-    ) -> (f32, f32) {
-        let free = match self.wheel_free.get(&id) {
-            Some(&(free, left)) if left == from => (
-                (free.0 + to.0 - from.0).clamp(0.0, max.0.max(0.0)),
-                (free.1 + to.1 - from.1).clamp(0.0, max.1.max(0.0)),
-            ),
-            _ => to,
+        delta: (f32, f32),
+    ) -> ((f32, f32), bool) {
+        let Some((key, axes)) = self
+            .host
+            .kernel()
+            .node(id)
+            .map(|n| (n.key, n.style.scroll_snap_type.axes()))
+        else {
+            return (to, false);
         };
+        let active = self
+            .wheel_snap
+            .get(&id)
+            .copied()
+            .filter(|w| w.key == key && w.last == from);
         let mut rests = to;
+        let mut fine = (false, false);
+        let mut snapped_notch = false;
         for vertical in [false, true] {
-            let (f, r, release) = if vertical {
-                (free.1, &mut rests.1, from.1)
-            } else {
-                (free.0, &mut rests.0, from.0)
-            };
-            if f == release {
+            if !(if vertical { axes.1 } else { axes.0 }) {
                 continue;
             }
-            let Some(snap) = self.snap(id, vertical) else {
-                continue;
-            };
-            // Ticks that add up to a browser's wheel notch are a flick their
-            // way: a notch moves a mandatory snap one position, as a
-            // browser's wheel does; finer ticks add up to one first.
-            let way = if (f - release).abs() >= WHEEL_NOTCH {
-                (f - release).signum()
+            let (target, raw, release) = if vertical {
+                (&mut rests.1, delta.1, from.1)
             } else {
-                0.0
+                (&mut rests.0, delta.0, from.0)
             };
-            if let Some(at) = flicked(
-                &snap.areas,
-                f,
-                release,
-                (release, way),
-                snap.mandatory,
-                snap.port,
-            ) {
-                *r = at;
+            if *target == release {
+                continue;
+            }
+            if active.is_none() && raw.abs() >= WHEEL_NOTCH {
+                snapped_notch = true;
+                if let Some(snap) = self.snap(id, vertical) {
+                    let way = raw.signum();
+                    if let Some(at) = flicked(
+                        &snap.areas,
+                        *target,
+                        release,
+                        (release, way),
+                        snap.mandatory,
+                        snap.port,
+                    ) {
+                        *target = at;
+                    }
+                }
+            } else if vertical {
+                fine.1 = true;
+            } else {
+                fine.0 = true;
             }
         }
-        // Once it moves, the next ticks add up from where it rests.
-        let free = (
-            if rests.0 != from.0 { rests.0 } else { free.0 },
-            if rests.1 != from.1 { rests.1 } else { free.1 },
-        );
-        self.wheel_free.insert(id, (free, rests));
-        rests
+        if fine.0 || fine.1 {
+            let due = self.wheel_now() + WHEEL_SNAP_QUIET_MS;
+            let next = match active {
+                Some(w) => WheelSnap {
+                    key,
+                    start: (
+                        if !w.moved.0 && fine.0 {
+                            from.0
+                        } else {
+                            w.start.0
+                        },
+                        if !w.moved.1 && fine.1 {
+                            from.1
+                        } else {
+                            w.start.1
+                        },
+                    ),
+                    last: rests,
+                    min: (
+                        if w.moved.0 {
+                            w.min.0.min(rests.0)
+                        } else {
+                            from.0.min(rests.0)
+                        },
+                        if w.moved.1 {
+                            w.min.1.min(rests.1)
+                        } else {
+                            from.1.min(rests.1)
+                        },
+                    ),
+                    max: (
+                        if w.moved.0 {
+                            w.max.0.max(rests.0)
+                        } else {
+                            from.0.max(rests.0)
+                        },
+                        if w.moved.1 {
+                            w.max.1.max(rests.1)
+                        } else {
+                            from.1.max(rests.1)
+                        },
+                    ),
+                    moved: (w.moved.0 || fine.0, w.moved.1 || fine.1),
+                    due,
+                },
+                None => WheelSnap {
+                    key,
+                    start: from,
+                    last: rests,
+                    min: (from.0.min(rests.0), from.1.min(rests.1)),
+                    max: (from.0.max(rests.0), from.1.max(rests.1)),
+                    moved: fine,
+                    due,
+                },
+            };
+            self.wheel_snap.insert(id, next);
+            (rests, true)
+        } else if let Some(mut w) = active.filter(|_| !snapped_notch) {
+            // A perpendicular tick on an unsnapped axis keeps the open snap run alive.
+            w.last = rests;
+            self.wheel_snap.insert(id, w);
+            (rests, true)
+        } else {
+            self.wheel_snap.remove(&id);
+            (rests, false)
+        }
+    }
+
+    /// Settle any fine-tick wheel gestures whose quiet window has elapsed.
+    pub(super) fn settle_wheel_snaps(&mut self) {
+        if self.wheel_snap.is_empty() {
+            return;
+        }
+        let ids: Vec<ViewId> = self.wheel_snap.keys().copied().collect();
+        for id in ids {
+            let Some(w) = self.wheel_snap.get(&id).copied() else {
+                continue;
+            };
+            if !self.wheel_snap_valid(id, &w) {
+                self.wheel_snap.remove(&id);
+                continue;
+            }
+            if w.due > self.wheel_now() {
+                continue;
+            }
+            let at = self.scroll_of(id);
+            let stamp = self.host.kernel().layout_stamp();
+            let mut target = at;
+            let mut chosen: [Option<Snap>; 2] = [None, None];
+            for vertical in [false, true] {
+                if !(if vertical { w.moved.1 } else { w.moved.0 }) {
+                    continue;
+                }
+                let Some(snap) = self.snap(id, vertical) else {
+                    continue;
+                };
+                let (start, cur, lo, hi, out) = if vertical {
+                    (w.start.1, at.1, w.min.1, w.max.1, &mut target.1)
+                } else {
+                    (w.start.0, at.0, w.min.0, w.max.0, &mut target.0)
+                };
+                let total = cur - start;
+                let pullback = if total > 0.0 { hi - cur } else { cur - lo };
+                let way = if total.abs() > 0.5 && pullback < WHEEL_PULLBACK_SLOP {
+                    total.signum()
+                } else {
+                    0.0
+                };
+                if let Some(pos) = flicked(
+                    &snap.areas,
+                    cur,
+                    cur,
+                    (start, way),
+                    snap.mandatory,
+                    snap.port,
+                ) {
+                    *out = pos;
+                }
+                chosen[usize::from(vertical)] = Some(snap);
+            }
+            // Record the geometry used to choose this rest so a later layout
+            // commit follows the chosen area rather than an earlier layout's.
+            for (axis, snap) in chosen.into_iter().enumerate() {
+                if let Some(snap) = snap {
+                    let vertical = axis == 1;
+                    let dest = if vertical { target.1 } else { target.0 };
+                    let mut layout = AxisLayout::new(stamp, snap, None);
+                    if target != at {
+                        layout.release = Some((dest, dest));
+                    }
+                    self.snap_layout.axes.insert((id, vertical), layout);
+                }
+            }
+            if target != at {
+                if self.reveal_glides(None) {
+                    self.scroll_end_moved(id, Completion::Glide);
+                    self.wheel_snap.remove(&id);
+                    self.begin_glide(id, at, target);
+                    if self.host.collection(id).is_some() {
+                        self.queue_collections();
+                    }
+                    self.dirty = true;
+                } else {
+                    self.set_scroll_offset(id, at, target, Completion::Instant);
+                    self.wheel_snap.remove(&id);
+                    self.snap_motion_landed(id);
+                }
+            } else {
+                self.wheel_snap.remove(&id);
+                self.dirty |= self.snap_probe_needed();
+            }
+        }
     }
 
     /// Each of scrollers `ids`' snap, for a reader that aims its fling

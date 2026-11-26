@@ -397,9 +397,20 @@ pub(super) fn level_without_heading(tag: &str, attrs: &[Attr], span: Span) -> Op
     })
 }
 
-pub(super) fn alert_font(tag: &str, attrs: &[Attr], styles: &[StyleDecl]) -> Option<LowerError> {
-    if literal(attrs, "role") != Some("alertdialog") || !(tag == "dialog" || has(attrs, "popover"))
-    {
+pub(super) fn alert_font<'a>(
+    tag: &str,
+    attrs: &'a [Attr],
+    styles: &[StyleDecl],
+    root: &'a contract_syntax::Component,
+    view_bindings: &[(&'a str, Option<&'a Expr>)],
+    fns: &'a [contract_syntax::FnDecl],
+) -> Option<LowerError> {
+    let role = crate::menus::alertdialog_role(attrs, root, view_bindings, &|name| {
+        fns.iter()
+            .find(|f| f.name == name)
+            .map(|f| (f.params.as_slice(), &f.body))
+    });
+    if role == crate::menus::AlertRole::Never || !(tag == "dialog" || has(attrs, "popover")) {
         return None;
     }
     let class = crate::class::rows(

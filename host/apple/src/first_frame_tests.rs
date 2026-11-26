@@ -1203,3 +1203,41 @@ fn a_hidden_page_releases_holds_at_their_commit_and_holds_nothing() {
     );
     assert!(host.runner.presented().seen);
 }
+
+/// A native button that moves and resizes with its layout keeps its laid-out size, where the platform draws its chrome,
+/// and moves by its centre, so its face stays centred in the box the move shows (LLP 1069.011 D6).
+const NATIVE_MOVING: &str = r##"component A
+  state wide = true
+  action go
+    wide = not wide
+  view
+    column width="100%" height="100%" position="relative"
+      button testId="tab" press=go position="absolute" top=0 left=(wide ? "0px" : "100px") width=(wide ? "200px" : "100px") height=44 -exact-layout-transition="200ms linear"
+        text "Tab"
+"##;
+
+#[test]
+fn a_native_button_moves_by_its_centre_at_its_laid_out_size() {
+    let plan = contract::compile(NATIVE_MOVING).unwrap().encode();
+    let (mut host, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        390.0,
+        844.0,
+    )
+    .unwrap();
+    host.start_on_frame(true, 0.0);
+    let tab = id(&host, "tab");
+    let batch = host.dispatch_at(tab, Event::Press, 100.0);
+    let v: serde_json::Value = serde_json::from_str(&batch).unwrap();
+    let presented = v["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|op| op["id"] == tab && op["op"] == "present" && op["property"] == "layout")
+        .map(|op| ["x", "y", "w", "h"].map(|k| op[k].as_f64().unwrap()));
+    // From x 0, 200 wide, to x 100, 100 wide: its centre moves from 100 to 150, so it starts 50 left of its laid-out box
+    assert_eq!(presented, Some([-50.0, 0.0, 0.0, 0.0]), "{batch}");
+}

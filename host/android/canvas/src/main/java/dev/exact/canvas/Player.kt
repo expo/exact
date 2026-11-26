@@ -76,7 +76,18 @@ internal class Player(private val fonts: Map<Int, Font>) {
     var layer: (Int) -> android.graphics.RenderNode? = { null }
     var shared: (Long) -> android.graphics.RenderNode? = { null }
     var group: ((Int) -> android.graphics.RenderNode)? = null
-    private val groupOrigins = HashMap<Int, android.graphics.PointF>()
+    /** Notified whenever [replay] records a group's RenderNode (including nested groups). */
+    var onGroupRecorded: ((Int) -> Unit)? = null
+    private class OpenGroup(
+        val id: Int,
+        val node: android.graphics.RenderNode,
+        val outer: Canvas,
+        val parentChildren: ArrayList<PaintedOrigins.Placement>?,
+        val clipBase: Int,
+        val reused: Boolean,
+        val shiftX: Float,
+        val shiftY: Float,
+    )
     /** What is drawn in place of a scroller's own node, for one whose edge the reader stretches ([Scrolling]). */
     var holder: ((Int) -> android.graphics.RenderNode?)? = null
     var width = 0
@@ -131,14 +142,18 @@ internal class Player(private val fonts: Map<Int, Font>) {
     private class SavedMatrix {
         val matrix = Matrix()
         var clipAt = -1
+        var hasClipBounds = false
+        val clipBounds = RectF()
     }
     private val savedMatrices = ArrayList<SavedMatrix>()
     private var matrixDepth = 0
-    private fun saveMatrix(clipAt: Int = -1) {
+    private fun saveMatrix(clipAt: Int = -1): SavedMatrix {
         if (matrixDepth == savedMatrices.size) savedMatrices.add(SavedMatrix())
         val saved = savedMatrices[matrixDepth++]
         saved.matrix.set(current)
         saved.clipAt = clipAt
+        saved.hasClipBounds = false
+        return saved
     }
     private fun restoreMatrix() { current.set(savedMatrices[--matrixDepth].matrix) }
     private val backdropBounds = RectF()
@@ -425,16 +440,15 @@ internal class Player(private val fonts: Map<Int, Font>) {
     }
 
     /** [replay] into a node whose origin is at ([dx], [dy]) in the stream's pixels. */
-    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Float, dy: Float, into: android.graphics.RenderNode? = null) {
+    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Float, dy: Float, into: android.graphics.RenderNode? = null, reuseGroups: Boolean = false) {
         val sx = shiftX; val sy = shiftY
         shiftX = sx + dx; shiftY = sy + dy
-        try { replay(canvas, b, from, n, into = into) } finally { shiftX = sx; shiftY = sy }
+        try { replay(canvas, b, from, n, reuseGroups = reuseGroups, into = into) } finally { shiftX = sx; shiftY = sy }
     }
 
-    /** A partial replay uses the same recording coordinates as the group in the full stream, including inside a filter. */
+    /** Record one group's body in page coordinates, matching its placement in a full replay. */
     fun recordGroup(b: IntBuffer, range: IntArray, node: android.graphics.RenderNode) {
-        val origin = groupOrigins[range[0]]
-        replayAt(node.beginRecording(), b, range[1], range[2], origin?.x ?: 0f, origin?.y ?: 0f, node)
+        replay(node.beginRecording(), b, range[1], range[2], into = node, inGroup = true)
         node.endRecording()
     }
 
@@ -449,8 +463,9 @@ internal class Player(private val fonts: Map<Int, Font>) {
         val first = maxOf(base, filters.lastOrNull { it.node != null }?.clipBase ?: 0)
         for (depth in first until matrixDepth) {
             val saved = savedMatrices[depth]
-            if (saved.clipAt < 0) continue
-            readRRect(b, saved.clipAt)
+            if (saved.clipAt >= 0) readRRect(b, saved.clipAt)
+            else if (saved.hasClipBounds) rect.set(saved.clipBounds)
+            else continue
             if (!saved.matrix.isAffine) {
                 // The corners bound the projection only while the entire clip is in front of the eye.
                 saved.matrix.getValues(values)
@@ -929,7 +944,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         }
     }
 
-    fun replay(canvas: Canvas, b: IntBuffer, from: Int, n: Int, reuseGroups: Boolean = false, into: android.graphics.RenderNode? = null) {
+    fun replay(canvas: Canvas, b: IntBuffer, from: Int, n: Int, reuseGroups: Boolean = false, into: android.graphics.RenderNode? = null, inGroup: Boolean = false) {
         val placements = origins?.let { ArrayList<PaintedOrigins.Placement>() }
         var children = placements
         tint = 1f; tintEnd = -1
@@ -941,15 +956,16 @@ internal class Player(private val fonts: Map<Int, Font>) {
         // Each recording starts locally; stream matrices supply the device coordinates.
         current.reset(); canvas.setMatrix(current)
         var c: Canvas = canvas
-        var outer: Canvas? = null
-        var node: android.graphics.RenderNode? = null
-        var grouped = 0
-        var groupParent = placements
+        val openGroups = ArrayList<OpenGroup>(2)
         // Each edge carries the enclosing canvas clip in its recording's coordinates.
-        fun placed(child: android.graphics.RenderNode, x: Float, y: Float, saves: Int = 0, kept: Matrix? = null) {
+        // Inside a scroll group, derive rectangular clips from the stream stack rather than
+        // RecordingCanvas.clipBounds, which clamps to the group's nominal viewport size.
+        fun placed(child: android.graphics.RenderNode, x: Float, y: Float, saves: Int = 0, kept: Matrix? = null, port: android.graphics.Rect? = null, hasPort: Boolean = false) {
             val list = children ?: return
-            val clipped = origins?.frameClips == true && c.saveCount > (if (c === canvas) base + 1 else 1) + saves
-            val clip = if (clipped) {
+            val clip = if (origins?.frameClips != true) null
+            else if (hasPort) port?.let { android.graphics.Rect(it) }
+            else if (openGroups.isNotEmpty() || inGroup) scrollPort(b, openGroups.lastOrNull()?.clipBase ?: matrixBase)
+            else if (c.saveCount > (if (c === canvas) base + 1 else 1) + saves) {
                 val save = c.save()
                 c.setMatrix(null)
                 c.clipBounds.also { c.restoreToCount(save) }
@@ -1042,13 +1058,15 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     i += 13
                 }
                 5 -> {
-                    saveMatrix()
+                    val saved = saveMatrix()
                     c.save()
                     i = readPath(b, i + 2, b.get(i + 1) == 1)
+                    path.computeBounds(saved.clipBounds, true)
+                    saved.hasClipBounds = true
                     c.clipPath(path)
                 }
                 45 -> {
-                    saveMatrix()
+                    val saved = saveMatrix()
                     c.save()
                     val end = i + 2 + b.get(i + 1)
                     val count = b.get(i + 2)
@@ -1059,6 +1077,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         if (child == 0) clipUnion.set(path)
                         else check(clipUnion.op(path, Path.Op.UNION)) { "invalid clip union" }
                     }
+                    clipUnion.computeBounds(saved.clipBounds, true)
+                    saved.hasClipBounds = true
                     c.clipPath(clipUnion)
                     i = end
                 }
@@ -1242,39 +1262,53 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     i += 3
                 }
                 20 -> {
-                    // A scroller's rows: their own node, so a move only translates it.
-                    val g = group!!(b.get(i + 1))
-                    node = g
-                    grouped = b.get(i + 1)
+                    // A scroller's rows: their own node, recorded in page coordinates so a move only translates it.
+                    val id = b.get(i + 1)
+                    val g = group!!(id)
                     i += 2
                     if (reuseGroups) {
                         // A backdrop references the page's group; recording it again would move the page's rows.
-                        while (i < n && b.get(i) != 21) i = walker.end(b, i)
+                        var depth = 1
+                        while (i < n && depth > 0) {
+                            val op = b.get(i)
+                            if (op == 20) depth++
+                            else if (op == 21) { depth--; if (depth == 0) break }
+                            i = walker.end(b, i)
+                        }
+                        if (i < n && b.get(i) == 21) {
+                            openGroups.add(OpenGroup(id, g, c, children, matrixDepth, true, shiftX, shiftY))
+                        }
                     } else {
-                        if (shiftX == 0f && shiftY == 0f) groupOrigins.remove(grouped)
-                        else groupOrigins.getOrPut(grouped) { android.graphics.PointF() }.set(shiftX, shiftY)
+                        onGroupRecorded?.invoke(id)
                         g.setPosition(0, 0, width, height)
-                        outer = c
+                        val outerCanvas = c
+                        val outerShiftX = shiftX; val outerShiftY = shiftY
+                        shiftX = 0f; shiftY = 0f
                         saveMatrix()
+                        val clipBase = matrixDepth
                         c = g.beginRecording()
-                        groupParent = children
+                        val parentChildren = children
                         children = origins?.let { ArrayList<PaintedOrigins.Placement>() }
                         current.reset(); c.setMatrix(current)
+                        openGroups.add(OpenGroup(id, g, outerCanvas, parentChildren, clipBase, false, outerShiftX, outerShiftY))
                     }
                 }
                 21 -> {
-                    node?.let { g ->
-                        if (!reuseGroups) {
-                            g.endRecording()
-                            children?.let { origins?.record(g, it) }
-                            children = groupParent
-                            c = outer!!
+                    if (openGroups.isNotEmpty()) {
+                        val og = openGroups.removeAt(openGroups.lastIndex)
+                        if (!og.reused) {
+                            og.node.endRecording()
+                            children?.let { origins?.record(og.node, it) }
+                            children = og.parentChildren
+                            c = og.outer
                             restoreMatrix()
+                            shiftX = og.shiftX; shiftY = og.shiftY
                         }
-                        placed(g, -shiftX, -shiftY)
-                        drawScrollPort(c, holder?.invoke(grouped) ?: g, scrollPort(b, matrixBase))
+                        val portBase = openGroups.lastOrNull()?.clipBase ?: matrixBase
+                        val box = scrollPort(b, portBase)
+                        placed(og.node, -shiftX, -shiftY, port = box, hasPort = true)
+                        drawScrollPort(c, holder?.invoke(og.id) ?: og.node, box)
                     }
-                    node = null
                     i += 1
                 }
                 else -> {
@@ -1289,6 +1323,16 @@ internal class Player(private val fonts: Map<Int, Font>) {
         }
         // A backdrop's replay of what is under it can stop inside a filter.
         while (filters.size > filterBase) closeFilter()
+        while (openGroups.isNotEmpty()) {
+            val og = openGroups.removeAt(openGroups.lastIndex)
+            if (!og.reused) {
+                og.node.endRecording()
+                children = og.parentChildren
+                c = og.outer
+                restoreMatrix()
+                shiftX = og.shiftX; shiftY = og.shiftY
+            }
+        }
         canvas.restoreToCount(base)
         matrixDepth = matrixBase
         placements?.let { origins?.record(into, it) }

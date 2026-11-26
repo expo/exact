@@ -598,6 +598,17 @@ open class ExactActivity : Activity() {
     }
 
     private var loopNotice: DevLoop.Notice? = null
+
+    /** Tell the host the keyboard as its inset animation moves it, which the inset dispatch gives only at its ends (LLP
+     * 1123 D7), while this reader reads. Activation (stage 5) calls it: registering an inset animation callback changes
+     * how Android runs the keyboard's animation, so no shipping reader registers one before then. */
+    internal fun followKeyboard() {
+        if (Build.VERSION.SDK_INT < 30) return
+        root.setWindowInsetsAnimationCallback(KeyboardProgress { depth ->
+            if (stopped || !reads()) return@KeyboardProgress
+            view.owner?.keyboardProgress(depth) ?: Native.keyboardProgress(depth)
+        })
+    }
     private lateinit var root: Root
 
     /** The app is edge to edge (LLP 1115.001 D3.4): the window reaches under transparent system bars and into the
