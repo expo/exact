@@ -5,6 +5,7 @@ import { agentParameters } from "./agent-parameters.js";
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
 import { sheetGone, sheetsLeft, stackSheets } from "./sheet-stack.js";
+import { misplaced, placeOf, replaces } from "./history-replace.js";
 // @ref LLP 1038 D6/D7/D11 — host projection and the last committed URL.
 const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 // @ref LLP 1047.002 D2.1 — the behaviours that act only on what a plan makes: a tablist's panels and the sidebar, a
@@ -521,7 +522,7 @@ export function historyURL(path) {
 /** Whether `e` scrolls the page by the person: a wheel, a touch's move, a key that scrolls, or a press on a scrollbar. A
 * `scroll` event cannot say: the page's own scrolls (a fragment's, scroll anchoring, a clamp) are trusted events too. */
 const byPerson = (e, el = e.target) => e.type === "keydown" ? /^(Arrow(Up|Down|Left|Right)|Page(Up|Down)|Home|End| )$/.test(e.key) && !el.closest?.("input, textarea, select, [contenteditable]") : e.type !== "pointerdown" || el instanceof Element && ((b) => e.clientX - b.left >= el.clientLeft + el.clientWidth || e.clientY - b.top >= el.clientTop + el.clientHeight)(el.getBoundingClientRect());
-const stamp = (index, op) => ({ exact: index, id: op.top, url: op.url });
+const stamp = (index, op) => ({ exact: index, id: op.top, url: op.url, ...placeOf(op) });
 /** A route's Back control, the selected route's unless named (1035.001 D1: the `id` the root's `navigationBack` names), pressable or not: the route's own, else one in no route at all (a header the routes share), as iOS resolves it (NavigationBack.control); another route's is that route's. */
 const backControl = (nav, route = selectedRoute(nav), name = nav.getAttribute("navigationBack")) => route && name !== null ? route.querySelector(`[id="${CSS.escape(name)}"]`) ?? [...nav.ownerDocument.querySelectorAll(`[id="${CSS.escape(name)}"]`)].find((control) => [null, nav].includes(control.closest("[navigationKey]"))) ?? null : undefined;
 // LLP 1116.000 D4: Back belongs to the header shadow root; bar items proxy the authored controls.
@@ -917,14 +918,14 @@ function pressBack(nav) {
 // An opaque frame can stamp a browser entry even when it cannot change its address.
 // If the browser refuses the stamp too, subsequent entries and traversals belong to this mirror.
 function writeEntry(method, entry) {
-  if (memory) return;
+  // The entry as written, which `commit` checks: "memory" where writes go to memory alone, else the browser's id for it
+  // (or "written", where the browser lists none) while its current state is this write's
+  if (memory) { entry.nid = "memory"; return; }
   const url = historyURL(entry.url);
-  try {
-    history[method](entry, "", url);
-  } catch {
-    try { history[method]({ ...entry, address: launchLocation() }, ""); }
-    catch { memory = true; }
+  try { history[method](entry, "", url); } catch {
+    try { history[method]({ ...entry, address: launchLocation() }, ""); } catch { memory = true; }
   }
+  entry.nid = memory ? "memory" : history.state?.exact === entry.exact && history.state.id === entry.id ? globalThis.navigation?.currentEntry?.id ?? "written" : undefined;
 }
 function traverseBrowser(delta) {
   if (memory) return false;
@@ -967,10 +968,8 @@ function commit(op) {
     }
   } else if (written[cursor]?.id === op.top && !(pop === null && written[cursor].url !== op.url && written[cursor].url.split("#")[0] === op.url.split("#")[0])) {
     // another fragment on the visit shown, or none, is one more browser entry of it, as a same-document link's is (LLP 1153 D5)
-    if (written[cursor].url !== op.url) {
-      written[cursor] = stamp(cursor, op);
-      writeEntry("replaceState", written[cursor]);
-    }
+    // and one whose visit now stands elsewhere (a restored router can mint its id again there) is stamped again
+    if (written[cursor].url !== op.url || misplaced(written[cursor], op)) { writeEntry("replaceState", written[cursor] = stamp(cursor, op)); }
   } else {
     let j = cursor;
     while (j > first && gone.has(written[j]?.id)) {
@@ -979,19 +978,19 @@ function commit(op) {
         const from = cursor;
         cursor = j;
         // The entry gone back to takes the top's url when that changed in the same commit (`replace(back(r), u)`).
-        // An entry a reload left holds the state of the page before it, which is stamped again.
+        // An entry a reload left, or one whose visit a commit placed elsewhere, holds a stale stamp: stamped again.
         return go(j, from, () => {
-          if (written[j].url !== op.url || !memory && (history.state?.exact !== j || history.state.id !== written[j].id)) {
-            writeEntry("replaceState", written[j] = stamp(j, op));
-          }
+          if (written[j].url !== op.url || misplaced(written[j], op) || !memory && (history.state?.exact !== j || history.state.id !== written[j].id)) { writeEntry("replaceState", written[j] = stamp(j, op)); }
         });
       }
     }
-    for (const index of Object.keys(written)) {
-      if (Number(index) > cursor) {
-        delete written[index];
-      }
+    // A new visit in the place of the one shown takes its entry (history-replace.js)
+    if (replaces(op, { written, cursor, memory, traversing: waiters.size > 0 }, canonicalOf)) {
+      writeEntry("replaceState", written[cursor] = stamp(cursor, op));
+      globalThis.exact?.fragment?.forget(cursor);
+      return;
     }
+    for (const index of Object.keys(written)) { if (Number(index) > cursor) { delete written[index]; } }
     written.length = Math.max(0, cursor + 1);
     op.pushed = written[cursor]?.id === op.top;
     written[++cursor] = stamp(cursor, op);
@@ -1254,7 +1253,7 @@ export const navigation = {
       reportedLinkPop = true;
       log(`navigation: link ${JSON.stringify(link.url)} popped the stack to a retained visit`);
     }
-    visits = new Map((op.visits ?? []).map(([id, url]) => [String(id), url]));
+    [op.held, visits] = [visits, new Map((op.visits ?? []).map(([id, url]) => [String(id), url]))]; // `held`: those before it
     pendingRow = SPLITS && pressedRow && pressedRow.event.eventPhase !== 0 && op.url !== pressedRow.from ? {
       row: pressedRow.row,
       list: pressedRow.list,

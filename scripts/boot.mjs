@@ -31,6 +31,7 @@ const MODULES = {
     'host/web/navigation/environment.js',
     'host/web/navigation/focus.js',
     'host/web/navigation/grant-origins.js',
+    'host/web/navigation/history-replace.js',
     'host/web/navigation/layers.js',
     'host/web/navigation/lists.js',
     'host/web/navigation/markup.js',
