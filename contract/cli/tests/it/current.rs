@@ -173,3 +173,286 @@ fn a_mutation_or_a_derive_is_refused() {
         );
     }
 }
+
+/// The server snapshots /state at the start of each read. The test delivers
+/// that snapshot 200 ms later, after any intervening events.
+#[derive(Default)]
+struct Snapshots {
+    refuse: bool,
+    change_prop: bool,
+    post: bool,
+    refuse_failure: bool,
+    asks: Vec<Vec<Value>>,
+}
+
+impl DataSource for Snapshots {
+    fn grants(&self) -> &str {
+        "secret.keep revision\nsecret.keep attempted"
+    }
+
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+
+    fn answer(
+        &mut self,
+        store: &mut Store,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Answer, DataError> {
+        if name == "revision" {
+            return Ok(Answer::Now(Value::Number(
+                if store.get("revision").is_some() {
+                    2.
+                } else {
+                    0.
+                },
+            )));
+        }
+        if name == "guard" {
+            if self.refuse_failure && args == [Value::Bool(true)] {
+                return Err(DataError::Unavailable("failure refused".into()));
+            }
+            return Ok(Answer::Now(Value::Number(0.)));
+        }
+        self.asks.push(args.to_vec());
+        if self.refuse {
+            store.set("attempted", "yes").unwrap();
+            return Err(DataError::Unavailable("offline".into()));
+        }
+        let url = "https://example.test/state";
+        Ok(Answer::Later(if self.post {
+            Request::post_json(url, "{}")
+        } else {
+            Request::get(url)
+        }))
+    }
+
+    fn parse(
+        &mut self,
+        store: &mut Store,
+        _: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        let Outcome::Response(response) = outcome else {
+            return Err(DataError::Unavailable("offline".into()));
+        };
+        if self.change_prop {
+            store.set("revision", "2").unwrap();
+        }
+        Ok(Answer::Now(Value::str(&format!(
+            "{}@{}/{}",
+            response.body[0],
+            args[0].as_str().unwrap(),
+            args[1].as_number().unwrap()
+        ))))
+    }
+}
+
+fn live_view() -> Runner<Source> {
+    let src = r#"
+component App
+  state seq = 0
+  state topic = "a"
+  state active = true
+  state mounted = true
+  resource revision = revision() as shape number
+  action event
+    seq = seq + 1
+  action change
+    topic = "b"
+  action both
+    topic = "c"
+    seq = seq + 1
+  action idle
+    active = false
+  action remove
+    mounted = false
+  view
+    column
+      if mounted
+        Readout(seq=seq, topic=topic, active=active, revision=revision)
+component Readout
+  props
+    seq: number
+    topic: string
+    active: bool
+    revision: number
+  resource snapshot = load(topic) with seq, revision when active as shape string else empty()
+  resource guarded = guard(failed(snapshot)) as shape number
+  view
+    text `${snapshot} ${current(snapshot)} ${pending(snapshot)} ${failed(snapshot)}` testId="out"
+"#;
+    Runner::boot(
+        contract::compile(src).unwrap(),
+        boxed(Snapshots::default()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap()
+}
+
+fn read(r: &mut Runner<Source>) -> u64 {
+    let reads = r.take_requests();
+    assert_eq!(reads.len(), 1, "one GET /state");
+    assert_eq!(reads[0].request.url, "https://example.test/state");
+    assert!(!reads[0].forced);
+    reads[0].ticket
+}
+
+fn snapshot(value: u8) -> Outcome {
+    Outcome::Response(Response {
+        status: 200,
+        headers: vec![],
+        body: vec![value],
+    })
+}
+
+#[test]
+fn with_events_during_a_kept_read_land_then_ask_once_at_the_latest_arguments() {
+    let mut r = live_view();
+    let first = read(&mut r);
+    r.advance(100.).unwrap();
+    for action in ["event", "both", "event"] {
+        r.act(action, vec![]).unwrap();
+    }
+    assert!(r.take_requests().is_empty());
+    assert!(r.holds(first));
+    r.advance(200.).unwrap();
+    r.fulfill(first, snapshot(0)).unwrap();
+    assert_eq!(text(&r), "0@c/3 true true false");
+    let second = read(&mut r);
+    r.advance(300.).unwrap();
+    r.act("event", vec![]).unwrap();
+    assert_eq!(text(&r), "0@c/3 true true false");
+    assert!(r.holds(second));
+    r.advance(400.).unwrap();
+    r.act("event", vec![]).unwrap();
+    r.fulfill(second, snapshot(3)).unwrap();
+    assert_eq!(text(&r), "3@c/5 true true false");
+    let third = read(&mut r);
+    r.advance(500.).unwrap();
+    r.act("event", vec![]).unwrap();
+    r.advance(600.).unwrap();
+    r.fulfill(third, snapshot(5)).unwrap();
+    assert_eq!(text(&r), "5@c/6 true true false");
+    let last = read(&mut r);
+    r.advance(800.).unwrap();
+    r.fulfill(last, snapshot(6)).unwrap();
+    assert_eq!(text(&r), "6@c/6 true false false");
+    assert!(r.take_requests().is_empty());
+    assert!(r.pending().is_empty());
+}
+
+#[test]
+fn a_call_argument_alone_earns_no_follow_up_and_a_failed_kept_read_spends_one() {
+    let mut r = live_view();
+    let first = read(&mut r);
+    r.act("change", vec![]).unwrap();
+    r.fulfill(first, snapshot(0)).unwrap();
+    assert_eq!(text(&r), "0@b/0 true false false");
+    assert!(r.take_requests().is_empty());
+    r.act("event", vec![]).unwrap();
+    let held = read(&mut r);
+    r.act("both", vec![]).unwrap();
+    r.fulfill(held, offline()).unwrap();
+    assert_eq!(text(&r), "0@b/0 false true false");
+    let last = read(&mut r);
+    r.fulfill(last, offline()).unwrap();
+    assert_eq!(text(&r), "0@b/0 false false true");
+    assert!(r.take_requests().is_empty());
+}
+
+#[test]
+fn a_constant_post_read_is_sent_twice_when_its_with_value_changes_in_flight() {
+    let mut r = live_view();
+    let first = read(&mut r);
+    r.fulfill(first, snapshot(0)).unwrap();
+    r.source::<Snapshots>().post = true;
+    r.act("change", vec![]).unwrap();
+    let post = r.take_requests().remove(0);
+    r.act("event", vec![]).unwrap();
+    assert!(r.take_requests().is_empty());
+    r.fulfill(post.ticket, snapshot(0)).unwrap();
+    let second = r.take_requests();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].request, post.request);
+    assert_eq!(post.request.method, "POST");
+    r.fulfill(second[0].ticket, snapshot(1)).unwrap();
+    assert!(r.take_requests().is_empty());
+}
+
+#[test]
+fn an_idle_or_unmounted_resource_spends_its_kept_read_without_a_follow_up() {
+    for action in ["idle", "remove"] {
+        let mut r = live_view();
+        let held = read(&mut r);
+        r.act("event", vec![]).unwrap();
+        assert!(r.holds(held));
+        r.act(action, vec![]).unwrap();
+        assert!(!r.holds(held));
+        assert!(r.fulfill(held, snapshot(0)).unwrap().is_none());
+        assert!(r.take_requests().is_empty());
+        assert!(r.pending().is_empty());
+    }
+}
+
+#[test]
+fn a_refused_follow_up_keeps_the_reply_and_its_failure_stands() {
+    let mut r = live_view();
+    let held = read(&mut r);
+    r.act("event", vec![]).unwrap();
+    r.source::<Snapshots>().refuse = true;
+    r.fulfill(held, snapshot(0)).unwrap();
+    assert_eq!(text(&r), "0@a/1 true false true");
+    assert!(!r
+        .store()
+        .snapshot()
+        .iter()
+        .any(|(key, _)| key == "attempted"));
+    r.advance(200.).unwrap();
+    assert!(r.take_requests().is_empty());
+}
+
+#[test]
+fn the_follow_up_uses_the_props_committed_by_the_parser() {
+    let mut r = live_view();
+    let first = read(&mut r);
+    r.act("event", vec![]).unwrap();
+    r.source::<Snapshots>().change_prop = true;
+    r.source::<Snapshots>().asks.clear();
+    r.fulfill(first, snapshot(0)).unwrap();
+    let next = read(&mut r);
+    r.fulfill(next, snapshot(1)).unwrap();
+    assert_eq!(
+        r.source::<Snapshots>().asks,
+        [vec![Value::str("a"), Value::Number(1.), Value::Number(2.)]]
+    );
+    assert!(r.take_requests().is_empty());
+}
+
+#[test]
+fn refusing_to_publish_a_failure_leaves_the_last_receipt_and_allows_later_asks() {
+    for parse_fails in [false, true] {
+        let mut r = live_view();
+        let first = read(&mut r);
+        r.act("event", vec![]).unwrap();
+        r.source::<Snapshots>().refuse = true;
+        r.source::<Snapshots>().refuse_failure = true;
+        if parse_fails {
+            assert!(r.fulfill(first, offline()).is_err());
+        } else {
+            assert!(r.fulfill(first, snapshot(5)).unwrap().is_some());
+            assert!(text(&r).starts_with("5@a/1"));
+        }
+        r.source::<Snapshots>().refuse = false;
+        r.source::<Snapshots>().refuse_failure = false;
+        r.act("event", vec![]).unwrap();
+        let next = read(&mut r);
+        r.fulfill(next, snapshot(6)).unwrap();
+        assert_eq!(text(&r), "6@a/2 true false false");
+        assert!(r.take_requests().is_empty());
+    }
+}

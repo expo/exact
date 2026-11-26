@@ -130,17 +130,20 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Settle every derive and resource against current state, in plan
-    /// order, to a fixpoint: an expression that reads something not yet
-    /// settled this pass is retried after it settles. Deterministic, and a
-    /// cycle is a typed refusal. On boot a resource takes its compiled value
-    /// if its evaluated arguments equal the baked arguments (LLP 1038 D5);
-    /// afterwards it is re-requested only when its arguments changed, so
-    /// every derive that reads it sees the new value in the same
-    /// pass.
+    /// Settle derives and resources in plan order, retrying pending inputs until
+    /// all settle or a cycle refuses the commit. At boot a resource can take a
+    /// compiled answer whose arguments match (LLP 1038 D5).
     pub(super) fn settle(&mut self, boot: bool) -> Result<(), RunnerError> {
+        self.settle_with_read(boot, None)
+    }
+
+    pub(super) fn settle_with_read(
+        &mut self,
+        boot: bool,
+        ordinary: Option<usize>,
+    ) -> Result<(), RunnerError> {
         let mut effects = Vec::new();
-        let result = self.settle_pass(boot, &mut effects);
+        let result = self.settle_pass(boot, ordinary, &mut effects);
         if result.is_err() {
             // A refused pass hands nothing out: the `Later` answers it
             // collected are dropped, and their sources forget the calls
@@ -201,6 +204,7 @@ impl<D: DataSource> Runner<D> {
     fn settle_pass(
         &mut self,
         boot: bool,
+        ordinary: Option<usize>,
         effects: &mut Vec<RequestEffect>,
     ) -> Result<(), RunnerError> {
         // Store provenance as the derives below will see it.
@@ -210,11 +214,7 @@ impl<D: DataSource> Runner<D> {
         // pass hands the host, and the pending flags as they will be —
         // published with the rest only when the pass succeeds.
         let mut force = std::mem::take(&mut self.refresh_next);
-        // What this settlement refreshes stays refreshed in every pass, though
-        // the first ask takes it out of `force` (a store reader asked again
-        // after a later resource wrote): a turn over its budget's wait, or a
-        // request, replaces the standing ask and starts a new streak
-        // (`overrun.rs`).
+        // A later store pass must keep the first ask's refresh policy and overrun streak.
         let refreshing = force.clone();
         // Work on a copy of the committed resource states; publish only when
         // the whole pass succeeds, so a failure leaves every cache as it was.
@@ -590,6 +590,7 @@ impl<D: DataSource> Runner<D> {
                         // the value stays and stops being an answer. A refresh
                         // or a store change asks nothing of it and is not
                         // remembered: waking asks it anyway (LLP 1161.002 D2).
+                        self.resources[i].landing_read = false;
                         force.retain(|f| *f != i);
                         self.reconciling.retain(|r| *r != i);
                         let upload = self.uploading(i);
@@ -769,7 +770,7 @@ impl<D: DataSource> Runner<D> {
                     // resource is device data just like a direct reader.
                     self.resources[i].store_reader |= store_dependent;
                     let forced = force.contains(&i);
-                    let refreshed = forced || refreshing.contains(&i);
+                    let refreshed = ordinary != Some(i) && (forced || refreshing.contains(&i));
                     self.forget_refused(i, &args);
                     // Invalid arguments take the query's refusal path, which fails
                     // reconciliation without undoing the write's end.
@@ -867,6 +868,11 @@ impl<D: DataSource> Runner<D> {
                         .filter(|s| {
                             !(s.value.is_compiled() && self.secrets_unseen(i, &row, &resources))
                         })
+                        .or_else(|| {
+                            states[i]
+                                .as_ref()
+                                .filter(|_| self.resources[i].landing_read)
+                        })
                         .map(|s| s.value.clone());
                     // A child its ask would let go, or arguments refused for
                     // one, keeps what shows, and a refresh is spent (LLP
@@ -899,16 +905,9 @@ impl<D: DataSource> Runner<D> {
                     // Whether what shows is a stand-in, not an answer (D4).
                     let mut placeholder =
                         reuse.is_some() && states[i].as_ref().is_some_and(|s| s.placeholder);
-                    // Every ResourceState was checked for this index in this
-                    // Runner's immutable plan: settlement checks new values,
-                    // boot rechecks carried/kept values, and fulfil checks replies.
-                    // Cloning that immutable value preserves its shape. Only this
-                    // successful reuse skips validation; fresh/baked/fallback
-                    // answers still cross the shape boundary below.
+                    // A reused answer already passed this immutable plan's shape check.
                     let reused = reuse.is_some();
-                    let mut checked = false; // an answer now is checked as it is asked
-                                             // A reused value keeps what an earlier pass recorded;
-                                             // anything else is recorded by the branch that takes it.
+                    let mut checked = false;
                     let compiled = std::mem::replace(&mut adopted[i], false);
                     let value = match reuse {
                         Some(v) => v,

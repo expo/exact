@@ -434,7 +434,9 @@ export function C(name, args) {
 }
 // Who caused the commit (modules.js, LLP 1133.002 D12), taken as a command is queued, so a deferred tail runs it
 // under its own commit's origin.
+const originOrder = ['device', 'wake', 'tool', 'action', 'app'];
 export const Origin = {
+  least: (a, b) => originOrder.indexOf(b) < originOrder.indexOf(a) ? b : a,
   now: () => Origin.ask ?? 'app',
   run(origin, f, input = false) {
     const was = this.ask, previousInput = this.input;
@@ -589,6 +591,7 @@ export function commit(f, what = 'commit', finished, presenceSnap = false) {
   const unrun = why => {
     Output?.done(cmds);
     for (const go of out.splice(sent)) go.refused?.(why);
+    for (const follow of out.followUps ?? []) follow.refused();
   };
   const link = Nav?.holdLink();
   const tail = Object.assign(
@@ -657,6 +660,13 @@ export function commit(f, what = 'commit', finished, presenceSnap = false) {
         if (!clock.agent) drive();
       }
     Sched?.scan(true, Sched?.changed(queued) ?? changed); // a free queue's waiting send is due (LLP 1092 D3)
+    // The next answer can be synchronous. Dispatch this answer's storage
+    // requests first so SQLite receives its writes in answer order.
+    const followUps = out.followUps;
+    if (followUps) {
+      out.followUps = null;
+      for (const follow of followUps) follow();
+    }
     return true;
   };
   // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
@@ -667,10 +677,10 @@ export function commit(f, what = 'commit', finished, presenceSnap = false) {
 /** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while
  * reads are owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of
  * that leaves nothing owed. */
-export function recommit(f, what) {
-  if (deferForReplacement(() => recommit(f, what))) return;
+export function recommit(f, what, reader) {
+  if (deferForReplacement(() => recommit(f, what, reader))) return;
   const done = commit(f, what),
-    owed = done === false ? Resources.filter(r => r.reconciling) : [],
+    owed = done === false ? Resources.filter(r => r.reconciling || r === reader) : [],
     why = Refused?.message;
   if (owed.length) {
     for (const r of owed) r.giveUp(`the commit that asked it again was refused: ${why}`);

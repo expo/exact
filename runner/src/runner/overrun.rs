@@ -119,7 +119,7 @@ impl<D: DataSource> Runner<D> {
             upload: false,
             sent: false,
             grant: None,
-            ask_again: false,
+            ask_again: Default::default(),
             origin: self.writes.tick(),
             write: None,
             held: false,

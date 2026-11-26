@@ -410,7 +410,7 @@ impl<D: DataSource> Runner<D> {
                         && !p.long_poll
                         && !p.held
                     {
-                        p.ask_again = true;
+                        p.ask_again.refresh = true;
                         p.module_again = Some(revision);
                         again.push(p.ticket);
                     }

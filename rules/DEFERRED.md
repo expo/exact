@@ -788,6 +788,8 @@ change can break.
   a bug in the presenter. A terminal entry (LLP 1101) is a separate application root on
   a separate medium, not a platform override; GUI surfaces still have one source.
 
+**Live reads (panel, 2026-11-25).** AW1 lets a chat snapshot catch up after an event changes its `with` counter during an equal plain HTTP read. The kept reply lands, followed by one ordinary ask (LLP 1054.000.000 D3, LLP 1162 D2).
+
 **Package calls in one answer (Charlie, 2026-11-24, "recs ok").** The overlap experiment kept a live call's state in several places that fell out of step under review, so package calls remain sequential within an answer. Before reopening LLP 1162 D2, land one durable record per admitted call in a refactor that preserves scheduling.
 
 **Expanded (expo/exact#359, 2026-11-12; LLP 1162.001):** a `source` declared in

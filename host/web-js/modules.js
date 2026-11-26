@@ -54,8 +54,6 @@ import { hatchClock } from "./hatches.js";
 // `views`: a package view's tag → [extension, displayed, binding props, agent vocabulary, package] (views.js);
 // `events`: extension.event → [its action, taken when heard; activation | emit | wake; hold; its parameters' types; its
 // name; a wake's budget].
-// Who a call comes from, least privileged first (the runner's `CallOrigin`)
-const RANK = ["device", "wake", "tool", "action", "app"];
 export function modules(rows, bound = {}, views = {}, events = {}) {
   const byKey = new Map(), preferred = new Map(), permission = new Map(), held = [];
   const covers = row => (!Array.isArray(row.sub.implementationTargets) || row.sub.implementationTargets.includes("web")) && !row.sub.implementationOverrides?.includes("web");
@@ -90,7 +88,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   // Data code calls a module as the least privileged of its own call's origin, the commit's and what still runs that it
   // cannot tell itself apart from (`inFlight`), as the runner's `data_origin` does (LLP 1133.002 D12); a Contract send
   // carries its commit's origin exactly.
-  const dataOrigin = from => [from ?? "app", originNow(), inFlight() ?? "app"].reduce((a, b) => (RANK.indexOf(b) < RANK.indexOf(a) ? b : a));
+  const dataOrigin = from => [from ?? "app", originNow(), inFlight() ?? "app"].reduce(Origin.least);
   // What a commit of a wake's origin may not run (LLP 1133.017 D6): journaled, never run; a call's, calls.js says.
   Origin.refused = (name, from) => from === "tool" ? !!Origin.callRefuses?.(name) : from === "wake" && REFUSED.has(name) && (say(`${name}: refused: during a wake`), true);
   After.push(() => { if (deviceBase !== null && inflight.n <= deviceBase) deviceBase = null; });

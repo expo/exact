@@ -1337,12 +1337,14 @@ those fetches as a lost connection, so the banner says "You're offline".
 
 `with` takes one or more expressions, before `as shape`, and appends them to the
 source's arguments. All arguments still trigger re-asks and identify live
-requests. Only an eligible persisted answer admitted while the source is unready
+requests. An eligible persisted answer admitted while the source is unready
 at boot matches the call arguments alone; it can then stand while activation is
 pending. Without `with`, every argument identifies that kept answer. Keep
 account/tenant IDs and representation choices in the call, credentials below
-the seam, and use `refresh`/`refreshes` for counters whose only purpose is another
-ask. The default web JS target keeps no persisted resource answers
+the seam. Use `with` for a live event counter when an in-flight read should
+land and the view should keep showing its answer during the follow-up.
+Use `refresh` for an explicit reload or `refreshes` when a mutation changes
+the resource. For a plain read, both force a new ask that joins nothing in flight. The default web JS target keeps no persisted resource answers
 (LLP 1027.005).
 
 Resource inputs are not asynchronous prerequisites, and HTTP request lanes do
@@ -1437,7 +1439,20 @@ A long poll (`/changes?since=…&wait=…`) is a stream too: add
 `exactLongPoll: { cursor: 'since', from: 'seq' }` beside `exactStream`, and the
 host asks again with each reply's cursor, skipping heartbeats and backing off
 on failures (`docs/reference.md`, LLP 1016.000 D8). Re-read on each event with
-`resource view = load() with live.seq`. A native app has 16 network stream slots. Long polls, event feeds, WebSockets, listeners and running uploads each use one. Use one poll carrying changes for all open documents. Desktop apps have 16 additional slots for streaming children.
+`resource view = load() with live.seq`. If `load` returns the same single
+plain HTTP request while a read is in flight, that reply lands with the newest arguments.
+One ordinary read follows, however many events arrived during the first read.
+An event during the follow-up earns another read after that reply.
+Use revalidation or `no-store` if a cached response could hide the change.
+A Rust source returning `Later(GET /state)` supports this rule. A plain
+TypeScript `fetch` returns a separate promise on each ask and can still be
+replaced mid-read. Keep a counter used only to signal freshness out of the
+request. Putting it in the URL or a header makes each event replace the read.
+If events arrive every 100 ms and reads take 200 ms, none lands until the
+events stop. Uploads keep their once-per-identity record. A stream keeps its
+existing rules for opening and replacing its transport.
+
+A native app has 16 network stream slots. Long polls, event feeds, WebSockets, listeners and running uploads each use one. Use one poll carrying changes for all open documents. Desktop apps have 16 additional slots for streaming children.
 
 A bidirectional WebSocket uses a resource's TypeScript
 `fetch(url, { exactStream(event, socket) { … } })` (LLP 1016.000 D7).

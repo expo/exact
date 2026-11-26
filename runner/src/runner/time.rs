@@ -453,8 +453,8 @@ impl<D: DataSource> Runner<D> {
                     && p.refusal.is_none()
             }) {
                 in_flight = true;
-                if !p.ask_again {
-                    p.ask_again = true;
+                if !p.ask_again.refresh {
+                    p.ask_again.refresh = true;
                     log.get_or_insert(p.ticket);
                 }
             }
