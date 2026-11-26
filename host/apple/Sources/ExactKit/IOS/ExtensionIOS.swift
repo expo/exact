@@ -73,6 +73,9 @@ extension NodeView {
     /// an ancestor moves or an ancestor's filter comes or goes (`extensionsUnder`), and, for the colour strip, as an agent
     /// moves the clock, which can start or end an animation of the background colour (`animatesBackground`).
     nonisolated(unsafe) static let askedToExtend = NSHashTable<NodeView>.weakObjects()
+    /// The boxes that name edges to mirror their picture on (`boxExtendEdges`), which the host sizes while the kernel
+    /// gives them no extension (`Presenter.sideExtension`).
+    nonisolated(unsafe) static let namesExtension = NSHashTable<NodeView>.weakObjects()
     static func extensionsLookAgain() {
         for view in askedToExtend.allObjects { view.applyExtension() }
     }

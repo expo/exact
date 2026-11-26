@@ -1,6 +1,6 @@
 // LLP 1188 D2: until LLP 1123's activation gives a scroller the kernel's reach, a route's vertical scroller whose edge
 // meets its route's side clearance reaches across that clearance, as a list UIKit draws does (`GroupedListView.sideReach`).
-// A row nested in it that scrolls sideways reaches as far.
+// A row nested in it that scrolls sideways reaches as far, and a picture that mirrors itself mirrors to the route's edge.
 // Its scroll view then ends where a hand-built screen's does, and UIKit lays its vertical indicator out there. Its box,
 // its content and its CSS scroll position stay as they were. Activation deletes this file and what reads `sideInset`.
 #if os(iOS) || os(tvOS)
@@ -63,6 +63,42 @@ extension Presenter {
         sides.left = max(sides.left, view.safeAreaInsets.left - added.left)
         sides.right = max(sides.right, view.safeAreaInsets.right - added.right)
         return sides
+    }
+
+    /// How far `v`, a box that mirrors its picture (`-exact-safe-area-extend`), extends past its left and right edges
+    /// while the kernel gives it no extension of its own: on each edge it names (`boxExtendEdges`) whose side its route
+    /// clears of UIKit's own safe area (`platformSides`) and that its edge meets, to the route's edge, as UIKit's
+    /// extension view mirrors into the safe area its view overlaps. Nothing between it and the route may cut that strip
+    /// off; a scroller's scroll view clips at the reach it has or this pass gives it (`sideReach`).
+    func sideExtension(of v: NodeView, in route: NodeView) -> UIEdgeInsets {
+        #if os(tvOS)
+        return .zero
+        #else
+        guard let named = v.props["boxExtendEdges"]?.split(separator: " ").map({ $0 == "1" }), named.count == 4,
+              case .edges(let clear)? = navigation.covers[route.id], let window = platformSides(of: route) else { return .zero }
+        let box = v.convert(v.bounds, to: route), off = RouteGeometry.clearanceOff(route)
+        let side = { (on: Bool, bit: Int, clear: CGFloat, window: CGFloat, gap: CGFloat) -> CGFloat in
+            on && off & bit == 0 && clear > 0 && abs(clear - window) < 0.5 && abs(gap - clear) < 0.5 ? clear : 0
+        }
+        var out = UIEdgeInsets(top: 0, left: side(named[3], 8, clear.left, window.left, box.minX),
+                               bottom: 0, right: side(named[1], 2, clear.right, window.right, route.bounds.width - box.maxX))
+        guard out != .zero else { return .zero }
+        func passes(_ c: UIView, _ node: NodeView?) -> Bool {
+            guard c.transform.isIdentity, c.layer.boxMask == nil, node?.clipPath == nil, node?.boxFilter == nil else { return false }
+            guard c !== v, c !== route else { return true }
+            if c.next is UIViewController { return false }
+            guard c.clipsToBounds else { return true }
+            var clip = c.convert(c.bounds, to: route)
+            if let owner = c.superview as? NodeView, owner.scroll === c {
+                let reach = sideReach(of: owner, in: route)
+                clip = owner.convert(owner.bounds, to: route).inset(by: UIEdgeInsets(top: 0, left: -reach.left, bottom: 0, right: -reach.right))
+            }
+            if clip.minX > box.minX - out.left + 0.5 { out.left = 0 }
+            if clip.maxX < box.maxX + out.right - 0.5 { out.right = 0 }
+            return true
+        }
+        return Self.climb(from: v, to: route, passes) ? out : .zero
+        #endif
     }
 
     /// How far `v`, a row that scrolls only sideways inside a route's vertical scroller, reaches past its left and right

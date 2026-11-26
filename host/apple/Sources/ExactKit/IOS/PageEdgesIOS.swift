@@ -87,6 +87,13 @@ extension Presenter {
             bars += found.topLifts.map { ($0.bar, v, $0.over, .top) } + found.bottomLifts.map { ($0.bar, v, $0.over, .bottom) }
         }
         #if os(iOS)
+        // A picture that names edges to mirror on reaches its route's side where the kernel gives it no extension
+        for v in NodeView.namesExtension.allObjects where v.props["boxExtension"] == nil && v.window != nil {
+            let route = ViewPresentation.controllers(for: v, layout: true).lazy.compactMap({ $0 as? any RouteSurface })
+                .first(where: { $0.hosting === navigation && v.isDescendant(of: $0.node) })
+            let out = route.map { sideExtension(of: v, in: $0.node) } ?? .zero
+            if out != v.extras?.extensionAsked ?? .zero { v.setExtension(out) }
+        }
         // The bar's and the bottom bar's own edge effects follow a banded scroller (D2).
         for c in navigation.routeSurfaces.values {
             let r = routes[ObjectIdentifier(c)]

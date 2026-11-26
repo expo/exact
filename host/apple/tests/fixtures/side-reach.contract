@@ -23,7 +23,8 @@ component App
                   for name in ["plain", "opted", "padded", "clipped", "moved", "material", "wide", "hidden", "round", "bordered", "held", "list"] key=name
                     button press=show(name) testId=`show-${name}`
                       text name
-                  // A row of cards that scrolls sideways (LLP 1123 C33, nested)
+                  // A picture that mirrors itself on its sides, and a row of cards that scrolls sideways (LLP 1123 C33, nested)
+                  view testId="picture" height=120 background-color="#3366cc" -exact-safe-area-extend="start end"
                   list testId="strip" display="flex" width="100%" height=100 overflow-x="scroll" overflow-y="hidden" gap=10 padding-left=16 padding-right=16 box-sizing="border-box"
                     for i in range(8) key=i
                       view testId=`card-${i}` width=150 height=100 flex-shrink=0 background-color="#cc6633"

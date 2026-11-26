@@ -92,6 +92,15 @@ impl Kernel {
         Some(reach_on(arena, slot, &space, &sides, named))
     }
 
+    /// The edges, top right bottom left, the box `key` names to mirror its picture on (D13's
+    /// extension, `start` and `end` resolved), where it names any: what a host that sizes the
+    /// extension from the platform's own safe area reads while the kernel has no band for the box.
+    pub fn extension_edges(&self, key: NodeKey) -> Option<[bool; 4]> {
+        let slot = self.arena.resolve(key)?;
+        let named = extended(&self.arena, slot);
+        named.contains(&true).then_some(named)
+    }
+
     /// How far the box `key`'s picture is mirrored past its laid-out border box on each edge, top
     /// right bottom left (D13's extension), in points in its layout's space. On an edge it extends
     /// on, `auto` is the distance reach would have there were the box to reach that edge, whatever

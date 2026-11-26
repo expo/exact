@@ -550,6 +550,15 @@ impl<D: DataSource> Host<D> {
                     }
                 }
             }
+            // The edges it names to mirror on, for the host to size where the kernel has no band (`Presenter.sideExtension`)
+            m.derived_prop(
+                id,
+                "boxExtendEdges",
+                kernel
+                    .extension_edges(key)
+                    .map(|edges| edges.map(|on| if on { "1" } else { "0" }).join(" ")),
+                batch,
+            );
             let extension = kernel.extension(key).filter(|edges| *edges != [0.0; 4]);
             m.derived_prop(
                 id,

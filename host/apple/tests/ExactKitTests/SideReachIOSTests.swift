@@ -179,6 +179,20 @@ final class SideReachIOSTests: XCTestCase {
         XCTAssertTrue(scroll.alwaysBounceHorizontal, "a row bounces sideways whatever its content's width")
     }
 
+    /// A picture that mirrors itself on its sides (`-exact-safe-area-extend`), laid out clear of the side clearance in
+    /// the scroller that reaches across it, mirrors to the route's edge (`sideExtension`) while the kernel gives it none.
+    func testAPictureThatMirrorsItselfMirrorsAcrossTheSideClearance() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a route's side clearance is a scene window's safe area") }
+        let (band, route) = try booted(scene)
+        let picture = try node("picture")
+        func frame(_ v: UIView) -> CGRect { v.convert(v.bounds, to: route) }
+        XCTAssertNil(picture.props["boxExtension"], "the kernel gives it none")
+        XCTAssertEqual([frame(picture).minX, frame(picture).maxX], [band.left, route.bounds.width - band.right])
+        waitFor("the picture mirrors to the route's edges") {
+            picture.boxExtension.map { frame($0.view).minX <= 0.5 && frame($0.view).maxX >= route.bounds.width - 0.5 } ?? false
+        }
+    }
+
     func testTheReachGoesWithItsScrollView() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "a route's side clearance is a scene window's safe area") }
         _ = try booted(scene)

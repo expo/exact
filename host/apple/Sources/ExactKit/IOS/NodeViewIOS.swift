@@ -1073,6 +1073,11 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         } else if clear.contains("boxExtension") {
             setExtension(.zero)
         }
+        // A box naming edges to mirror on, which the host sizes while the kernel gives it no extension (`sideExtension`)
+        if set["boxExtendEdges"] != nil { Self.namesExtension.add(self) } else if clear.contains("boxExtendEdges") {
+            Self.namesExtension.remove(self)
+            if props["boxExtension"] == nil { setExtension(.zero) }
+        }
         let nativeList = kind == "list" && next["listStyle"] != nil
         if groupedOwner != nativeList { groupedOwner = nativeList; syncScroll() }
         #endif
