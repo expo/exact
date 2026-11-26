@@ -135,13 +135,13 @@ function step(input, measured, last, caps, tolerance) {
 }
 
 /** How far `el`'s box lies from where it would with every scroll offset at zero, x then y: the offsets of the scrollers
- * it scrolls in, the document's included, up to a fixed ancestor, which no scroll above it moves (D9). */
+ * it scrolls in, the document's included, up to and with a fixed ancestor, which no scroll above it moves (D9). */
 function unscrolled(el) {
   let dx = 0, dy = 0;
   for (let a = el.parentElement; a; a = a.parentElement) {
-    if (getComputedStyle(a).position === "fixed") break;
     dx += a.scrollLeft;
     dy += a.scrollTop;
+    if (getComputedStyle(a).position === "fixed") break;
   }
   return getComputedStyle(el).position === "fixed" ? [0, 0] : [dx, dy];
 }

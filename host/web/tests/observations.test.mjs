@@ -75,12 +75,14 @@ const TRANSITIONS = `<!doctype html><style>body { margin: 0 } div { box-sizing: 
 const SCROLLED = `<!doctype html><style>body { margin: 0; height: 3000px } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
   <div id="page" style="top:100px;height:50px"></div>
   <div id="port" style="top:400px;height:100px;overflow:auto"><div style="position:static;height:1000px"><div id="held" style="position:static;margin-top:200px;height:50px"></div></div></div>
+  <div id="panel" style="position:fixed;top:300px;height:100px;overflow:auto"><div style="position:static;height:1000px"><div id="pinned" style="position:static;margin-top:200px;height:50px"></div></div></div>
   <script type="module">
     import { observe } from '/observe.js';
     scrollTo(0, 100);
     const port = document.getElementById('port');
     port.scrollTop = 600;
-    const readers = ['page', 'held'].map((id) => document.getElementById(id));
+    document.getElementById('panel').scrollTop = 500;
+    const readers = ['page', 'held', 'pinned'].map((id) => document.getElementById(id));
     observe(readers, [47, 0, 34, 0]);
     window.result = readers.map((el) => el.style.getPropertyValue('--exact-safe-area-inset-top'));
   </script>`;
@@ -91,8 +93,9 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader is measur
     const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
     await page.goto(`${server.url.href}scrolled`);
     await page.waitForFunction(() => window.result);
-    // At rest 100 and 600 below the top, clear of the 47-point band, though scrolling has moved each under it
-    expect(await page.evaluate(() => window.result)).toEqual(['0px', '0px']);
+    // At rest 100, 600 and, in a fixed panel the page's scroll does not move, 500 below the top, clear of the 47-point
+    // band, though scrolling has moved each under it
+    expect(await page.evaluate(() => window.result)).toEqual(['0px', '0px', '0px']);
   } finally {
     await browser.close();
   }
