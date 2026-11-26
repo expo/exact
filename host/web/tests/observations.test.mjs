@@ -1,7 +1,8 @@
 // @ref LLP 1123 D9, D17 — each reader's own safe-area observation on the web, in Chrome with a phone's safe area, and in
 // WebKit and Firefox with that band given: a
 // reader at the top takes the status bar's depth and one below it none; a reader its own input moves settles over a few
-// rounds; one that moves back and forth is unsettled at D9's bound; a reader out of the document takes `initial`; and
+// rounds, D9's secant steps finding a fixed point where substitution would swing; one with no fixed point is unsettled at
+// D9's bound; a reader is measured with every scroll offset at zero; a reader out of the document takes `initial`; and
 // an ancestor's value never reaches a reader, which has its own. The properties are unregistered, as activation leaves
 // them, so `initial` is the guaranteed-invalid value and a reader's fallback applies.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
@@ -18,16 +19,18 @@ beforeAll(() => {
     }
     if (path === '/keyboard') return new Response(KEYBOARD, { headers: { 'content-type': 'text/html' } });
     if (path === '/transitions') return new Response(TRANSITIONS, { headers: { 'content-type': 'text/html' } });
+    if (path === '/scrolled') return new Response(SCROLLED, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
       <div id="top" style="position:absolute;top:0;left:0;width:390px;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
       <div id="low" style="position:absolute;top:300px;left:0;width:100px;height:100px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
       <div id="settles" style="position:absolute;left:100px;width:50px;height:50px;top:calc(60px - var(--exact-safe-area-inset-top, 60px))"></div>
       <div id="swings" style="position:absolute;left:200px;width:50px;height:50px;top:calc(2 * var(--exact-safe-area-inset-top, 0px))"></div>
+      <div id="jumps" style="position:absolute;left:250px;width:40px;height:50px;top:clamp(0px, (var(--exact-safe-area-inset-top, 0px) - 10px) * 1000, 100px)"></div>
       <div style="position:absolute;top:0;left:300px;--exact-safe-area-inset-top:30px"><div id="inside" style="width:20px;height:400px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div></div>
       <script type="module">
         import { observe, documentBand } from '/observe.js';
-        const ids = ['top', 'low', 'settles', 'swings', 'inside'], gone = document.createElement('div');
+        const ids = ['top', 'low', 'settles', 'swings', 'jumps', 'inside'], gone = document.createElement('div');
         const readers = [...ids.map((id) => document.getElementById(id)), gone];
         // Chrome's override is the browser's env(); another engine takes the same band from the query
         const given = new URL(location.href).searchParams.get('band');
@@ -43,11 +46,14 @@ beforeAll(() => {
 afterAll(() => server?.stop(true));
 
 // Readers whose inputs transition: one at the top padding by its input over a second, one its input moves over a
-// second, beside a box whose opacity is already transitioning, the rounds 100ms in
-const TRANSITIONS = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; width: 50px; height: 50px }</style>
+// second whose transition the page's sheet makes important, beside a box whose opacity is already transitioning and one
+// whose opacity the page sets just before the rounds, which starts its own, the rounds 100ms in
+const TRANSITIONS = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; width: 50px; height: 50px }
+  #moves { transition: top 1s linear !important }</style>
   <div id="pads" style="top:0;left:0;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px);transition:padding-top 1s linear"></div>
   <div id="moves" style="left:100px;top:calc(60px - var(--exact-safe-area-inset-top, 60px));transition:top 1s linear"></div>
   <div id="other" style="left:200px;top:300px;opacity:0;transition:opacity 1s linear"></div>
+  <div id="fresh" style="left:300px;top:300px;opacity:0;transition:opacity 1s linear"></div>
   <script type="module">
     import { observe } from '/observe.js';
     const other = document.getElementById('other');
@@ -55,13 +61,41 @@ const TRANSITIONS = `<!doctype html><style>body { margin: 0 } div { box-sizing: 
     other.style.opacity = '1';
     getComputedStyle(other).opacity;
     setTimeout(() => {
-      const running = Math.round(other.getAnimations()[0].currentTime);
+      const running = Math.round(other.getAnimations()[0].currentTime), fresh = document.getElementById('fresh');
+      fresh.style.opacity = '1';
       const readers = ['pads', 'moves'].map((id) => document.getElementById(id)), { rounds } = observe(readers, [47, 0, 34, 0]);
       const transitions = (el) => el.getAnimations().map((a) => [a.transitionProperty, a.effect.getKeyframes()[0][a.transitionProperty === 'top' ? 'top' : 'paddingTop'], a.effect.getKeyframes().at(-1)[a.transitionProperty === 'top' ? 'top' : 'paddingTop']]);
       window.result = { rounds, pads: transitions(readers[0]), moves: transitions(readers[1]), other: other.getAnimations().map((a) => Math.round(a.currentTime) - running),
-        rule: document.documentElement.classList.contains('exact-rounds') };
+        fresh: fresh.getAnimations().map((a) => a.transitionProperty), rule: document.documentElement.classList.contains('exact-rounds') };
     }, 100);
   </script>`;
+
+// A reader 100 below the document's top, in a page scrolled 100 down, beside one a scroller of its own holds scrolled
+const SCROLLED = `<!doctype html><style>body { margin: 0; height: 3000px } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
+  <div id="page" style="top:100px;height:50px"></div>
+  <div id="port" style="top:400px;height:100px;overflow:auto"><div style="position:static;height:1000px"><div id="held" style="position:static;margin-top:200px;height:50px"></div></div></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    scrollTo(0, 100);
+    const port = document.getElementById('port');
+    port.scrollTop = 600;
+    const readers = ['page', 'held'].map((id) => document.getElementById(id));
+    observe(readers, [47, 0, 34, 0]);
+    window.result = readers.map((el) => el.style.getPropertyValue('--exact-safe-area-inset-top'));
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader is measured with every scroll offset at zero, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}scrolled`);
+    await page.waitForFunction(() => window.result);
+    // At rest 100 and 600 below the top, clear of the 47-point band, though scrolling has moved each under it
+    expect(await page.evaluate(() => window.result)).toEqual(['0px', '0px']);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
 
 // A reader at the bottom under a 300-point keyboard, one above it, asked with the keyboard and with none showing
 const KEYBOARD = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
@@ -104,11 +138,13 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's values s
     await page.goto(`${server.url.href}transitions`);
     await page.waitForFunction(() => window.result);
     const r = await page.evaluate(() => window.result);
-    // The rounds read the layout, not a transition's first frame: the mover writes 47, 34, 21, 8 and 0, holding at round 5
-    expect(r.rounds).toBe(5);
+    // The rounds read the layout, not a transition's first frame, though the page's sheet makes the mover's important:
+    // it writes 47, then 34, and with its residual repeating the end of its range, 0, holding at round 3
+    expect(r.rounds).toBe(3);
     expect(r.pads).toEqual([['padding-top', '5px', '47px']]);
     expect(r.moves).toEqual([['top', '0px', '60px']]);
     expect(r.other).toEqual([0]);
+    expect(r.fresh).toEqual(['opacity'], "the page's own change before the rounds starts its transition");
     expect(r.rule).toBe(false);
   } finally {
     await browser.close();
@@ -134,9 +170,11 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes 
     // 60 less its own depth under the bar: 13, then 26, 39, 52, past the bar, where it rests
     expect(r.tops.settles).toBe(60);
     expect(r.inputs.settles[0]).toBe('0px');
-    // Twice its depth: 94 clears the bar, 0 takes it again, at the bound still swinging
+    // At twice its input, 47 less that input: substitution swings between 0 and 47, the secant steps find 47 / 3
+    expect(parseFloat(r.inputs.swings[0])).toBeCloseTo(47 / 3, 0);
+    // 47 below 10 and 0 above it, which no input holds: unsettled at the bound
     expect(r.rounds).toBe(24);
-    expect(r.unsettled).toEqual(['swings']);
+    expect(r.unsettled).toEqual(['jumps']);
     // Its own, the bar's 47 from its top, not the 30 an ancestor says
     expect(r.inputs.inside[0]).toBe('47px');
     expect(r.padding.inside).toBe(47);

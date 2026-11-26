@@ -25,7 +25,7 @@ extension NodeView {
         let shaped = ClipPath.mask(outline)
         if let box = clipBox?.layer { box.mask = shaped }
         state.boxMask = clipBox?.layer?.mask
-        guard !hasBoxFilter else { return }
+        guard !hasBoxFilter else { return noteClipLayer(nil) }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         defer { state.layerMask = layer.mask; state.effectMask = effect?.maskImage }
@@ -42,9 +42,10 @@ extension NodeView {
                 effect.maskImage = nil
             }
             layer.mask = clipMask(shaped: clipBox == nil ? shaped : nil)
-            return
+            return noteClipLayer(clipBox == nil && shaped != nil ? nil : layer.mask)
         }
         layer.mask = composedMask(shaped: clipBox == nil ? shaped : nil)
+        noteClipLayer(style["mask_image"] != nil || clipBox == nil && shaped != nil ? nil : layer.mask)
     }
 
     /// `mask-image` over `clip-path` over the shaped corners, as one mask.

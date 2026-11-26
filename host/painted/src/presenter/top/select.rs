@@ -77,7 +77,7 @@ impl<D: DataSource> Presenter<D> {
         };
         let key = node.key;
         let now = self.host.now();
-        self.open_surface((id, key), plan, false, (Some(id), None), now);
+        self.open_surface((id, key), plan, false, (Some(id), None), None, now);
         let keys = keyboard || self.remote();
         let Some(open) = self.top.open.as_mut() else {
             return;

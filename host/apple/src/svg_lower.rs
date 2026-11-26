@@ -598,10 +598,11 @@ pub(crate) fn eligibility(
 /// main thread is doing. A shape keeps its sampled morph when Core
 /// Animation cannot draw what the engine would: a paint server (its parts
 /// are drawn by Core Graphics), a non-scaling stroke or markers (both
-/// follow the path's vertices), an island's pixels, a box filter, or two
+/// follow the path's vertices), an island's pixels, a box filter, two
 /// ends whose segments differ (an arc flattens to as many cubics as its
 /// sweep needs; Core Animation interpolates only paths of the same
-/// elements). An `svg`'s morphs go together or not at all, so a line never
+/// elements), or an arc where Core Animation would blend keys, as its
+/// cubics are not linear in its numbers (LLP 1003.003 §5). An `svg`'s morphs go together or not at all, so a line never
 /// runs on while the area under it is sampled (the chart's).
 pub(crate) fn hand_over_paths(kernel: &Kernel, engine: &mut Engine, live: bool) {
     use exact_kernel::svg::Paint;
@@ -632,17 +633,13 @@ pub(crate) fn hand_over_paths(kernel: &Kernel, engine: &mut Engine, live: bool) 
             && s.vector_effect != exact_kernel::VectorEffect::NonScalingStroke
             && !marked(kernel, &n)
             && !in_picture(kernel, engine, &n, live)
-            && !under_box_filter(kernel, engine, &n);
+            && !under_box_filter(kernel, engine, &n)
+            && !in_canvas(kernel, &n);
+        // @ref LLP 1003.003 §5 — a `d` plays as a clip does
         let same = engine.path_ends(node).is_some_and(|(from, to)| {
-            let (a, b) = (
-                exact_kernel::svg::parse_d(&from.to_d()),
-                exact_kernel::svg::parse_d(&to.to_d()),
-            );
-            a.0.len() == b.0.len()
-                && a.0
-                    .iter()
-                    .zip(&b.0)
-                    .all(|(x, y)| std::mem::discriminant(x) == std::mem::discriminant(y))
+            engine
+                .transition(node, Property::D)
+                .is_some_and(|(t, _)| super::clip_handover::paths_play(&from, &to, &t.curve))
         });
         let mut root = n.parent;
         while let Some(r) = root.and_then(|id| kernel.node(id)) {
@@ -671,8 +668,9 @@ pub(crate) fn hand_over_paths(kernel: &Kernel, engine: &mut Engine, live: bool) 
 }
 
 /// The properties whose transitions Core Animation plays for a box
-/// ([`hand_over_transitions`]).
-const BOX_PLAYED: [Property; 5] = [
+/// ([`hand_over_transitions`]), its clip's path among them (LLP 1003.003 D7).
+const BOX_PLAYED: [Property; 6] = [
+    Property::ClipPath,
     Property::Opacity,
     Property::BackgroundColor,
     Property::Translate,
@@ -731,7 +729,8 @@ pub(crate) fn hand_over_transitions(
 /// Whether Core Animation can play the transition on `p` of box `key` as
 /// CSS does: not what a press or a look paints over, not a property an
 /// animation also plays (it composes over the transition), no box under a
-/// CSS filter (its picture is drawn from the model), no opacity in a glass
+/// CSS filter (its picture is drawn from the model) or inside a canvas
+/// (which may draw it into its own picture), no opacity in a glass
 /// group, a background colour only where the layer paints it with one alpha
 /// at both ends (Core Animation interpolates unpremultiplied), and no view
 /// `skip` names.
@@ -751,6 +750,7 @@ fn playable(
         || skip(n.id)
         || crate::looks::paints_over(&n, p)
         || under_box_filter(kernel, engine, &n)
+        || in_canvas(kernel, &n)
         || engine
             .animation_plays(key)
             .iter()
@@ -767,6 +767,7 @@ fn playable(
                         .transition_ends(key, p)
                         .is_some_and(|t| exact_motion::rotation::planar(t.from, t.to)))
         }
+        Property::ClipPath => super::clip_handover::playable(engine, key, &n),
         Property::BackgroundColor => {
             layer_paints_background(&n)
                 && background_on_layer(kernel, &n)
@@ -884,6 +885,20 @@ pub(crate) fn transition_specs(
             .filter(|kept| kept.ends == ends && kept.size == size)
         {
             out.push(spec.text.clone());
+            continue;
+        }
+        if p == Property::ClipPath {
+            if let Some(text) = super::clip_handover::spec(engine, key) {
+                made.insert(
+                    slot,
+                    PlayedSpec {
+                        ends,
+                        size,
+                        text: text.clone(),
+                    },
+                );
+                out.push(text);
+            }
             continue;
         }
         let Some((t, _)) = engine.transition(key, p) else {
@@ -1108,6 +1123,20 @@ fn under_box_filter(kernel: &Kernel, engine: &Engine, n: &exact_kernel::NodeRef<
     let mut up = n.parent;
     while let Some(a) = up.and_then(|id| kernel.node(id)) {
         if filtered(&a) {
+            return true;
+        }
+        up = a.parent;
+    }
+    false
+}
+
+/// Whether a box is inside a canvas, which may draw its children into its
+/// own picture (LLP 1014 D3) and draws them again only when they change: a
+/// layer's own animation would not reach that picture.
+fn in_canvas(kernel: &Kernel, n: &exact_kernel::NodeRef<'_>) -> bool {
+    let mut up = n.parent;
+    while let Some(a) = up.and_then(|id| kernel.node(id)) {
+        if a.node_type == NodeType::Canvas {
             return true;
         }
         up = a.parent;

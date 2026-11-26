@@ -154,3 +154,127 @@ fn an_inherited_colour_keeps_a_childs_moving_clip() {
         .expect("the parent's colour re-sends the child's style");
     assert!(tip(&shown) > 40.0 && tip(&shown) < 48.0, "{shown}");
 }
+
+/// A balloon whose clip moves on `transition`, with `extra` attributes.
+fn handed(transition: &str, extra: &str, grown: &str, small: &str) -> String {
+    format!(
+        "component A\n  state grown = true\n  action go\n    grown = not grown\n  view\n    column\n      button press=go testId=\"go\"\n        text \"Go\"\n      box testId=\"balloon\" width=120 height=48 background-color=\"#0088ff\" {extra} clip-path=(grown ? \"path('{grown}')\" : \"path('{small}')\") transition=\"{transition}\"\n"
+    )
+}
+
+const GROWN: &str = "M0 0H120V40H0ZM104 40L120 40L120 48Z";
+const SMALL: &str = "M0 0H120V40H0ZM104 40L120 40L120 40Z";
+
+/// The `path` spec the `animations` op carries for `view`, if any.
+fn path_spec(batch: &str, view: u32) -> Option<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(batch).unwrap();
+    v["ops"]
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|op| op["op"] == "animations" && op["id"] == view)?["specs"]
+        .as_array()?
+        .iter()
+        .find(|s| s["k"] == "path")
+        .cloned()
+}
+
+/// Presses Go and gives the run its first frame, on a host that hands box
+/// transitions to Core Animation: whether the clip is played, and the batch.
+fn started(app: &str) -> (bool, Option<serde_json::Value>) {
+    let mut host = booted(app);
+    host.svg.box_motion = true;
+    host.svg.play_transitions = true;
+    host.engine.set_lowered_properties(&svg::lowered(true));
+    host.start_on_frame(true, 0.0);
+    let balloon = id(&host, "balloon");
+    let key = exact_kernel::motion::motion_node(host.runner.kernel().node(balloon).unwrap().key);
+    host.dispatch_at(id(&host, "go"), Event::Press, 100.0);
+    let first = host.tick_at(112.0, 116.0);
+    (
+        host.engine.is_played(key, Property::ClipPath),
+        path_spec(&first, balloon),
+    )
+}
+
+/// LLP 1003.003 D7: Core Animation plays a box's clip from its start and its
+/// end, a cubic within [0, 1] as one timing function between them, and a
+/// `steps()` as whole paths that hold.
+#[test]
+fn core_animation_plays_a_clip_from_its_two_ends() {
+    let (played, spec) = started(&handed("clip-path 1s ease", "", GROWN, SMALL));
+    assert!(played, "the engine presents the target");
+    let spec = spec.expect("a path spec");
+    assert_eq!(
+        spec["v"].as_array().unwrap().len(),
+        2,
+        "the two ends: {spec}"
+    );
+    assert_eq!(
+        spec["c"],
+        serde_json::json!([[0.25, 0.1, 0.25, 1]]),
+        "CSS `ease`"
+    );
+    assert_eq!(spec["m"], 0);
+    assert_eq!(spec["fill"], 2, "the start holds through a delay");
+    let (played, spec) = started(&handed("clip-path 1s steps(4)", "", GROWN, SMALL));
+    assert!(played);
+    let spec = spec.expect("a path spec");
+    assert_eq!(spec["m"], 1, "discrete keys");
+    // Each of the four paths holds from its key time to the next, the last
+    // to the end: one key time more than values (`kCAAnimationDiscrete`)
+    assert_eq!(
+        spec["t"],
+        serde_json::json!([0, 0.25, 0.5, 0.75, 1]),
+        "{spec}"
+    );
+    assert_eq!(spec["v"].as_array().unwrap().len(), 4, "{spec}");
+}
+
+/// Where Core Animation would not draw what the engine does, the engine
+/// samples the clip: an arc blended between keys, a `mask-image` or rounded
+/// corners on a box that clips, which nest the clip in another mask.
+#[test]
+fn a_clip_core_animation_cannot_play_is_sampled() {
+    let arcs = handed(
+        "clip-path 1s ease",
+        "",
+        "M10 30 A20 20 0 0 1 50 30Z",
+        "M10 30 A30 30 0 0 1 50 30Z",
+    );
+    let masked = handed(
+        "clip-path 1s ease",
+        "mask-image=\"linear-gradient(black, transparent)\"",
+        GROWN,
+        SMALL,
+    );
+    let rounded = handed(
+        "clip-path 1s ease",
+        "overflow=\"hidden\" border-radius=12",
+        GROWN,
+        SMALL,
+    );
+    // A radius can outline a box that does not clip its overflow (a
+    // backdrop's on the Mac), and a backdrop's material can mask it
+    let radius = handed("clip-path 1s ease", "border-radius=\"50%\"", GROWN, SMALL);
+    let backdrop = handed(
+        "clip-path 1s ease",
+        "backdrop-filter=\"blur(6px)\"",
+        GROWN,
+        SMALL,
+    );
+    // A run of no duration has no track: the engine switches it when its
+    // delay ends
+    let instant = handed("clip-path 0s linear 300ms", "", GROWN, SMALL);
+    for app in [arcs, masked, rounded, radius, backdrop, instant] {
+        let (played, spec) = started(&app);
+        assert!(!played && spec.is_none(), "{app}");
+    }
+    let (played, _) = started(&handed(
+        "clip-path 1s steps(3)",
+        "",
+        "M10 30 A20 20 0 0 1 50 30Z",
+        "M10 30 A30 30 0 0 1 50 30Z",
+    ));
+    assert!(played, "under `steps()` an arc's keys hold, so it plays");
+}

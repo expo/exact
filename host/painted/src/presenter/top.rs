@@ -479,37 +479,40 @@ impl<D: DataSource> Presenter<D> {
     ) -> bool {
         // Its session's roles (LLP 1121 stage 5): the surface's look resolves them.
         let _roles = self.host.runner().bind_roles();
-        // A popover its author placed by `left` or `top` opens at that point,
-        // as a context menu opens at the pointer (LLP 1021 D2).
-        let point = point.or_else(|| {
-            let node = self.host.kernel().node_by_key(target?)?;
-            let style = node.computed_style(exact_kernel::StyleMask::INHERITED);
-            let popover = !modal && node.props.str(PropId::Popover).is_some();
-            popover
-                .then(|| {
-                    area::inset_point(&style, &self.host.kernel().env_of(node.id), self.viewport)
-                })
-                .flatten()
-        });
         if self.neutral_alerts() {
+            let point = point.or_else(|| self.popover_inset_point(target, modal));
             return self.alert_present(target, name, invoker, point, modal, now_ms);
         }
-        let kernel = self.host.kernel();
-        let pop = (target.and_then(|key| kernel.node_by_key(key)))
+        let mut pop = (target.and_then(|key| self.host.kernel().node_by_key(key)))
             .map(|node| (node.id, node.key, node.parent));
-        let plan = pop.and_then(|(id, ..)| self.surface_plan(id, modal));
-        // A dialog whose author painted its surface (its own background
-        // colour or image) is the author's box in HTML's top layer, not a
-        // window of the platform's (LLP 1035.001 D11, as on iOS): on a shell
-        // that makes windows it is painted in the page, as on the desktop
-        // hosts (alert.rs). A chooser and a plain dialog stay refused here.
+        let mut plan = pop.and_then(|(id, ..)| self.surface_plan(id, modal));
+        let (toggled, replaced) = if !modal && plan.is_none() {
+            self.eager_open_popover_toggle(target, invoker, now_ms)
+        } else {
+            (false, None)
+        };
+        if toggled {
+            pop = (target.and_then(|key| self.host.kernel().node_by_key(key)))
+                .map(|node| (node.id, node.key, node.parent));
+            plan = pop.and_then(|(id, ..)| self.surface_plan(id, modal));
+        }
+        let point = point.or_else(|| self.popover_inset_point(target, modal));
         let painted = modal
-            && pop.and_then(|(id, ..)| kernel.node(id)).is_some_and(|n| {
-                n.style.written.has(exact_kernel::StyleId::BackgroundColor)
-                    || n.style.written.has(exact_kernel::StyleId::BackgroundImage)
-            });
+            && pop
+                .and_then(|(id, ..)| self.host.kernel().node(id))
+                .is_some_and(|n| {
+                    n.style.written.has(exact_kernel::StyleId::BackgroundColor)
+                        || n.style.written.has(exact_kernel::StyleId::BackgroundImage)
+                });
         if plan.is_none() && (self.top.overlay.enabled || (painted && self.has_windows())) {
-            return self.alert_present(target, name, invoker, point, modal, now_ms);
+            return self.present_overlay(
+                target,
+                name,
+                (invoker, point),
+                modal,
+                now_ms,
+                (toggled, replaced),
+            );
         }
         let shows =
             |parent: Option<ViewId>| !parent.is_some_and(|p| self.host.route_visibility(p).1);
@@ -524,42 +527,34 @@ impl<D: DataSource> Presenter<D> {
             let what = if modal { "showModal" } else { "popover" };
             let why = refusal.unwrap_or_default();
             self.host.log(format!("{what} \"{name}\" refused: {why}"));
+            if toggled {
+                self.settle_eager_toggle(target, false);
+            }
             return false;
         };
-        self.open_surface((id, key), plan, modal, (invoker, point), now_ms);
-        // Alerts need an initial action even when a pointer or a response
-        // opens them. TV surfaces also start at their first row (LLP 1115.001.003 D3).
-        let desktop_alert = self.top.overlay.enabled
-            && self
-                .top
-                .open
-                .as_ref()
-                .is_some_and(|open| open.kind == SurfaceKind::Alert);
-        if self.remote() || desktop_alert {
-            self.surface_step(false);
+        if !self.open_surface((id, key), plan, modal, (invoker, point), replaced, now_ms) {
+            if toggled {
+                self.settle_eager_toggle(Some(key), false);
+            }
+            return false;
         }
-        self.queue_toggle(key, true);
-        self.surface_changed();
+        self.finish_surface_open(key, toggled);
         true
     }
 
-    /// Open `plan`, what `id` (its node's `key`) is, as the surface, opened
-    /// by `invoker` or at `point`: the surface open closes, the pointer's
-    /// contact ends, and the new one is measured and placed. The focus
-    /// moves in, and the page's node loses it, but a select keeps it, as a
-    /// combobox does while its listbox is open.
+    /// Open `plan` for `id`/`key`: closes any prior surface, clears pointer/focus,
+    /// revalidates after blur handlers, then measures and places the surface.
     fn open_surface(
         &mut self,
         (id, key): (ViewId, NodeKey),
-        plan: Plan,
+        _plan: Plan,
         modal: bool,
         (invoker, point): (Option<ViewId>, Option<(f32, f32)>),
+        replaced: Option<NodeKey>,
         now_ms: f64,
-    ) {
+    ) -> bool {
         let request = self.request_back_layer(5);
-        let restore = self
-            .replace_surface(invoker, now_ms)
-            .and_then(|key| self.host.kernel().node_by_key(key).map(|n| n.id));
+        let restore_key = self.replace_surface(invoker, now_ms).or(replaced);
         self.report_top_layer();
         if let Err(e) = self.pointer_cancel(now_ms) {
             self.host.log(e);
@@ -569,6 +564,11 @@ impl<D: DataSource> Presenter<D> {
                 self.host.log(e);
             }
         }
+        let Some((id, plan)) = self.revalidate_surface(key, modal, restore_key, request, now_ms)
+        else {
+            return false;
+        };
+        let restore = restore_key.and_then(|k| self.host.kernel().node_by_key(k).map(|n| n.id));
         let serial = request.unwrap_or_else(|| self.next_surface_serial());
         let inputs = self.surface_inputs(id);
         let layout = self.measure_surface(&plan, id, &inputs);
@@ -608,6 +608,7 @@ impl<D: DataSource> Presenter<D> {
             open.anchor = anchor;
         }
         self.place_surface();
+        true
     }
 
     /// Close the previous surface and carry its original focus return target.

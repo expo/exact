@@ -62,13 +62,16 @@ extension CssAnimations {
     static func make(_ spec: CssAnimation, layer: CALayer, clock: Double?, offscreen: CFTimeInterval? = nil) -> CAAnimation? {
         let (key, values, keyTimes, timing) = (spec.key, spec.values, spec.keyTimes, spec.timing)
         let duration = spec.duration, repeatCount = spec.repeatCount
-        guard duration > 0, repeatCount != 0, keyTimes.count == values.count, keyTimes.count >= 2 else { return nil }
+        // A discrete track holds each value from its key time to the next,
+        // the last to the end: one key time more than values (`kCAAnimationDiscrete`)
+        let times = values.count + (spec.discrete ? 1 : 0)
+        guard duration > 0, repeatCount != 0, keyTimes.count == times, keyTimes.count >= 2, values.count > 0 else { return nil }
         let a = CAKeyframeAnimation(keyPath: key == "r" ? "path" : key)
         a.keyTimes = keyTimes
         // Through KVC, so the shared array is kept rather than bridged anew.
         a.setValue(values, forKey: "values")
         if let timing { a.timingFunctions = timing }
-        a.calculationMode = .linear
+        a.calculationMode = spec.discrete ? .discrete : .linear
         a.duration = duration
         a.repeatCount = repeatCount < 0 ? .infinity : Float(repeatCount)
         let fill = spec.fill

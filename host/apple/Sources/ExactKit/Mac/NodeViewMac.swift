@@ -610,7 +610,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         guard !inert, !held, !isHiddenOrHasHiddenAncestor, placedAncestor?.placementHidden != true, let point = spaceHit(point) else { return nil }
         let local = convert(point, from: superview)
         if drawsRowBezel, let bezel = rowBezelRect, !bezel.contains(local) { return nil }
-        if let clipPath, !clipPath.contains(local, using: clipRule) { return nil }
+        if let clip = presentedClipPath, !clip.contains(local, using: clipRule) { return nil }
         if !fragmentHit(local) { return nil }
         if isSurfaceControl, !cssVisibilityHidden, hitBounds.contains(local) { return self }
         if let geometry = glassGeometry {
