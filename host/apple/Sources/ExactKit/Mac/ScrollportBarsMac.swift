@@ -39,10 +39,18 @@ package final class ScrollportHolder: NSView {
 }
 
 package enum ScrollportBars {
-    /// Which bars lie on their parents' scrollports, and the children op each scroller last had, by presenter.
+    /// Which bars lie on their parents' scrollports, and the children op each scroller last had, by presenter. A list
+    /// is held by its scroller's view, weakly, and goes once the view is no longer the presenter's (`place`).
     final class State {
         var bars: Set<UInt32> = []
-        var childLists: [UInt32: [UInt32]] = [:]
+        var childLists: [ObjectIdentifier: ChildList] = [:]
+    }
+
+    /// A scroller's last children op, and the scroller, held weakly.
+    final class ChildList {
+        weak var parent: NodeView?
+        let ids: [UInt32]
+        init(_ parent: NodeView, _ ids: [UInt32]) { (self.parent, self.ids) = (parent, ids) }
     }
 
     nonisolated(unsafe) static let states = NSMapTable<Presenter, State>.weakToStrongObjects()
@@ -63,8 +71,10 @@ package enum ScrollportBars {
         guard state.bars != bars else { return }
         let changed = state.bars.symmetricDifference(bars)
         state.bars = bars
-        for (id, children) in state.childLists where !changed.isDisjoint(with: children) {
-            var op = BatchOp(op: .children, nodeID: id)
+        for list in Array(state.childLists.values) {
+            guard let parent = list.parent, presenter.views[parent.id] === parent, !changed.isDisjoint(with: list.ids) else { continue }
+            let children = list.ids
+            var op = BatchOp(op: .children, nodeID: parent.id)
             op.ids = children
             var reparented = Set<UInt32>()
             presenter.placeChildren(op, reparented: &reparented)
@@ -77,7 +87,10 @@ package enum ScrollportBars {
     static func place(_ parent: NodeView, _ ids: [UInt32], in presenter: Presenter) -> [UInt32] {
         // The lists are kept from the first, so bars set after their scroller's children mounted place them again
         let state = state(of: presenter)
-        if parent.scroll != nil || state.childLists[parent.id] != nil { state.childLists[parent.id] = ids.isEmpty ? nil : ids }
+        let key = ObjectIdentifier(parent)
+        if parent.scroll != nil || state.childLists[key] != nil { state.childLists[key] = ids.isEmpty ? nil : ChildList(parent, ids) }
+        // A destroyed or renewed scroller's list goes, which its view may outlive
+        state.childLists = state.childLists.filter { _, list in list.parent.map { presenter.views[$0.id] === $0 } ?? false }
         let bars = state.bars.isEmpty ? [] : ids.filter(state.bars.contains)
         guard !bars.isEmpty || holders.object(forKey: parent) != nil else { return ids }
         mount(bars.compactMap { presenter.views[$0] }, keeping: Set(ids), in: parent, presenter)

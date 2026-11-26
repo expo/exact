@@ -1,7 +1,8 @@
 // @ref LLP 1123 D15 — a Mac split item's controls, each one AppKit property of the item, read on the
 // element that projects it: the sidebar's on the root tablist, the page's on its stack's first route,
 // the detail's on the pane's first route, and the inspector's on the route's `aside`. Exact writes
-// each after the pass that reads it and writes AppKit's default while the attribute is unsaid.
+// each after the pass that reads it, and owns it only while the attribute is set: it writes AppKit's default when the
+// attribute goes and otherwise leaves the property to the window's owner.
 //
 // An accessory is the element its item names by `id`, shown in an `NSSplitViewItemAccessoryViewController`
 // at the item's top or bottom (macOS 26): the element's view moves into the accessory's view and the
@@ -12,9 +13,11 @@
 import AppKit
 import ExactKit
 
-/// What Exact shows on each split item: its accessories, by item, so a change replaces only its own.
+/// What Exact shows on each split item: its accessories and the properties it owns, by item, so a change replaces only
+/// its own.
 final class SplitItemControls {
     fileprivate var accessories: [ObjectIdentifier: (top: SplitAccessory?, bottom: SplitAccessory?)] = [:]
+    fileprivate var owned: [ObjectIdentifier: Set<String>] = [:]
 }
 
 /// One accessory Exact shows: the element, the accessory's view controller and the block its view is.
@@ -39,22 +42,49 @@ extension ExactSidebarController {
     func applyItemControls() {
         let presenter = exactView.session.presenter
         let split = presenter.navigationHost.split
+        let items = [sidebarItem, pageItem, detailItem, inspectorItem].compactMap { $0 }
+        // An item gone, as an inspector its route no longer has, gives back the accessories it showed
+        releaseItemControls(except: Set(items.map(ObjectIdentifier.init)))
         if let sidebarItem { apply(sidebarItem, from: presenter.sidebarHost.tablist) }
         apply(pageItem, from: split.pageRoute)
         apply(detailItem, from: split.detailBase)
         if let inspectorItem { apply(inspectorItem, from: inspectorNode) }
     }
 
+    /// Give back every item's accessories and properties but those of `items`: all of them as the controller leaves.
+    func releaseItemControls(except items: Set<ObjectIdentifier> = []) {
+        let presenter = exactView.session.presenter
+        for (key, held) in itemControls.accessories where !items.contains(key) {
+            for accessory in [held.top, held.bottom].compactMap({ $0 }) {
+                presenter.blocks.release(accessory.node)
+                accessory.controller.removeFromParent()
+            }
+            itemControls.accessories[key] = nil
+        }
+        itemControls.owned = itemControls.owned.filter { items.contains($0.key) }
+    }
+
     private func apply(_ item: NSSplitViewItem, from node: NodeView?) {
-        let props = node?.props ?? [:]
+        let props = node?.props ?? [:], key = ObjectIdentifier(item)
+        // A property Exact owns while its attribute is set, AppKit's default once it goes, else the owner's
+        func own(_ name: String, _ write: (String?) -> Void) {
+            let said = props[name]
+            guard said != nil || itemControls.owned[key]?.contains(name) == true else { return }
+            write(said)
+            if said == nil { itemControls.owned[key]?.remove(name) } else { itemControls.owned[key, default: []].insert(name) }
+        }
         if item.behavior == .sidebar || item.behavior == .inspector {
-            let full = props["navigationSplitItemFullHeight"] != "false"
-            if item.allowsFullHeightLayout != full { item.allowsFullHeightLayout = full }
+            own("navigationSplitItemFullHeight") { said in
+                let full = said != "false"
+                if item.allowsFullHeightLayout != full { item.allowsFullHeightLayout = full }
+            }
         }
         guard #available(macOS 26, *) else { return }
-        let adjusts = props["navigationSplitItemAdjustsForOverlays"] == "true"
-        if item.automaticallyAdjustsSafeAreaInsets != adjusts { item.automaticallyAdjustsSafeAreaInsets = adjusts }
-        let key = ObjectIdentifier(item), held = itemControls.accessories[key]
+        own("navigationSplitItemAdjustsForOverlays") { said in
+            let adjusts = said == "true"
+            if item.automaticallyAdjustsSafeAreaInsets != adjusts { item.automaticallyAdjustsSafeAreaInsets = adjusts }
+        }
+        let held = itemControls.accessories[key]
         let top = accessory(named: props["navigationSplitItemTopAccessory"], kept: held?.top, on: item, top: true)
         let bottom = accessory(named: props["navigationSplitItemBottomAccessory"], kept: held?.bottom, on: item, top: false)
         itemControls.accessories[key] = top == nil && bottom == nil ? nil : (top, bottom)
