@@ -80,6 +80,32 @@ final class BoxReachMacTests: XCTestCase {
         XCTAssertNotNil(box.scroll)
         XCTAssertEqual(box.frame, NSRect(x: 0, y: 100, width: 300, height: 120), "at its laid-out frame")
         XCTAssertEqual(box.bounds.origin, .zero)
+        XCTAssertEqual(box.scroll?.frame, NSRect(x: 0, y: -47, width: 300, height: 167), "its scroll view reaching")
+    }
+
+    /// A scroller reaches with its scroll view: it grows past the box, keeping CSS `scrollTop` and `scrollLeft`, takes
+    /// the clicks in the reached strip, and goes back to the box at a reach of zero.
+    func testAScrollerReachesWithItsScrollView() throws {
+        let p = try presenter()
+        let window = try XCTUnwrap(self.window)
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["overflow_x": "scroll", "overflow_y": "scroll", "background_color": [51, 102, 153, 255]]],
+                           ["op": "content", "id": 2, "w": 900, "h": 1000], ["op": "frame", "id": 2, "x": 0.0, "y": 100.0, "w": 300.0, "h": 100.0]]))
+        let box = try XCTUnwrap(p.views[2]), scroll = try XCTUnwrap(box.scroll)
+        XCTAssertEqual(scroll.frame, box.bounds)
+        scroll.contentView.scroll(to: NSPoint(x: 30, y: 50))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let offset = { [scroll.contentView.bounds.origin.x + scroll.contentInsets.left, scroll.contentView.bounds.origin.y + scroll.contentInsets.top] }
+        let start = offset()
+        p.setReach(2, NSEdgeInsets(top: 47, left: 10, bottom: 0, right: 0))
+        XCTAssertEqual(scroll.frame, NSRect(x: -10, y: -47, width: 310, height: 147), "grown past the box")
+        XCTAssertEqual(box.frame, NSRect(x: 0, y: 100, width: 300, height: 100), "the box at its laid-out frame")
+        XCTAssertEqual(offset(), start, "CSS scrollLeft and scrollTop kept")
+        XCTAssertFalse(box.clipsToBounds, "the clip left to the scroll view")
+        let strip = box.convert(NSPoint(x: 150, y: -20), to: nil)
+        XCTAssertTrue(window.contentView?.hitTest(strip)?.isDescendant(of: scroll) ?? false, "a click in the strip is the scroller's")
+        p.setReach(2, NSEdgeInsetsZero)
+        XCTAssertEqual(scroll.frame, box.bounds)
+        XCTAssertEqual(offset(), start)
     }
 }
 #endif

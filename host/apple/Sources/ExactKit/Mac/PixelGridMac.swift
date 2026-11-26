@@ -144,7 +144,8 @@ extension Presenter {
         }
         v.arrangeShift = .zero
         v.textRasterGeometryChanged()
-        v.scroll?.frame = v.bounds
+        v.scroll?.frame = v.scrollFrame
+        ScrollportBars.raise(in: v)
         v.layoutField()
         v.layoutTextArea()
         v.metal?.frame = v.bounds

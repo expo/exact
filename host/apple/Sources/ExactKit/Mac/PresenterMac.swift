@@ -1376,7 +1376,7 @@ package final class Presenter {
     func placeChildren(_ op: BatchOp, reparented: inout Set<UInt32>, leaving: Set<UInt32>? = nil) {
         let id = op.id
         guard let parent = views[id] else { return }
-        let want = regionPopoverChildren(op.ids, of: parent).compactMap { views[$0] }
+        let want = ScrollportBars.place(parent, regionPopoverChildren(op.ids, of: parent), in: self).compactMap { views[$0] } // D12's bars aside
         let container = parent.container
         dialogs.children(container, want)
         menus.children(container, want)

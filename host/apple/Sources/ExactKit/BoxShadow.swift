@@ -464,6 +464,8 @@ extension NodeView {
     package var clipsItself: Bool {
         #if os(iOS) || os(tvOS)
         if pageBand != .zero || reach != .zero, scrollHoldsContent { return false }
+        #else
+        if !NSEdgeInsetsEqual(reach, NSEdgeInsetsZero), scrollHoldsContent { return false }
         #endif
         return overflowClips && clipBox == nil
     }

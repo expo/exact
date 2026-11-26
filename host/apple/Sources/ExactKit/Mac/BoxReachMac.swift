@@ -2,7 +2,8 @@
 // reaches it, as an AppKit view's background fills a window to its edge under the title bar: its view is outset on
 // the pixel grid and its bounds origin shifted by as much, so its children stay where layout put them while its
 // background, border and clicks fill the reached frame. Its layout, its observations, its geometry and its
-// accessibility frame keep the laid-out box. A scroller's reach is its scroll view's, not drawn here.
+// accessibility frame keep the laid-out box. A scroller reaches with its scroll view instead, which grows past the box
+// keeping CSS `scrollTop` and `scrollLeft`, the box leaving the clip to it.
 #if os(macOS)
 import AppKit
 
@@ -17,16 +18,49 @@ extension NodeView {
         return CGRect(origin: .zero, size: place.drawn.size)
     }
 
-    /// Draws the box past its laid-out frame by `reach`, top right bottom left (`Kernel::box_reach`), or at it again at
-    /// zero. A scroller keeps none of its own: its scroll view reaches instead.
+    /// Draws the box past its laid-out frame by `reach`, top right bottom left (`Kernel::box_reach`,
+    /// `Kernel::scroll_terms` for a scroller), or at it again at zero; a scroller's scroll view reaches instead.
     package func setReach(_ reach: NSEdgeInsets) {
         let given = BoxReach.reaches.object(forKey: self)
-        guard given.map({ !NSEdgeInsetsEqual($0.edges, reach) }) ?? true else { return }
+        guard given.map({ !NSEdgeInsetsEqual($0.edges, reach) }) ?? !NSEdgeInsetsEqual(reach, NSEdgeInsetsZero) else { return }
         if NSEdgeInsetsEqual(reach, NSEdgeInsetsZero) { BoxReach.reaches.removeObject(forKey: self) } else {
             BoxReach.reaches.setObject(BoxReach(reach), forKey: self)
         }
+        if scroll != nil { return reachScroll() }
         guard let layout = grid?.layout else { return }
         presenter?.applyFrame(self, layout)
+    }
+
+    /// The scroll view's frame: the box's bounds outset by its reach, so a scroller draws past its box into the area
+    /// that reaches it.
+    package var scrollFrame: CGRect {
+        let r = reach, b = bounds
+        return CGRect(x: b.minX - r.left, y: b.minY - r.top, width: b.width + r.left + r.right, height: b.height + r.top + r.bottom)
+    }
+
+    /// A scroller's scroll view moved to its reach (`scrollFrame`), keeping CSS `scrollTop` and `scrollLeft`, the box's
+    /// own clip left to the scroll view while it reaches (`clipsItself`).
+    func reachScroll() {
+        guard let sv = scroll else { return }
+        let clip = sv.contentView, before = sv.contentInsets
+        let top = clip.bounds.origin.y + before.top, left = clip.bounds.origin.x + before.left
+        if clipsToBounds != clipsItself { clipsToBounds = clipsItself }
+        sv.frame = scrollFrame
+        fitScroll()
+        let now = sv.contentInsets
+        let kept = clip.constrainBoundsRect(NSRect(origin: NSPoint(x: left - now.left, y: top - now.top), size: clip.bounds.size)).origin
+        if kept != clip.bounds.origin {
+            clip.scroll(to: kept)
+            sv.reflectScrolledClipView(clip)
+        }
+    }
+
+    /// A click at `point`, in the superview's coordinates, in a scroller's reached strip outside its box: its scroll
+    /// view's, which AppKit's own hit test, stopping at the box's frame, does not find.
+    func scrollReachHit(_ point: NSPoint) -> NSView? {
+        guard let sv = scroll, !NSEdgeInsetsEqual(reach, NSEdgeInsetsZero) else { return nil }
+        let local = convert(point, from: superview)
+        return sv.frame.contains(local) ? sv.hitTest(local) : nil
     }
 
     /// Its frame drawn past `place` by its reach on the grid it is placed on, and the bounds origin that keeps its

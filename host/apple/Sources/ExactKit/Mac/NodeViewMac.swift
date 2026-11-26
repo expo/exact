@@ -769,7 +769,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if !fragmentHit(convert(point, from: superview)) { return nil }
         if isSurfaceControl, !cssVisibilityHidden, hitBounds.contains(convert(point, from: superview)) { return self }
         func ordinary() -> NSView? {
-            let found = raisedHit(super.hitTest(point), point) ?? overflowHit(point) ?? slopHit(point)
+            let found = raisedHit(super.hitTest(point), point) ?? overflowHit(point) ?? scrollReachHit(point) ?? slopHit(point)
             // Empty scroll chrome keeps the scroll view's wheel route. Its
             // mouse contact forwards to this node; children and native
             // scrollers keep their own hits.
