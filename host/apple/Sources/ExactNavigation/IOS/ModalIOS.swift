@@ -47,14 +47,13 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         #endif
     }
     /// A sheet route's presentation, its `navigationSizing` as it is presented (LLP 1123 D7): a page sheet unsaid, as
-    /// the LLP keeps it; `form` UIKit's form sheet and `automatic` UIKit's choice.
+    /// the LLP keeps it, and `form` UIKit's form sheet.
     static func sheetStyle(_ sizing: String?) -> UIModalPresentationStyle {
         #if os(tvOS)
         .overFullScreen
         #else
         switch sizing {
         case "form": .formSheet
-        case "automatic": .automatic
         default: .pageSheet
         }
         #endif
@@ -83,14 +82,15 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
     }
     private var detentValue: String?, cornerRadius: CGFloat?, grabberValue: String?
     /// The route's other sheet choices as last applied (LLP 1123 D7): the detent it holds the sheet at, its edge
-    /// attachment in a compact height and its scroll expansion.
+    /// attachment in a compact height, whether it then takes its content's preferred width, and its scroll expansion.
     private var choices = SheetChoices()
     private struct SheetChoices: Equatable {
-        var selected: String?, undimmed: String?, edgeAttached: String?, scrollExpands: String?
+        var selected: String?, undimmed: String?, edgeAttached: String?, widthFollows: String?, scrollExpands: String?
         init(_ props: [String: String]? = nil) {
             selected = props?["navigationSelectedDetent"].flatMap { $0.isEmpty ? nil : $0 }
             undimmed = props?["navigationUndimmedDetent"].flatMap { $0.isEmpty ? nil : $0 }
             edgeAttached = props?["navigationEdgeAttachedInCompactHeight"]
+            widthFollows = props?["navigationWidthFollowsPreferredContentSize"]
             scrollExpands = props?["navigationScrollExpands"]
         }
     }
@@ -123,6 +123,7 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
             SheetDetents.updateGrabber(grabber, on: sheet)
             if let expands = next.scrollExpands { sheet.prefersScrollingExpandsWhenScrolledToEdge = expands == "true" }
             sheet.prefersEdgeAttachedInCompactHeight = next.edgeAttached == "true"
+            sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = next.widthFollows == "true"
             sheet.preferredCornerRadius = radius
             // In `animateChanges`, the surface moves with the sheet.
             self.paintSurface()

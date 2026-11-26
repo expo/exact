@@ -416,15 +416,18 @@ final class ModalDetentIOSTests: XCTestCase {
         XCTAssertEqual(controller.selectedDetentIdentifier, .init("authored-0"), "let go: where it opens, its first")
         XCTAssertFalse(controller.prefersEdgeAttachedInCompactHeight)
         XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge, "unsaid over two detents: the platform's")
-        update(["navigationEdgeAttachedInCompactHeight": "true", "navigationScrollExpands": "false"])
+        XCTAssertFalse(controller.widthFollowsPreferredContentSizeWhenEdgeAttached)
+        update(["navigationEdgeAttachedInCompactHeight": "true", "navigationWidthFollowsPreferredContentSize": "true", "navigationScrollExpands": "false"])
         XCTAssertTrue(controller.prefersEdgeAttachedInCompactHeight)
+        XCTAssertTrue(controller.widthFollowsPreferredContentSizeWhenEdgeAttached)
         XCTAssertFalse(controller.prefersScrollingExpandsWhenScrolledToEdge)
-        update(["navigationEdgeAttachedInCompactHeight": nil, "navigationScrollExpands": nil])
+        update(["navigationEdgeAttachedInCompactHeight": nil, "navigationWidthFollowsPreferredContentSize": nil, "navigationScrollExpands": nil])
         XCTAssertFalse(controller.prefersEdgeAttachedInCompactHeight, "UIKit's default once it stops")
+        XCTAssertFalse(controller.widthFollowsPreferredContentSizeWhenEdgeAttached)
         XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge)
         // UIKit reads a style back as it resolves it for the device (on an iPhone a form sheet reads as a page
         // sheet), so the sheet is made as a controller given the same style is
-        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .pageSheet)] {
+        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("page", .pageSheet), (nil, .pageSheet)] {
             XCTAssertEqual(ModalController.sheetStyle(sizing), style, sizing ?? "unsaid")
             route.props["navigationSizing"] = sizing
             let made = ModalController(host: session.presenter.modalHost, route: route, kind: "modal", detent: nil, grabber: nil)

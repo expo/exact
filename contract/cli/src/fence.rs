@@ -316,6 +316,7 @@ fn attr_moves(name: &str) -> Option<&'static str> {
         "navigationSelectedDetent",
         "navigationSizing",
         "navigationEdgeAttachedInCompactHeight",
+        "navigationWidthFollowsPreferredContentSize",
         "navigationPopoverAnchor",
         "navigationPopoverMargins",
         "navigationPopoverArrows",

@@ -633,16 +633,17 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "testId" => AttrTarget::Prop(p("testId")),
         // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
         // `none` for a full-bleed screen.
-        "navigationKey" | "navigationBack" | "navigationBar" => AttrTarget::Prop(p(name)),
-        "navigationGrabber" | "navigationDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
-        "navigationPresentation" | "navigationVerticalBar" => AttrTarget::Prop(p(name)),
-        "navigationHistory" | "navigationEdgeAttachedInCompactHeight" => AttrTarget::Prop(p(name)),
-        "navigationInitialDetent" | "navigationExtendsUnderOpaqueBars" => AttrTarget::Prop(p(name)),
-        "navigationSelectedDetent" | "navigationPopoverOverlapsSource" => AttrTarget::Prop(p(name)),
-        "navigationScrollExpands" | "navigationVerticalBarCompression" => AttrTarget::Prop(p(name)),
-        "navigationUndimmedDetent" | "navigationPopoverAdaptation" => AttrTarget::Prop(p(name)),
-        "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
+        "navigationWidthFollowsPreferredContentSize" | "navigationKey" => AttrTarget::Prop(p(name)),
+        "navigationEdgeAttachedInCompactHeight" | "navigationGrabber" => AttrTarget::Prop(p(name)),
+        "navigationExtendsUnderOpaqueBars" | "navigationInitialDetent" => AttrTarget::Prop(p(name)),
+        "navigationVerticalBarCompression" | "navigationScrollExpands" => AttrTarget::Prop(p(name)),
+        "navigationPopoverOverlapsSource" | "navigationSelectedDetent" => AttrTarget::Prop(p(name)),
+        "navigationPopoverAdaptation" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
         "navigationPopoverMargins" | "navigationExtendedLayout" => AttrTarget::Prop(p(name)),
+        "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
+        "navigationPresentation" | "navigationVerticalBar" => AttrTarget::Prop(p(name)),
+        "navigationHistory" | "navigationDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
+        "navigationBack" | "navigationBar" => AttrTarget::Prop(p(name)),
         // @ref LLP 1125 D11 — the Screen Wake Lock API's one type, on any element.
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.
@@ -1158,8 +1159,7 @@ pub(crate) fn html_tag(name: &str) -> Option<&'static str> {
             "a label is `text` beside its field, and the field is named by `aria-label` (or `aria-labelledby` with the text's `id`)"
         }
         "heading" => "a heading is `h1` (to `h6` for the level)",
-        // The app farm's guesses (round 1): each names the Contract form
-        // that does the job.
+        // The app farm's guesses (round 1): each names the Contract form that does the job.
         "small" | "code" | "pre" | "paragraph" | "subtitle" => {
             "text is `text`, styled by its attributes (`font-size`, `font-family`, `white-space`)"
         }

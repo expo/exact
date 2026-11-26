@@ -75,6 +75,9 @@ final class PopoverRouteIOSTests: XCTestCase {
         XCTAssertEqual(source.popoverLayoutMargins, UIEdgeInsets(top: 12, left: 20, bottom: 12, right: 20))
         XCTAssertFalse(source.canOverlapSourceViewRect)
         XCTAssertEqual(controller.preferredContentSize, CGSize(width: 240, height: 180), "the route's box's own size")
+        let sheet = source.adaptiveSheetPresentationController
+        XCTAssertTrue(sheet.prefersEdgeAttachedInCompactHeight, "the sheet it adapts to rests on a short window's bottom edge")
+        XCTAssertTrue(sheet.widthFollowsPreferredContentSizeWhenEdgeAttached, "at its preferred width")
         let compact = UITraitCollection(horizontalSizeClass: .compact)
         XCTAssertEqual(source.delegate?.adaptivePresentationStyle?(for: source, traitCollection: compact), UIModalPresentationStyle.none,
                        "`none`: a popover in a compact-width window too")

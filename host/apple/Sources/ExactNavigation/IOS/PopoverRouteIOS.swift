@@ -48,6 +48,11 @@ final class PopoverRoute: NSObject, UIPopoverPresentationControllerDelegate {
         if source.canOverlapSourceViewRect != overlaps { source.canOverlapSourceViewRect = overlaps }
         let size = Self.size(of: route)
         if source.presentedViewController.preferredContentSize != size { source.presentedViewController.preferredContentSize = size }
+        // The sheet it adapts to in a compact width rests on a short window's bottom edge at that width where the route says so
+        let sheet = source.adaptiveSheetPresentationController
+        let attached = route.props["navigationEdgeAttachedInCompactHeight"] == "true", follows = route.props["navigationWidthFollowsPreferredContentSize"] == "true"
+        if sheet.prefersEdgeAttachedInCompactHeight != attached { sheet.prefersEdgeAttachedInCompactHeight = attached }
+        if sheet.widthFollowsPreferredContentSizeWhenEdgeAttached != follows { sheet.widthFollowsPreferredContentSizeWhenEdgeAttached = follows }
     }
 
     /// Whether its anchor has left its window since it was presented, said once.
