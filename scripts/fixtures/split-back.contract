@@ -21,6 +21,7 @@ routes nav
     book "/book/:id"
     notes "/notes/:id"
     share "/share/:id"
+    info "/info/:id"
     cover "/cover/:id"
     page "/page/:id"
     photo "/photo/:id"
@@ -48,6 +49,8 @@ component App
     nav = back(nav)
   action openNotes(id: string)
     nav = push(nav, path("notes", id))
+  action openInfo(id: string)
+    nav = push(nav, path("info", id))
   action openShare(id: string)
     nav = push(nav, path("share", id))
   action openCover(id: string)
@@ -114,6 +117,8 @@ component App
                   text "Renew"
               button press=openNotes(e.params.id) testId=`notes-${e.params.id}`
                 text "Notes"
+              button press=openInfo(e.params.id) testId=`info-${e.params.id}`
+                text "Info"
               button press=openShare(e.params.id) testId=`share-${e.params.id}`
                 text "Share"
               button press=openCover(e.params.id) testId=`cover-${e.params.id}`
@@ -136,6 +141,11 @@ component App
               text "Swap"
             button id="back" press=back testId=`back-notes-${e.params.id}`
               text "Back"
+        if e.name == "info"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationInspector=true position="absolute" inset=0 testId="info-page"
+            text "About the book"
+            button press=back testId="info-close"
+              text "Close"
         if e.name == "share"
           column navigationKey=`${e.id}` navigationPresentation="modal" position="absolute" inset=0 testId="share-page"
             text "Share the book"

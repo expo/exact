@@ -648,6 +648,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.
         "orientationlock" => AttrTarget::Prop(p("orientationlock")),
+        // @ref LLP 1127 — a sheet that an expanded split shows as its inspector.
+        "navigationInspector" => AttrTarget::Prop(p(name)),
         "navigationSource" | "sharedElement" | "arrangement" => AttrTarget::Prop(p(name)),
         // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
         "portal" => AttrTarget::Prop(p("portal")),

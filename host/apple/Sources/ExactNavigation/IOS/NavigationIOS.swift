@@ -633,7 +633,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // hides is not presented, nor is any above it: its sheet is out of
         // the document's tree, which no longer hides it (LLP 1123 D2)
         let segments = NavigationRules.segments(presentations: p.routes[...p.selected].map { $0.props["navigationPresentation"] })
-        let parts = Array(segments.enumerated().prefix { $0.offset == 0 || !logicallyHidden(wanted[$0.element.lowerBound].node) }.map(\.element))
+        var parts = Array(segments.enumerated().prefix { $0.offset == 0 || !logicallyHidden(wanted[$0.element.lowerBound].node) }.map(\.element))
         reshape(p)
         installPrimary(p, first: Array(wanted[parts[0]]))
         if let tabs = p.tabs {
@@ -652,6 +652,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 }
             }
         }
+        let inspecting = inspectorRoute(parts, wanted)
+        if inspecting != nil { parts = Array(parts.prefix(1)) }
         // Before any hold: the press whose batch opened the detail selects its row.
         if let split { creditPresses(split, batch: batch.sequence, stack: Array(wanted[parts[0]])) }
         // The other tabs' stacks, the selected tab and its items (LLP 1075.003 §3.7).
@@ -681,6 +683,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         let boundaries = parts.dropFirst().map { wanted[$0.lowerBound].node }
         let mounted = presenter.modalHost.routes
+        if inspecting == nil { placeInspector(nil) }
         let common = zip(boundaries, mounted).prefix {
             $0.0 === $0.1.node && $0.0.props["navigationPresentation"] == $0.1.kind
         }.count
@@ -747,6 +750,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             presenter.modalHost.closeTop()
             return
         }
+        if let inspecting, !held { placeInspector(inspecting, animated: !ExactEnv.agentFreezes && !unanimated) }
         if boundaries.count > mounted.count, let background = modalNavigation ?? primaryOwner, let owner {
             let part = parts[mounted.count + 1], route = wanted[part.lowerBound].node
             func waitForOwner() {

@@ -33,6 +33,12 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     let empty = UIViewController()
     /// What UIKit shows changed: it collapsed or expanded, or showed or hid the list.
     var changed: () -> Void = {}
+    /// The inspector's column (iOS 26), made when a route first goes there.
+    private(set) var inspector: UINavigationController?
+    /// The person closed the inspector's column; the router has yet to hear it.
+    var inspectorClosed: () -> Void = {}
+    /// UIKit is moving the columns, inside its animation (`moveAlong`).
+    var columnsMove: () -> Void = {}
     /// UIKit is about to push a route within N1, over the route beneath it.
     var willPush: (_ route: RouteController, _ beneath: RouteController) -> Void = { _, _ in }
     /// N1 has a new base, or none: prepare N1's own transition, which N0's
@@ -129,8 +135,119 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var shown: [RouteController] {
         list.stackRoutes.prefix(1).compactMap { $0 as? RouteController } + (showsDetail ? detailRoutes : [])
     }
+    /// The route the inspector's column shows, while the split is expanded.
+    var inspecting: RouteController? {
+        guard !controller.isCollapsed, let inspector else { return nil }
+        return inspector.viewControllers.first as? RouteController
+    }
+
+    /// Whether this split can show an inspector's column (UIKit's, iOS 26).
+    var inspects: Bool {
+        #if os(iOS)
+        if #available(iOS 26.0, *) { return true }
+        #endif
+        return false
+    }
+
+    /// The sheet route that says `navigationInspector` in the inspector's
+    /// column, or none there (LLP 1127 D14). Collapsed, the column empties at
+    /// once, for the route to go to its sheet; closed while expanded, the
+    /// route stays until the column's transition is over. `animated` false
+    /// puts the column in place at once (a route that leaves its sheet as
+    /// the split expands, as UIKit's own inspector is there from the
+    /// expansion's first frame).
+    func inspect(_ route: RouteController?, in made: UINavigationController?, animated: Bool = true) {
+        // tvOS has no inspector's column.
+        #if os(iOS)
+        guard #available(iOS 26.0, *) else { return }
+        // A split that collapsed, or is collapsing, since its route was
+        // chosen (a fold during the sync) has no column to show it in: its
+        // route goes to its sheet.
+        if let route, let nav = made, !controller.isCollapsed, move != .collapsing {
+            // A close still in its transition is superseded: its end must not empty the column.
+            closing = nil
+            endSlide()
+            inspector = nav
+            // The column is the split's again after a collapse took it (`topColumnForCollapsing`).
+            if controller.viewController(for: .inspector) !== nav { controller.setViewController(nav, for: .inspector) }
+            if nav.viewControllers.first !== route { nav.setViewControllers([route], animated: false) }
+            if !animated, !controller.isShowing(.inspector) {
+                UIView.performWithoutAnimation {
+                    controller.show(.inspector)
+                    controller.view.layoutIfNeeded()
+                }
+            } else if !controller.isShowing(.inspector) {
+                // UIKit lays its own inspector out where it ends and then
+                // slides the column in: the route, which no frame has shown,
+                // is told its place still (`NavigationHost.tellStill`).
+                controller.show(.inspector)
+                moveAlong()
+            }
+            return
+        }
+        guard let nav = inspector, !nav.viewControllers.isEmpty else { return endSlide() }
+        // Collapsing, the column goes with the split (`topColumnForCollapsing`).
+        if controller.isCollapsed || move == .collapsing || controller.viewController(for: .inspector) !== nav {
+            empty(nav)
+            return endSlide()
+        }
+        // A close in its transition keeps its route until it ends.
+        guard closing == nil else { return }
+        if !controller.isShowing(.inspector) {
+            empty(nav)
+            return endSlide()
+        }
+        closes += 1
+        let close = closes
+        closing = close
+        controller.hide(.inspector)
+        moveAlong()
+        let finish = { [weak self, weak nav] in
+            guard let self, let nav, closing == close else { return }
+            closing = nil
+            empty(nav)
+            endSlide()
+        }
+        if let coordinator = controller.transitionCoordinator { coordinator.animate(alongsideTransition: nil) { _ in finish() } } else { finish() }
+        #endif
+    }
+
+    /// UIKit animates the columns into place from a show or hide: what the
+    /// routes beside them clear is told inside that animation
+    /// (`columnsMove`), so their content moves with the columns, as a
+    /// hand-built detail's does.
+    private func moveAlong() {
+        controller.transitionCoordinator?.animate(alongsideTransition: { [weak self] _ in self?.columnsMove() })
+    }
+
+    /// Exact's close of the inspector's column, until its transition ends:
+    /// UIKit's report of it is not the person's. Each close has its number,
+    /// so that an opening or a later close supersedes it.
+    private var closing: Int?
+    private var closes = 0
+
+    /// The views of the inspector's route a batch destroyed, live while its
+    /// column slides out (`NavigationHost.slideOutInspector`).
+    var sliding: Leaving?
+    /// The sliding route's views go: its column let it go.
+    func endSlide() {
+        guard let ended = sliding else { return }
+        sliding = nil
+        for member in ended.members { member.forget() }
+        ended.view.removeFromSuperview()
+    }
+
+    /// Empty the inspector's column. Its route is Exact's to move (to its
+    /// sheet, folded) or to let go, not one UIKit popped: no stack holds it
+    /// until Exact writes it again (`RouteController.held`).
+    private func empty(_ nav: UINavigationController) {
+        let routes = nav.viewControllers.compactMap { $0 as? RouteController }
+        nav.setViewControllers([], animated: false)
+        for route in routes { route.held = false }
+    }
+
     /// Whether `nav` is one of the columns'.
-    func holds(_ nav: UINavigationController) -> Bool { nav === list || nav === detail }
+    func holds(_ nav: UINavigationController) -> Bool { nav === list || nav === detail || nav === inspector }
 
     /// Whether UIKit is moving the columns or their stacks: a push or pop in
     /// either, the split's own transition (`show(_:)`, a rotation), or an
@@ -166,6 +283,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var showing: (beside: [RouteController], under: [RouteController]) {
         guard !controller.isCollapsed, let root = list.stackRoutes.first as? RouteController else { return ([], []) }
         let top = detailRoutes.last
+        if inspecting != nil {
+            switch controller.displayMode {
+            case .oneOverSecondary, .twoOverSecondary: return ([root], top.map { [$0] } ?? [])
+            case .secondaryOnly: return (top.map { [$0] } ?? [], [])
+            default: return ([root] + (top.map { [$0] } ?? []), [])
+            }
+        }
         switch controller.displayMode {
         case .oneOverSecondary, .twoOverSecondary: return ([root], top.map { [$0] } ?? [])
         case .secondaryOnly: return ([], top == nil ? [root] : [])
@@ -280,6 +404,11 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     func splitViewController(_ svc: UISplitViewController,
                              topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column) -> UISplitViewController.Column {
         move = .collapsing
+        #if os(iOS)
+        if #available(iOS 26.0, *), let inspector, svc.viewController(for: .inspector) === inspector {
+            svc.setViewController(nil, for: .inspector)
+        }
+        #endif
         return detailRoutes.isEmpty ? .primary : .secondary
     }
     func splitViewController(_ svc: UISplitViewController,
@@ -287,6 +416,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         move = .expanding
         return proposedDisplayMode
     }
+    func splitViewController(_ svc: UISplitViewController, didHide column: UISplitViewController.Column) {
+        #if os(iOS)
+        guard #available(iOS 26.0, *), column == .inspector, closing == nil, !svc.isCollapsed else { return }
+        DispatchQueue.main.async { self.inspectorClosed() }
+        #endif
+    }
+
     func splitViewControllerDidCollapse(_ svc: UISplitViewController) { settle() }
     func splitViewControllerDidExpand(_ svc: UISplitViewController) { settle() }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {

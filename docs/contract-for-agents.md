@@ -3156,6 +3156,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | a route with `navigationBar="none"` | no navigation bar: a full-bleed screen that draws its own way back; the edge swipe still goes back unless the route's control named by `navigationBack` is disabled; [disable that control during a run](recipes/navigation-stack.md) to refuse Back |
 | a route with `navigationPresentation="modal"` | a sheet |
 | a route pushed while a sheet is on top, with no `navigationPresentation` of its own | pushed inside the sheet, with the system Back; the sheet's swipe down, or a tap behind a `closedby="any"` one, closes the sheet with every route pushed inside it |
+| a sheet route with `navigationInspector=true` | an expanded split's inspector column beside the detail, iOS 26 (LLP 1127 D14); a sheet at a compact width and on other hosts |
 
 On iOS, a system dialog sheet can use the same resting heights as a modal route.
 For a form that opens tall and can be dragged down to half height, write

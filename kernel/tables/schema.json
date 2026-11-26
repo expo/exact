@@ -975,6 +975,12 @@
       "_comment": "@ref LLP 1057.001.000 D2: a zoomable scroll container's zoom, as `scrollTop` is its offset: the scale it opens at and moves to when the written value changes, clamped to its range."
     },
     {
+      "id": 340,
+      "name": "navigationInspector",
+      "kind": "bool",
+      "_comment": "LLP 1127: on a sheet route (`navigationPresentation=\"modal\"`), the sheet is an inspector: where iOS shows its stack as an expanded split, the route is the split's inspector column beside the detail, as SwiftUI's `inspector(isPresented:)` is; a compact width and every other host keep the sheet."
+    },
+    {
       "id": 110,
       "name": "playbackVisibilityThreshold",
       "kind": "float"

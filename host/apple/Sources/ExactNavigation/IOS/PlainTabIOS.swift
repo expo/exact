@@ -125,10 +125,10 @@ extension NavigationHost {
     /// the one stack of a root without tabs: a split's two columns.
     var primaryStacks: [UIViewController] {
         if let bootOwner { return [bootOwner] }
-        guard !tabPanels.isEmpty else { return [primaryNavigation, split?.detail].compactMap { $0 } }
+        guard !tabPanels.isEmpty else { return [primaryNavigation, split?.detail, split?.inspector].compactMap { $0 } }
         let held = moreTab
         return tabPanels.indices.flatMap { index -> [UIViewController] in
-            if let columns = tabSplits[tabPanels[index]] { return [columns.list, columns.detail] }
+            if let columns = tabSplits[tabPanels[index]] { return [columns.list, columns.detail] + [columns.inspector].compactMap { $0 } }
             return [index == held ? more : routesStack(index)].compactMap { $0 }
         }
     }
