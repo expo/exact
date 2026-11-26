@@ -194,3 +194,51 @@ fn a_claimed_scroller_reaches_and_widens_its_range_keeping_its_offset() {
     p.scroll.insert(port, (0., 200.));
     assert!(p.frame().data() == empty, "as before the claim");
 }
+
+/// A colour-only extension paints the card's colour in a strip past its border box, once where a translucent colour
+/// meets the box's own and where it meets the card's reach, takes no hits, and leaves the frame as it was once gone.
+#[test]
+fn a_colour_only_extension_paints_the_boxs_colour_around_it_once() {
+    let source = APP.replace("#ff0000", "#ff000080");
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(&source),
+        (),
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let (card, clip) = (id(&p, "card"), id(&p, "clip"));
+    let empty = p.frame().data().to_vec();
+    let inside = pixel(&mut p, 100., 90.);
+    assert_ne!(inside, WHITE);
+    // 20 above and 10 to the right: the card's (20, 40, 100, 60) grows to (20, 20, 110, 80), inside the clip at 35
+    assert!(p.set_box_extension(card, Some([20., 10., 0., 0.])));
+    for (x, y) in [(60., 37.), (125., 70.), (125., 37.)] {
+        assert_eq!(pixel(&mut p, x, y), inside, "the colour once at ({x}, {y})");
+    }
+    assert_eq!(
+        pixel(&mut p, 135., 70.),
+        WHITE,
+        "nothing past the extension"
+    );
+    assert_eq!(pixel(&mut p, 60., 32.), WHITE, "the ancestor's clip holds");
+    assert_eq!(pixel(&mut p, 40., 60.), BLUE, "the child where it was");
+    assert_eq!(p.hit(125., 70.), Some(clip), "the strip takes no hits");
+    assert_eq!(p.rect_of(card), Some((20., 40., 100., 60.)));
+    // Reaching 40 to the right as it extends 20 up: the reach paints its own strip, the extension the rest, once
+    assert!(p.set_box_reach(card, Some([0., 40., 0., 0.])));
+    for (x, y) in [(60., 37.), (150., 70.), (125., 37.), (125., 70.)] {
+        assert_eq!(pixel(&mut p, x, y), inside, "once at ({x}, {y})");
+    }
+    assert_eq!(
+        pixel(&mut p, 150., 37.),
+        WHITE,
+        "neither reaches above the reached strip"
+    );
+    assert!(p.set_box_reach(card, None));
+    assert!(p.set_box_extension(card, None));
+    assert!(p.frame().data() == empty, "as before the extension");
+}

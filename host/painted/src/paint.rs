@@ -1131,9 +1131,14 @@ impl Painter {
         self.flight_geometry(node, &mut surface);
         // A text node still walks its runs so a visible inline paints.
         if paints_self {
-            surface.bleed = self.bleed(walk.scene.kernel, node.id, &surface.outer, ts);
+            // A colour-only extension stands in for the band's bleed (LLP 1123 D13)
+            surface.bleed = match shown.extension == [0.0; 4] {
+                true => self.bleed(walk.scene.kernel, node.id, &surface.outer, ts),
+                false => [0.0; 4],
+            };
             self.row_box_reach(&paint.shadows, surface.outer.rect, geometry.outer.rect, ts);
             paint.paint(self.backend.as_mut(), &surface, ts);
+            self.extension_strip(&shown, paint.background, surface.outer.rect, rect, ts);
             self.column_rules(walk.scene.kernel, node, rect, ts);
             self.prose_marker(walk, node, rect, ts);
             let (dark, feedback) = (
