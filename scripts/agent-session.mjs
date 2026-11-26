@@ -17,7 +17,7 @@ import {
 import { preferGroups, preferOp } from './agent-prefer.mjs';
 import { axTree } from './agent-ax.mjs';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { encodePng } from './png.mjs';
 import { basename, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -31,6 +31,7 @@ import {
   unopenedHint,
 } from './agent-test.mjs';
 import { MalformedOperation, operationReply } from './agent-keys.mjs';
+import { checkDragDeadline } from '../host/apple/touches.mjs';
 import { AWAY } from './agent-wire.mjs';
 import { openAttached } from './agent-attach.mjs';
 import { openStdio } from './agent-stdio.mjs';
@@ -42,6 +43,7 @@ import { bakeOutput, executableName, linuxBinary, resolveApp, webDist as default
 import { androidBinary } from './agent-android.mjs';
 import { VIEWPORT, openWeb } from './agent-web.mjs';
 import { openIOS, simulatorOrientation } from './agent-ios.mjs';
+import { guardDragInput, requireDragOwner } from './agent-drag.mjs';
 import { sessionInput } from './agent-input.mjs';
 const CLOCK_STEP_MS = 1000,
   CLOCK_BUDGET_MS = 3000,
@@ -270,6 +272,8 @@ export async function open({
       return carrier.state?.session ?? null;
     },
     set session(label) {
+      checkDragDeadline();
+      requireDragOwner(s);
       if (carrier.state) carrier.state.session = label;
     },
     /** Milliseconds from launch to the first frame. */
@@ -281,6 +285,7 @@ export async function open({
     /** The host's wire: one request as the carrier sends it, views addressed by `id`. The methods (`tap`, `type`, …)
      * are the operations a person performs; a request the wire would answer by doing nothing is refused (habits F8). */
     async op(req) {
+      checkDragDeadline();
       if (!req || typeof req !== 'object' || typeof req.op !== 'string')
         throw new MalformedOperation('op: a request is {op: "<name>", …}');
       const input = req.op === 'tap' || req.op === 'type';
@@ -289,6 +294,7 @@ export async function open({
           `op: the wire's ${req.op} addresses a view by \`id\`, not \`target\`; s.${req.op}(${JSON.stringify(req.target)}, …) finds a target and delivers the input as a person would`,
         );
       const r = await operationReply(carrier, req);
+      checkDragDeadline();
       if (req.op === 'tree') s.pendingRequests = r.pending ?? [];
       // A web page's own tap or type acts only for an iframe guest, history, a list's row or a control's value:
       // the carrier's browser input is the rest, which only the methods reach.
@@ -777,6 +783,7 @@ export async function open({
     /** Pixels as PNG (second argument true includes the native window), or a canvas carry with `(path, target,
      * "save")`, or film: `(path, {over, every, window})` (LLP 1012.001.000 D2). */
     screenshot: async (path, target = false, form, film = false, of) => {
+      checkDragDeadline();
       // `screenshot shots/home.png` makes `shots/`, as a shell redirect would not but every agent expects.
       mkdirSync(dirname(resolve(path)), { recursive: true });
       if (target && typeof target === 'object') return s.film(path, target);
@@ -837,6 +844,7 @@ export async function open({
       let r = await carrier.screenshot(resolve(path), area, film || !!s.held, {
         status: form === 'status', own: form === 'app', skipMotion: !!(s.contact || s.held),
       });
+      checkDragDeadline();
       if (r.captureSpace === 'screen' && r.scale === null) return r;
       if (scale !== undefined) {
         const { image, shrunk } = s.scaled(r);
@@ -858,10 +866,12 @@ export async function open({
      * A reply still on real time (a store's, the network's) stays for a `clock` step. The reply's tags are read
      * after it. */
     async landed(r) {
+      checkDragDeadline();
       if (r == null || r.error != null || r.delivery === 'unsupported') return s.tagged(r);
       // The input closed the window (the app's `close()`, or `close`'s button): no session is left to land in.
       if (r.closed) return r;
       const l = await carrier.ask({ op: 'clock', land: true });
+      checkDragDeadline();
       // delivered: not `error`, so neither an agent nor a test sends it again as if refused
       if (l.error) return { ...r, landError: l.error };
       // A sheet the input (or its answer's `then`) opened or closed still moving past the iOS host's bound.
@@ -900,7 +910,7 @@ export async function open({
       for (const key of Object.keys(tags)) if (r[key] === undefined) r[key] = tags[key];
       return r;
     },
-    close: carrier.close,
+    close: carrier.close && ((...args) => { checkDragDeadline(); return carrier.close(...args); }),
     async rotate(orientation) {
       if (!simulatorOrientation(orientation)) throw new MalformedOperation('rotate takes portrait, portraitUpsideDown, landscapeLeft or landscapeRight');
       if (!carrier.rotate) throw new Error('rotate needs agent ios on an iOS simulator');
@@ -919,6 +929,22 @@ export async function open({
       return carrier.background(ms);
     },
     springboard: carrier.springboard,
+  };
+  guardDragInput(carrier);
+  const capture = s.screenshot;
+  s.screenshot = async (path, ...args) => {
+    if (!checkDragDeadline()) return capture(path, ...args);
+    // A timed-out host may still write its image. Only a completed checkpoint can publish it at the requested path.
+    const destination = resolve(path), parent = dirname(destination);
+    mkdirSync(parent, { recursive: true });
+    const dir = mkdtempSync(resolve(parent, '.exact-capture-')), pending = resolve(dir, basename(path));
+    try {
+      const reply = await capture(pending, ...args);
+      checkDragDeadline();
+      if (reply.screenshot !== pending) return reply;
+      renameSync(pending, destination);
+      return { ...reply, screenshot: destination };
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   };
   Object.assign(s, sessionInput(s, { carrier, host, timing, touch, app }));
   // An attached session reads, on the app's own wall clock (LLP 1012.000 D3): the driver refuses input and the clock

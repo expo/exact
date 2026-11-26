@@ -10,10 +10,10 @@ import { basename, dirname, resolve } from 'node:path';
 import { ROOT, contractTool } from './tools.mjs';
 import { faultRequest as rawFaultRequest, packageClock, preferExtension, preferGroups } from './agent-prefer.mjs';
 import { open } from './agent.mjs';
-import { duringOp } from './agent-drag.mjs';
+import { authoredDrag } from './agent-drag.mjs';
 import { dragExpectation } from './agent-drag-out.mjs';
 import { equalJson } from '../host/web-js/declared-values.js';
-import { compareBox, samplePoints } from './agent-compare.mjs';
+import { capturePaint, layoutDifference, paintDifference } from './agent-compare.mjs';
 import { perfDelta } from './agent-inspect.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { macSandboxed } from './agent-build.mjs';
@@ -99,11 +99,16 @@ export function focusedExpectation(nodes, target) {
 
 /** Read presented boxes in viewport points. Both sides of a comparison use the same tree snapshot. */
 export async function layoutExpectation(s, nodes, st) {
+  return layoutDifference(await readMeasures(s, nodes, st), st);
+}
+
+async function readMeasures(s, nodes, st, withinHold) {
   const round = v => Math.round(v * 100) / 100;
   async function measure({ target, dimension }) {
     const n = targetNode(nodes, target), said = `${dimension} of "${target}"`;
     if (!n) return { message: `${said} is absent (no view carries that testId${unopenedHint(nodes)})` };
     if (n.unshown) return { message: `testId "${target}" is in the tree, but ${n.unshown}`, unshown: true };
+    withinHold?.();
     const space = (await s.layout(n.id)).node?.space;
     if (!space?.viewport) return { message: `${said} is unknown: ${space?.unavailable ?? 'the host reports no box for it'}` };
     const { x, y, w, h } = space.viewport;
@@ -113,43 +118,108 @@ export async function layoutExpectation(s, nodes, st) {
     return { value: round(values[dimension]), said, size: `${round(w)}×${round(h)}` };
   }
   const lhs = await measure(st);
-  if (lhs.message) return lhs;
+  if (lhs.message) return { lhs };
   const rhs = typeof st.value === 'number' ? { value: st.value } : await measure(st.value);
-  if (rhs.message) return rhs;
-  const delta = lhs.value - rhs.value;
-  const tolerance = st.tolerance ? st.tolerance + Number.EPSILON * Math.max(1, Math.abs(lhs.value), Math.abs(rhs.value)) : 0;
-  const holds = { equal: Math.abs(delta) <= tolerance, 'at-least': delta >= -tolerance, 'at-most': delta <= tolerance };
-  if (holds[st.comparison]) return null;
-  const sign = { equal: '', 'at-least': '>= ', 'at-most': '<= ' }[st.comparison];
-  const expected = rhs.said ? `${rhs.said} (${rhs.value})` : rhs.value;
-  const within = st.tolerance === undefined ? '' : ` within ${st.tolerance} pt`;
-  return { message: `${lhs.said} is ${lhs.value}, expected ${sign}${expected}${within} (its box is ${lhs.size})` };
+  return { lhs, rhs };
 }
 
-async function paintExpectation(s, st, file) {
-  const nodes = (await s.tree()).nodes, node = targetNode(nodes, st.target);
-  if (!node) return `no view carries testId "${st.target}"${unopenedHint(nodes)}`;
-  if (node.unshown) return `testId "${st.target}" is in the tree, but ${node.unshown}`;
-  const space = (await s.layout(node.id)).node?.space, box = space?.viewport;
-  if (!box) return space?.unavailable ?? `the host reports no viewport box for "${st.target}"`;
-  if (st.op === 'expect-screenshot') return compareBox(s, box, resolve(dirname(file), st.reference));
-  if (!(st.x >= 0 && st.x < box.w && st.y >= 0 && st.y < box.h))
-    return `sample (${st.x}, ${st.y}) is outside "${st.target}" (${box.w}×${box.h})`;
-  const sampled = await samplePoints(s, [[box.x + st.x, box.y + st.y]], true);
-  if (sampled.error) return sampled.error;
-  const rgba = sampled.values?.[0];
-  if (!['extended-linear-srgb', 'srgb'].includes(sampled.space) || rgba?.length !== 4 || !rgba.every(Number.isFinite))
-    return `the host returned no sRGB pixel for "${st.target}"`;
-  const bytes = rgba.map((v, i) => {
-    if (i < 3 && sampled.space === 'extended-linear-srgb') v = v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
-    return Math.round(Math.max(0, Math.min(1, v)) * 255);
-  });
-  const expected = st.color.slice(1).match(/../g).map(c => parseInt(c, 16));
-  if (expected.length === 3) expected.push(255);
-  if (bytes.every((v, i) => Math.abs(v - expected[i]) <= st.tolerance)) return null;
-  const actual = '#' + bytes.map(b => b.toString(16).padStart(2, '0')).join('');
-  return `"${st.target}" at (${st.x}, ${st.y}) is ${actual}, expected ${st.color} within ${st.tolerance} per channel`;
+
+async function readExpectation(s, st, withinHold) {
+  switch (st.op) {
+    case 'expect-state': return s.state(undefined, undefined, false, false, { reveal: true });
+    case 'expect-sound': return (await s.state(undefined, undefined, false, false, { sounds: 'all' })).sounds;
+    case 'expect-midi': return (await s.state(undefined, undefined, false, false, { midi: 'all' })).midi;
+    case 'expect-mediasession': return (await s.state()).mediaSession;
+    case 'expect-wakelock': {
+      const lock = (await s.state()).wakelock;
+      withinHold?.();
+      const nodes = lock && lock.held !== st.held && lock.by.length ? (await s.tree()).nodes : [];
+      return { lock, nodes };
+    }
+    case 'expect-layout': return readMeasures(s, (await s.tree()).nodes, st, withinHold);
+    case 'expect-sample':
+    case 'expect-screenshot': {
+      const nodes = (await s.tree()).nodes, node = targetNode(nodes, st.target);
+      if (!node) return { message: `no view carries testId "${st.target}"${unopenedHint(nodes)}` };
+      if (node.unshown) return { message: `testId "${st.target}" is in the tree, but ${node.unshown}` };
+      return capturePaint(s, st, node, withinHold);
+    }
+    default: return (await s.tree()).nodes;
+  }
 }
+
+function expectationDifference(sample, st, file) {
+  switch (st.op) {
+    case 'expect-tree': return treeExpectation(sample, st.target, st.present);
+    case 'expect-disabled': return disabledExpectation(sample, st.target, st.disabled);
+    case 'expect-focused': return focusedExpectation(sample, st.target);
+    case 'expect-layout': return layoutDifference(sample, st);
+    case 'expect-text': return textExpectation(sample, st.target, st.value);
+    case 'expect-state': return stateExpectation(sample, st);
+    case 'expect-drag': return dragExpectation(targetNode(sample, st.target), st);
+    case 'expect-sample':
+    case 'expect-screenshot': {
+      const message = paintDifference(sample, st, st.reference && resolve(dirname(file), st.reference));
+      return message ? { message } : null;
+    }
+    case 'expect-wakelock': {
+      const { lock, nodes } = sample;
+      if (!lock) { return { message: `this host reports no wakelock holder record`, direct: true }; }
+      if (lock.held !== st.held) {
+        const holders = lock.by.map(id => {
+          const testId = nodes.find(node => node.id === id)?.props?.testId;
+          return `view ${id}${testId ? ` (${JSON.stringify(testId)})` : ''}`;
+        });
+        return { message: `expected wakelock ${st.held ? 'held' : 'released'}; ${holders.length ? `held by ${holders.join(', ')}` : 'nothing holds it'}`, direct: true };
+      }
+      return null;
+    }
+    // The runner's voice table, the whole record (LLP 1096 D10): a voice of that
+    // source matching every clause given, or none; a dropped call is not a voice.
+    case 'expect-sound': {
+      const sounds = sample;
+      const clauses = ['at', 'gain', 'ends', 'playbackRate', 'pan', 'by'].filter((k) => st[k] != null), said = clauses.map((k) => ` ${k} ${st[k]}`).join('');
+      // `state.sounds` names a voice's rate and pan only when not 1 and 0 (LLP 1125 D10).
+      const field = (v, k) => v[k] ?? { playbackRate: 1, pan: 0 }[k];
+      if (!sounds) { return { message: `the app declares no sound, so the runner keeps no voice table`, direct: true }; }
+      const first = sounds.voices[0]?.at ?? Infinity;
+      if (sounds.evicted > 0 && (st.at != null ? st.at < first : !st.present)) { return { message: `voices before t=${first} are no longer recorded (the record keeps the last ${sounds.recorded})`, direct: true }; }
+      const found = sounds.voices.some((v) => v.src === st.src && clauses.every((k) => field(v, k) === st[k]));
+      if (found !== st.present) {
+        const of = sounds.voices.filter((v) => v.src === st.src).slice(-8).map((v) => `#${v.id} at ${v.at} gain ${v.gain}${v.playbackRate != null ? ` playbackRate ${v.playbackRate}` : ''}${v.pan != null ? ` pan ${v.pan}` : ''} ends ${v.ends} by ${v.by}`);
+        // A voice is recorded by the commit that issued it: no clock hint applies.
+        return { message: `expected ${st.present ? 'a' : 'no'} voice of "${st.src}"${said}; ${of.length ? `its voices: ${of.join('; ')}` : 'it has no voice'}`, direct: true };
+      }
+      return null;
+    }
+    // The MIDI queue's record (LLP 1125 D5): a message to that output, not taken back, at `at` when given.
+    case 'expect-midi': {
+      const midi = sample;
+      if (!midi) { return { message: `the app keeps no MIDI queue (no sequence, no sendMIDI, exactMIDI or midimessage)`, direct: true }; }
+      const hex = st.data.map((b) => b.toString(16).padStart(2, '0')).join(' '), said = `"${st.output}" ${hex}${st.at != null ? ` at ${st.at}` : ''}`;
+      const found = midi.sent.some((m) => m.output === st.output && m.data === hex && m.state !== 'retracted' && (st.at == null || m.at === st.at));
+      if (found !== st.present) {
+        const of = midi.sent.filter((m) => m.output === st.output).slice(-8).map((m) => `#${m.id} ${m.data} at ${m.at} ${m.state}${m.by ? ` by ${m.by}` : ''}`);
+        return { message: `expected ${st.present ? 'a' : 'no'} message to ${said}; ${of.length ? `its messages: ${of.join('; ')}` : `nothing was queued for it (access ${midi.state}, outputs ${midi.outputs.map((o) => o.id).join(', ') || 'none'})`}`, direct: true };
+      }
+      return null;
+    }
+    // The media session the host reports (LLP 1098 D10): a field, the owner by its testId, or an offered action.
+    case 'expect-mediasession': {
+      const ms = sample;
+      if (!ms) { return { message: `this host reports no media session`, direct: true }; }
+      if (st.action != null) {
+        if (ms.actions.includes(st.action) !== st.present) return { message: `expected the media session ${st.present ? 'to offer' : 'not to offer'} "${st.action}"; it offers ${ms.actions.length ? ms.actions.join(', ') : 'nothing'}${ms.owner == null ? ' (no owner)' : ''}` };
+        return null;
+      }
+      const got = st.field === 'owner' ? (ms.owner == null ? null : ms.testId ?? `view ${ms.owner}`) : st.field === 'playbackState' ? ms.playbackState : ms.metadata?.[st.field] ?? null;
+      if (got !== st.value) return { message: `mediasession ${st.field} is ${JSON.stringify(got)}, expected ${JSON.stringify(st.value)}` };
+      return null;
+    }
+    default: throw new Error(`unknown checkpoint expectation ${st.op}`);
+  }
+}
+
 
 /** A press on a disabled control does nothing, and each host said so its own way (the web's silently, a native one in the words of the view
  * that took the touch), so a step that presses one fails the same on every host (LLP 1116.010 D3): the test of a refusal is `expect disabled`.
@@ -421,9 +491,9 @@ export const NO_FAILURES = Object.freeze({ failures: {}, failed: {}, mutations: 
 /** What has failed so far, to compare with an earlier mark (`unarranged`): each resource's refusals (`state.failures`,
  * a development build's) and its latest reason, each send's failure, how often each fetch fault fired, and the
  * journal's cursor. */
-export async function failureMark(s) {
+export async function failureMark(s, cursor) {
   const state = await s.state();
-  const journal = (await s.op({ op: 'logs', since: Number.MAX_SAFE_INTEGER }).catch(() => null))?.next ?? 0;
+  const journal = cursor ?? (await s.op({ op: 'logs', since: Number.MAX_SAFE_INTEGER }).catch(() => null))?.next ?? 0;
   return {
     failures: Object.fromEntries(Object.entries(state.failures ?? {}).map(([name, f]) => [name, f.count])),
     failed: state.failed ?? {}, mutations: state.mutationFailures ?? {},
@@ -1040,7 +1110,47 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       // The last `perf` block's counts, and what had failed at launch or at the last `expect no failures` (LLP 1146 D3, D4).
       // The launch's mark is empty: a failure while the app booted is one the test did not arrange.
       let measured = null, mark = NO_FAILURES;
-      const refusals = t.steps.filter((x) => x.op === 'expect-refusal').map((x) => x.target);
+      const refusals = t.steps.flatMap(function names(st) {
+        if (st.op === 'expect-refusal') return [st.target];
+        if (st.op === 'perf') return (st.steps ?? []).filter(step => step.op === 'drag').flatMap(names);
+        if (st.op !== 'drag') return [];
+        return (st.during ?? []).concat((st.path ?? []).flatMap(leg => leg.during ?? [])).flatMap(names);
+      });
+      const sample = async (st, withinHold) => {
+        if (st.op === 'expect-refusal') {
+          const log = await s.op({ op: 'logs', since: refusalCursors.get(st.target) ?? 0 });
+          const check = refusalExpectation(log, st.target);
+          withinHold?.();
+          if (!check.message) {
+            refusalCursors.set(st.target, log.next);
+            expectedRefusals.push(...check.expected);
+          }
+          return check;
+        }
+        if (st.op === 'expect-no-failures') {
+          const was = mark;
+          if (withinHold) {
+            const log = await peekLogs(s, was.journal);
+            if (!Array.isArray(log.lines) || !Number.isFinite(log.next)) throw new Error(log.error ?? 'the host returned no journal');
+            withinHold();
+            const now = await failureMark(s, log.next);
+            withinHold();
+            mark = now;
+            return { was, now: mark, churn: churnLines(log.lines) };
+          }
+          mark = await failureMark(s);
+          return { was, now: mark, churn: churnLines((await peekLogs(s, was.journal).catch(() => null))?.lines) };
+        }
+        return readExpectation(s, st, withinHold);
+      };
+      const difference = (observation, st) => {
+        if (st.op === 'expect-refusal') return observation.message ? observation : null;
+        if (st.op === 'expect-no-failures') {
+          const lines = unarranged(observation.was, observation.now, { refusals, churn: observation.churn });
+          return lines.length ? { message: `expected no failures the test did not arrange; ${lines.join('; ')}`, direct: true } : null;
+        }
+        return expectationDifference(observation, st, file);
+      };
       // One step: an input, a read, an expect, or a `perf` block, whose steps run here in turn (LLP 1146 D3).
       // The test's last line, a `perf` block's steps included.
       const last = Math.max(...t.steps.flatMap((x) => [x.line, ...(x.steps ?? []).map((y) => y.line)]));
@@ -1117,13 +1227,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'prefer-midi': { const r = await s.op({ op: 'prefer', midi: { ...(st.state ? { state: st.state } : {}), ...(st.inputs ? { inputs: st.inputs } : {}), ...(st.outputs ? { outputs: st.outputs } : {}) } }); if (r?.error) throw new Error(r.error); await s.clock('settle'); break; }
           case 'tap-midi': delivered(await s.tap(null, { midi: st.clock ? { input: st.input, clock: st.clock } : { input: st.input, data: st.data } })); input = st.line; break;
           case 'drag': {
-            const drag = { ...(st.to != null ? { to: st.to, ...(st.at ? { at: st.at } : {}) } : { dx: st.dx, dy: st.dy }), ...(st.from ? { from: st.from } : {}), ...(st.mouse ? { mouse: true } : {}), ...(st.press != null ? { press: st.press } : {}), ...(st.over != null ? { over: st.over } : {}), ...(st.hold != null ? { hold: st.hold } : {}) };
-            if (st.into != null) drag.into = st.into;
-            if (st.modifiers) drag.modifiers = st.modifiers;
-            const reads = (ops) => ops.map((op) => () => duringOp(s, op));
-            if (st.during?.length) drag.during = reads(st.during);
-            if (st.path) drag.path = st.path.map(({ during, ...leg }) => ({ ...leg, ...(during ? { during: reads(during) } : {}) }));
-            delivered(await s.tap(st.target, { drag })); input = st.line; break;
+            delivered(await authoredDrag(s, st, sample, difference, why => failures.push(`${at}: ${why}`)));
+            input = st.line; break;
           }
           case 'type': {
             // `append`: after the field's value as the tree shows it, the text a keyboard would add (feed F8).
@@ -1199,114 +1304,27 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             if (replayShots) mkdirSync(replayShots, { recursive: true });
             await s.screenshot(path); shots.push(path); break;
           }
-          case 'expect-tree': {
-            const tree = await s.tree();
-            const f = treeExpectation(tree.nodes, st.target, st.present);
-            // The first step of a test that waited for data cannot see the boot's loading view (authoring bench).
-            const first = !beforeData && n === leading;
-            if (f?.unshown) failures.push(`${at}: ${f.message}`);
-            else if (f) await fail(`${at}: ${f.message}${first && st.present ? ' (the test waited for the app\'s data before its first step; `before data`, a launch line, starts without that wait)' : ''}`);
-            break;
-          }
-          case 'expect-refusal': {
-            const logs=await s.op({op:'logs',since:refusalCursors.get(st.target) ?? 0});
-            const refusal=refusalExpectation(logs,st.target);
-            if (refusal.message) await fail(`${at}: ${refusal.message}`);
-            else { expectedRefusals.push(...refusal.expected); refusalCursors.set(st.target,logs.next); }
-            break;
-          }
-          case 'expect-disabled': {
-            const f = disabledExpectation((await s.tree()).nodes, st.target, st.disabled);
-            if (f) await fail(`${at}: ${f.message}`);
-            break;
-          }
-          case 'expect-focused': {
-            const f = focusedExpectation((await s.tree()).nodes, st.target);
-            if (f) await fail(`${at}: ${f.message}`);
-            break;
-          }
+          case 'expect-refusal':
+          case 'expect-no-failures':
+          case 'expect-tree':
+          case 'expect-disabled':
+          case 'expect-focused':
           case 'expect-sample':
-          case 'expect-screenshot': {
-            const message = await paintExpectation(s, st, file);
-            if (message) await fail(`${at}: ${message}`);
-            break;
-          }
-          case 'expect-layout': {
-            const f = await layoutExpectation(s, (await s.tree()).nodes, st);
-            if (f?.unshown) failures.push(`${at}: ${f.message}`);
-            else if (f) await fail(`${at}: ${f.message}`);
-            break;
-          }
-          case 'expect-text': {
-            const f = textExpectation((await s.tree()).nodes, st.target, st.value);
-            if (f?.unshown) failures.push(`${at}: ${f.message}`);
-            else if (f) await fail(`${at}: ${f.message}`);
-            break;
-          }
-          case 'expect-state': {
-            const state = await s.state(undefined, undefined, false, false, { reveal: true });
-            const f = stateExpectation(state, st);
-            if (f) await fail(`${at}: ${f.message}`);
-            break;
-          }
-          case 'expect-drag': {
-            const f = dragExpectation(targetNode((await s.tree()).nodes, st.target), st);
-            if (f) await fail(`${at}: ${f.message}`);
-            break;
-          }
-          case 'expect-wakelock': {
-            const lock = (await s.state()).wakelock;
-            if (!lock) { failures.push(`${at}: this host reports no wakelock holder record`); break; }
-            if (lock.held !== st.held) {
-              const nodes = lock.by.length ? (await s.tree()).nodes : [];
-              const holders = lock.by.map(id => {
-                const testId = nodes.find(node => node.id === id)?.props?.testId;
-                return `view ${id}${testId ? ` (${JSON.stringify(testId)})` : ''}`;
-              });
-              failures.push(`${at}: expected wakelock ${st.held ? 'held' : 'released'}; ${holders.length ? `held by ${holders.join(', ')}` : 'nothing holds it'}`);
-            }
-            break;
-          }
-          // The runner's voice table, the whole record (LLP 1096 D10): a voice of that
-          // source matching every clause given, or none; a dropped call is not a voice.
-          case 'expect-sound': {
-            const sounds = (await s.state(undefined, undefined, false, false, { sounds: 'all' })).sounds;
-            const clauses = ['at', 'gain', 'ends', 'playbackRate', 'pan', 'by'].filter((k) => st[k] != null), said = clauses.map((k) => ` ${k} ${st[k]}`).join('');
-            // `state.sounds` names a voice's rate and pan only when not 1 and 0 (LLP 1125 D10).
-            const field = (v, k) => v[k] ?? { playbackRate: 1, pan: 0 }[k];
-            if (!sounds) { failures.push(`${at}: the app declares no sound, so the runner keeps no voice table`); break; }
-            const first = sounds.voices[0]?.at ?? Infinity;
-            if (sounds.evicted > 0 && (st.at != null ? st.at < first : !st.present)) { failures.push(`${at}: voices before t=${first} are no longer recorded (the record keeps the last ${sounds.recorded})`); break; }
-            const found = sounds.voices.some((v) => v.src === st.src && clauses.every((k) => field(v, k) === st[k]));
-            if (found !== st.present) {
-              const of = sounds.voices.filter((v) => v.src === st.src).slice(-8).map((v) => `#${v.id} at ${v.at} gain ${v.gain}${v.playbackRate != null ? ` playbackRate ${v.playbackRate}` : ''}${v.pan != null ? ` pan ${v.pan}` : ''} ends ${v.ends} by ${v.by}`);
-              // A voice is recorded by the commit that issued it: no clock hint applies.
-              failures.push(`${at}: expected ${st.present ? 'a' : 'no'} voice of "${st.src}"${said}; ${of.length ? `its voices: ${of.join('; ')}` : 'it has no voice'}`);
-            }
-            break;
-          }
-          // The MIDI queue's record (LLP 1125 D5): a message to that output, not taken back, at `at` when given.
-          case 'expect-midi': {
-            const midi = (await s.state(undefined, undefined, false, false, { midi: 'all' })).midi;
-            if (!midi) { failures.push(`${at}: the app keeps no MIDI queue (no sequence, no sendMIDI, exactMIDI or midimessage)`); break; }
-            const hex = st.data.map((b) => b.toString(16).padStart(2, '0')).join(' '), said = `"${st.output}" ${hex}${st.at != null ? ` at ${st.at}` : ''}`;
-            const found = midi.sent.some((m) => m.output === st.output && m.data === hex && m.state !== 'retracted' && (st.at == null || m.at === st.at));
-            if (found !== st.present) {
-              const of = midi.sent.filter((m) => m.output === st.output).slice(-8).map((m) => `#${m.id} ${m.data} at ${m.at} ${m.state}${m.by ? ` by ${m.by}` : ''}`);
-              failures.push(`${at}: expected ${st.present ? 'a' : 'no'} message to ${said}; ${of.length ? `its messages: ${of.join('; ')}` : `nothing was queued for it (access ${midi.state}, outputs ${midi.outputs.map((o) => o.id).join(', ') || 'none'})`}`);
-            }
-            break;
-          }
-          // The media session the host reports (LLP 1098 D10): a field, the owner by its testId, or an offered action.
+          case 'expect-screenshot':
+          case 'expect-layout':
+          case 'expect-text':
+          case 'expect-state':
+          case 'expect-drag':
+          case 'expect-wakelock':
+          case 'expect-sound':
+          case 'expect-midi':
           case 'expect-mediasession': {
-            const ms = (await s.state()).mediaSession;
-            if (!ms) { failures.push(`${at}: this host reports no media session`); break; }
-            if (st.action != null) {
-              if (ms.actions.includes(st.action) !== st.present) await fail(`${at}: expected the media session ${st.present ? 'to offer' : 'not to offer'} "${st.action}"; it offers ${ms.actions.length ? ms.actions.join(', ') : 'nothing'}${ms.owner == null ? ' (no owner)' : ''}`);
-              break;
+            const f = difference(await sample(st), st);
+            if (f?.unshown || f?.direct) failures.push(`${at}: ${f.message}`);
+            else if (f) {
+              const first = !beforeData && n === leading && st.op === 'expect-tree' && st.present;
+              await fail(`${at}: ${f.message}${first ? " (the test waited for the app's data before its first step; `before data`, a launch line, starts without that wait)" : ''}`);
             }
-            const got = st.field === 'owner' ? (ms.owner == null ? null : ms.testId ?? `view ${ms.owner}`) : st.field === 'playbackState' ? ms.playbackState : ms.metadata?.[st.field] ?? null;
-            if (got !== st.value) await fail(`${at}: mediasession ${st.field} is ${JSON.stringify(got)}, expected ${JSON.stringify(st.value)}`);
             break;
           }
           // A measured window (LLP 1146 D3): whole-tree `perf` reads around the block's steps, and a read of each
@@ -1329,14 +1347,6 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             const names = [...Object.keys(state.resources ?? {}), ...(state.owned ?? [])];
             const f = perfExpectation(measured, st, [...new Set(names)]);
             if (f) failures.push(`${at}: ${f}`);
-            break;
-          }
-          // No failure the test did not arrange since launch or the last of these (LLP 1146 D4).
-          case 'expect-no-failures': {
-            const now = await failureMark(s);
-            const lines = unarranged(mark, now, { refusals, churn: churnLines((await peekLogs(s, mark.journal).catch(() => null))?.lines) });
-            if (lines.length) failures.push(`${at}: expected no failures the test did not arrange; ${lines.join('; ')}`);
-            mark = now;
             break;
           }
           default: failures.push(`${at}: unknown step ${st.op}`);

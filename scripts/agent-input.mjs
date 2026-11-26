@@ -4,7 +4,8 @@ import { partTap, tapRefusal, layoutBox } from './agent-inspect.mjs';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { namedRefusal } from './agent-aim.mjs';
-import { dragTap, heldDown, heldPhase, holdTap, folderTree } from './agent-drag.mjs';
+import { requireDragOwner, dragTap, heldDown, heldPhase, holdTap, folderTree } from './agent-drag.mjs';
+import { checkDragDeadline } from '../host/apple/touches.mjs';
 import { refuseDisabled } from './agent-test.mjs';
 import {
   MalformedOperation,
@@ -88,6 +89,8 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
     // {contextmenu:true,at:[x,y]} is secondary. Points are target-relative; plain
     // canvas taps and held down/move/up contacts remain fingers (LLP 1015.000).
     async tap(target, opts = {}) {
+      checkDragDeadline();
+      requireDragOwner(s);
       // @ref LLP 1057.001 §8.3 — a swipe is a real flick, a fast straight drag the platform's recognizer reads (the drag
       // refuses one it would make the scroll view's own). Only a real touch reaches UIKit's recognizer, so another carrier
       // refuses it, having sent nothing, as it does one aimed at a held request.
@@ -367,7 +370,10 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           mode: timing,
         });
       let r, again = null;
-      const press = () => carrier.input(node.id, kind, { ...opts, ...at });
+      const press = () => {
+        requireDragOwner(s);
+        return carrier.input(node.id, kind, { ...opts, ...at });
+      };
       try {
         r = await press();
       } catch (error) {
@@ -420,7 +426,9 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
      * the app reads the move as lasting `ms` (#1333).
      * The platform owns hit-testing, recognition, scrolling and animation: the app receives whatever it delivers,
      * and a carrier that cannot hold a contact answers `delivery: "unsupported"` rather than faking one. */
-    async pointer(phase, opts = {}) {
+    async pointer(phase, opts = {}, land = true) {
+      checkDragDeadline();
+      requireDragOwner(s);
       // One sample at most each `FRAME_MS`, as the carriers space a timed move; a sample refused partway, or a contact
       // the carrier ended, answers as the move. A clock the display holds (live frame capture, `--live`) refuses the
       // first step, and the move is then the carrier's own, on real time.
@@ -432,12 +440,15 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           // Whole milliseconds until the last, so the clock's sum is exact; each sample at most `FRAME_MS` on.
           const t = i === steps ? ms : Math.floor((ms * i) / steps), f = i / steps;
           try { await s.clock(`+${t - done}`); } catch (error) {
+            checkDragDeadline();
             if (i === 1 && /display's clock|--live/.test(error.message)) return carrier.input(null, 'move', opts);
             throw error;
           }
+          checkDragDeadline();
           r = await carrier.input(null, 'move', { ...(i === 1 ? rest : {}), x: from.x + (to[0] - from.x) * f, y: from.y + (to[1] - from.y) * f, ms: t - done });
+          checkDragDeadline();
           done = t;
-          if (r.error || r.delivery === 'unsupported' || r.contact === false) break;
+          if (r.error || r.delivery === 'unsupported' || r.contact === false || r.closed) break;
           delivered++;
           at = Array.isArray(r.at) ? r.at : [from.x + (to[0] - from.x) * f, from.y + (to[1] - from.y) * f];
         }
@@ -486,12 +497,15 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
         }); // one real touch, played at the lift (agent-drag.mjs)
       const before = s.now,
         r = phase === 'move' && timing !== 'platform' && opts.ms > 0 && opts.ms <= MOVE_MS ? await clockedMove(opts) : await carrier.input(null, phase, opts);
+      checkDragDeadline();
       if (r.delivery !== 'unsupported') {
         if (Number.isFinite(r.clock)) s.now = r.clock;
-        if (r.contact === false || phase === 'up' || phase === 'cancel') s.contact = null;
+        if (r.contact === false || (!r.error && (phase === 'up' || phase === 'cancel'))) s.contact = null;
         // A move refused partway answers where the delivered samples left the contact.
         else if (phase === 'move' && Array.isArray(r.at)) s.contact = { x: r.at[0], y: r.at[1] };
       }
+      // On timeout the drag needs only confirmation that the carrier released the pointer.
+      if (!land) return r;
       // A virtual hold seeks the clock (platformer R7). The reader can wait without a new commit.
       if (phase === 'hold' && opts.virtual && opts.ms > 0 && !(r.waitMs > 0) &&
           !(Number.isFinite(r.clock) && r.clock > before))

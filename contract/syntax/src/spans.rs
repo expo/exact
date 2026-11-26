@@ -14,6 +14,14 @@ pub trait VisitSpans {
     fn visit_spans(&mut self, visit: &mut impl FnMut(&mut Span));
 }
 
+impl VisitSpans for During {
+    fn visit_spans(&mut self, visit: &mut impl FnMut(&mut Span)) {
+        if let Self::Expect(step) = self {
+            step.visit_spans(visit);
+        }
+    }
+}
+
 impl VisitSpans for StateOperand {
     fn visit_spans(&mut self, visit: &mut impl FnMut(&mut Span)) {
         match self {
@@ -97,7 +105,6 @@ leaves!(
     TaskKind,
     MutationMode,
     TapForm,
-    crate::DragLeg,
     PropertyKind,
     PropertyForm,
     ParamValue,
@@ -118,6 +125,7 @@ macro_rules! structs {
     )* };
 }
 structs! {
+    DragLeg { dx, dy, over, hold, during }
     NameSpans { names, sources, view_ranges }
     File { names, routes, uses, fonts, sounds, shapes, styles, decorations, decoration_scopes, atoms, atom_scopes, keyframes, timelines, color_profiles, theme, design, package_designs, library, library_packages, fns, sources, modules, tests, properties, launch, components, members, deferred }
     KeyframesDecl { name, frames, span }

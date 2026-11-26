@@ -559,6 +559,7 @@ impl Parser {
                 target: self.str_lit("a testId")?,
                 span,
             },
+            "tap" if self.at_ident("up") => return self.err("syntax-expected-step", "a drag lifts at its end; write its expectation inside `during`"),
             "tap" => {
                 let target = self.str_lit("a testId")?;
                 if self.at_ident("drag") {

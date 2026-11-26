@@ -1,4 +1,4 @@
-use contract_syntax::Step;
+use contract_syntax::{During, Step};
 
 #[test]
 fn a_test_drags_through_waypoints_as_the_driver_does() {
@@ -18,14 +18,18 @@ fn a_test_drags_through_waypoints_as_the_driver_does() {
     };
     assert_eq!(
         (*press, modifiers.as_str(), during.as_slice()),
-        (Some(500.0), "Shift", ["state".to_string()].as_slice())
+        (
+            Some(500.0),
+            "Shift",
+            [During::Read("state".into())].as_slice()
+        )
     );
     assert_eq!(path.len(), 2);
     assert_eq!(
         (path[0].dx, path[0].dy, path[0].over, path[0].hold),
         (0.0, 80.0, Some(150.0), Some(100.0))
     );
-    assert_eq!(path[0].during, ["clock +50"]);
+    assert_eq!(path[0].during, [During::Read("clock +50".into())]);
     assert_eq!(
         (path[1].dx, path[1].over, path[1].hold),
         (-10.0, None, None)
@@ -59,5 +63,44 @@ fn a_test_drags_through_waypoints_as_the_driver_does() {
     ] {
         let e = contract::tests(&format!("test \"t\"\n  tap \"a\" {line}\n")).unwrap_err();
         assert!(e.message.contains(says), "{line}: {}", e.message);
+    }
+}
+
+#[test]
+fn a_checkpoint_refuses_captures_open_ended_drags_and_checks_between_steps() {
+    contract::tests(r#"test "checkpoint"
+  tap "a" drag 1 0 during "screenshot \"before as held.png\"" "expect refusal \"feed\"" "expect no failures"
+"#).unwrap();
+    for (form, reason) in [
+        (
+            r#"tap "a" drag 1 0 during "state moves" as snapshot"#,
+            "no named captures",
+        ),
+        (
+            r#"tap "a" drag 1 0 during "state moves as snapshot""#,
+            "no named captures",
+        ),
+        (r#"tap "a" drag 1 0 hold"#, "lifts at its end"),
+        (r#"tap "a" drag 1 0 hold then 0 1"#, "lifts at its end"),
+        (
+            r#"tap "a" drag 1 0 during "expect state moves >= 1 as snapshot""#,
+            "no named captures",
+        ),
+        (
+            r#"tap "a" drag 1 0 during "state moves as \"snapshot\"""#,
+            "no named captures",
+        ),
+        (
+            r#"tap "a" drag 1 0 during "expect state moves >= 1 as \"snapshot\"""#,
+            "no named captures",
+        ),
+        ("tap up", "lifts at its end"),
+        (
+            r#"tap "a" drag 1 0 during "expect perf""#,
+            "completed perf block",
+        ),
+    ] {
+        let e = contract::tests(&format!("test \"checkpoint\"\n  {form}\n")).unwrap_err();
+        assert!(e.message.contains(reason), "{form}: {e}");
     }
 }

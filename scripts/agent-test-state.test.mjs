@@ -53,6 +53,20 @@ component App
   state shown = "hint" persist
   state n = 2
   state minimum = 1
+  state moves = 0
+  state y = 0
+  state startY = 0
+  state waypoint = 0
+  state lifts = 0
+  action down(e: PointerEvent)
+    startY = e.clientY
+    waypoint = e.clientY - 30.5
+  action move(e: PointerEvent)
+    y = e.clientY
+    moves = moves + 1
+  action up(e: PointerEvent)
+    y = e.clientY
+    lifts = lifts + 1
   state maximum = 3
   state choices = [1, 2, 3]
   mutation saved as shape Point
@@ -68,6 +82,10 @@ component App
     column
       button "Advance" testId="advance" press=advance
       button "Reconcile" testId="reconcile" press=reconcile
+      column height=200 width=200 testId="area" touch-action="none" pointerdown=down pointermove=move pointerup=up
+        if moves >= 1
+          text "Moved" testId="preview"
+      column width=100 height=100 testId="knob" touch-action="none" pointerdown=down
 `);
     writeFileSync(file, `test "equal literals"
   expect state shown == "hint"
@@ -120,6 +138,11 @@ test "an upgrade starts from stored settings"
   expect state shown == "advanced"
 test "the next install owns its store"
   expect state shown == "hint"
+test "preview follows both legs"
+  tap "area" drag 0 -30.5 mouse during "state" "expect state moves >= 1" "expect state y == state waypoint" "expect text \\"preview\\" == \\"Moved\\"" then 0 60 during "expect state y >= state startY" "expect state lifts == 0"
+  expect state lifts == 1
+test "a down-only handle cannot move the preview"
+  tap "knob" drag 0 30 mouse during "expect state moves >= 1"
 `);
     const compiler = join(process.env.CARGO_TARGET_DIR ?? join(root, 'target'), 'debug', 'contract');
     const compile = spawnSync(compiler, ['build', app, '-o', plan], { cwd: root, encoding: 'utf8' });
@@ -128,8 +151,9 @@ test "the next install owns its store"
     expect(build.status, build.stderr).toBe(0);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const r = await runTests({ host: 'web', file, app: dir, url: `http://127.0.0.1:${server.address().port}/` });
-    expect(r.results.slice(4).map(t => t.failures)).toEqual([[], []]);
-    expect([r.passed, r.failed]).toEqual([4, 2]);
+    expect(r.results.slice(4, 7).map(t => t.failures)).toEqual([[], [], []]);
+    expect([r.passed, r.failed]).toEqual([5, 3]);
+    expect(r.results[7].failures).toEqual([expect.stringMatching(/line \d+: checkpoint 1: moves is 0, expected >= 1$/)]);
     expect(r.results[0].failures).toEqual([]);
     const messages = r.results[1].failures.map(f => f.slice(f.indexOf(': ', f.indexOf(':') + 1) + 2));
     expect(messages).toEqual([

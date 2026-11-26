@@ -594,6 +594,31 @@ export const TICK_MARGIN = 150;
 /** A drag's bounds (LLP 1080.000 §11): each duration in ms; the travel is bounded so its moves fit the dispatch log's ring (D5). */
 export const DRAG_BOUNDS = { press: 10000, hold: 10000, over: 2000, total: 10000 };
 
+// A callback can resume after cancellation, even during another drag on the same session.
+// Its asynchronous calls still belong to the gesture that started it.
+const dragScope = new AsyncLocalStorage();
+export class DragTimeout extends Error {}
+export function checkDragDeadline() { const check = dragScope.getStore(); check?.(); return !!check; }
+
+export async function withDragDeadline(end, work) {
+  checkDragDeadline();
+  if (end === undefined) return work();
+  const limit = DRAG_BOUNDS.total;
+  let timer, open = true;
+  const timeout = () => new DragTimeout(`drag: checkpoint timed out after ${limit} ms`);
+  const parent = dragScope.getStore();
+  const check = () => { parent?.(); if (!open || performance.now() >= end) throw timeout(); };
+  try {
+    check();
+    const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(timeout()), Math.ceil(end - performance.now())); });
+    const finishedReads = () => { check(); clearTimeout(timer); end = Infinity; };
+    const result = await Promise.race([expired, dragScope.run(check, () => work(finishedReads))]);
+    check();
+    return result;
+  } catch (error) { check(); throw error; }
+  finally { open = false; clearTimeout(timer); }
+}
+
 /**
  * A real tap on view `id` (LLP 1080.000 D4/D5/D8), or with `drag` one whole
  * real gesture from it (§11): the host aims (`at`, a viewport point, or the
@@ -725,7 +750,9 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
     const entries = async () => {
       const out = [];
       for (let cursor = a.seq; ;) {
+        checkDragDeadline();
         const page = await raced(ask({ op: 'tap', log: cursor }), 'the dispatch-log read');
+        checkDragDeadline();
         if (page.error || page.lost) throw new Error(`${what}: the dispatch log: ${page.error ?? `dropped entries past seq ${cursor}`}`);
         out.push(...page.log);
         reached = page.reached ?? [];
@@ -745,7 +772,9 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
     const early = `${what}: the touch lifted before the ops during it`;
     try {
       // A `return` here leaves the touch to the barrier below, with nothing more run and the clock unmoved.
-      await (async () => {
+      const deadline = ops.length ? performance.now() + DRAG_BOUNDS.total : undefined;
+      const observe = op => withDragDeadline(deadline, () => raced(Promise.resolve().then(op), 'an operation during the hold', '; lengthen hold'));
+      await withDragDeadline(deadline, async finishedReads => {
         for (let touch; !(touch = ours(await entries()));) {
           if (finished && !ops.length) return;
           if (finished) {
@@ -784,6 +813,7 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
         const step = async (ms, from, at, held = down) => {
           if (!drag.tick) return;
           await new Promise((r) => setTimeout(r, Math.max(0, from - Date.now())));
+          checkDragDeadline();
           await ticked(drag.tick(ms), Math.max(at - TICK_MARGIN, (from + at) / 2), held);
         };
         // Where `ms` into the gesture falls in local time, from the touch's `began` on the host's clock where the
@@ -812,8 +842,10 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
             }
             for (const op of checkpoint.ops) {
               await held();
-              during.push(await raced(op(), 'an operation during the hold', '; lengthen hold'));
+              checkDragDeadline();
+              during.push(await observe(op));
               await held();
+              if (during.length === ops.length) finishedReads();
             }
             if (checkpoint.end > checkpoint.offset) await step(checkpoint.end, await local(checkpoint.offset), await local(checkpoint.end), async () => {
               if (finished) return false;
@@ -830,15 +862,29 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
           await new Promise((r) => setTimeout(r, Math.max(0, moved - Date.now())));
           for (const op of ops) {
             const lifted = ours(await entries()).lifted;
+            checkDragDeadline();
             if (lifted || finished) throw new Error(`${early} finished; lengthen hold`);
-            during.push(await raced(op(), 'an operation during the hold', '; lengthen hold'));
+            during.push(await observe(op));
           }
-          if (ops.length && ours(await entries()).lifted) throw new Error(`${early} finished; lengthen hold`);
+          if (ops.length) {
+            if (ours(await entries()).lifted) throw new Error(`${early} finished; lengthen hold`);
+            finishedReads();
+          }
           // Until shortly before the lift, asking before each step that the finger is still down (`heldTick`).
           await step(end, await local(offset), await local(end));
         }
-      })();
+      });
     } catch (error) {
+      if (error instanceof DragTimeout) {
+        abandon?.(error.message);
+        // Ending the runner and completing its submitted gesture are separate acknowledgements.
+        const stop = !finished && touches.end ? touches.end() : null;
+        const ended = await within(Promise.all([stop, injecting]), RUNNER_MS, () => null);
+        if (!ended) throw transport(`${what}: ${error.message}; touch runner release unconfirmed`);
+        const [failure, done] = ended;
+        if (failure || done.error) throw transport(`${what}: the touch runner: ${failure?.message ?? failure ?? done.error}; ${error.message}`);
+        throw transport(`${what}: ${error.message}`);
+      }
       const done = await injecting;
       if (done.error) throw transport(`${what}: the touch runner: ${done.error}`);
       throw error;

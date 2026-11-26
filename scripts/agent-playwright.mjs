@@ -1,6 +1,7 @@
 // Firefox and WebKit carrier for scripts/agent.mjs. Chrome deliberately stays
 // in agent-web.mjs on its direct CDP pipe; importing Playwright is deferred until
 // one of these browsers is selected.
+import { checkDragDeadline } from '../host/apple/touches.mjs';
 import { storedScript, substitutesScript } from './agent-web.mjs';
 import { MalformedOperation, keyArguments } from './agent-keys.mjs';
 import { spawnSync } from 'node:child_process';
@@ -195,7 +196,9 @@ export function playwrightPointer({ name, move, down, up, wait }) {
       if (contact) throw new Error('a contact is already down; use `tap up` first');
       const px = opts.x ?? point?.x, py = opts.y ?? point?.y;
       await move(px, py);
+      checkDragDeadline();
       await down();
+      checkDragDeadline();
       contact = { x: px, y: py };
       return { contact: opts.id, phase: 'down', at: [px, py], delivery: 'platform', pointer: 'mouse' };
     }
@@ -204,10 +207,12 @@ export function playwrightPointer({ name, move, down, up, wait }) {
       const to = { x: opts.x ?? contact.x + (opts.dx ?? 0), y: opts.y ?? contact.y + (opts.dy ?? 0) };
       const ms = Math.max(0, opts.ms ?? 0), steps = Math.max(1, Math.round(ms / 16));
       for (let i = 1; i <= steps; i++) {
+        checkDragDeadline();
         const t = i / steps;
         await move(contact.x + (to.x - contact.x) * t, contact.y + (to.y - contact.y) * t);
         if (ms && !opts.virtual) await wait(ms / steps);
       }
+      checkDragDeadline();
       contact = to;
       return { phase: 'move', at: [to.x, to.y], delivery: 'platform' };
     }

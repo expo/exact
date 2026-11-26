@@ -1,6 +1,35 @@
 //! Authored tests: a `test` block and its steps (LLP 1017 P7).
 use crate::{Expr, Span, TapForm};
 
+/// One observation or clock operation while a drag is held.
+#[derive(Debug, Clone, PartialEq)]
+pub enum During {
+    /// A driver read or clock command.
+    Read(String),
+    /// An authored expectation sampled once at this leg.
+    Expect(Box<Step>),
+}
+
+impl Step {
+    /// Steps inside a measured block or a drag's checkpoints, in execution order.
+    pub fn nested(&self) -> impl Iterator<Item = &Step> {
+        let (steps, first, path): (&[Step], &[During], &[DragLeg]) = match self {
+            Self::Perf { steps, .. } => (steps, &[], &[]),
+            Self::Drag { during, path, .. } => (&[], during, path),
+            _ => (&[], &[], &[]),
+        };
+        steps.iter().chain(
+            first
+                .iter()
+                .chain(path.iter().flat_map(|leg| &leg.during))
+                .filter_map(|op| match op {
+                    During::Expect(step) => Some(step.as_ref()),
+                    During::Read(_) => None,
+                }),
+        )
+    }
+}
+
 /// A drag's `then dx dy [over ms] [hold ms] [during "op" …]`: a further leg
 /// of the same contact, from where the one before ended.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,7 +43,7 @@ pub struct DragLeg {
     /// Milliseconds held after the move.
     pub hold: Option<f64>,
     /// Quoted reads or `clock`, after the move and before the hold.
-    pub during: Vec<String>,
+    pub during: Vec<During>,
 }
 
 /// The comparison in an authored `expect state` step.
@@ -140,7 +169,7 @@ pub enum Step {
         hold: Option<f64>,
         /// Quoted ops run while the finger is down, after the move, before
         /// the hold. Empty when the step names none.
-        during: Vec<String>,
+        during: Vec<During>,
         /// `modifiers "Shift+Meta"`: the keys held from the press to the lift
         /// (empty for none).
         modifiers: String,

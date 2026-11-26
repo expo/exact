@@ -495,20 +495,29 @@ export function referenceScale(ref, w, h) {
 }
 
 /** The current viewport in points and its unscaled PNG. */
-async function viewportPixels(s) {
+async function viewportCapture(s) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-viewport-'));
   try {
     const shot = await s.screenshot(resolve(dir, 'viewport.png'));
     if (!(shot.w > 0 && shot.h > 0)) throw new Error('the host returned an empty viewport');
-    return { png: decodePng(readFileSync(shot.screenshot)), w: shot.w, h: shot.h };
+    return { bytes: readFileSync(shot.screenshot), w: shot.w, h: shot.h };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 /** Apple can sample extended-range layers. Other graphical hosts supply the displayed sRGB PNG. */
 export async function samplePoints(s, points, strict = false) {
+  return samplesOf(await capturePoints(s, points, strict), points);
+}
+
+async function capturePoints(s, points, strict) {
   if (['mac', 'macos', 'ios', 'tvos', 'host', 'host-ios'].includes(s.host))
     return s.op({ op: 'sample', points, strict });
-  const { png, w, h } = await viewportPixels(s);
+  return viewportCapture(s);
+}
+
+function samplesOf(capture, points) {
+  if (!capture.bytes) return capture;
+  const { bytes, w, h } = capture, png = decodePng(bytes);
   const values = points.map(([x, y]) => {
     if (!(x >= 0 && x < w && y >= 0 && y < h)) throw new Error(`sample (${x}, ${y}) is outside the ${w}×${h} viewport`);
     const i = 4 * (Math.floor(y * png.height / h) * png.width + Math.floor(x * png.width / w));
@@ -519,7 +528,11 @@ export async function samplePoints(s, points, strict = false) {
 
 /** Compare the target's border box on the same point grid as a full-screen reference. */
 export async function compareBox(s, box, path) {
-  const { png, w, h } = await viewportPixels(s);
+  return compareCapturedBox(await viewportCapture(s), box, path);
+}
+
+function compareCapturedBox(capture, box, path) {
+  const { bytes, w, h } = capture, png = decodePng(bytes);
   if (!(box.w > 0 && box.h > 0 && box.x >= 0 && box.y >= 0 && box.x + box.w <= w && box.y + box.h <= h))
     throw new Error('the full border box must be visible in the viewport to compare it');
   const pos = (v, pixels, points) => Math.round(v * pixels / points);
@@ -533,6 +546,50 @@ export async function compareBox(s, box, path) {
   if (result.match === 1) return null;
   const first = result.mask.indexOf(1);
   return `${Math.round((1 - result.match) * cols * rows)} of ${cols * rows} points differ from ${path}, first at (${first % cols}, ${Math.floor(first / cols)})`;
+}
+
+export function layoutDifference({ lhs, rhs }, st) {
+  if (lhs.message) return lhs;
+  if (rhs.message) return rhs;
+  const delta = lhs.value - rhs.value;
+  const tolerance = st.tolerance ? st.tolerance + Number.EPSILON * Math.max(1, Math.abs(lhs.value), Math.abs(rhs.value)) : 0;
+  const holds = { equal: Math.abs(delta) <= tolerance, 'at-least': delta >= -tolerance, 'at-most': delta <= tolerance };
+  if (holds[st.comparison]) return null;
+  const sign = { equal: '', 'at-least': '>= ', 'at-most': '<= ' }[st.comparison];
+  const expected = rhs.said ? `${rhs.said} (${rhs.value})` : rhs.value;
+  const within = st.tolerance === undefined ? '' : ` within ${st.tolerance} pt`;
+  return { message: `${lhs.said} is ${lhs.value}, expected ${sign}${expected}${within} (its box is ${lhs.size})` };
+}
+
+export async function capturePaint(s, st, node, withinHold) {
+  withinHold?.();
+  const space = (await s.layout(node.id)).node?.space, box = space?.viewport;
+  if (!box) return { message: space?.unavailable ?? `the host reports no viewport box for "${st.target}"` };
+  withinHold?.();
+  if (st.op === 'expect-screenshot') return { box, capture: await viewportCapture(s) };
+  if (!(st.x >= 0 && st.x < box.w && st.y >= 0 && st.y < box.h))
+    return { message: `sample (${st.x}, ${st.y}) is outside "${st.target}" (${box.w}×${box.h})` };
+  const points = [[box.x + st.x, box.y + st.y]];
+  return { points, capture: await capturePoints(s, points, true) };
+}
+
+export function paintDifference(sample, st, reference) {
+  if (sample.message) return sample.message;
+  if (st.op === 'expect-screenshot') return compareCapturedBox(sample.capture, sample.box, reference);
+  const sampled = samplesOf(sample.capture, sample.points);
+  if (sampled.error) return sampled.error;
+  const rgba = sampled.values?.[0];
+  if (!['extended-linear-srgb', 'srgb'].includes(sampled.space) || rgba?.length !== 4 || !rgba.every(Number.isFinite))
+    return `the host returned no sRGB pixel for "${st.target}"`;
+  const bytes = rgba.map((v, i) => {
+    if (i < 3 && sampled.space === 'extended-linear-srgb') v = v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
+    return Math.round(Math.max(0, Math.min(1, v)) * 255);
+  });
+  const expected = st.color.slice(1).match(/../g).map(c => parseInt(c, 16));
+  if (expected.length === 3) expected.push(255);
+  if (bytes.every((v, i) => Math.abs(v - expected[i]) <= st.tolerance)) return null;
+  const actual = '#' + bytes.map(b => b.toString(16).padStart(2, '0')).join('');
+  return `"${st.target}" at (${st.x}, ${st.y}) is ${actual}, expected ${st.color} within ${st.tolerance} per channel`;
 }
 
 /** The CLI's `screenshot <png> compare <reference.png>` (`args` after `screenshot`). On iOS the capture includes the

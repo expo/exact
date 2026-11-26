@@ -1296,9 +1296,13 @@ step); `mouse` makes it the left button on the web, with the page's pointer
 `fine`, so a desktop path is what runs (iOS refuses it; macOS and Linux drag
 with the mouse anyway). A finger's drag the browser takes to scroll an
 ancestor ends in `panrelease` and a `pan cancelled` journal line naming the
-`touch-action` that keeps it. `during "op" …`: each quoted op is a read
-(`tree`, `layout`, `state`, `logs`, `screenshot`) or `clock`, run while the finger
-is down, after its leg's move and before its hold. The gesture takes its `press`,
+`touch-action` that keeps it. `during "op" …` gives a leg its checkpoint operations.
+It takes a read (`tree`, `layout`, `state`, `logs`, `screenshot`), `clock`, or an expectation.
+For example, `tap "area" drag 0 -40 hold 300 during "expect state moves >= 1" then 0 80 hold 300 during "expect state y >= state startY"` checks both waypoints in order.
+On macOS, the web and the Linux and Windows painted hosts, the runner samples once after the move commits and before the pointer lifts. A failure names the checkpoint. An ordinary `expect` can wait for data or motion. A checkpoint never settles or retries. All checkpoints share the drag’s ten-second deadline.
+The iOS and Android runners refuse checkpoint expectations by name before starting the gesture. XCTest schedules the lift in advance, so an iOS plain read can miss the committed move or finish after lift. Android’s driver has yet to verify both ordering guarantees on a device.
+The ordinary forms of `expect state`, `tree`, `text`, `disabled`, `enabled`, `focused`, `drag`, `layout`, `sample`, `screenshot`, `sound`, `midi`, `mediasession`, `wakelock`, `refusal` and `no failures` apply. Escape quotes inside the operation, as in `during "expect tree has \"preview\""`.
+Keep `expect perf` after its measured block, where the counts are available. A checkpoint has no named captures. Every drag lifts at its end. The gesture takes its `press`,
 `over` and `hold` on the test's clock, so `performanceNow()` in the app's pointer
 actions reads them: a move's samples are a frame apart on the clock, the first
 one frame after the press (500 ms of press reads 515 on the web before a 200 ms

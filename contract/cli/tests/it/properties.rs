@@ -553,6 +553,15 @@ fn authored_tests_use_the_selected_program_or_the_closest_fixture_or_app() {
         app.write(path, &script("liked"));
         ok(path, &[]);
     }
+    let during = |other| {
+        format!("test \"waypoint\"\n  tap \"like\" drag 0 4 then 0 -4 during \"expect state liked == state {other}\"\n")
+    };
+    app.write("tests/checkpoint.test.contract", &during("also"));
+    assert!(run("tests/checkpoint.test.contract", &[]).status.success());
+    app.write("tests/checkpoint.test.contract", &during("missing"));
+    let error = run("tests/checkpoint.test.contract", &[]);
+    assert!(!error.status.success());
+    assert!(String::from_utf8_lossy(&error.stderr).contains("state missing"));
     app.write("fixture.contract", &program("fixture"));
     app.write("fixture.test.contract", &script("fixture"));
     ok("fixture.test.contract", &[]);

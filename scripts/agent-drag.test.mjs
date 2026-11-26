@@ -1,7 +1,7 @@
 // `drag`'s reply carries what the host journaled about a reorder during it (LLP 1102 §3.17), and
 // keeps every field of the carrier's reply. `bun test ./scripts/agent-drag.test.mjs`.
 import { test, expect } from 'bun:test';
-import { dragTap, dragArguments, parseDrag, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
+import { authoredDrag, dragTap, dragArguments, parseDrag, heldDown, heldPhase, heldRead, heldTick, HELD_LEAD, HELD_READ, HELD_STEP, STROKES, TICK_STEP } from './agent-drag.mjs';
 import { DRAG_BOUNDS, realFingers, realTap, reaches, REACH_MS, TICK_MARGIN } from '../host/apple/touches.mjs';
 
 import assert from 'node:assert/strict';
@@ -34,8 +34,11 @@ need('chrome', chromium().unavailable)('a web contact reports browser cancellati
       await c.input(1, 'down', { x: 100, y: 300, mouse: mode === 'mouse' });
       if (mode === 'changed') assert.equal(await c.evaluate("getComputedStyle(document.querySelector('#target')).touchAction"), 'none');
       await c.input(null, 'move', { x: 100, y: 100, ms: 200 });
+      const cancelled = ['auto', 'pan-y', 'ancestor', 'scroller', 'changed'].includes(mode);
+      if (cancelled) await expect(c.checkContact()).rejects.toThrow('pointercancel');
+      else await c.checkContact();
       const up = await c.input(null, 'up', {});
-      if (['auto', 'pan-y', 'ancestor', 'scroller', 'changed'].includes(mode)) {
+      if (cancelled) {
         assert.equal(await c.evaluate('globalThis.cancelTarget'), 'inner', mode);
         const own = ['auto', 'changed'].includes(mode) ? 'auto' : mode === 'ancestor' ? 'pan-y pinch-zoom' : 'pan-y';
         const effective = mode === 'ancestor' ? 'pan-y' : own;
@@ -252,6 +255,216 @@ test('a carrier\'s contact plays a drag\'s legs in order', async () => {
   expect(phases).toEqual([['down'], ['hold', undefined, undefined, 500], ['move', 100, 0, 200], ['move', 0, 80, 150], ['read'], ['hold', undefined, undefined, 100], ['move', -10, 0, 250], ['up', undefined, undefined, undefined]]);
   expect(r.during).toEqual(['read']);
   expect(r.drag.path).toEqual([{ dx: 0, dy: 80, over: 150, hold: 100 }, { dx: -10, dy: 0, over: 250, hold: 0 }]);
+});
+
+test('a checkpoint reads the committed fractional move and finishes its compound read before up', async () => {
+  const { sessionInput } = await import('./agent-input.mjs');
+  for (const host of ['macos', 'web', 'linux', 'windows']) {
+    const moving = Promise.withResolvers(), commit = Promise.withResolvers();
+    const measuring = Promise.withResolvers(), measured = Promise.withResolvers();
+    let y = 60, lifted = false, reads = 0;
+    const carrier = { async input(id, phase, opts) {
+      if (phase === 'up') lifted = true;
+      return { at: [30, opts.y ?? 20], delivery: 'platform' };
+    } };
+    const s = {
+      host, now: 0,
+      async layout() { return { nodes: [{ id: 7, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 300, h: 500 } }; },
+      async op() { return { lines: [], next: 0 }; },
+      async tagged(reply) { return reply; },
+      tap(target, { drag }) { return dragTap({ s, carrier, node: { id: 7 }, target, host, timing: 'agent' }, drag); },
+      async clock() {},
+      async landed(reply) {
+        if (reply.phase === 'move') {
+          moving.resolve();
+          await commit.promise;
+          y = reply.at[1];
+        }
+        return reply;
+      },
+    };
+    s.pointer = sessionInput(s, { host, carrier, timing: 'agent' }).pointer;
+    const drag = { target: 'area', dx: 0, dy: 40.25, from: [30, 20], during: [{ op: 'expect-layout' }] };
+    const failures = [];
+    const result = authoredDrag(s, drag, async () => {
+      reads++;
+      const treeY = y;
+      measuring.resolve();
+      await measured.promise;
+      return { treeY, layoutY: y, lifted };
+    }, sample => { expect(sample).toEqual({ treeY: 60.25, layoutY: 60.25, lifted: false }); }, why => failures.push(why));
+    await moving.promise;
+    await expect(s.pointer('up')).rejects.toThrow('a drag owns the contact');
+    expect(reads).toBe(0);
+    commit.resolve();
+    await measuring.promise;
+    expect(lifted).toBe(false);
+    measured.resolve();
+    await result;
+    expect(failures).toEqual([]);
+    expect(reads).toBe(1);
+    expect(lifted).toBe(true);
+  }
+});
+
+test.each(['library', 'plain', 'expect', 'landing', 'move'])('one drag deadline releases a stalled %s and discards its late result', async kind => {
+  const bound = DRAG_BOUNDS.total;
+  DRAG_BOUNDS.total = 120;
+  try {
+    const old = Promise.withResolvers(), next = Promise.withResolvers(), readingNext = Promise.withResolvers();
+    const events = [];
+    let answered = false;
+    const s = {
+      host: 'web', now: 0,
+      async layout() { return { nodes: [{ id: 7, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 100, h: 100 } }; },
+      async op() { return { lines: [], next: 0 }; },
+      async state() { return old.promise; },
+      async landed(r) { return kind === 'landing' ? old.promise : r; },
+      async pointer(phase) {
+        if (s.held) throw Error('checkpoint still holds input');
+        events.push(phase);
+        if (phase === 'up' || phase === 'cancel') s.contact = null;
+        if (phase === 'move' && kind === 'move') return old.promise;
+        return { at: [50, 50] };
+      },
+      async tagged(r) { return r; },
+      tap(target, { drag }) { return dragTap({ s, carrier, target, node: { id: 7 }, host: s.host, timing: 'agent' }, drag); },
+    };
+    const carrier = { async input() { events.push('down'); return { at: [50, 50], delivery: 'platform' }; } };
+    const drag = { target: 'area', dx: 0, dy: kind === 'landing' ? 0 : 1, over: 1 };
+    const read = async (_, withinHold) => {
+      await old.promise;
+      withinHold();
+      events.push('late read');
+    };
+    const first = kind === 'library'
+      ? s.tap('area', { drag: { ...drag, during: [Object.assign(() => old.promise, { checkpoint: 9 })] } })
+      : authoredDrag(s, { ...drag, during: kind === 'plain' ? ['state'] : [{ op: 'expect-layout' }] },
+        read, () => events.push('late comparison'), why => events.push(why));
+    try {
+      const watchdog = setTimeout(() => { answered = true; old.resolve({ at: [50, 50] }); }, 1000);
+      try { await expect(first).rejects.toThrow(/120 ms/); } finally { clearTimeout(watchdog); }
+      expect(answered).toBe(false);
+      expect(events.at(-1)).toBe('cancel');
+      expect(s.contact).toBeNull();
+      const second = s.tap('area', { drag: { dx: 0, dy: 0, during: [() => { readingNext.resolve(); return next.promise; }] } });
+      await readingNext.promise;
+      old.resolve({ at: [50, 50] });
+      await Bun.sleep(0);
+      expect(s.held).toBe('area');
+      expect(events).not.toContain('late read');
+      expect(events).not.toContain('late comparison');
+      next.resolve('second');
+      expect((await second).during).toEqual(['second']);
+    } finally { old.resolve({}); next.resolve('second'); }
+  } finally { DRAG_BOUNDS.total = bound; }
+}, 2500);
+
+test('raw wire and carrier input cannot release another caller’s checkpoint', async () => {
+  const phases = [];
+  const s = await open({ host: 'ios', device: true }, { openDevice: async () => ({
+    host: 'ios', close: async () => {},
+    async ask(req) {
+      if (req.op === 'layout') return { nodes: [{ id: 7, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 100, h: 100 } };
+      if (req.op === 'tree') return { nodes: [{ id: 7, props: {} }] };
+      if (req.op === 'tap') phases.push(req.phase);
+      return { lines: [], next: 0 };
+    },
+    async input(id, phase) { phases.push(phase); return { at: [50, 50], delivery: 'platform' }; },
+  }) });
+  try {
+    const read = async () => {
+      await expect(s.op({ op: 'tap', phase: 'up' })).rejects.toThrow('owns the contact');
+      await expect(s.carrier.input(null, 'cancel', {})).rejects.toThrow('owns the contact');
+      return 'still held';
+    };
+    const reply = await dragTap({ s, carrier: s.carrier, node: { id: 7 }, target: 'area', host: 'ios', timing: 'agent' },
+      { dx: 0, dy: 0, during: [read] });
+    expect(reply.during).toEqual(['still held']);
+    expect(phases).toEqual(['down', 'up']);
+  } finally { await s.close(); }
+});
+
+test('the iOS runner stops a pending plain read at the drag deadline', async () => {
+  const bound = DRAG_BOUNDS.total, read = Promise.withResolvers(), injected = Promise.withResolvers(), stopping = Promise.withResolvers();
+  DRAG_BOUNDS.total = 120;
+  const aim = { orientation: 'portrait', session: 'main', generation: 1, screen: { x: 0, y: 0, w: 400, h: 800 }, point: [30, 20], viewport: [400, 800], at: [30, 20], window: [30, 20], seq: 4, hit: 7 };
+  const events = [];
+  try {
+    const run = realTap({
+      id: 7,
+      ask: async req => req.aim ? { aim } : { log: [began], truncated: false },
+      touches: {
+        ask: req => req.op === 'foreground' ? { state: 'runningForeground' } : injected.promise,
+        end() { events.push('end'); stopping.resolve(); },
+      },
+      abandon() { events.push('abandon'); },
+      drag: { dx: 0, dy: 0, press: 0, over: 0, hold: 100, during: [
+        () => { events.push('read'); return read.promise; }, () => events.push('late'),
+      ] },
+    });
+    const reported = run.catch(error => { events.push('reported'); return error; });
+    await stopping.promise;
+    await Bun.sleep(0);
+    expect(events).toEqual(['read', 'abandon', 'end']);
+    injected.resolve({ error: 'synthesis stopped' });
+    expect((await reported).message).toMatch(/synthesis stopped.*timed out after 120 ms/);
+    read.resolve('old reply');
+    await Bun.sleep(0);
+    expect(events).toEqual(['read', 'abandon', 'end', 'reported']);
+  } finally {
+    DRAG_BOUNDS.total = bound;
+    read.resolve('old reply');
+    injected.resolve({ injected: {} });
+  }
+});
+
+test('successive waypoints spend the same deadline', async () => {
+  const bound = DRAG_BOUNDS.total;
+  DRAG_BOUNDS.total = 120;
+  const phases = [], s = {
+    async layout() { return { nodes: [{ id: 1, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 100, h: 100 } }; },
+    async op() { return { lines: [], next: 0 }; },
+    async pointer(phase) { phases.push(phase); return { at: [50, 50] }; },
+    async tagged(reply) { return reply; },
+  };
+  const carrier = { async input() { return { at: [50, 50], delivery: 'platform' }; } };
+  const leg = { dx: 1, dy: 0, over: 1, during: [() => Bun.sleep(80)] };
+  try {
+    await expect(dragTap({ s, carrier, node: { id: 1 }, target: 'area', host: 'macos', timing: 'agent' },
+      { ...leg, path: [leg] })).rejects.toThrow('checkpoint 2: drag: checkpoint timed out after 120 ms');
+    expect(phases).toEqual(['move', 'move', 'cancel']);
+  } finally { DRAG_BOUNDS.total = bound; }
+});
+
+test('a stationary checkpoint sees the landed press and keeps its mismatch if the next read fails', async () => {
+  const events = [], failures = [];
+  const s = {
+    host: 'web', now: 0,
+    async layout() { return { nodes: [{ id: 7, x: 0, y: 0, w: 100, h: 100 }], viewport: { w: 100, h: 100 } }; },
+    async op() { return { lines: [], next: 0 }; },
+    async landed(r) { events.push('land'); return r; },
+    async pointer(phase) { if (phase === 'cancel') s.contact = null; return { at: [50, 50] }; },
+    tap(target, { drag }) { return dragTap({ s, carrier, node: { id: 7 }, target, host: s.host, timing: 'agent' }, drag); },
+  };
+  const carrier = { async input() { return { at: [50, 50], delivery: 'platform' }; } };
+  const during = [{ op: 'expect-state' }];
+  const drag = { target: 'area', dx: 0, dy: 0, path: [{ dx: 0, dy: 0, during }, { dx: 0, dy: 10, during }] };
+  const read = async () => {
+    events.push('read');
+    if (events.length === 3) throw new Error('layout failed');
+  };
+  await expect(authoredDrag(s, drag, read, () => ({ message: 'pressed is true' }), message => failures.push(message)))
+    .rejects.toThrow('checkpoint 3: layout failed');
+  expect(events).toEqual(['land', 'read', 'read']);
+  expect(failures).toEqual(['checkpoint 2: pressed is true']);
+});
+
+test('mobile drivers refuse an authored checkpoint expectation on a later leg before injecting the drag', async () => {
+  for (const host of ['ios', 'host-ios', 'android']) {
+    const drag = { during: ['state'], path: [{ during: [{ op: 'expect-state' }] }] };
+    await expect(authoredDrag({ host }, drag)).rejects.toThrow(`checkpoint 2: ${host === 'android' ? 'Android' : 'iOS'} refuses expect inside during`);
+  }
 });
 
 // #1333: under the agent's clock a timed move is a sample a frame, the clock moved to each one's time before it, so

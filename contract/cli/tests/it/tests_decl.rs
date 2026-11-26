@@ -324,7 +324,7 @@ fn a_test_pinches_holds_a_key_and_indexes_state() {
     ));
     assert!(matches!(
         &t.steps[5],
-        Step::Drag { hold: Some(h), during, .. } if *h == 100.0 && during.as_slice() == ["clock +500"]
+        Step::Drag { hold: Some(h), during, .. } if *h == 100.0 && matches!(during.as_slice(), [contract_syntax::During::Read(op)] if op == "clock +500")
     ));
     assert!(matches!(
         &t.steps[6],

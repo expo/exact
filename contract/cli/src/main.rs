@@ -643,8 +643,7 @@ fn tests(args: &[String]) -> ExitCode {
                                 value: StateOperand::State(_),
                                 ..
                             } => true,
-                            Step::Perf { steps, .. } => steps.iter().any(needs_program),
-                            _ => false,
+                            _ => step.nested().any(needs_program),
                         }
                     }
                     if selected.is_some()

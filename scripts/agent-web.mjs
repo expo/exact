@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pageAim, pagePoint, pageOutside } from './agent-aim.mjs';
+import { checkDragDeadline } from '../host/apple/touches.mjs';
 import { fileDrag, driverFiles, pageContact } from './agent-drag.mjs';
 import {
   MalformedOperation,
@@ -399,7 +400,9 @@ async function openWebUnlocked({
     const heldKeys = new Map();
     let documentLoader = null;
     const call = async (method, params, timeoutMs) => {
+      checkDragDeadline();
       const reply = await cdp.send(method, withHeldModifiers(method, params, heldKeys), sessionId, timeoutMs);
+      checkDragDeadline();
       if (method === 'Input.dispatchKeyEvent') {
         if (params.type === 'keyUp') heldKeys.delete(params.code);
         else if (params.type === 'keyDown' || params.type === 'rawKeyDown') heldKeys.set(params.code, params);
@@ -681,6 +684,13 @@ async function openWebUnlocked({
         if (r.scrolled) await frame();
         return r;
       },
+      async checkContact() {
+        if (!contact) throw new Error('the browser contact ended before its checkpoint');
+        if (!contact.mouse) {
+          const cancelled = await evaluate(`(${pageContact})('check')`);
+          if (cancelled) throw new Error(cancelled);
+        }
+      },
       // the browser's emulation through CDP, the glue's substitute where it offers none (agent-prefer.mjs)
       async prefer(media, page, fold, mode) {
         if (media['display-mode'] != null) await carryDisplayMode(media['display-mode']);
@@ -856,6 +866,7 @@ async function openWebUnlocked({
             await caught(ms);
             const steps = Math.max(1, Math.round(ms / 16));
             for (let i = 1; i <= steps; i++) {
+              checkDragDeadline();
               const t = i / steps;
               contact.t += (ms || 16) / steps / 1000;
               const at = { x: contact.x + (to.x - contact.x) * t, y: contact.y + (to.y - contact.y) * t };
@@ -863,6 +874,7 @@ async function openWebUnlocked({
               else await finger('touchMove', [at], contact.t);
               if (ms) await sleep(ms / steps);
             }
+            checkDragDeadline();
             contact = { ...contact, ...to, mouse, modifiers: held };
             await frame();
             return { phase: 'move', at: [to.x, to.y], delivery: 'platform' };
@@ -870,6 +882,7 @@ async function openWebUnlocked({
           if (kind === 'hold') {
             if (opts.ms) {
               if (!opts.virtual) await sleep(opts.ms);
+              checkDragDeadline();
               contact.t += opts.ms / 1000;
             }
             return { phase: 'hold', at: [contact.x, contact.y], delivery: 'platform' };

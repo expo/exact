@@ -114,17 +114,25 @@ impl Parser {
                 }
                 "press" => press = Some(self.step_number("milliseconds")?),
                 "over" => leg.over = Some(self.step_number("milliseconds")?),
-                "hold" => leg.hold = Some(self.step_number("milliseconds")?),
+                "hold" => {
+                    if matches!(
+                        self.peek_kind(),
+                        TokenKind::Newline | TokenKind::Eof | TokenKind::Ident(_)
+                    ) {
+                        return self.err("syntax-expected-step", "a drag lifts at its end; use `hold <milliseconds> during \"expect …\"` to check it before the lift");
+                    }
+                    leg.hold = Some(self.step_number("milliseconds")?);
+                }
                 "during" => {
                     while let TokenKind::Str(op) = self.peek_kind().clone() {
-                        self.next();
-                        if !during_read(&op) {
-                            return self.err(
-                                "syntax-expected-step",
-                                format!("`during` {op:?} is not a read or the clock (tree, layout, state, logs, screenshot, clock)"),
-                            );
-                        }
-                        leg.during.push(op);
+                        let span = self.next().span;
+                        leg.during.push(Self::during_op(op, span)?);
+                    }
+                    if self.at_ident("as") {
+                        return self.err(
+                            "syntax-expected-step",
+                            "`during` has no named captures; use a quoted expectation",
+                        );
                     }
                     if leg.during.is_empty() {
                         return self.err(
@@ -153,6 +161,50 @@ impl Parser {
             path,
             span,
         })
+    }
+
+    fn during_op(op: String, span: Span) -> R<During> {
+        let refuse = |message: String| SyntaxError {
+            id: "syntax-expected-step",
+            message,
+            span,
+        };
+        let mut words = op.split_whitespace();
+        let head = words.next();
+        // Keep quoted filenames and expected text opaque when looking for a capture.
+        let capture = Lexer::tokenize_at(op.trim(), span).is_ok_and(|tokens| {
+            let mut words = tokens
+                .iter()
+                .rev()
+                .map(|t| &t.kind)
+                .filter(|t| !matches!(t, TokenKind::Eof | TokenKind::Newline));
+            matches!(words.next(), Some(TokenKind::Ident(_) | TokenKind::Str(_)))
+                && matches!(words.next(), Some(TokenKind::Ident(word)) if word == "as")
+        });
+        if head == Some("capture") || capture {
+            return Err(refuse(
+                "`during` has no named captures; use a quoted expectation".into(),
+            ));
+        }
+        if head == Some("expect") {
+            if words.next() == Some("perf") {
+                return Err(refuse(format!(
+                    "`during` cannot check {op:?}: `expect perf` needs a completed perf block"
+                )));
+            }
+            let mut parser = Parser::new(Lexer::tokenize_at(op.trim(), span)?);
+            let step = parser.step()?;
+            if !matches!(parser.peek_kind(), TokenKind::Eof) {
+                return Err(refuse(
+                    "`during` takes one expectation per quoted operation".into(),
+                ));
+            }
+            Ok(During::Expect(Box::new(step)))
+        } else if during_read(&op) {
+            Ok(During::Read(op))
+        } else {
+            Err(refuse(format!("`during` {op:?} is not a read or the clock (tree, layout, state, logs, screenshot, clock); a quoted `expect` checks a read")))
+        }
     }
 
     /// After `expect drag`: the node's `testId`, then `none`, `missing

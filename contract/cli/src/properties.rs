@@ -258,15 +258,16 @@ pub fn resolve_test_states_path(
 ) -> Result<(), Vec<CompileError>> {
     use contract_syntax::{StateComparison as C, StateOperand};
     use contract_types::{Ty, TypeError};
-    fn relations<'a>(steps: &'a [Step], out: &mut Vec<&'a Step>) {
-        for step in steps {
-            match step {
-                Step::ExpectState {
-                    value: StateOperand::State(_),
-                    ..
-                } => out.push(step),
-                Step::Perf { steps, .. } => relations(steps, out),
-                _ => {}
+    fn relations<'a>(step: &'a Step, out: &mut Vec<&'a Step>) {
+        match step {
+            Step::ExpectState {
+                value: StateOperand::State(_),
+                ..
+            } => out.push(step),
+            _ => {
+                for child in step.nested() {
+                    relations(child, out);
+                }
             }
         }
     }
@@ -275,7 +276,7 @@ pub fn resolve_test_states_path(
     for step in tests.iter_mut().flat_map(|test| &mut test.steps) {
         match step {
             Step::Stored { name, window, .. } => stored.push((name, window)),
-            step => relations(std::slice::from_ref(step), &mut steps),
+            step => relations(step, &mut steps),
         }
     }
     if steps.is_empty() && (stored.is_empty() || !path.is_file()) {

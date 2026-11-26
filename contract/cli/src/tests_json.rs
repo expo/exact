@@ -59,7 +59,7 @@ fn steps_json(steps: &[Step], s: &mut String) {
 }
 
 /// A drag leg's `during` ops, when it names any.
-fn during_json(during: &[String], s: &mut String) {
+fn during_json(during: &[contract_syntax::During], s: &mut String) {
     if during.is_empty() {
         return;
     }
@@ -68,7 +68,10 @@ fn during_json(during: &[String], s: &mut String) {
         if i > 0 {
             s.push(',');
         }
-        q(op, s);
+        match op {
+            contract_syntax::During::Read(read) => q(read, s),
+            contract_syntax::During::Expect(step) => step_json(step, s),
+        }
     }
     s.push(']');
 }

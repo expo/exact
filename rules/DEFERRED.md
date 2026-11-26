@@ -2427,6 +2427,8 @@ production attach.
 from `tree`, `state`, or `layout`. The old repo's six primitives grew eighty wire names
 one reasonable "view" at a time; the count is the cost. (Charlie, 2026-08-29.)
 
+**Admitted (panel, 2026-11-25), AR6.** An authored drag can check its preview with `during "expect …"`. Each expectation samples the committed move once (LLP 1080.000 §11). The iOS touch runner refuses checkpoint expectations until it can guarantee that ordering. Android refuses them pending device verification.
+
 **Admitted (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** Pocket Lab's Fold lab can move an iOS simulator's hinge
 with `fold <degrees>` in a drive or authored test (LLP 1078 D7). The driver acts outside the app and waits for the device's angle. The wire still has ten operations.
 **Admitted (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** A drive or authored test can turn an iOS simulator with `rotate` and wait for its scene's interface orientation (AJ1, LLP 1078 D7). This reaches the landscape tray on a closed Duo. The driver acts outside the app.
