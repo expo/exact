@@ -379,8 +379,9 @@ final class BoxExtensionIOSTests: XCTestCase {
         image.layer.displayIfNeeded()
         let fitted = try XCTUnwrap(image.imageLayer, "the image's picture is a layer")
         image.setExtension(UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
-        let e = try XCTUnwrap(image.boxExtension), picture = try XCTUnwrap(e.picture)
-        XCTAssertTrue(fitted.superlayer === picture.layer, "the fitted image is the picture's")
+        let e = try XCTUnwrap(image.boxExtension)
+        XCTAssertTrue(e.view is ExtensionView, "an image mirrors itself in Exact's own view")
+        XCTAssertTrue(fitted.isHidden, "the mirror's box draws the picture")
         XCTAssertFalse(e.view.isHidden)
         image.layoutResize = CGSize(width: 0, height: 10)
         image.applySurface()
@@ -389,14 +390,14 @@ final class BoxExtensionIOSTests: XCTestCase {
         let layers = image.layer.sublayers ?? []
         XCTAssertTrue(e.view.isHidden, "the surface paints the box meanwhile")
         XCTAssertTrue(image.pictureHost === image.layer)
-        XCTAssertTrue(fitted.superlayer === image.layer, "on the box while the surface paints it")
+        XCTAssertTrue(fitted.superlayer === image.layer && !fitted.isHidden, "on the box while the surface paints it")
         XCTAssertLessThan(try XCTUnwrap(layers.firstIndex { $0 === surface }), try XCTUnwrap(layers.firstIndex { $0 === fitted }), "over the surface")
         image.layoutResize = .zero
         image.applySurface()
         image.layer.displayIfNeeded()
         XCTAssertNil(image.surface)
         XCTAssertTrue(image.boxExtension === e && !e.view.isHidden, "the strip shows again")
-        XCTAssertTrue(fitted.superlayer === picture.layer, "back in the picture")
+        XCTAssertTrue(fitted.isHidden, "the mirror draws it again")
         // Ended while a transition's surface paints the box, the extension leaves the image over the surface
         image.layoutResize = CGSize(width: 0, height: 10)
         image.applySurface()
@@ -408,6 +409,60 @@ final class BoxExtensionIOSTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(after.firstIndex { $0 === surface2 }), try XCTUnwrap(after.firstIndex { $0 === fitted }), "still over the surface")
         image.layoutResize = .zero
         image.applySurface()
+    }
+
+    /// An image mirrors itself in Exact's own view, placed in the transaction that places the image: through an
+    /// animation that moves and narrows the image (a sidebar opening, a fold), each mirror meets the picture's edge at
+    /// every frame the render server draws. UIKit's extension view trails the picture by about two frames, which showed
+    /// a cut between them as the iPhone Duo folded. Ended, the image draws its own picture again.
+    func testAnImagesMirrorsMeetItsPictureAtEveryFrameOfAnAnimation() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the presentation tree is the render server's, which needs a scene's window") }
+        guard #available(iOS 26, *) else { throw XCTSkip("the image's mirror is iOS 26's") }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40), format: format).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
+        }.pngData())
+        let p = Presenter(), loader = RasterLoader(), resolver = AssetResolver(root: URL(fileURLWithPath: NSTemporaryDirectory()))
+        defer { loader.shutdown() }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 300, height: 400)
+        p.viewport.frame = window.bounds; window.addSubview(p.viewport); window.makeKeyAndVisible()
+        self.window = window
+        let image = NodeView(id: 1, kind: "image", presenter: p)
+        p.views[1] = image; p.viewport.addSubview(image)
+        image.frame = CGRect(x: 40, y: 100, width: 230, height: 100)
+        image.applyStyle(["object_fit": .string("cover")])
+        image.loadGeneration = 1
+        loader.load(image, source: "data:image/png;base64," + png.base64EncodedString(), resolver: resolver)
+        waitFor("the image's raster") { image.raster != nil }
+        image.layer.displayIfNeeded()
+        image.setExtension(UIEdgeInsets(top: 0, left: 40, bottom: 0, right: 30))
+        let view = try XCTUnwrap(image.boxExtension?.view as? ExtensionView, "an image's mirror is Exact's own view")
+        XCTAssertEqual(image.imageLayer?.isHidden, true, "the mirror's box draws the picture")
+        UIView.animate(withDuration: 0.6, delay: 0, options: [.curveEaseInOut]) {
+            image.frame = CGRect(x: 120, y: 100, width: 150, height: 100)
+            image.setExtension(UIEdgeInsets(top: 0, left: 120, bottom: 0, right: 30))
+        }
+        // Each mirror's edge against the picture's, as the render server draws them
+        func edges() -> (box: CGRect, left: CGFloat?, right: CGFloat?) {
+            let shown = { (layer: CALayer) -> CGRect in let pres = layer.presentation() ?? layer; return pres.convert(pres.bounds, to: nil) }
+            let mirrors = (view.layer.sublayers ?? []).filter { $0.transform.m11 < 0 }.map(shown)
+            let box = shown(view.content.layer)
+            return (box, mirrors.first { $0.midX < box.midX }?.maxX, mirrors.first { $0.midX > box.midX }?.minX)
+        }
+        var seen: [CGFloat] = []
+        let end = Date(timeIntervalSinceNow: 0.7)
+        while Date() < end {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.03))
+            let (box, left, right) = edges()
+            seen.append(box.minX)
+            XCTAssertEqual(try XCTUnwrap(left, "a mirror on the left"), box.minX, accuracy: 0.01, "the left mirror at the picture's edge, the picture at \(box.minX)")
+            XCTAssertEqual(try XCTUnwrap(right, "a mirror on the right"), box.maxX, accuracy: 0.01, "the right mirror at the picture's edge")
+        }
+        XCTAssertTrue(seen.contains { $0 > 41 && $0 < 119 }, "the picture was seen between its two places: \(seen)")
+        image.setExtension(.zero)
+        XCTAssertNil(image.boxExtension)
+        XCTAssertEqual(image.imageLayer?.isHidden, false, "the image draws its own picture again")
     }
 
     /// A CSS animation of the background colour plays where the fill paints: on the picture while the box extends, so

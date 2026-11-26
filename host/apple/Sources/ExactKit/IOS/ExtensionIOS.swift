@@ -1,5 +1,7 @@
 // A box's picture mirrored past its border box (LLP 1123 D13's extension). The extension is a child of the box's own
-// view, behind its children and taking no touches: on iOS 26 a `UIBackgroundExtensionView` whose content view, placed
+// view, behind its children and taking no touches: for an image, Exact's own mirror (`ExtensionView`,
+// BackgroundMirrorIOS.swift), which keeps its mirror at the picture's edge through an animation; for another box on
+// iOS 26 a `UIBackgroundExtensionView` whose content view, placed
 // by hand at the border box, holds the box's picture (its fill, gradients, inset shadow and an image's picture), which
 // the box's own layer stops painting meanwhile; before iOS 26 a strip in the box's background colour around the border
 // box, the picture staying on the box. UIKit's extension view lays a view of its own over its content and takes every
@@ -98,7 +100,10 @@ extension NodeView {
             if existing.outsets != outsets { existing.outsets = outsets; layer.setNeedsDisplay() }
         } else {
             let made: BoxExtension
-            if #available(iOS 26, tvOS 26, *), Self.extensionMirrors {
+            if #available(iOS 26, tvOS 26, *), Self.extensionMirrors, kind == "image" {
+                // An image mirrors itself in Exact's own view, placed with the image in one transaction (`placeMirror`)
+                made = BoxExtension(view: ExtensionView(), picture: nil, outsets: outsets)
+            } else if #available(iOS 26, tvOS 26, *), Self.extensionMirrors {
                 let view = UIBackgroundExtensionView()
                 let picture = UIView()
                 picture.isUserInteractionEnabled = false
@@ -183,6 +188,8 @@ extension NodeView {
     /// Ends the box's extension: its picture goes back to the box's own layer.
     func clearExtension() {
         guard let view = boxExtension?.view else { return }
+        // An image's own picture layer draws again (`placeMirror`)
+        if view is ExtensionView { imageLayer?.isHidden = false }
         rehostPicture { more.boxExtension = nil }
         view.removeFromSuperview()
         Self.extensions.removeObject(forKey: self)
@@ -214,6 +221,25 @@ extension NodeView {
         }
         e.picture?.frame = box
         (e.view as? ExtensionStrip)?.place(around: box)
+        if let mirror = e.view as? ExtensionView { placeMirror(mirror, box) }
+    }
+
+    /// An image's mirror (`ExtensionView`): its box at `box` drawing its picture as the image does (`applyImageLayer`),
+    /// and the box mirrored about each edge the extension reaches past. `UIBackgroundExtensionView` moves its mirror on
+    /// SwiftUI's clock, about two frames behind Core Animation's animation of the picture, so while a fold or a column
+    /// resizes the picture a cut showed between the picture and its mirror; these layers are placed in the transaction
+    /// that places the image, so one animation moves them all and the mirror meets the picture at every frame. The
+    /// image's own picture layer stays hidden meanwhile, so no pixel at the edge is drawn twice.
+    private func placeMirror(_ mirror: ExtensionView, _ box: CGRect) {
+        // A layout transition's surface paints the box meanwhile, the image's own picture with it, the mirror hidden
+        guard surface == nil, flightLook == nil, let image = raster?.image else { imageLayer?.isHidden = false; return }
+        if imageLayer?.isHidden == false { imageLayer?.isHidden = true }
+        let inner = contentBox(), fit = style["object_fit"]?.string ?? "fill"
+        let drawn = RasterGeometry.rect(natural: image.naturalSize, content: inner, fit: fit, position: style["object_position"]?.array)
+            .offsetBy(dx: -inner.minX, dy: -inner.minY)
+        let corners = cornerRadii(in: bounds).contains { $0 > 0 } ? roundedPath(in: CGRect(origin: .zero, size: bounds.size)).cgPath : nil
+        mirror.place(box, inner: inner, drawn: drawn, pixels: ImageLink.animated?.frame(for: self) ?? image.image,
+                     tint: channels("tint_color").map { TextEngine.color($0).cgColor }, corners: corners)
     }
 
     /// Runs `change`, which starts or ends the extension, moving the picture layers to where the box paints its picture
