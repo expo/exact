@@ -836,6 +836,18 @@ pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::
             return;
         };
         let written = &arena.style(slot).written;
+        if let Some(width) = m.width {
+            s.size.width = taffy::style::Dimension::length(width);
+            s.margin.left = Lpa::length(0.0);
+            s.margin.right = Lpa::length(0.0);
+            if !written.has(StyleId::PaddingLeft) {
+                s.padding.left = Lp::length(m.cell[0]);
+            }
+            if !written.has(StyleId::PaddingRight) {
+                s.padding.right = Lp::length(m.cell[1]);
+            }
+            return;
+        }
         if written.has(StyleId::PaddingLeft) {
             if !written.has(StyleId::MarginLeft) && s.margin.left != Lpa::length(0.0) {
                 s.margin.left = Lpa::length(m.card[0]);
