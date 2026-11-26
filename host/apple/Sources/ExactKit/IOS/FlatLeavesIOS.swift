@@ -457,6 +457,14 @@ package final class FlatLeaves {
     /// stay flat under this parent.
     func place(_ parent: NodeView, _ ids: [UInt32]) -> [UInt32] {
         placements += 1
+        let kept = Set(ids)
+        for old in order[parent.id] ?? [] where !kept.contains(old) {
+            if let gone = leaves[old], gone.parent == parent.id {
+                gone.layer.removeFromSuperlayer()
+                gone.layer.flatHit = nil
+                gone.parent = nil
+            }
+        }
         let flat = ids.filter { leaves[$0] != nil }
         guard !flat.isEmpty else {
             if order.removeValue(forKey: parent.id) != nil { dirty.insert(parent.id) }
@@ -477,7 +485,11 @@ package final class FlatLeaves {
         guard let leaf = leaves[id], ids.allSatisfy({ leaves[$0] != nil }), ids.isEmpty || !leaf.paint.clips else { return false }
         placements += 1
         for old in order[id] ?? [] where !ids.contains(old) {
-            if let gone = leaves[old], gone.parent == id { gone.layer.removeFromSuperlayer() }
+            if let gone = leaves[old], gone.parent == id {
+                gone.layer.removeFromSuperlayer()
+                gone.layer.flatHit = nil
+                gone.parent = nil
+            }
         }
         order[id] = ids.isEmpty ? nil : ids
         for kid in ids.compactMap({ leaves[$0] }) {

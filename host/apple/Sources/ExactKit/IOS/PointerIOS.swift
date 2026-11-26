@@ -104,14 +104,16 @@ final class PointerRecognizer: UIGestureRecognizer {
         if touch == nil, let relay { node = relay.listener(source) { $0.wantsPointer } }
         // A contact going down ends a live press's handoff before its `pointerdown` runs.
         node?.presenter?.supersedePress()
-        guard touch == nil, let first = touches.first, let node, !node.disabled, relay != nil || !nearer(source) else { return }
+        guard touch == nil, let first = touches.first, let node, !node.disabled,
+              !(relay != nil ? node.authoredInert : node.inert),
+              relay != nil || !nearer(source) else { return }
         touch = first
         touchId += 1
         buttons = first.type == .indirectPointer ? Self.domButtons(event.buttonMask) : 1
         // This recognizer's node is the innermost that hears the pointer:
         // the others from here up leave the touch to it (`nearer`), so it
         // sends the bubbling down and up for them all.
-        path = Self.bubbling(from: node).map(Weak.init)
+        path = Self.bubbling(from: node, relayed: relay != nil).map(Weak.init)
         presenter = node.presenter
         let target = source.flatMap { view -> NodeView? in
             guard let start = NodeView.innermost(view) else { return nil }
@@ -155,10 +157,14 @@ final class PointerRecognizer: UIGestureRecognizer {
             }
         }
     }
-    /// Up the authored tree (`Presenter.authoredNodes`).
-    static func bubbling(from node: NodeView) -> [NodeView] {
+    /// Up the authored tree (`Presenter.authoredNodes`). Modal inertness
+    /// blocks direct hits on the page behind a sheet, not logical bubbling
+    /// relayed out of the sheet (LLP 1123 D2).
+    static func bubbling(from node: NodeView) -> [NodeView] { bubbling(from: node, relayed: false) }
+    static func bubbling(from node: NodeView, relayed: Bool) -> [NodeView] {
         (node.presenter?.authoredNodes(from: node) ?? [node]).filter {
-            !$0.disabled && ($0.handlers.contains("pointerdown") || $0.handlers.contains("pointerup") || $0.handlers.contains("pointercancel"))
+            !$0.disabled && !(relayed || $0 !== node ? $0.authoredInert : $0.inert)
+                && ($0.handlers.contains("pointerdown") || $0.handlers.contains("pointerup") || $0.handlers.contains("pointercancel"))
         }
     }
     /// Still the tree's node: a handler further in may have removed it.
@@ -769,7 +775,7 @@ extension NodeView {
         return false
     }
     /// The node a touch landed in: its view, or that view's nearest node
-    static func innermost(_ view: UIView) -> NodeView? {
+    package static func innermost(_ view: UIView) -> NodeView? {
         var at: UIView? = view
         while let candidate = at { if let node = candidate as? NodeView { return node }; at = candidate.superview }
         return nil

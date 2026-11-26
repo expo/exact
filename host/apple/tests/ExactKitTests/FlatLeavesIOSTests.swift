@@ -265,6 +265,9 @@ final class FlatLeavesIOSTests: XCTestCase {
         XCTAssertEqual(FlatPaint(["position_type": "absolute"])?.positioned, true)
         XCTAssertEqual(FlatPaint(["position_type": "static"])?.positioned, false)
         XCTAssertNil(FlatPaint(["position_type": "fixed"]))
+        XCTAssertNotNil(FlatPaint(["touch_action": "auto"]), "default touch-action stays flat")
+        XCTAssertNil(FlatPaint(["touch_action": "pan-y"]), "non-auto touch-action stays a view for gesture policy")
+        XCTAssertNil(FlatPaint(["touch_action": "none"]), "touch-action: none stays a view for gesture policy")
     }
 
     func testALightDarkLeafPaintsInItsParentsAppearance() throws {
@@ -411,6 +414,45 @@ final class FlatLeavesIOSTests: XCTestCase {
         let dot = try XCTUnwrap(row.sublayers?.first?.sublayers?.first)
         let caster = try XCTUnwrap(dot.sublayers?.first as? ShadowCaster)
         XCTAssertEqual(caster.firstColor?.components?.first ?? 0, 246 / 255, accuracy: 0.01, "the glow in the strip's appearance")
+    }
+
+    func testReplacingAFlatChildWithAViewDetachesTheFlatLayer() throws {
+        let p = presenter([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0],
+        ])
+        XCTAssertTrue(p.flats.isFlat(2))
+        let parent = try XCTUnwrap(p.views[1])
+        XCTAssertTrue(parent.hitTest(CGPoint(x: 50, y: 50), with: nil) === parent)
+        // Replacing [2] with view [3] without destroying 2 must detach 2's flat layer so 3 takes hits.
+        p.apply(wireBatch([
+            ["op": "create", "id": 3, "kind": "view", "handlers": ["pointermove"]],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0],
+            ["op": "children", "id": 1, "ids": [3]],
+        ]))
+        let child = try XCTUnwrap(p.views[3])
+        XCTAssertFalse(parent.layer.sublayers?.contains(where: { $0.flatHit != nil }) ?? false, "detached flat layer is removed")
+        XCTAssertTrue(parent.hitTest(CGPoint(x: 50, y: 50), with: nil) === child, "view child takes hit after replacing flat child")
+    }
+
+    func testScrollContainerLeafStaysAViewWhileOverflowClipStaysFlat() throws {
+        let p = presenter([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view", "style": ["overflow_y": "hidden"]],
+            ["op": "create", "id": 3, "kind": "view", "style": ["overflow_y": "clip"]],
+            ["op": "children", "id": 1, "ids": [2, 3]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 50.0, "h": 100.0],
+            ["op": "frame", "id": 3, "x": 50.0, "y": 0.0, "w": 50.0, "h": 100.0],
+        ])
+        XCTAssertFalse(p.flats.isFlat(2), "overflow:hidden is a scroll container for touch-action")
+        XCTAssertNotNil(p.views[2])
+        XCTAssertTrue(p.flats.isFlat(3), "overflow:clip is not a scroll container and stays flat")
     }
 
 }

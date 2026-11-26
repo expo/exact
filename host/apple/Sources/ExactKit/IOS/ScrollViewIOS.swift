@@ -134,9 +134,14 @@ package class ScrollView: UIScrollView, SafeIndicators {
         paddingInset = inset
     }
     private func holdPaddingClip() {
-        guard let clip = paddingClip, layer.mask === clip else { return }
         let origin = CGPoint(x: bounds.minX - frame.minX, y: bounds.minY - frame.minY)
-        if clip.position != origin { clip.position = origin }
+        if let clip = paddingClip, layer.mask === clip {
+            if clip.position != origin { clip.position = origin }
+        } else if let surface = scrollingNode?.surface?.clip, layer.mask === surface, surface.frame.origin != origin {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            surface.frame.origin = origin
+            CATransaction.commit()
+        }
     }
     /// What the padding edge's mask adds to both indicators' insets on each side: the border's widths while it
     /// masks, else none. It moves as a difference, as the keyboard's and a page band's terms do
@@ -257,7 +262,10 @@ package class ScrollView: UIScrollView, SafeIndicators {
         // below visits each of them, and walking twice at every nested
         // scroller made a touch on a list walk its rows four times.
         guard !isHidden, isUserInteractionEnabled, alpha >= 0.01, self.point(inside: point, with: event) else { return nil }
-        if let child = NodeView.hitChildren(in: self, at: point, with: event) { return child }
+        let inEdge = (layer.mask as? CAShapeLayer).flatMap { mask in
+            mask.path.map { $0.contains(CGPoint(x: point.x - mask.frame.minX, y: point.y - mask.frame.minY)) }
+        } ?? true
+        if inEdge, let child = NodeView.hitChildren(in: self, at: point, with: event) { return child }
         // A paragraph's scroller with nothing to scroll is its node, as on the
         // web, where a click on it bubbles to the button around it: a
         // `UIScrollView` keeps a touch from the responder chain. CSS makes one
