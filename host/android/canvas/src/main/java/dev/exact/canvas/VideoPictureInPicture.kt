@@ -10,17 +10,39 @@ import android.view.ViewGroup
 
 /** The pinned activity shows one existing player's video above its page (LLP 1042 §9.3). */
 internal class VideoPictureInPicture(private val activity: ExactActivity) {
-    private data class Presentation(val target: MediaAllocation, val player: VideoPlayer, var view: View? = null, var removed: Boolean = false)
+    private class Presentation(val target: MediaAllocation, val player: VideoPlayer) {
+        var entered = false
+        var removed = false
+        var view: View? = null
+    }
     private var current: Presentation? = null
-    private var expandOnEntry = false
+    private var expanding = false
+    private val commands = ArrayDeque<MediaAllocation?>()
+
+    // Android can report isInPictureInPictureMode before it delivers the entry callback.
+    // Only the callback releases the next command. A null target means exit.
+    fun request(target: MediaAllocation?) {
+        commands.addLast(target)
+        drain()
+    }
+
+    private fun drain() {
+        while (commands.isNotEmpty()) {
+            val presentation = current
+            if (expanding || presentation?.entered == false) return
+            val next = commands.first()
+            if (presentation != null && next != presentation.target) {
+                if (next == null) commands.removeFirst()
+                expand()
+                return
+            }
+            commands.removeFirst()
+            if (next != null && presentation == null) activity.floatPicture(next)
+        }
+    }
 
     fun start(target: MediaAllocation, player: VideoPlayer, source: Rect) {
         fun refuse(reason: String) = target.tell("pictureinpictureerror", reason, "")
-        if (current?.target == target) return
-        if (current != null && current?.view == null) {
-            refuse("another video is entering picture in picture")
-            return
-        }
         if (player.pictureDisabled) { refuse("this video disables picture in picture"); return }
         if (!activity.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             refuse("picture in picture is unavailable on this Android device")
@@ -31,23 +53,14 @@ internal class VideoPictureInPicture(private val activity: ExactActivity) {
             refuse("the video has no loaded picture")
             return
         }
-        val params = params(size, source)
+        current = Presentation(target, player)
         try {
-            if (activity.isInPictureInPictureMode) {
-                activity.setPictureInPictureParams(params)
-                ended()
-                current = Presentation(target, player)
-                modeChanged(true)
-            } else {
-                current = Presentation(target, player)
-                expandOnEntry = false
-                if (!activity.enterPictureInPictureMode(params)) {
-                    ended()
-                    refuse("Android declined picture in picture")
-                }
+            if (!activity.enterPictureInPictureMode(params(size, source))) {
+                current = null
+                refuse("Android declined picture in picture")
             }
         } catch (error: RuntimeException) {
-            if (current?.target == target) ended()
+            current = null
             refuse(error.message ?: "Android declined picture in picture")
         }
     }
@@ -60,55 +73,64 @@ internal class VideoPictureInPicture(private val activity: ExactActivity) {
     }
 
     fun modeChanged(active: Boolean) {
-        if (!active) { expandOnEntry = false; ended(); return }
-        val exitRequested = expandOnEntry
-        expandOnEntry = false
-        val presentation = current
-        if (presentation == null) { if (exitRequested) expand(); return }
-        if (presentation.view != null) return
-        val view = try {
-            val surface = presentation.player.floatPicture { size ->
-                if (current === presentation && activity.isInPictureInPictureMode) activity.setPictureInPictureParams(params(size))
-            } ?: throw IllegalStateException("the video player is unavailable")
-            activity.addContentView(surface, ViewGroup.LayoutParams(-1, -1))
-            surface
-        } catch (error: RuntimeException) {
-            presentation.player.restorePicture()
-            current = null
-            presentation.target.tell("pictureinpictureerror", error.message ?: "Android could not show the video", "")
-            expand()
-            return
+        if (!active) {
+            ended()
+        } else {
+            val presentation = current ?: return
+            if (presentation.entered) return
+            presentation.entered = true
+            presentation.target.tell("enterpictureinpicture", "", "")
+            if (!presentation.removed) {
+                try {
+                    val view = presentation.player.floatPicture { size ->
+                        if (current === presentation && !expanding) activity.setPictureInPictureParams(params(size))
+                    } ?: throw IllegalStateException("the video player is unavailable")
+                    presentation.view = view
+                    activity.addContentView(view, ViewGroup.LayoutParams(-1, -1))
+                } catch (error: RuntimeException) {
+                    presentation.target.tell("pictureinpictureerror", error.message ?: "Android could not show the video", "")
+                    commands.addFirst(null)
+                }
+            }
         }
-        presentation.view = view
-        presentation.target.tell("enterpictureinpicture", "", "")
-        if (exitRequested) view.post { if (current === presentation) expand() }
+        // Window changes requested by the callback run after Android applies this configuration.
+        activity.window.decorView.post { drain() }
     }
 
     /** Bringing the same singleTop activity forward expands the pinned task. */
-    fun expand() {
-        if (activity.isInPictureInPictureMode) {
-            activity.startActivity(Intent(activity, activity.javaClass).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP))
-        } else if (current != null) expandOnEntry = true
-        else android.util.Log.i("exact", "exitPictureInPicture ignored: nothing is floating")
+    private fun expand() {
+        expanding = true
+        activity.startActivity(Intent(activity, activity.javaClass).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP))
     }
 
     fun removed(target: MediaAllocation?) {
+        commands.removeAll { it != null && it == target }
         val presentation = current ?: return
         if (target != presentation.target || presentation.removed) return
         presentation.removed = true
         if (presentation.view != null) presentation.player.restorePicture()
-        if (!activity.isFinishing && !activity.isDestroyed) expand()
-        if (presentation.view == null) current = null
+        if (!activity.isFinishing && !activity.isDestroyed && !expanding) {
+            commands.addFirst(null)
+            drain()
+        }
     }
 
-    fun ended() {
+    fun destroy() {
+        commands.clear()
+        ended()
+    }
+
+    private fun ended() {
+        expanding = false
         val presentation = current ?: return
         current = null
-        val view = presentation.view ?: return
-        if (!presentation.removed) presentation.player.restorePicture()
-        // The canvas can retire a node while the activity's content is drawing its children.
-        val parent = view.parent as? ViewGroup
-        parent?.post { if (view.parent === parent) parent.removeView(view) }
-        presentation.target.tell("leavepictureinpicture", "", "")
+        val view = presentation.view
+        if (view != null) {
+            if (!presentation.removed) presentation.player.restorePicture()
+            // The canvas can retire a node while the activity's content is drawing its children.
+            val parent = view.parent as? ViewGroup
+            parent?.post { if (view.parent === parent) parent.removeView(view) }
+        }
+        if (presentation.entered) presentation.target.tell("leavepictureinpicture", "", "")
     }
 }

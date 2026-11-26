@@ -243,6 +243,7 @@ pub(crate) struct Lowerer<'a> {
     pub types: &'a Types,
     sharing: sharing::Sharing,
     pub root: &'a contract_syntax::Component,
+    picture_ids: std::cell::OnceCell<stmts::PictureIds<'a>>,
     pub canvas_targets: std::collections::BTreeSet<String>,
     pub ty_ids: BTreeMap<String, TypesId>,
     pub slots: Vec<exact_plan::SlotsId>,
@@ -462,6 +463,7 @@ fn lower_with_sites(
         types,
         sharing: sharing::Sharing::new(ex),
         root,
+        picture_ids: Default::default(),
         canvas_targets: file
             .components
             .iter()

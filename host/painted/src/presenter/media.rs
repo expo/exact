@@ -57,7 +57,8 @@ impl<D: DataSource> Presenter<D> {
             return self.media_state(id, key, state);
         }
         if event == "pictureinpictureerror" {
-            self.host.log(format!("requestPictureInPicture refused: {payload}"));
+            self.host
+                .log(format!("requestPictureInPicture refused: {payload}"));
         }
         let handlers = self.host.runner().handlers_of(id);
         if !leave

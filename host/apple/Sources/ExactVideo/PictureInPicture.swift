@@ -117,11 +117,22 @@ final class PictureInPictureHost {
         host.sendSource()
     }
 
+    static func videoEvent(_ session: ExactSession, id: UInt32, generation: Int?, event: String, payload: String) {
+        DispatchQueue.main.async { [weak session] in
+            guard let session, session.generation == generation else { return }
+            session.apply(session.runtime.media(id, event: event, payload: payload, now: session.now()))
+        }
+    }
+
     /// The request failed: a journal line, and the image's `pictureinpictureerror` with the
     /// reason, as HTML's promise rejects.
     static func refuse(_ node: NodeView, _ why: String) {
         node.presenter?.session?.log("requestPictureInPicture \"\(node.props["id"] ?? "")\" refused: \(why)")
-        dispatch(node, "pictureinpictureerror", payload: why)
+        if node.kind == "video", let session = node.presenter?.session, node.handlers.contains("pictureinpictureerror") {
+            videoEvent(session, id: node.id, generation: session.generation, event: "pictureinpictureerror", payload: why)
+        } else {
+            dispatch(node, "pictureinpictureerror", payload: why)
+        }
     }
 
     /// `exitPictureInPicture()`: the image in the picture-in-picture window leaves it and hears it,

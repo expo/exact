@@ -937,7 +937,7 @@ open class ExactActivity : Activity() {
     }
 
     override fun onDestroy() {
-        picture.ended()
+        picture.destroy()
         folds.stop()
         accessibility.removeAccessibilityStateChangeListener(accessWatch)
         requests.destroy()

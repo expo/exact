@@ -410,11 +410,11 @@ final class VideoView: VideoPlaying, VisibilityRefreshing {
             if was && !autoplay.armed { DispatchQueue.main.async { [weak self] in self?.update() } }
         }
         guard let event = message["event"] as? String else { return }
-        if event == "enterpictureinpicture" || event == "leavepictureinpicture" {
-            guard owner.handlers.contains(event) || owner.handlers.contains("leavepictureinpicture"),
+        if ["enterpictureinpicture", "leavepictureinpicture", "pictureinpictureerror"].contains(event) {
+            guard owner.handlers.contains(event) || (event == "enterpictureinpicture" && owner.handlers.contains("leavepictureinpicture")),
                   let session = owner.presenter?.session else { return }
-            guard session.generation == generation else { return }
-            session.apply(session.runtime.media(owner.id, event: event, payload: "", now: session.now()))
+            PictureInPictureHost.videoEvent(session, id: owner.id, generation: generation,
+                                            event: event, payload: message["payload"] as? String ?? "")
             return
         }
         guard owner.handlers.contains(event) else { return }

@@ -124,7 +124,7 @@ internal class Requests(private val activity: ExactActivity) {
                     HATCH -> activity.hatches()?.told(words, body, i)
                     MODULE -> Extensions.call(id, string(words, body).first, module)
                     PRESENCE -> Presence.check(string(words, body).first)
-                    VIDEO_PICTURE -> if (i == body) activity.picture.expand() else activity.floatPicture(pictureTarget(words, body))
+                    VIDEO_PICTURE -> activity.picture.request(if (i == body) null else pictureTarget(words, body))
                     ACTIVITY -> Activities.request(string(words, body).first)
                     ORIENTATION -> orientation.told(words, body)
                     // The surface, then its message's JSON.
