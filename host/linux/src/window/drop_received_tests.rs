@@ -183,9 +183,19 @@ fn a_titled_links_encoding_is_read_from_its_bytes() {
     let mut unmarked = utf16("https://example.com/ab");
     unmarked.pop();
     assert_eq!(
-        items(b"", &unmarked, b"").url,
-        "",
-        "unmarked UTF-16 cut short too"
+        utf16_or_utf8(&unmarked),
+        None,
+        "unmarked little-endian UTF-16 cut short"
+    );
+    let mut unmarked: Vec<u8> = "https://example.com/ab"
+        .encode_utf16()
+        .flat_map(u16::to_be_bytes)
+        .collect();
+    unmarked.pop();
+    assert_eq!(
+        utf16_or_utf8(&unmarked),
+        None,
+        "unmarked big-endian UTF-16 cut short"
     );
 }
 
