@@ -103,7 +103,12 @@ extension GroupedListView {
     /// would cover the highlight, so it dims, as a plain list's row does.
     static func pressIsCells(_ row: GroupedListModel.Row, _ node: NodeView?) -> Bool {
         guard row.custom else { return true }
+        #if os(iOS)
         guard row.pressable, let node, node.platformOwnsPress else { return false }
+        #else
+        // tvOS builds the shared cell code but makes no grouped list's cells (`Runtime.groupedList` is nil there): a compile-time fallback
+        guard row.pressable, let node else { return false }
+        #endif
         return !node.wrote("background_color") && !node.wrote("background_image")
     }
 
