@@ -5,6 +5,40 @@ import QuartzCore
 @testable import ExactKit
 
 final class FrameHealthMacTests: XCTestCase {
+    func testClearKeepsPauseAndTheRequestedRateAndDiscardsRetainedHitches() throws {
+        _ = NSApplication.shared
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlayMac(health: health)
+        overlay.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+        overlay.setVisible(true)
+        overlay.layoutSubtreeIfNeeded()
+        health.requestedRate(120)
+        let start = CACurrentMediaTime()
+        health.record(arrival: start, target: start + 0.001, period: 1 / 120, finished: start + 0.010)
+        XCTAssertGreaterThan(health.historyStatus().retained, 0)
+        overlay.card.activate?(.status)
+        overlay.card.activate?(.details)
+        let elements = overlay.card.accessibilityChildren()?.compactMap { $0 as? NSAccessibilityElement } ?? []
+        let clear = try XCTUnwrap(elements.first { $0.accessibilityLabel() == "Clear frame health" })
+        let generation = health.snapshot().generation
+        XCTAssertTrue(clear.accessibilityPerformPress())
+        XCTAssertGreaterThan(health.snapshot().generation, generation)
+        XCTAssertEqual(health.snapshot().callbacks, 0)
+        XCTAssertEqual(health.historyStatus().retained, 0)
+        XCTAssertEqual(health.requestedHertz, 120)
+        XCTAssertEqual(health.requestedPeriodNs, 8_333_333)
+        XCTAssertEqual(overlay.card.state.status, .paused)
+        XCTAssertEqual(overlay.card.state.rows[0].1, "—")
+        XCTAssertTrue(overlay.card.state.showsDetails)
+        XCTAssertTrue(overlay.card.chart.held)
+        overlay.card.activate?(.status)
+        XCTAssertFalse(overlay.card.chart.held)
+        XCTAssertTrue(clear.accessibilityPerformPress())
+        XCTAssertNotEqual(overlay.card.state.status, .paused)
+        overlay.setVisible(false)
+    }
+
     func testPlatformTrackpadReplayIsRefusedBeforeInputOrClockChanges() throws {
         guard !ExactEnv.agentFreezes else { throw XCTSkip("platform-timing input regression") }
         _ = NSApplication.shared

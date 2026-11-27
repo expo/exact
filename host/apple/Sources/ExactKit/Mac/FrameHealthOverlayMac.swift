@@ -151,6 +151,14 @@ final class FrameHealthOverlayMac: NSView {
             NSAccessibility.post(element: card, notification: .announcementRequested,
                 userInfo: [.announcement: paused ? "Paused" : "Resumed"])
             if paused { render() } else { refresh() }
+        case .clear:
+            health?.clear()
+            reader.reset()
+            card.chart.reset()
+            if let health { reader.sample(health, force: true) }
+            render()
+            NSAccessibility.post(element: card, notification: .announcementRequested,
+                userInfo: [.announcement: "Frame health cleared"])
         case .close: setVisible(false)
         case .title: card.showDefinitions()
         case .details:
@@ -312,7 +320,7 @@ final class FrameHealthCardViewMac: NSView {
         setAccessibilityRole(.group)
         setAccessibilityLabel("Frame health")
         elements = [Element(.close, card: self), Element(.title, card: self), Element(.status, card: self),
-            Element(.details, card: self), Element(.share, card: self), Element(.charts, card: self), Element(.table, card: self), Element(.rateChart, card: self),
+            Element(.clear, card: self), Element(.details, card: self), Element(.share, card: self), Element(.charts, card: self), Element(.table, card: self), Element(.rateChart, card: self),
             Element(.timeChart, card: self), Element(.tableView, card: self), Element(.detailsView, card: self)]
         resolveColors()
     }
@@ -529,7 +537,7 @@ final class FrameHealthCardViewMac: NSView {
 
     /// An accessibility element over a region the card draws: its buttons, charts and table.
     private final class Element: NSAccessibilityElement {
-        enum Role { case close, title, status, details, share, charts, table, rateChart, timeChart, tableView, detailsView }
+        enum Role { case close, title, status, clear, details, share, charts, table, rateChart, timeChart, tableView, detailsView }
         let role: Role
         weak var card: FrameHealthCardViewMac?
         init(_ role: Role, card: FrameHealthCardViewMac) {
@@ -544,6 +552,7 @@ final class FrameHealthCardViewMac: NSView {
             case .close: card.activate?(.close)
             case .title: card.activate?(.title)
             case .status: card.activate?(.status)
+            case .clear: card.activate?(.clear)
             case .details: card.activate?(.details)
             case .share: card.activate?(.share)
             case .charts: card.activate?(.charts)
@@ -565,6 +574,7 @@ final class FrameHealthCardViewMac: NSView {
             case .status: frame = l.status; label = state.status == .paused ? "Resume frame health" : "Pause frame health"
             case .close: frame = l.close; label = "Close frame health"
             case .title: frame = l.title; label = "Frame health"; element.setAccessibilityHelp("Shows what these numbers mean.")
+            case .clear: frame = l.clear; label = "Clear frame health"
             case .details: frame = l.details; label = state.showsDetails ? "Done" : "Frame health details"
             case .share: frame = l.share; label = "Share frame health"
             case .charts, .table:
@@ -591,7 +601,7 @@ final class FrameHealthCardViewMac: NSView {
                 role = .staticText
             }
             // Details takes the place of the figures and charts
-            if state.showsDetails, ![.close, .title, .status, .details, .share, .detailsView].contains(element.role) { hidden = true }
+            if state.showsDetails, ![.close, .title, .status, .clear, .details, .share, .detailsView].contains(element.role) { hidden = true }
             if element.role == .detailsView, !state.showsDetails { hidden = true }
             // In the card's own coordinates, which are flipped, as the parent space is
             element.setAccessibilityFrameInParentSpace(frame)

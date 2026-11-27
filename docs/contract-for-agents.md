@@ -7207,6 +7207,9 @@ Actions follow the responder chain to the eligible window; an embedder opts in b
 passing `frameHealthContainer` to `DevMenu.install`. The standalone adapter supplies its
 host slot. The card takes the clicks within its bounds and moves without changing the
 app's viewport. Details shows within the card on both platforms, with the app's frames.
+Clear starts a new measurement on both platforms, discarding the figures, charts and
+retained hitches for every source the card measures. It preserves the paused state and
+the app's requested frame rate. On iOS this also clears the screen-update measurements.
 Active reader updates are coalesced at half-second intervals across the process.
 Lifecycle changes may publish immediately; there is no idle publication timer, and only
 an iOS card measuring the screen reads on a timer of its own, twice a second while it
