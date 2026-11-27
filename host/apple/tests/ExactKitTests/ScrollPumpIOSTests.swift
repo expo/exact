@@ -125,31 +125,42 @@ final class ScrollPumpIOSTests: XCTestCase {
     }
 
     func testTextInARowBeyondItsOuterScrollportsLeadDoesNotAskForFrames() throws {
-        let session = fixture("pump-clipped-row")
-        defer { session.destroy(); window.isHidden = true }
+        let session = ExactApp.shared.makeSession(label: "pump-clipped-row")
         let p = session.presenter
+        mount(p)
+        defer { session.destroy(); window.isHidden = true }
         p.apply(wireBatch([
-            ["op": "style", "id": 1, "style": ["overflow_y": "scroll"]],
-            ["op": "content", "id": 1, "w": 400.0, "h": 1400.0],
-            ["op": "create", "id": 3, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
-            ["op": "create", "id": 4, "kind": "text", "props": ["text": "A title inside the row"], "style": ["font_size": 16.0]],
-            ["op": "children", "id": 1, "ids": [2, 3]],
-            ["op": "children", "id": 3, "ids": [4]],
-            ["op": "frame", "id": 3, "x": 0.0, "y": 1000.0, "w": 400.0, "h": 120.0],
-            ["op": "content", "id": 3, "w": 600.0, "h": 120.0],
-            ["op": "frame", "id": 4, "x": 20.0, "y": 10.0, "w": 250.0, "h": 32.0],
+            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 2, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "A title inside the row"], "style": ["font_size": 16]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "children", "id": 2, "ids": [3]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 400],
+            ["op": "content", "id": 1, "w": 400, "h": 1400],
+            ["op": "frame", "id": 2, "x": 0, "y": 1000, "w": 400, "h": 120],
+            ["op": "content", "id": 2, "w": 600, "h": 120],
+            ["op": "frame", "id": 3, "x": 20, "y": 10, "w": 250, "h": 32],
         ]))
         window.layoutIfNeeded()
         p.scrollPump.reset()
-        let title = try XCTUnwrap(p.views[4]), scroll = try XCTUnwrap(p.views[1]?.scrollView)
-        title.dropTextRaster()
-        XCTAssertTrue(p.owedText.contains(title.id))
-        p.scrollPump.scrolled(p.views[1])
-        XCTAssertFalse(p.scrollPump.asksForFrames)
+        let outer = try XCTUnwrap(p.views[1]?.scrollView), inner = try XCTUnwrap(p.views[2]?.scrollView)
+        let title = try XCTUnwrap(p.views[3])
+        XCTAssertTrue(title.canRasterText)
+        XCTAssertTrue(inner.bounds.contains(title.convert(title.bounds, to: inner)))
+
+        inner.contentOffset.x = 20
+        XCTAssertFalse(p.scrollPump.asksForFrames, "the outer scrollport still clips the entire row beyond its lead")
         XCTAssertFalse(title.textRasterReady)
-        scroll.contentOffset.y = 800
-        p.scrollPump.scrolled(p.views[1])
-        XCTAssertTrue(title.textRasterReady)
+
+        outer.contentOffset.y = 400
+        XCTAssertTrue(p.scrollPump.asksForFrames, "text within the outer scrollport's lead is eligible for prefetch")
+        XCTAssertFalse(title.textRasterReady, "the row is still out of view")
+
+        outer.contentOffset.y = 800
+        let visible = p.textScrollportRect(title)
+        XCTAssertFalse(visible.isEmpty)
+        XCTAssertTrue(title.textRasterReady && title.textRasterFrame.contains(visible), "the first visible frame has its text")
     }
 
     func testFallbackTextSkipsTheRasterPassAndReturnsWhenItCanRasterAgain() throws {
