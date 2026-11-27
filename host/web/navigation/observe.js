@@ -66,6 +66,9 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   // The scrollers a round's values can clamp: each reader's own and those that move it
   const scrollers = new Map([...readers.filter((el) => box(el).scrolls), ...[...chains.values()].flat()].map((a) => [a, [a.scrollLeft, a.scrollTop]]));
   const sticky = [...new Set(readers.flatMap(ancestry))].filter((a) => box(a).position === "sticky");
+  // Whether a settled change could start a transition: a reader with one, or one whose subtree a round restyles (read
+  // before the marks zero them)
+  const transitional = readers.some((el) => reads.get(el).subtree || box(el).transitions);
   ensureRoundsRule();
   // Only what a round can restyle is marked, so the marks restyle the readers and the subtrees they hand an observation
   // to, never the whole document
@@ -74,6 +77,12 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   try {
     // A sticky ancestor held at rest is positioned as it was, so the chains read before the marks still hold
     const result = rounds(readers, reads, chains, band, keyboard);
+    // The last round's values are the settled ones. Where nothing marked can transition, no sticky box was held and no
+    // scroller moved (read from the rounds' last layout), they stay as written: putting the provisional values back and
+    // writing the settled ones again would lay the page out once more for the same result
+    if (!transitional && !sticky.length && [...scrollers].every(([a, [x, y]]) => a.scrollLeft === x && a.scrollTop === y)) {
+      return { rounds: result.rounds, unsettled: result.unsettled };
+    }
     // The provisional values out, and each scroller where it was, then the settled ones in once the marks are gone
     for (const [el, was] of before) reads.get(el).inputs.forEach((i, k) => was[k] ? el.style.setProperty(NAMES[i], was[k]) : el.style.removeProperty(NAMES[i]));
     sticky.forEach((a) => a.removeAttribute(REST));
@@ -268,18 +277,19 @@ function chain(el, box = styles()) {
   return found;
 }
 
-/** A transaction's reading of each element's computed position, of whether it contains fixed boxes, and of whether it
- * is a scroll container (CSS Overflow 3: an axis neither `visible` nor `clip`), once each: the last two only when
- * asked. */
+/** A transaction's reading of each element's computed position, of whether it contains fixed boxes, of whether it is
+ * a scroll container (CSS Overflow 3: an axis neither `visible` nor `clip`) and of whether it has a transition that
+ * runs, once each: the last three only when asked. */
 function styles() {
   const known = new Map();
   return (el) => {
     let b = known.get(el);
     if (!b) {
       const s = getComputedStyle(el);
-      let fixed, scrolls;
+      let fixed, scrolls, transitions;
       b = { position: s.position, get fixed() { return fixed ??= fixedContainer(s); },
-        get scrolls() { return scrolls ??= [s.overflowX, s.overflowY].some((o) => o !== "visible" && o !== "clip"); } };
+        get scrolls() { return scrolls ??= [s.overflowX, s.overflowY].some((o) => o !== "visible" && o !== "clip"); },
+        get transitions() { return transitions ??= s.transitionDuration.split(",").some((d) => parseFloat(d) > 0); } };
       known.set(el, b);
     }
     return b;
