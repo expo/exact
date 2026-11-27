@@ -175,7 +175,7 @@ pub(crate) fn with_text_styles(
         .structure()
         .walk_regions_with(start, warning_regions);
     let (mut seen, mut platform) = (BTreeSet::new(), Vec::new());
-    let mut seen_buttons = BTreeSet::new();
+    let (mut seen_buttons, mut seen_symbols) = (BTreeSet::new(), BTreeSet::new());
     let mut seen_alert_font = BTreeSet::new();
     let mut role_cache = crate::alert_role::RoleCache::default();
     let (var_tokens, mut undeclared) =
@@ -186,14 +186,21 @@ pub(crate) fn with_text_styles(
             crate::var_tokens::carried_undeclared(attrs, &var_tokens, &mut undeclared);
             // A component used twice is inlined twice: one line for its source.
             let span = visit.span();
-            let fresh = seen.insert((span.source_id, span.line, span.col, span.end_col));
-            // @ref LLP 1116.007 D3.1 — a symbol by another spelling than its role.
-            if let (true, "image", Some(source)) = (fresh, tag, positional.first()) {
-                out.extend(crate::symbols::image_source(
-                    source,
-                    &mut platform,
-                    selection,
-                ));
+            let at = (span.source_id, span.line, span.col, span.end_col);
+            let fresh = seen.insert(at);
+            // @ref LLP 1116.007 D3.1 — a symbol by another spelling than its role. Speak for a source at its first
+            // unmarked use: a row's disclosure is drawn as its role whatever its spelling (LLP 1084.000 D1)
+            let marked =
+                crate::disclosure::row_disclosure(span, visit.instance().unwrap_or_default())
+                    .is_some();
+            if let ("image", false, Some(source)) = (tag, marked, positional.first()) {
+                if seen_symbols.insert(at) {
+                    out.extend(crate::symbols::image_source(
+                        source,
+                        &mut platform,
+                        selection,
+                    ));
+                }
             }
             // A later inline may be the first to produce a button warning.
             out.extend(

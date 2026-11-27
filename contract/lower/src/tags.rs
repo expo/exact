@@ -670,7 +670,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "glassInteractive" => AttrTarget::Prop(p("glassInteractive")),
         "menuOrder" | "keepsMenuPresented" => AttrTarget::Prop(p(name)),
         "buttonStyle" => AttrTarget::Prop(p("buttonStyle")),
-        "listStyle" => AttrTarget::Prop(p("listStyle")),
+        "listStyle" | "rowDisclosure" => AttrTarget::Prop(p(name)),
         "toolbarPlacement" => AttrTarget::Prop(p("toolbarPlacement")),
         "retainFocus" => AttrTarget::Prop(p("retainFocus")),
         "focusGuide" => AttrTarget::Prop(p("focusGuide")),

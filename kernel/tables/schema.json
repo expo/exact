@@ -2040,6 +2040,12 @@
       "_comment": "@ref LLP 1115 §2 (what the author writes wins): on a menu's popover column (a menu or a submenu) or on one of its rows, whether a pick on the row leaves the menu open. The row's own value wins over its popover's, which reaches no submenu. Unset, a pick closes the menu, the platform's. A row that follows a link, opens something, or hides a menu it is in closes it anyway. iOS sets UIKit's `keepsMenuPresented` on the row and updates the open menu after each pick, except in the edit menu a keyboard's menu key opens; the web keeps a menu open until a row hides it, as before; macOS, tvOS, Android, Linux and Windows close it at every pick and ignore it."
     },
     {
+      "id": 351,
+      "name": "rowDisclosure",
+      "kind": "str",
+      "_comment": "@ref LLP 1084.000 D1, D5, D6: on a forward chevron a list's row owns, the row's disclosure: `semantic`, which each host shows or hides by its platform's convention for the list it is in (D3), or `always`, shown on every host. Set by Contract on each such image, never written by an author; the author's `disclosure=\"always\"` on the image says `always`."
+    },
+    {
       "id": 303,
       "name": "glassInteractive",
       "kind": "bool",

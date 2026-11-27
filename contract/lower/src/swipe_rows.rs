@@ -64,6 +64,17 @@ fn untyped(expr: &Expr, keep_enums: bool) -> Expr {
     expr
 }
 
+/// A swipe's name (`swipeContent`, or the `id` it names) as the kernel compares them at run time: a template with
+/// nothing computed in it as the text lowering folds it to, any other expression as written, its types and spans aside.
+pub(crate) fn swipe_name(e: &Expr) -> Expr {
+    let mut e = untyped(e, false);
+    if let Some(text) = crate::values::template_text(&e, &|_, _| None) {
+        e = Expr::Str(text, Span::default());
+    }
+    e.visit_spans(&mut |s| *s = Span::default());
+    e
+}
+
 fn implied(name: &str, value: Expr, span: Span) -> Attr {
     Attr {
         name: name.into(),
@@ -262,14 +273,9 @@ fn written(node: &Node, row: &dyn Fn(&Node, bool) -> Node) -> Option<Node> {
         return None;
     };
     // The child whose `id` is written as `swipeContent` is (a template
-    // such as `row-${n.id}` included): the same expression, where it is.
-    let bare = |e: &Expr| {
-        let mut e = untyped(e, false);
-        e.visit_spans(&mut |s| *s = Span::default());
-        e
-    };
-    let name = bare(&last(attrs, "swipeContent")?.value);
-    let named = |c: &Node| matches!(c, Node::Element { attrs, .. } if last(attrs, "id").is_some_and(|a| bare(&a.value) == name));
+    // such as `row-${n.id}` included), where it is.
+    let name = swipe_name(&last(attrs, "swipeContent")?.value);
+    let named = |c: &Node| matches!(c, Node::Element { attrs, .. } if last(attrs, "id").is_some_and(|a| swipe_name(&a.value) == name));
     // One content, and no leading inset of the author's on the scroll (the
     // form that puts the row's insets there keeps them there); a class's
     // rows are not read here, so a scroll with one keeps them too.

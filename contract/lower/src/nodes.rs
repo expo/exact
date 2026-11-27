@@ -89,6 +89,24 @@ impl Lowerer<'_> {
         let Some(t) = tags::tag(tag).or_else(|| native::tag(tag)) else {
             return Err(unknown_tag(tag, *span));
         };
+        // @ref LLP 1084.000 D1, D5 — a row's chevron carries its mark, and is drawn as the portable role
+        let (marked_attrs, marked_source);
+        // (the image itself: a swipe scroll lowering wraps around a row keeps its span and instance)
+        let mark = crate::disclosure::row_disclosure(*span, *instance).filter(|_| tag == "image");
+        let (attrs, positional) = match mark {
+            Some(mode) => {
+                marked_attrs = crate::disclosure::marked_attrs(attrs, mode, *span);
+                marked_source = crate::disclosure::marked_source(positional);
+                (&marked_attrs, &marked_source)
+            }
+            None => match crate::disclosure::without_misplaced(attrs) {
+                Some(kept) => {
+                    marked_attrs = kept;
+                    (&marked_attrs, positional)
+                }
+                None => (attrs, positional),
+            },
+        };
         // Two layout refusals the compiler can make without measuring
         // (LLP 1017 P1c; the measured ones are bake's). Conservative:
         // only the case nothing on the path can bound is refused.

@@ -62,6 +62,7 @@ pub(crate) fn unlowered() {
     note_accent(None);
     crate::icons::clear(None);
     crate::theme::forget_roles();
+    crate::disclosure::forget();
 }
 
 /// Every unreachable override, once a target, control and parameter, and
