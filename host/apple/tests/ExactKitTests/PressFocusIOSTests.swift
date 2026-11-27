@@ -48,6 +48,18 @@ final class PressFocusIOSTests: XCTestCase {
         presenter(node(1, "view", w: 400, h: 400) + node(2, "input", w: 300, h: 34) + node(3, "button", handlers: ["press"], y: 200)
                   + [["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]]])
     }
+
+    func testSelectTextDoesNotRefocusAnAlreadyFocusedField() throws {
+        let p = composer()
+        let node = try XCTUnwrap(p.views[2])
+        node.applyProps(set: ["id": "a", "value": "hello"], clear: [])
+        let field = try XCTUnwrap(p.views[2]?.field)
+        p.focusElement(["a"])
+        XCTAssertTrue(field.isFirstResponder)
+        p.focusElement(["a"], selectText: true)
+        XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: try XCTUnwrap(field.selectedTextRange?.start)), 0)
+        XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: try XCTUnwrap(field.selectedTextRange?.end)), 5)
+    }
     /// A touch resting at one window point, wherever its view goes.
     private final class PointTouch: UITouch {
         var point: CGPoint

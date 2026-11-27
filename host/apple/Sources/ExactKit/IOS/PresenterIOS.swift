@@ -629,6 +629,10 @@ package final class Presenter {
             session?.log("selectText \"\(name)\" refused: not a text editor")
             return
         }
+        if selectText, responder.isFirstResponder {
+            fieldSelections.selectAll(target)
+            return
+        }
         chooseFocus(target)
         guard responder.canBecomeFirstResponder else {
             session?.log("focus \"\(name)\" refused: not focusable")
