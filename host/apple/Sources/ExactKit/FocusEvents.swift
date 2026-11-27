@@ -45,6 +45,8 @@ extension Presenter {
         if menus.preservesFocus(id) { return }
         #if os(iOS)
         if carriesFocus(id) { carriedFocus?.resigned = true; return }
+        // Keys a card stood down keep their editor's focus till they are back (LLP 1021 §5.4)
+        if heldKeys?.node?.id == id { return }
         #endif
         #endif
         focusEvents.blur(id)

@@ -29,8 +29,7 @@ package final class Presenter {
     var autofocusProcessed: Set<ObjectIdentifier> = []
     weak var autofocusedThisTurn: NodeView? // taken out of the window this turn, it has not had its autofocus (NodeViewIOS)
     package var pressHandoff: PressHandoff? // the press whose work may hand its control's focus on (PressHandoffIOS)
-    /// While a batch a person's input caused is presented, when it was marked
-    /// (`Batch.input`): a glass that joins a group then materializes.
+    /// While a batch a person's input caused is presented, when it was marked (`Batch.input`): a glass that joins a group then materializes.
     var inputStarted: CFTimeInterval?
     /// A booted session's autofocus waits for its first activation.
     var launchAutofocusReleased = false
@@ -255,7 +254,7 @@ package final class Presenter {
     /// A native prompt outside the session's mounts, associated by its creator.
     package weak var keyboardPrompt: UITextField?
     var keyboardEditor: UIView? {
-        guard let responder = FirstResponder.current as? UIView, responder is UIKeyInput,
+        guard let responder = (heldKeys?.editor ?? FirstResponder.current) as? UIView, responder is UIKeyInput,
               mounts(responder) || responder === keyboardPrompt else { return nil }
         return responder
     }
@@ -276,6 +275,7 @@ package final class Presenter {
         return nil
         #else
         guard container.window != nil, hasKeyboardEditor else { return nil }
+        if let held = heldKeys { return container.convert(CGPoint(x: 0, y: held.sample.frame.minY), from: nil).y }
         if let view = container as? ExactView, !view.hasKeyboardGuide { return nil }
         let guide = container.keyboardLayoutGuide.layoutFrame
         return guide.height > 0 ? guide.minY : nil
@@ -647,10 +647,10 @@ package final class Presenter {
         if selectText, responder.isFirstResponder { fieldSelections.selectAll(target) }
     }
 
-    /// The action's blur(): drop focus and the keyboard, and any focus still
-    /// waiting to be delivered; blur(html-id) only when that node holds it.
+    /// The action's blur(): drop focus and the keyboard, and any focus still waiting to be delivered; blur(html-id) only when that node holds it.
     func blurElement(_ args: [Any]) {
         pendingFocus = nil
+        if heldKeys?.blur(args) == true { return } // keys a card stood down go as it closes (LLP 1021 §5.4)
         if let name = args.first as? String {
             guard let target = views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }) else { return }
             let responder: UIView = target.headerField ?? target.textArea ?? target.field ?? target

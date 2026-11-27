@@ -25,6 +25,14 @@ package final class PopoverLayer: UIView {
     private weak var popover: UIView?
     var rehost: (() -> Void)?
     private var mounting = false
+    #if os(iOS)
+    /// The UIKit popover it shows in, zoomed out of its opener's glass, in
+    /// place of the document (LLP 1021 §5.4, PopoverCardIOS.swift).
+    var card: PopoverCard?
+    private var cardView: UIView? { card?.view }
+    #else
+    private var cardView: UIView? { nil }
+    #endif
 
     package init(presenter: Presenter, order: Int, popover: UIView) {
         hosts = presenter.dialogs.controllers(holding: popover).reversed().map { Host(controller: $0) }
@@ -45,11 +53,11 @@ package final class PopoverLayer: UIView {
     func mount(in presenter: Presenter) {
         mounting = true
         defer { mounting = false }
-        var host: UIView = presenter.modals.coordinateView ?? presenter.documentHost
+        var host: UIView = cardView ?? presenter.modals.coordinateView ?? presenter.documentHost
         sheet = nil
         // A sheet hosts it only while its dialog still holds the popover: a move out of it leaves the sheet.
         let holding = popover.map { presenter.dialogs.controllers(holding: $0) } ?? []
-        for candidate in hosts {
+        for candidate in hosts where cardView == nil {
             if let controller = candidate.controller,
                holding.contains(where: { $0 === controller }),
                controller.presentingViewController != nil,
@@ -69,8 +77,8 @@ package final class PopoverLayer: UIView {
         }
         // UIKit orders its own siblings; authored siblings use Exact's paint ranks.
         setPaintForeground(sheet == nil)
-        if sheet != nil {
-            // Outside the session's root, as a sheet is: its theme and tint, as the sheet's (DialogSheetController).
+        if sheet != nil || cardView != nil {
+            // Outside the session's root, in a sheet or a card: its theme and tint, as the sheet's (DialogSheetController).
             ThemeRoles.adopt(self, from: presenter.root)
             tintColor = ThemeRoles.color("AccentColor", in: self)
         }
@@ -81,6 +89,14 @@ package final class PopoverLayer: UIView {
         let place = (host as? UIScrollView)?.pageBounds ?? host.bounds
         if frame != place { frame = place }
     }
+
+    #if os(iOS)
+    // Out of its page as the popover closes: the card goes with it
+    package override func removeFromSuperview() {
+        if !mounting, let card { self.card = nil; card.close() }
+        super.removeFromSuperview()
+    }
+    #endif
 
     package override func didMoveToWindow() {
         super.didMoveToWindow()

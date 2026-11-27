@@ -821,6 +821,7 @@ package final class MenuHost {
         guard let presenter, let pop = entry.popover else { return }
         #if os(iOS)
         if entry.relay == nil { entry.relay = MountRelay(presenter, mount: entry.layer) }
+        if showsCard(pop, in: entry.layer, from: entry.source) { return }
         #endif
         entry.layer.mount(in: presenter)
         if pop.superview !== entry.layer { pop.movingRoute(into: entry.layer) { entry.layer.addSubview(pop) } }

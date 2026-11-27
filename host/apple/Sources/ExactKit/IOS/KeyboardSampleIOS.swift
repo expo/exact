@@ -28,6 +28,7 @@ package final class KeyboardSampleIOS {
     @discardableResult
     package static func install(in window: UIWindow) -> KeyboardSampleIOS {
         if let sampler = existing(in: window) { return sampler }
+        KeyboardWindow.watch()
         let sampler = KeyboardSampleIOS()
         for probe in [sampler.docked, sampler.following] {
             probe.frame = window.bounds
@@ -71,8 +72,12 @@ package final class KeyboardSampleIOS {
         if guide.keyboardDismissPadding != padding { guide.keyboardDismissPadding = padding }
     }
 
+    /// The keys a card stood down, which its readers see where they stood (LLP 1021 §5.4).
+    package var held: Sample?
+
     /// The keyboard now, `nil` while none shows or the sampler is out of its window.
     package var sample: Sample? {
+        if let held { return held }
         guard let window = following.window else { return nil }
         let frame = following.keyboardLayoutGuide.layoutFrame
         guard frame.height > 0 else { return nil }
