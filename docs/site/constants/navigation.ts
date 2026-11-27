@@ -149,6 +149,7 @@ export const sections: NavSection[] = [
       'store-update': '@exact/store-update says whether the App Store or Google Play has a newer binary and opens it, for a change Exact\'s own signed updates cannot carry.',
       'suspending-feed': 'A WebSocket feed that stays open while a desktop window is hidden and closes when the host freezes the page.',
       symbols: 'image "symbol:<role>" is an icon each host draws from its own set (SF Symbols on Apple, matching outlines elsewhere).',
+      'system-controls': 'app.json\'s controls are buttons outside the app (Control Center, the Lock Screen, the Action button, a Quick Settings tile) that open a location or run a tool.',
       tabs: 'Use tabs for at least two top-level sections, each with its own route stack.',
       tests: 'app.test.contract drives the app by testId, the same on the web and iOS (bun exact.mjs test web, test ios; verify runs them too).',
       'timer-in-a-component': 'A bounded child owns its timer; an activity gate stops it while hidden.',
@@ -193,6 +194,7 @@ export const sections: NavSection[] = [
         description: 'Toolchains, the Contract CLI, the native and web loops, data modules, delivery and the stress examples.',
         sectionDescriptions: {
           'run-a-terminal-app': 'Build the terminal harness and the LLP reader, and the command line they share with exact-terminal: a launch location, a single run with --print or --json, and headless drives.',
+          'package-configuration': 'A package declares the values it takes per target in its exact.json, the app sets them in app.json\'s packages, and the package reads them through context.config.',
           'access-hatches': 'An access hatch hands the app\'s native code the platform object Exact built for a node, at defined moments, so the app can do what only that object can.',
           'the-six-checks': 'The six checks of a change: build, test, lint, caps, the boot graph and the workspace, with what each covers and what the async lane runs.',
           'rust-live-replacement': 'Rust replacement is enabled by default in development and production; app.json\'s rust key disables it or sets a mode for an environment or a platform.',
