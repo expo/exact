@@ -67,6 +67,24 @@ fn freshness_decides_what_a_load_does() {
     );
     // Nothing to go by: never stored, and never used if it were.
     assert_eq!(at(0, &[]), Use::Refetch);
+    // Only `Last-Modified`, 1,000 s before its `Date`: fresh for 100 s.
+    let received = UNIX_EPOCH + Duration::from_secs(784_111_777);
+    let modified = Head::of(
+        &headers(&[
+            ("date", "Sun, 06 Nov 1994 08:49:37 GMT"),
+            ("last-modified", "Sun, 06 Nov 1994 08:32:57 GMT"),
+        ]),
+        received,
+        Duration::ZERO,
+    );
+    assert_eq!(
+        modified.usable(received + Duration::from_secs(99)),
+        Use::Fresh
+    );
+    assert_eq!(
+        modified.usable(received + Duration::from_secs(101)),
+        Use::Validate
+    );
 }
 
 #[test]

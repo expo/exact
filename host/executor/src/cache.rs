@@ -808,9 +808,23 @@ pub fn freshness_of(
 ) -> Option<Freshness> {
     let (age, lifetime, validate) = freshness(headers, delay, received)?;
     let directives = Directives::of(headers);
+    // With no lifetime given, a tenth of the age `Last-Modified` gives it
+    // (RFC 9111 §4.2.2), as Apple's `URLCache` and browsers take; none under
+    // `must-revalidate`, as Chromium.
+    let heuristic = (directives.max_age.is_none()
+        && first(headers, "expires").is_none()
+        && !directives.must_revalidate)
+        .then(|| first(headers, "last-modified").and_then(http_date))
+        .flatten()
+        .map(|modified| {
+            let date = first(headers, "date")
+                .and_then(http_date)
+                .unwrap_or(received.as_secs());
+            Duration::from_secs(date.saturating_sub(modified) / 10)
+        });
     Some(Freshness {
         age,
-        lifetime,
+        lifetime: heuristic.unwrap_or(lifetime),
         validate,
         stale_while_revalidate: Duration::from_secs(
             (!directives.must_revalidate)
