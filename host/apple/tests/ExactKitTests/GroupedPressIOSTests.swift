@@ -5,6 +5,63 @@ import XCTest
 @testable import ExactGroupedLists
 
 final class GroupedPressIOSTests: GroupedListFixture {
+    /// A custom row whose author left its press to the platform shows it as
+    /// its cell's highlight, not a dim, through a batch that configures its
+    /// cell again, while the finger stays on it (LLP 1084 §4, LLP 1115.000
+    /// D16).
+    func testAHeldCustomRowIsItsCellsHighlight() throws {
+        let p = presenter { self.model(custom: true) }
+        let row = try XCTUnwrap(p.views[21])
+        let held = { try XCTUnwrap(try self.cell(p, 21) as? GroupedCell).configurationState.isHighlighted }
+        XCTAssertFalse(try held())
+        row.pressed = true
+        XCTAssertTrue(try held(), "the cell highlights")
+        XCTAssertNil(row.layer.animation(forKey: "pressDim"), "the row does not dim")
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 255, 255]]]]))
+        XCTAssertTrue(try held(), "a batch keeps the highlight")
+        row.pressFollows(inside: false)
+        XCTAssertFalse(try held(), "a finger that leaves the row lets it go")
+        row.pressFollows(inside: true)
+        XCTAssertTrue(try held(), "and one that comes back shows it again")
+        row.pressed = false
+        XCTAssertFalse(try held(), "the release lets it go")
+        XCTAssertNil(row.layer.animation(forKey: "pressDim"))
+    }
+
+    /// A tap on a custom row whose press is its cell's selects the cell
+    /// before the press runs, as UIKit selects a tapped standard row, and a
+    /// press that pushed no screen lets it go.
+    func testATappedCustomRowSelectsItsCellUntilItsPressHasRun() throws {
+        let p = presenter { self.model(custom: true) }
+        let row = try XCTUnwrap(p.views[21]), lists = try XCTUnwrap(p.groupedLists)
+        XCTAssertTrue(lists.select(row) === row)
+        XCTAssertTrue(try cell(p, 21).isSelected, "selected while its press runs")
+        lists.ran(row, on: nil)
+        XCTAssertFalse(try cell(p, 21).isSelected, "and let go when it pushed nothing")
+    }
+
+    /// A context menu on a custom row whose press is its cell's lifts the
+    /// cell, the row's full width with its highlight, as a collection view
+    /// lifts its own cell; a row with its own press look lifts itself.
+    func testAContextMenuLiftsACustomRowsCell() throws {
+        let p = presenter { self.model(custom: true) }
+        let lists = try XCTUnwrap(p.groupedLists), row = try XCTUnwrap(p.views[21])
+        XCTAssertTrue(lists.cell(carrying: row) === (try cell(p, 21)))
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "press_background_color": [0, 0, 255, 255]]]]))
+        XCTAssertNil(lists.cell(carrying: row))
+    }
+
+    /// A custom row with a press look of its own shows that look: its cell
+    /// takes no highlight.
+    func testACustomRowWithItsOwnPressLookTakesNoCellHighlight() throws {
+        let p = presenter { self.model(custom: true) }
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "press_background_color": [0, 0, 255, 255]]]]))
+        let row = try XCTUnwrap(p.views[21])
+        row.pressed = true
+        XCTAssertFalse(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        row.pressed = false
+    }
+
     func testViewlessNativeRowKeepsTheTitlesColorOwnership() throws {
         var face = ButtonFace()
         face.title = "Profile"

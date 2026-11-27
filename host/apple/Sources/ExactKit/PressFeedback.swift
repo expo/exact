@@ -148,6 +148,7 @@ extension NodeView {
         if holds("active") { return }
         if !inside { paintPress(false); aimPress(false) }
         #if os(iOS)
+        if presenter?.groupedLists?.press(self, down: inside) == true { return }
         if presenter?.rowCells.press(self, inside) == true { return }
         if platformPressDims { dimPress(inside); return }
         #elseif os(macOS)

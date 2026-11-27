@@ -588,6 +588,9 @@ extension NodeView {
         // the cell stays selected under a screen the press pushed (LLP 1115.000 D16).
         let cells = presenter?.rowCells, screen = cells?.screen(of: self)
         let row = lands ? cells?.select(self) : nil
+        // A grouped list's custom row likewise (LLP 1084 §4)
+        let groupedRow = lands && row == nil ? presenter?.groupedLists?.select(self) : nil
+        let groupedScreen = groupedRow == nil ? nil : ViewPresentation.controller(for: self)
         pressed = overlayHoldsPress
         if lands {
             let held = KeyCodes.held(event?.modifierFlags ?? []), at = touches.first?.location(in: nil), bubbled = contact.bubbled
@@ -597,6 +600,7 @@ extension NodeView {
             }
         }
         if let row { cells?.ran(row, on: screen) }
+        if let groupedRow { presenter?.groupedLists?.ran(groupedRow, on: groupedScreen) }
     }
     package override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         if canvasTouches(touches, phase: "cancel", event: event) { return }

@@ -1106,17 +1106,17 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // The row's `-exact-tint-adjustment` is its cell's, as a hand-built app sets the cell's
         cell.tintAdjustmentMode = .init(host.presenter.views[id]?.style["tint_adjustment"])
         guard let row = rows[id] else { return }
-        cell.forcedPressed = !row.custom && host.presenter.views[id]?.pressIsDown == true
+        cell.forcedPressed = Self.pressIsCells(row, host.presenter.views[id]) && host.presenter.views[id]?.pressIsDown == true
         interact(cell, id)
         // A card-less section's rows sit on the list's background; a
-        // pressable standard row still shows UIKit's highlight while pressed.
+        // pressable row whose press is its cell's still shows UIKit's highlight while pressed.
         if card(of: id) {
             cell.configurationUpdateHandler = nil
             var card = cell.defaultBackgroundConfiguration()
             if let fill = ThemeRoles.color("secondary-grouped-background", in: host.presenter.root) { card.backgroundColor = fill }
             cell.backgroundConfiguration = card
         } else {
-            let highlights = row.pressable && !row.custom && !row.disabled
+            let highlights = row.pressable && !row.disabled && Self.pressIsCells(row, host.presenter.views[id])
             cell.configurationUpdateHandler = { cell, state in
                 cell.backgroundConfiguration = highlights && (state.isHighlighted || state.isSelected)
                     ? cell.defaultBackgroundConfiguration().updated(for: state) : .clear()

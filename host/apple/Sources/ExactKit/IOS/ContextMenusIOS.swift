@@ -596,6 +596,13 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             }
         }
         if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
+        // A row a grouped list carries lifts its cell, as a collection view
+        // lifts its own: the row's full width, and its press's highlight
+        if shown === source, let cell = presenter?.groupedLists?.cell(carrying: source), let target = LiftTarget.target(cell) {
+            let parameters = UIPreviewParameters()
+            parameters.visiblePath = LiftTarget.rounded(cell)
+            return UITargetedPreview(view: cell, parameters: parameters, target: target)
+        }
         let parameters = UIPreviewParameters()
         if shown === source, let lift = LiftTarget.clipLift(source) {
             parameters.visiblePath = lift.outline
