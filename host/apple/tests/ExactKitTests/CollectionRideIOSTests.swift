@@ -22,7 +22,10 @@ final class CollectionRideIOSTests: XCTestCase {
         window.makeKeyAndVisible()
         return p
     }
-    private func rows(_ ids: [Int]) -> [[String: Any]] { ids.map { ["view": $0, "root": $0, "epoch": 1] } }
+    /// Rows `ids` at consecutive logical positions from `first`.
+    private func rows(_ ids: [Int], from first: Int = 47) -> [[String: Any]] {
+        ids.enumerated().map { ["view": $1, "root": $1, "epoch": 1, "index": first + $0] }
+    }
     private func ride(_ view: UIView) -> CASpringAnimation? {
         (view.layer.animationKeys() ?? []).compactMap { view.layer.animation(forKey: $0) as? CASpringAnimation }.first { $0.keyPath == "position.y" }
     }
@@ -52,7 +55,7 @@ final class CollectionRideIOSTests: XCTestCase {
         let p = presenter()
         let scroll = try list(p)
         let leaving = try XCTUnwrap(p.views[12]), seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
-        p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 49, "totalExtent": 1960, "rows": rows([8, 10, 14]),
+        p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 49, "totalExtent": 1960, "rows": [["view": 8, "root": 8, "epoch": 1, "index": 46], ["view": 10, "root": 10, "epoch": 1, "index": 47], ["view": 14, "root": 14, "epoch": 1, "index": 48]],
             "correction": ["scrollSequence": seq, "offset": 1660, "smooth": true]]]],
             ["op": "exit", "id": 12],
             ["op": "create", "id": 8, "kind": "view"],
@@ -70,6 +73,66 @@ final class CollectionRideIOSTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(ride(leaving)?.fromValue as? CGFloat), -40, accuracy: 0.5, "the leaving row comes down with it")
         XCTAssertEqual(try XCTUnwrap(ride(try XCTUnwrap(p.views[8]))?.fromValue as? CGFloat), -40, accuracy: 0.5, "and the row the move mounted above it")
         XCTAssertNil(ride(try XCTUnwrap(p.views[14])), "the row after it stays where it showed")
+    }
+
+    /// A batch that replaces the window the list showed (a far smooth
+    /// `scrollIntoView`) keeps no row to move from where it showed: its
+    /// smooth correction keeps its own motion, though a commit rode it.
+    func testAWindowTheBatchReplacedKeepsItsSmoothCorrection() throws {
+        let p = presenter()
+        _ = try list(p)
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        var far = wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 50, "totalExtent": 2000, "rows": rows([30, 32], from: 5),
+            "correction": ["scrollSequence": seq, "offset": 200, "smooth": true]]]],
+            ["op": "create", "id": 30, "kind": "view"], ["op": "create", "id": 32, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [30, 32]],
+            ["op": "frame", "id": 30, "x": 0.0, "y": 200.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 32, "x": 0.0, "y": 240.0, "w": 300.0, "h": 40.0]])
+        far.rides = [1]
+        p.apply(far)
+        XCTAssertTrue(p.listHost.animating.contains(1), "the port moves on its own motion")
+        XCTAssertNil(ride(try XCTUnwrap(p.views[30])), "no row rides")
+    }
+
+    /// A far smooth reveal whose batch also lets a shown row leave keeps its
+    /// own motion: a row still leaving, like one kept mounted off the port,
+    /// carries no ride.
+    func testALeavingRowDoesNotTakeAFarRevealsMotion() throws {
+        let p = presenter()
+        _ = try list(p)
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        var far = wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 50, "totalExtent": 2000, "rows": rows([30, 32], from: 5),
+            "correction": ["scrollSequence": seq, "offset": 200, "smooth": true]]]],
+            ["op": "exit", "id": 12],
+            ["op": "create", "id": 30, "kind": "view"], ["op": "create", "id": 32, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [30, 32]],
+            ["op": "frame", "id": 30, "x": 0.0, "y": 200.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 32, "x": 0.0, "y": 240.0, "w": 300.0, "h": 40.0]])
+        far.rides = [1]
+        p.apply(far)
+        XCTAssertTrue(p.listHost.animating.contains(1), "the port moves on its own motion")
+    }
+
+    /// A row the batch mounts takes the move of the run it joins, not of a
+    /// row across a gap of rows not mounted.
+    func testAMountedRowTakesItsRunsMoveOnly() throws {
+        let p = presenter()
+        let scroll = try list(p)
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        var grown = wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 50, "totalExtent": 2020,
+            "rows": [["view": 2, "root": 2, "epoch": 1, "index": 3], ["view": 8, "root": 8, "epoch": 1, "index": 46]] + rows([10, 12, 14]),
+            "correction": ["scrollSequence": seq, "offset": 1720, "smooth": false]]]],
+            ["op": "create", "id": 2, "kind": "view"], ["op": "create", "id": 8, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [2, 8, 10, 12, 14]],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 120.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 8, "x": 0.0, "y": 1840.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 14, "x": 0.0, "y": 1960.0, "w": 300.0, "h": 60.0],
+            ["op": "content", "id": 1, "w": 300.0, "h": 2020.0]])
+        grown.rides = [1]
+        p.apply(grown)
+        XCTAssertEqual(scroll.contentOffset.y, 1720, accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(ride(try XCTUnwrap(p.views[8]))?.fromValue as? CGFloat), 20, accuracy: 0.5, "the row joining the run moves with it")
+        XCTAssertNil(ride(try XCTUnwrap(p.views[2])), "a row across a gap does not")
     }
 
     /// A runner commit that grows the last row at a followed end (a receipt

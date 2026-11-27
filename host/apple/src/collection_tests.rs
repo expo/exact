@@ -333,7 +333,63 @@ fn collection_feedback_rejects_invalid_time_before_mutation() {
 /// motion, do not.
 #[test]
 fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
-    let source = SOURCE
+    let (mut bridge, _, _) = fixture(&grow_source());
+    rides_on_growth(&mut bridge);
+}
+
+/// The ride is the list's, not the motion engine's: a plan that animates
+/// nothing, linked without motion, rides as well.
+#[test]
+fn a_list_rides_with_no_motion_linked() {
+    let plan = contract::compile(&grow_source()).unwrap().encode();
+    let mut turn = crate::link::TurnLinks::of(crate::link::ALL);
+    turn.motion = None;
+    let mut bridge = Bridge::with_links(crate::link::Links {
+        turn,
+        ..crate::link::Links::ALL
+    });
+    bridge.boot(&plan, Rows::default(), Hooks::none(), 400., 600.);
+    rides_on_growth(&mut bridge);
+}
+
+/// A row whose height moves on a transition grows over its ticks: a tick
+/// lays out the sampled height, which no runner commit made, and rides nothing.
+#[test]
+fn a_height_transitions_ticks_ride_nothing() {
+    let source = grow_source().replace(
+        "column height=(tall and row == 0 ? 80 : 20)",
+        "column height=(tall and row == 0 ? 80 : 20) transition=\"height 300ms linear\"",
+    );
+    let (mut bridge, _, _) = fixture(&source);
+    for now in 1..=8 {
+        let before = snapshot(&bridge);
+        send(&mut bridge, &facts(&before, 0.), f64::from(now) / 10.);
+        if snapshot(&bridge).revision == before.revision {
+            break;
+        }
+    }
+    let host = bridge.host.as_ref().unwrap();
+    let kernel = host.runner().kernel();
+    let grow = kernel
+        .node_by_key(kernel.find_by_test_id("grow")[0])
+        .unwrap()
+        .id;
+    bridge.dispatch(grow, 0, 0, 3.);
+    let mut grew = false;
+    for frame in 1..=20 {
+        let len = bridge.tick(3. + f64::from(frame) * 16.);
+        let ticked = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+        grew |= ticked.contains("\"frame\"");
+        assert!(
+            !ticked.contains("\"rides\""),
+            "a tick rides nothing: {ticked}"
+        );
+    }
+    assert!(grew, "the ticks laid the growing row out");
+}
+
+fn grow_source() -> String {
+    SOURCE
         .replace("action toggle", "state tall = false\n  action grow\n    tall = true\n  action toggle")
         .replace(
             "      if showing\n",
@@ -342,20 +398,27 @@ fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
         .replace(
             "            text `${row}` testId=`row-${row}`",
             "            column height=(tall and row == 0 ? 80 : 20)\n              text `${row}` testId=`row-${row}`",
-        );
-    let (mut bridge, _, _) = fixture(&source);
-    let list = snapshot(&bridge).view;
+        )
+}
+
+/// Each fill names no ride, a commit that grows a row names the list, and
+/// a resize names none.
+fn rides_on_growth(bridge: &mut Bridge<Rows>) {
+    let list = snapshot(bridge).view;
     let rides = format!("\"rides\":[{list}]");
-    // Reports until the window rests: the last one moves no row
-    let mut rested = String::new();
+    // Reports until the window rests: each fill mounts rows, the list's own
+    // doing, and names no ride
     for now in 1..=8 {
-        let before = snapshot(&bridge);
-        rested = send(&mut bridge, &facts(&before, 0.), f64::from(now) / 10.);
-        if snapshot(&bridge).revision == before.revision {
+        let before = snapshot(bridge);
+        let filled = send(bridge, &facts(&before, 0.), f64::from(now) / 10.);
+        assert!(
+            !filled.contains("\"rides\""),
+            "a fill rides nothing: {filled}"
+        );
+        if snapshot(bridge).revision == before.revision {
             break;
         }
     }
-    assert!(!rested.contains("\"rides\""), "nothing moved: {rested}");
     let host = bridge.host.as_ref().unwrap();
     let kernel = host.runner().kernel();
     let grow = kernel
@@ -365,8 +428,13 @@ fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
     let len = bridge.dispatch(grow, 0, 0, 3.);
     let grown = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
     assert!(grown.contains(&rides), "the first row grew: {grown}");
-    let len = bridge.resize(400., 600.);
+    // A resize moves the rows it rewraps without motion
+    let len = bridge.resize(300., 500.);
     let resized = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(
+        resized.contains("\"frame\""),
+        "the resize laid the rows out again: {resized}"
+    );
     assert!(!resized.contains("\"rides\""), "{resized}");
 }
 

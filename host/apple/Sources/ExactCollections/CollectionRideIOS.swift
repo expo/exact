@@ -2,7 +2,7 @@
 // moves its cells: from where they showed to where they are, on one spring from
 // one frame, the port's own change included, when a runner commit moved them
 // (`Batch.rides`) or a row left with an exit animation.
-#if os(iOS) || os(tvOS)
+#if os(iOS)
 import UIKit
 import ExactKit
 import ExactCore
@@ -26,30 +26,54 @@ extension CollectionHost {
         return presenter.leaving.keys.contains { !began.contains($0) && rows[$0] != nil }
     }
 
+    /// Whether the list's rows ride this batch: motion is on (not Reduce
+    /// Motion, not the agent's clock, not inside an animation the rows
+    /// already ride: the keyboard's, a pane's), and a row the port showed when
+    /// the batch began is still mounted in it, to move from where it showed.
+    /// A window the batch replaced, or one only offscreen or leaving rows are
+    /// left of, keeps its correction's own motion (LLP 1010 §6.8). Decided
+    /// before the correction lands, which a ride takes at once.
+    func canRide(_ id: UInt32) -> Bool {
+        guard !DisplayPreferences.reducedMotion, !ExactEnv.agentFreezes, !Presenter.animationMayBeOpen,
+              let presenter, presenter.session?.clock == nil, let entry = entries[id], let scroll = presenter.views[id]?.scroll else { return false }
+        let horizontal = entry.snapshot.horizontal, port = horizontal ? scroll.bounds.width : scroll.bounds.height
+        return entry.snapshot.rows.contains { row in
+            guard let showed = entry.batchRows[row.view], let view = presenter.views[row.view], view.isDescendant(of: scroll) else { return false }
+            return showed < port && showed + (horizontal ? view.bounds.width : view.bounds.height) > 0
+        }
+    }
+
     /// Moves each row the batch shifted on the screen, the leaving ones too,
     /// from where it showed to where it is, additively: rows after a removal
     /// at a followed end stay put and the rows before it come down over the
     /// gap as the leaving row fades; rows above a row that grew at a followed
     /// end go up as the port takes the new end at once. A row the batch
-    /// mounted moves as the row it is nearest to. Under Reduce Motion, the
-    /// agent's frozen clock, or inside an animation (the keyboard's, which the
-    /// rows already ride), they take their places at once.
+    /// mounted moves with the run of logical positions it joins, from the
+    /// nearest row in that run that showed; across a gap of rows not mounted
+    /// it takes no move. Runs once the presenter has written its offsets and
+    /// scroll snap, from where the rows end up (`canRide` decided it).
     func rideBatch(_ id: UInt32) {
-        guard !DisplayPreferences.reducedMotion, !ExactEnv.agentFreezes, UIView.inheritedAnimationDuration == 0,
-              let presenter, let entry = entries[id], let scroll = presenter.views[id]?.scroll else { return }
-        let horizontal = entry.snapshot.horizontal, key = "ride-\(CACurrentMediaTime())", path = horizontal ? "position.x" : "position.y"
+        guard let presenter, let entry = entries[id], let scroll = presenter.views[id]?.scroll else { return }
+        let horizontal = entry.snapshot.horizontal, key = "\(NodeView.rideAnimation)\(CACurrentMediaTime())", path = horizontal ? "position.x" : "position.y"
         let offset = horizontal ? scroll.contentOffset.x : scroll.contentOffset.y
-        var seen = Set<UInt32>(), moves: [(at: CGFloat, by: CGFloat)] = [], mounted: [(view: UIView, at: CGFloat)] = []
+        var carried: [UInt32: CGFloat] = [:], seen = Set<UInt32>()
+        let ride = { (view: UIView, by: CGFloat) in if abs(by) > 0.5 { view.layer.add(Self.batchMotion(path, from: by), forKey: key) } }
         for row in Array(entry.batchRows.keys) + entry.snapshot.rows.map(\.view) where seen.insert(row).inserted {
-            guard let view = presenter.views[row] ?? presenter.leaving[row]?.view, view.isDescendant(of: scroll) else { continue }
-            let at = start(of: view, in: scroll, horizontal: horizontal) - offset
-            guard let showed = entry.batchRows[row] else { mounted.append((view, at)); continue }
-            moves.append((at, showed - at))
-            if abs(showed - at) > 0.5 { view.layer.add(Self.batchMotion(path, from: showed - at), forKey: key) }
+            guard let showed = entry.batchRows[row], let view = presenter.views[row] ?? presenter.leaving[row]?.view, view.isDescendant(of: scroll) else { continue }
+            let by = showed - (start(of: view, in: scroll, horizontal: horizontal) - offset)
+            carried[row] = by
+            ride(view, by)
         }
-        for (view, at) in mounted {
-            guard let nearest = moves.min(by: { abs($0.at - at) < abs($1.at - at) }), abs(nearest.by) > 0.5 else { continue }
-            view.layer.add(Self.batchMotion(path, from: nearest.by), forKey: key)
+        let run = entry.snapshot.rows.filter { $0.index >= 0 }.sorted { $0.index < $1.index }
+        for pass in [run, run.reversed()] {
+            var last: (index: Int, by: CGFloat)?
+            for row in pass {
+                if let by = carried[row.view] { last = (row.index, by); continue }
+                guard let joined = last, abs(row.index - joined.index) == 1, let view = presenter.views[row.view] else { last = nil; continue }
+                carried[row.view] = joined.by
+                last = (row.index, joined.by)
+                ride(view, joined.by)
+            }
         }
     }
 
@@ -64,7 +88,8 @@ extension CollectionHost {
             starts[row.view] = start(of: view, in: scroll, horizontal: horizontal) - offset
             parent = view.superview
         }
-        // A row still leaving lies beside the mounted ones
+        // A row still leaving lies beside the mounted ones; with none left the
+        // list does not ride (`canRide`)
         for (row, leaving) in presenter.leaving where parent != nil && leaving.view.superview === parent {
             starts[row] = start(of: leaving.view, in: scroll, horizontal: horizontal) - offset
         }

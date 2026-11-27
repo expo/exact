@@ -539,9 +539,14 @@ final class NodePool {
 }
 
 extension NodeView {
+    /// The key prefix of a list row's ride (LLP 1010 §6.12, `CollectionRideIOS.swift`).
+    package static let rideAnimation = "ride-"
+
     /// Parked (`NodePool`): what `forget` drops, except the view's presenter
     /// and its empty text hierarchy or symbol glyph view, which the next row reuses.
     func recycle() {
+        // A list's ride is the row it moved, not the next row this view shows
+        for key in layer.animationKeys() ?? [] where key.hasPrefix(Self.rideAnimation) { layer.removeAnimation(forKey: key) }
         layoutHits = nil
         ControlBars.detach(self)
         trackClipboardHandlers(false)
