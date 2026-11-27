@@ -768,6 +768,7 @@ impl<D: DataSource> Host<D> {
         let order = host.preorder();
         host.close_top_layer(&order);
         host.cover_root_tablist();
+        host.pend_presented();
         host.prepare_flat(&mut batch);
         host.present_first_tree(previous, &order, &mut batch);
         host.declared_told = host.runner.declared_parents();

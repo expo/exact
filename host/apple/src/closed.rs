@@ -27,6 +27,23 @@ thread_local! {
     pub(crate) static CLOSED_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// A test's word that this platform presents routes with blocks of their own (`presents_routes`).
+    #[cfg(test)]
+    pub(crate) static PRESENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this platform presents a route in a container of its own, so a presented route waits for its block (LLP
+/// 1123, "a presented owner waits for its block"): iOS. AppKit chooses a painted sheet only after inspecting the route,
+/// and the painted hosts give a barless shell's sheet no block, so neither declares one yet.
+fn presents_routes() -> bool {
+    #[cfg(test)]
+    if PRESENTS.get() {
+        return true;
+    }
+    cfg!(target_os = "ios")
+}
+
 /// Whether this platform leaves a closed top-layer box out of layout.
 fn closed_wait() -> bool {
     #[cfg(test)]
@@ -51,9 +68,75 @@ pub(crate) struct Closed {
     opened: IdSet<NodeKey>,
     /// A box given back for the open boxes inside it, which name it.
     lent: IdMap<NodeKey, IdSet<NodeKey>>,
+    /// The routes waiting for the block their presentation gives them (`pend_presented`).
+    pending: Vec<ViewId>,
 }
 
 impl<D: DataSource> Host<D> {
+    /// Before a layout, at boot and after each commit's receipts: each route a navigation stack presents, a sheet's,
+    /// a popover's or one over the whole screen, and those pushed inside it, waits for the block UIKit's presentation
+    /// gives it (`Kernel::set_pending`), until the host gives one, as Swift's projection splits the stack
+    /// (`NavigationRules.segments`): the routes are a navigation root's or a tab panel's children with a
+    /// `navigationKey`, the stack the prefix through the one the root's key selects, and a new part starts at each
+    /// route whose `navigationPresentation` presents it. A part whose first route fits its content
+    /// (`navigationDetent` with `fit-content`) does not wait, as its detent is measured from its laid-out content
+    /// until a trial measures it apart. A route no part presents any more stops waiting.
+    pub(crate) fn pend_presented(&mut self) {
+        if !presents_routes() {
+            return;
+        }
+        let kernel = self.runner.kernel();
+        let mut wanted = Vec::new();
+        for root in kernel.navigation_roots() {
+            let Some(node) = kernel.node(root) else {
+                continue;
+            };
+            let Some(selected) = node.props.str(PropId::NavigationKey) else {
+                continue;
+            };
+            let panels = kernel
+                .root_tabs(root)
+                .map_or_else(|| vec![root], |t| t.panels);
+            for panel in panels.iter().filter_map(|&id| kernel.node(id)) {
+                let routes: Vec<_> = (panel.child_nodes())
+                    .filter(|r| r.props.str(PropId::NavigationKey).is_some())
+                    .collect();
+                let Some(last) = routes
+                    .iter()
+                    .position(|r| r.props.str(PropId::NavigationKey) == Some(selected))
+                else {
+                    continue;
+                };
+                // Every presenting route starts a part, the first route too, as `segments` gives the stack an empty
+                // part before it then
+                let (mut presented, mut fitted) = (false, false);
+                for route in &routes[..=last] {
+                    if matches!(
+                        route.props.str(PropId::NavigationPresentation),
+                        Some("modal" | "popover" | "fullscreen")
+                    ) {
+                        presented = true;
+                        fitted = (route.props.str(PropId::NavigationDetent))
+                            .is_some_and(|d| d.contains("fit-content"));
+                    }
+                    if presented && !fitted {
+                        wanted.push(route.id);
+                    }
+                }
+            }
+        }
+        let kernel = self.runner.kernel_mut();
+        for &id in &self.closed.pending {
+            if !wanted.contains(&id) {
+                let _ = kernel.set_pending(id, false);
+            }
+        }
+        for &id in &wanted {
+            let _ = kernel.set_pending(id, true);
+        }
+        self.closed.pending = wanted;
+    }
+
     /// At boot, before the first layout: every top-layer box in `order`.
     pub(crate) fn close_top_layer(&mut self, order: &[ViewId]) {
         self.close_boxes(order.iter().copied());
@@ -361,6 +444,43 @@ component App
         assert_eq!(port.frame.width, 200.);
         assert_eq!(port.content.0, port.frame.width);
         assert!(port.content.1 > port.frame.height);
+    }
+
+    /// A sheet selected at boot waits for the block UIKit's presentation gives it (LLP 1123, "a presented owner
+    /// waits for its block"): it and what it holds have no frame, while the page under it is laid out; a sheet that
+    /// fits its content does not wait.
+    #[test]
+    fn a_presented_route_waits_for_its_block() {
+        let source = |detent: &str| {
+            format!(
+                r#"component App
+  state selected = "sheet"
+  view
+    main navigationKey=selected navigationBack="back" display="flex" flex-direction="column"
+      column navigationKey="home" testId="home"
+        text "Home"
+      column navigationKey="sheet" navigationPresentation="modal"{detent} testId="sheet"
+        text "In the sheet" testId="inside"
+"#
+            )
+        };
+        let boot = |source: &str| {
+            PRESENTS.set(true);
+            let plan = contract::compile(source).unwrap().encode();
+            let measurer = Box::new(MonospaceMeasurer::default());
+            let (host, _) = Host::boot(&plan, NoData, measurer, 390.0, 844.0).unwrap();
+            PRESENTS.set(false);
+            host
+        };
+        let laid = |host: &Host<NoData>, id: &str| {
+            let k = host.runner.kernel();
+            k.laid_out_frame(k.find_by_test_id(id)[0]).is_some()
+        };
+        let host = boot(&source(""));
+        assert!(laid(&host, "home"));
+        assert!(!laid(&host, "sheet") && !laid(&host, "inside"));
+        let fitted = boot(&source(r#" navigationDetent="fit-content""#));
+        assert!(laid(&fitted, "sheet") && laid(&fitted, "inside"));
     }
 
     /// A box in a closed `dialog` is not laid out, so it does not

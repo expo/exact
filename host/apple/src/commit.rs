@@ -68,6 +68,7 @@ impl<D: DataSource> Host<D> {
             > 1)
         .then(|| self.runner.handlers());
         self.close_new_top_layer(receipts);
+        self.pend_presented();
         if receipts.iter().any(|t| !unchanged(&t.receipt)) {
             self.prepare_flat(&mut batch);
         }
