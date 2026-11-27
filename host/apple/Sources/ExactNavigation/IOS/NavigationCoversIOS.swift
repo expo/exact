@@ -419,13 +419,15 @@ extension NavigationHost {
                     // A band's part of the safe area is a UI inset over control bars, not layout (LLP 1131 D2).
                     let title = ownsTop ? node.scrollOrigin : 0
                     let stretched = title > 0 && node.scrollView.map { Self.stretched($0, origin: title) } == true
-                    let noTop = node === c.collapseScroll && RouteGeometry.insetsNoTop(c.node)
+                    // A route's top opt-out holds for its bottom-only scroller as for its title's
+                    let noTop = (node === c.collapseScroll || node === c.edgeScroll) && RouteGeometry.insetsNoTop(c.node)
                     let top = noTop ? 0 : max(0, max(stretched ? min(safe.top, title) : safe.top, title) - node.pageBand.top)
                     // Only the scroller whose clearance takes back UIKit's inset loses it in layout.
                     let back = min(0, node.scrollView.flatMap { extras[ObjectIdentifier($0)]?.bottom } ?? 0)
                     let bottomOff = RouteGeometry.clearanceOff(c.node) & 4 != 0
-                    // When a tab bar goes away on a cover page, the route takes its padding back.
-                    // The title scroller's old safe area disappears after that layout.
+                    // A cover page's route that keeps its bottom clearance (its title scroller does not hold the
+                    // bottom edge) pads it, and the scroller takes none: its safe area can still hold a tab bar
+                    // that went away until UIKit lays it out again.
                     let keepsBottom = covered && !presented && c.tabBarController != nil && !bottomOff && node !== c.edgeScroll && !peerBottom
                     let bottom = keepsBottom || (noTop && node !== c.edgeScroll) ? 0 : max(0, max(safe.bottom, bottomOff ? 0 : reach) + back - node.pageBand.bottom)
                     if top > 0 || bottom > 0 { wanted[node.id] = .inset(top: top, bottom: bottom) }

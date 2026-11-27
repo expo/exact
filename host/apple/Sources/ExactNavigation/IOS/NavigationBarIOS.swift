@@ -1286,7 +1286,8 @@ extension NavigationHost {
         #if os(iOS)
         if #available(iOS 27.1, *), presenter.arrangements.insets(node) { return true }
         #endif
-        return controllers.values.contains { $0.edgeScroll === node }
+        // A bottom-only scroller takes UIKit's adjustment unless its route has no top to inset (`reachBottom`)
+        return controllers.values.contains { $0.edgeScroll === node && !RouteGeometry.insetsNoTop($0.node) }
     }
 
     /// UIKit's zero-width fixed space splits shared glass without authored metrics.

@@ -1,0 +1,42 @@
+// LLP 1123 D3, D13 (PageEdgesIOSTests): under a `viewport-fit="cover"` root
+// with no tab bar, a pushed route that says it has no bar and opts its top out
+// of the clearance (`-exact-safe-area="top"`), its one scroller filling it.
+// The scroller takes the route's bottom edge, its bottom inset the home
+// indicator's, and its top stays opted out: UIKit insets none of it. Lead is
+// a route whose list, under a button, holds its bottom edge alone; Clear turns
+// its bar transparent and back, so its top has nothing to inset and then does.
+routes nav
+  home "/"
+    page "/page"
+    lead "/lead"
+
+component CoverBarlessTop
+  state clear = false
+  action open
+    nav = push(nav, "/page")
+  action openLead
+    nav = push(nav, "/lead")
+  action toggleClear
+    clear = not clear
+  view
+    main viewport-fit="cover" navigationKey=`${top(nav).id}` testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` testId="route-home" position="absolute" inset=0 display="flex" flex-direction="column"
+            button press=open testId="open"
+              text "Open"
+            button press=openLead testId="open-lead"
+              text "Lead"
+            scroll testId="list" flex=1 min-height=0
+              column height=1600
+        if e.name == "page"
+          column navigationKey=`${e.id}` navigationBar="none" -exact-safe-area="top" testId="route-page" position="absolute" inset=0 display="flex" flex-direction="column"
+            scroll testId="page-list" flex=1 min-height=0
+              text "list top" testId="list-top"
+              column height=1600
+        if e.name == "lead"
+          column navigationKey=`${e.id}` navigationBar=(clear ? "transparent" : "auto") testId="route-lead" position="absolute" inset=0 display="flex" flex-direction="column"
+            button press=toggleClear testId="clear"
+              text "Clear"
+            scroll testId="lead-list" flex=1 min-height=0
+              column height=1600
