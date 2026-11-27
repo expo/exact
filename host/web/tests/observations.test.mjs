@@ -25,6 +25,7 @@ beforeAll(() => {
     if (path === '/motion') return new Response(MOTION, { headers: { 'content-type': 'text/html' } });
     if (path === '/placed') return new Response(PLACED, { headers: { 'content-type': 'text/html' } });
     if (path === '/clamped') return new Response(CLAMPED, { headers: { 'content-type': 'text/html' } });
+    if (path === '/delayed') return new Response(DELAYED, { headers: { 'content-type': 'text/html' } });
     return new Response(`<!doctype html><meta name="viewport" content="width=device-width, viewport-fit=cover">
       <style>body { margin: 0 } div { box-sizing: border-box }</style>
       <div id="top" style="position:absolute;top:0;left:0;width:390px;height:200px;padding-top:var(--exact-safe-area-inset-top, 5px)"></div>
@@ -149,16 +150,15 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader is measur
   }
 }, 30_000);
 
-// A reader at the top of a 100-point scroller scrolled by 500, its margin 37 less half its input, so its input settles
-// at 20 under the 47-point band, and in it a box 50 times its input tall, 1000 until the rounds write one: the first
-// round's input, 10, leaves too little to scroll to 500, but the settled one, 20, enough
+// A 100-point scroller scrolled by 500 that reads its own input, its margin 37 less half of it, so its input settles at
+// 20 under the 47-point band, and hands it to its content, 50 times its input tall, 1000 until the rounds write one: a
+// new reader's first input, 0, and the rounds' before 20 leave too little to scroll to 500, but the settled one enough
 const CLAMPED = `<!doctype html><style>body { margin: 0 }</style>
-  <div id="port" style="overflow:auto;height:100px;width:100px">
-    <div id="reader" style="margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));height:10px">
-      <div style="height:calc(50 * var(--exact-safe-area-inset-top, 20px))"></div></div></div>
+  <div id="port" style="overflow:auto;height:100px;width:100px;margin-top:calc(37px - 0.5 * var(--exact-safe-area-inset-top, 0px));--content:calc(50 * var(--exact-safe-area-inset-top, 20px))">
+    <div style="height:var(--content)"></div></div>
   <script type="module">
     import { observe } from '/observe.js';
-    const port = document.getElementById('port'), reader = document.getElementById('reader');
+    const port = document.getElementById('port'), reader = port;
     port.scrollTop = 500;
     const { rounds, unsettled } = observe([reader], [47, 0, 34, 0]);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -185,7 +185,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's clamped 
 // A reader its input moves through several heights in the rounds, watched by a ResizeObserver and an
 // IntersectionObserver, which the browser delivers at its rendering step, after the task the rounds run in
 const OBSERVED = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
-  <div id="grows" style="top:calc(60px - var(--exact-safe-area-inset-top, 60px));height:calc(20px + var(--exact-safe-area-inset-top, 0px))"></div>
+  <div id="grows" style="top:calc(30px - 0.5 * var(--exact-safe-area-inset-top, 0px));height:calc(20px + var(--exact-safe-area-inset-top, 0px))"></div>
   <script type="module">
     import { observe } from '/observe.js';
     const el = document.getElementById('grows'), sizes = [], crossings = [];
@@ -204,10 +204,12 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`observers see only
     await page.goto(`${server.url.href}observed`);
     await page.waitForFunction(() => window.result);
     const r = await page.evaluate(() => window.result);
-    // The rounds moved it through 67 and 54 points tall back to 20, the height it had: no observer saw a round's
+    // From 0 the rounds moved it through 37 points tall and more to its fixed point, 34 under the band and 54 tall: the
+    // observers saw that height at most once, and no round's
     expect(r.rounds).toBeGreaterThan(1);
-    expect(r.height).toBe(20);
-    expect(r.sizes).toEqual([]);
+    expect(r.height).toBeCloseTo(54, 0);
+    expect(r.sizes.every((h) => Math.abs(h - r.height) < 0.01)).toBe(true);
+    expect(r.sizes.length).toBeLessThanOrEqual(1);
     expect(r.crossings.length).toBeLessThanOrEqual(1);
   } finally {
     await browser.close();
@@ -322,8 +324,8 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's values s
     await page.waitForFunction(() => window.result);
     const r = await page.evaluate(() => window.result);
     // The rounds read the layout, not a transition's first frame, though the page's sheet makes the mover's important:
-    // it writes 47, then 34, and with its residual repeating the end of its range, 0, holding at round 3
-    expect(r.rounds).toBe(3);
+    // a new reader starts at 0 (D9), which puts the mover at 60, clear of the band, where it holds in the first round
+    expect(r.rounds).toBe(1);
     expect(r.pads).toEqual([['padding-top', '5px', '47px']]);
     expect(r.moves).toEqual([['top', '0px', '60px']]);
     expect(r.other).toEqual([0]);
@@ -366,7 +368,33 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes 
     // Its own, the bar's 47 from its top, not the 30 an ancestor says
     expect(r.inputs.inside[0]).toBe('47px');
     expect(r.padding.inside).toBe(47);
-    expect(r.gone).toEqual(['initial', 'initial', 'initial', 'initial']);
+    // A reader with no box keeps the input it has, here none, so its fallback applies (D9)
+    expect(r.gone).toEqual(['', '', '', '']);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A reader at the top whose padding's transition has no duration but a one-second delay, which still starts a
+// transition (CSS Transitions 1: its combined duration is above 0), so the rounds take the full path and the settled
+// input reaches transition processing once, delayed, rather than landing as the rounds wrote it
+const DELAYED = `<!doctype html><style>body { margin: 0 }</style>
+  <div id="pads" style="position:absolute;top:0;width:50px;height:100px;padding-top:var(--exact-safe-area-inset-top, 5px);transition:padding-top 0s 1s"></div>
+  <script type="module">
+    import { observe } from '/observe.js';
+    const el = document.getElementById('pads');
+    getComputedStyle(el).paddingTop;
+    observe([el], [47, 0, 34, 0]);
+    window.result = { running: el.getAnimations().map((a) => a.transitionProperty), shown: getComputedStyle(el).paddingTop };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a delayed transition with no duration still takes the settled input, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}delayed`);
+    await page.waitForFunction(() => window.result);
+    expect(await page.evaluate(() => window.result)).toEqual({ running: ['padding-top'], shown: '5px' });
   } finally {
     await browser.close();
   }

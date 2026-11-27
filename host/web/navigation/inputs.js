@@ -6,11 +6,15 @@
 
 /** Each element's owned declarations, by name, and their text once a carry has built it. */
 const owned = new WeakMap();
+/** Every name the executor has owned on any element: a style text holding one carries a copy from when it was written
+ * (a motion snapshot), which no longer stands once it is dropped. */
+const ever = new Set();
 
 /** Write `value` as the element's own `name`, held until `drop`. */
 export function own(el, name, value) {
   let held = owned.get(el);
   if (!held) owned.set(el, (held = { names: new Map(), text: null }));
+  ever.add(name);
   held.names.set(name, value);
   held.text = null;
   el.style.setProperty(name, value);
@@ -25,23 +29,23 @@ export function drop(el, name) {
   el.style.removeProperty(name);
 }
 
-/** `text`, an inline style about to replace the element's, with the element's owned declarations as they are now. */
+/** `text`, an inline style about to replace the element's, without any copy of a declaration the executor owns or owned
+ * (the browser's parser takes them out, so a quoted `;` stays its value's) and with the element's owned declarations as
+ * they are now. */
 export function carry(el, text) {
-  const held = owned.get(el);
-  if (!held) return text;
   let out = text;
-  if (out.includes("--exact-")) for (const name of held.names.keys()) if (out.includes(name)) out = out.replace(declaration(name), "");
+  if (out.includes("--exact-") && [...ever].some((name) => out.includes(name))) {
+    scratch ??= document.createElement("div").style;
+    scratch.cssText = out;
+    for (const name of ever) scratch.removeProperty(name);
+    out = scratch.cssText;
+  }
+  const held = owned.get(el);
+  if (!held) return out;
   held.text ??= [...held.names].map(([name, value]) => `;${name}:${value}`).join("");
   return out + held.text;
 }
-
-const patterns = new Map();
-/** An owned declaration in a style text: a length or a keyword, which holds no `;` */
-function declaration(name) {
-  let p = patterns.get(name);
-  if (!p) patterns.set(name, (p = new RegExp(`(^|;)\\s*${name}\\s*:[^;]*`, "g")));
-  return p;
-}
+let scratch;
 
 const registered = new Set();
 /** Register `names` as properties of `syntax` that do not inherit, `initial` unsaid (CSS Properties and Values API), a

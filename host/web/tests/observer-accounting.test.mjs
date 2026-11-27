@@ -12,7 +12,7 @@ beforeAll(() => {
     if (/^\/[\w-]+\.js$/.test(path)) {
       return new Response(Bun.file(resolve(import.meta.dir, '../navigation' + path)), { headers: { 'content-type': 'text/javascript' } });
     }
-    return new Response(PAGE, { headers: { 'content-type': 'text/html' } });
+    return new Response(path === '/clipped' ? CLIPPED : PAGE, { headers: { 'content-type': 'text/html' } });
   } });
 });
 afterAll(() => server.stop(true));
@@ -62,6 +62,36 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a commit's sample 
     expect(r.author).toEqual({ resized: 1, outside: 1 });
     expect(r.scrolled.crossed).toBeGreaterThan(0);
     expect(r.scrolled.outside).toBe(r.scrolled.crossed);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A box in full view inside a clipping box, sampled; then the clip shrinks to 40 of its 100, which changes the box's
+// intersection though its own box stays where it was, a change from outside the commit
+const CLIPPED = `<!doctype html><style>body { margin: 0 }</style>
+  <div id="clip" style="position:absolute;top:0;left:0;width:200px;height:200px;overflow:hidden">
+    <div id="box" style="position:absolute;top:0;left:0;width:100px;height:100px"></div></div>
+  <script type="module">
+    import { account } from '/accounting.js';
+    const box = document.getElementById('box'), books = account(), frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const crossed = [];
+    new IntersectionObserver((entries) => crossed.push(...entries), { threshold: [0, 0.4, 1] }).observe(box);
+    await frame();
+    crossed.length = 0;
+    books.sample([box], 1);
+    document.getElementById('clip').style.height = '40px';
+    await frame();
+    window.result = { crossed: crossed.map((e) => Math.round(e.intersectionRatio * 10) / 10), outside: books.outside(crossed).length };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a clip's change of a box's intersection is outside the commit, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}clipped`);
+    await page.waitForFunction(() => window.result);
+    expect(await page.evaluate(() => window.result)).toEqual({ crossed: [0.4], outside: 1 });
   } finally {
     await browser.close();
   }

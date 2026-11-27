@@ -2,7 +2,8 @@
 // inline style, in Chromium, WebKit and Firefox: a reader's observation, which pads it through a one-second
 // transition, is still there after the `style` op writes the runtime's text, through the motion controller as when
 // motion is not loaded, so its padding holds and no transition starts; a snapshot's stale copy gives way to the current
-// value; and a dropped observation is not brought back. A replacement that does not carry it loses the padding and
+// value; a dropped observation is not brought back, even from a snapshot taken while it was written; and a quoted
+// semicolon in the replacing text stays its value's. A replacement that does not carry it loses the padding and
 // starts a transition, which is what the carry prevents.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
@@ -27,14 +28,23 @@ const PAGE = `<!doctype html><style>body { margin: 0 } div { position: absolute;
     carried.style.cssText = carry(carried, RUNTIME + ';left:0px;color:red');
     controller.style(1, RUNTIME + ';left:60px;color:red');
     stale.style.cssText = carry(stale, RUNTIME + ';left:120px;--exact-safe-area-inset-top:10px');
+    // A snapshot taken while the observation was written, put back after it is dropped, as a hold that lets go does
+    const snapshot = dropped.style.cssText;
     drop(dropped, '--exact-safe-area-inset-top');
-    dropped.style.cssText = carry(dropped, RUNTIME + ';left:180px');
+    dropped.style.cssText = carry(dropped, snapshot.replace('padding-top', 'transition: padding-top 1s linear; padding-top'));
     lost.style.cssText = RUNTIME + ';left:240px';
+    // A quoted semicolon stays its value's
+    const quoted = document.createElement('div');
+    document.body.append(quoted);
+    quoted.style.cssText = 'padding-top:var(--exact-safe-area-inset-top, 5px)';
+    observe([quoted], [47, 0, 0, 0]);
+    quoted.style.cssText = carry(quoted, 'content:"a;b";color:red;padding-top:var(--exact-safe-area-inset-top, 5px)');
+    window.quoted = { color: getComputedStyle(quoted).color, padding: getComputedStyle(quoted).paddingTop };
     // The transitions the replacements started, then each padding once they end
     const running = els.map((el) => el.getAnimations().length);
     document.getAnimations().forEach((a) => a.finish());
-    window.result = Object.fromEntries(ids.map((id, i) => [id, { padding: getComputedStyle(els[i]).paddingTop, running: running[i],
-      color: getComputedStyle(els[i]).color }]));
+    window.result = { ...Object.fromEntries(ids.map((id, i) => [id, { padding: getComputedStyle(els[i]).paddingTop, running: running[i],
+      color: getComputedStyle(els[i]).color }])), quoted: window.quoted };
   </script>`;
 
 let server;
@@ -66,6 +76,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a replaced inline 
       stale: { padding: '47px', running: 0, color: 'rgb(0, 0, 0)' },
       dropped: { padding: '5px', running: 1, color: 'rgb(0, 0, 0)' },
       lost: { padding: '5px', running: 1, color: 'rgb(0, 0, 0)' },
+      quoted: { color: red, padding: '47px' },
     });
   } finally {
     await browser.close();

@@ -1,6 +1,6 @@
 import { AGENT_ADMITTED, views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
-import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, modalCommand, popoverCommand, runFocusCommands, inertAncestor, refitTexts, noteSymbolEffect, playSymbolEffects } from "../navigation.js";
+import { carry, pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, modalCommand, popoverCommand, runFocusCommands, inertAncestor, refitTexts, noteSymbolEffect, playSymbolEffects } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
 import { attach } from "./input.js";
 import { flowBatch } from "./flow.js";
@@ -191,8 +191,9 @@ function apply(batch) {
           }
           applyProps(el, op.props, [], !!adopted);
           const css = op.css + (el.hasAttribute("data-action") ? ";touch-action:none" : "");
+          // An adopted element may hold the executor's declarations already, which the write carries (inputs.js)
           if ((el.getAttribute("style") ?? "") !== css) {
-            el.style.cssText = css;
+            el.style.cssText = adopted ? carry(el, css) : css;
           }
           noteFit(css);
           noteSymbolEffect(css);
