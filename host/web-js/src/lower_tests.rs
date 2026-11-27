@@ -471,7 +471,7 @@ fn a_none_and_a_blank_arm_lower() {
 
 /// @ref LLP 1123 D17 — a node whose rows the classes hold, not its inline style, is marked for the safe-area executor
 /// where they let an axis scroll or read an observation: an arm set that writes `overflow-y`, a static scroller and a
-/// static reader each, and a node with neither not at all.
+/// static reader each, a node with neither not at all, and a static reader with scrolling arms both.
 #[test]
 fn class_held_scrollers_and_readers_are_marked_for_the_safe_area_executor() {
     let (arm, why) = refusals("column overflow-y=(s == \"a\" ? \"auto\" : \"visible\")");
@@ -495,27 +495,23 @@ fn class_held_scrollers_and_readers_are_marked_for_the_safe_area_executor() {
     );
     let (plain, _) = refusals("column padding-top=\"8px\"");
     assert!(!plain.js.contains("data-exact-safe-area"), "{}", plain.js);
+    // A static reader whose arms switch `overflow-y`: the arms' one write keeps the class's `reader`
+    let (both, why) = refusals(
+        "column padding-top=\"var(--exact-safe-area-inset-top)\" overflow-y=(s == \"a\" ? \"auto\" : \"visible\")",
+    );
+    assert!(why.is_empty(), "{why:?}");
+    assert!(
+        both.js
+            .contains("setAttribute(\"data-exact-safe-area\",\"reader scroller\")"),
+        "{}",
+        both.js
+    );
 }
 
 #[test]
 fn safe_area_marks_read_the_style_text() {
-    use crate::safe_area::marks as safe_area_marks;
-    assert_eq!(
-        safe_area_marks("overflow-y:auto;height:10px"),
-        Some("scroller".into())
-    );
-    assert_eq!(
-        safe_area_marks("overflow:hidden scroll"),
-        Some("scroller".into())
-    );
-    assert_eq!(safe_area_marks("overflow-x:hidden"), None);
-    assert_eq!(
-        safe_area_marks("padding-top:var(--exact-keyboard-inset-bottom,0px)"),
-        Some("reader".into())
-    );
-    assert_eq!(
-        safe_area_marks("--a:var(--exact-safe-area-inset-top);overflow:auto"),
-        Some("reader scroller".into())
-    );
-    assert_eq!(safe_area_marks("color:red"), None);
+    use crate::safe_area::{reads, scrolls};
+    assert!(scrolls("overflow-y:auto;height:10px") && scrolls("overflow:hidden scroll"));
+    assert!(!scrolls("overflow-x:hidden") && !scrolls("color:red"));
+    assert!(reads("padding-top:var(--exact-keyboard-inset-bottom,0px)") && !reads("color:red"));
 }

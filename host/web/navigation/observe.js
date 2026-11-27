@@ -69,7 +69,7 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   let result, restore = false;
   try {
     // A sticky ancestor held at rest is positioned as it was, so the chains read before the marks still hold
-    result = rounds(readers, reads, chains, band, keyboard, box);
+    result = rounds(readers, reads, before, chains, band, keyboard, box);
     // The last round's values are the settled ones. Where nothing marked can transition, no sticky box was held and no
     // scroller moved (read from the rounds' last layout), they stay as written: putting the provisional values back and
     // writing the settled ones again would lay the page out once more for the same result. Otherwise the provisional
@@ -96,8 +96,11 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
 /** What `el`'s own style reads: the inputs it uses, by their index in `NAMES`, and whether it hands one to its
  * descendants, through a custom property it declares or an inherited length, so a round can restyle them too. Read from
  * its `style` attribute, as `readers` finds it (CSSOM leaves a shorthand's longhands empty where it holds a `var()`); a
- * reader whose inline style reads none is taken to read them all. */
+ * reader whose inline style reads none, or whose classes read too (the JS compiler's `reader` mark), is taken to read
+ * them all. */
 function consumed(el) {
+  // One whose classes read, whose rules the executor does not parse: every input, and its subtree marked
+  if (el.matches(CLASS_READER)) return { inputs: NAMES.map((_, i) => i), subtree: true };
   const inputs = new Set();
   let subtree = false;
   for (const [property, value] of declarations(el.getAttribute("style") ?? "")) {
@@ -136,7 +139,7 @@ function declarations(text) {
  * (`data-exact-safe-area~="reader"`); one that only declares an input, as an ancestor's value, reads none. Activation
  * (stage 5) takes them at each commit; tests until then. */
 export function readers(root = document) {
-  return [...root.querySelectorAll([...FAMILIES.map((f) => `[style*="var(--exact-${f}-"]`), '[data-exact-safe-area~="reader"]'].join(", "))];
+  return [...root.querySelectorAll([...FAMILIES.map((f) => `[style*="var(--exact-${f}-"]`), CLASS_READER].join(", "))];
 }
 
 /** The readers a running animation or transition can move (D17, "The web: invalidation"): those in the layout
@@ -162,23 +165,22 @@ export function moving(readers, animations = document.getAnimations()) {
 /** Measure the readers an animation moves each frame while one runs (D17), in rounds as a commit's, until none moves
  * them; returns a function that stops it. Activation (stage 5) starts it as a commit's rounds end; tests until then. */
 export function follow(readers, band, keyboard) {
-  let frame = 0, last = [];
+  let frame = 0, last = new Set();
   const step = () => {
-    const now = moving(readers);
-    // Once nothing moves them, those it moved last are measured once more, where they came to rest
-    const measured = now.length ? now : last;
+    const now = new Set(moving(readers));
+    // The readers an animation moves, and those one moved last frame and no longer does, once more where they came to rest
+    const measured = readers.filter((r) => now.has(r) || last.has(r));
     if (measured.length) observe(measured, band ?? documentBand(), keyboard ?? keyboardInset());
     last = now;
-    frame = now.length ? requestAnimationFrame(step) : 0;
+    frame = now.size ? requestAnimationFrame(step) : 0;
   };
   frame = requestAnimationFrame(step);
   return () => cancelAnimationFrame(frame);
 }
 
 /** The rule under which a round's values start no transition, on what the rounds mark: important in the page's first
- * cascade layer, which wins
- * over every important declaration of the page's own sheets, layered after it or unlayered (CSS Cascade 5, "Cascade
- * Layers"). */
+ * cascade layer, which wins over every important declaration of the page's own sheets, layered after it or unlayered
+ * (CSS Cascade 5, "Cascade Layers"). */
 function ensureRoundsRule() {
   if (document.getElementById("exact-rounds")) return;
   const style = document.createElement("style");
@@ -196,8 +198,9 @@ function write(el, reads, inputs) {
 /** D9's rounds over `readers`, returning the inputs each settled on, how many rounds ran and the readers still moving.
  * Each round reads every reader's box in one pass and writes every input it moves in one batch. A reader's next input is
  * D9's secant step on its residuals, the measured less the input, of this round and the last (`step`), within half a
- * device pixel of settled; its box is read as laid out, with every scroll offset at zero. */
-function rounds(readers, reads, chains, band, keyboard, box) {
+ * device pixel of settled; its box is read as laid out, with every scroll offset at zero. `before` holds each reader's
+ * inputs as its inline style had them, in the order of its reads. */
+function rounds(readers, reads, before, chains, band, keyboard, box) {
   const samples = readers.map(() => []);
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
   const keys = [0, 0, keyboard, 0], caps = readers.map(() => [...band, ...keys, ...keys]);
@@ -207,12 +210,13 @@ function rounds(readers, reads, chains, band, keyboard, box) {
   const written = new Map(), changed = new Set();
   const seeds = readers.map((el) => {
     const now = NAMES.map(() => 0), missing = [];
-    for (const i of reads.get(el).inputs) {
-      const v = el.style.getPropertyValue(NAMES[i]);
+    reads.get(el).inputs.forEach((i, k) => {
+      const v = before.get(el)[k];
       if (v.endsWith("px")) now[i] = parseFloat(v) || 0;
       else missing.push(i);
-    }
-    return { now, missing, boxed: el.isConnected && el.getClientRects().length > 0 };
+    });
+    // Only a reader with an input to seed is asked whether it has a box
+    return { now, missing, boxed: missing.length > 0 && el.isConnected && el.getClientRects().length > 0 };
   });
   readers.forEach((el, i) => {
     const { now, missing, boxed } = seeds[i];
@@ -227,7 +231,7 @@ function rounds(readers, reads, chains, band, keyboard, box) {
   // Each round reads every box once, laid out with every scroll offset at zero, and the area each reader observes, which
   // a reader's input can move
   const read = () => {
-    const seen = new Map(), reserved = reservedIn(new Map());
+    const seen = new Map(), reserved = reservations();
     const at = (el) => {
       if (!seen.has(el)) seen.set(el, el.isConnected && el.getClientRects().length ? laid(el, chains.get(el) ?? scrolling(el, box)) : null);
       return seen.get(el);
@@ -312,15 +316,13 @@ function step(input, measured, last, caps, tolerance) {
   });
 }
 
-/** How far a box lies from where it would with every scroll offset at zero, x then y (D9), given its `scrollers`, the
- * scroll containers of its `chain`: the offsets of the scrollers that move it, those in its containing blocks' chain, the
- * document's included unless a fixed box with no containing ancestor ends it. */
 /** What shapes the area each reader observes inside its owner (D9, D11, D12, D14), found once per transaction as no round
  * changes which box holds another: outermost first, each box that reserves part of the unsafe area inside it (D11: an
  * additional inset, which may be negative, then safe-area padding, which the emitter writes inline in `RESERVED`'s
  * registered properties) or whose route's transparent bar lies over the reader (`routes.js` `clearBar`); and whether a
  * scroller holds the reader (`cut`), which takes what reaches it on every edge, so the reader observes nothing of it or
- * of what lies outside it (a scroller that ignores the area is D4's). A box's reservation is read again each round, as a
+ * of what lies outside it (a scroller that ignores the area is D4's), and whether one that takes the keyboard does
+ * (`keys`), a vertical one at any depth. A box's reservation is read again each round, as a
  * reader's input can change it. The boxes inside a route take its bar, as content under a UIKit bar does; the route
  * itself does not, nor a box inside the bar, since the bar is the route's first child in its flow (neutral.css) and
  * either would move it by what it reads. A box observes only what reaches it, not its own reservation, which its
@@ -337,6 +339,16 @@ export function over(readers, box) {
     }
     return own.get(a);
   };
+  // Whether `a`, or a scroller above it, takes the keyboard: a vertical scroller takes it as a content inset, so its
+  // content observes none of it, and a sideways one passes it (D7, `keyboard.rs` `passes`); each scroller asked once
+  const takes = (a) => {
+    const found = step(a);
+    if (found.takes === undefined) {
+      const above = a.parentElement?.closest(SCROLLING);
+      found.takes = found.vertical || (!!above && takes(above));
+    }
+    return found.takes;
+  };
   for (const el of readers) {
     const steps = [];
     let cut = false, keys = false;
@@ -344,10 +356,10 @@ export function over(readers, box) {
       const found = step(a), header = found.header?.contains(el) ? null : found.header;
       // A scroller's own reservations and bars lie inside its cutoff, as the kernel keeps them
       if (header || found.reserving) steps.unshift(header === found.header ? found : { ...found, header });
+      // The nearest scroller takes the area; the keyboard goes on to the nearest vertical one
       if (found.scroller) {
         cut = true;
-        // A vertical scroller takes the keyboard as a content inset, so its content observes none of it (D7)
-        keys = found.vertical;
+        keys = takes(a);
         break;
       }
     }
@@ -356,6 +368,8 @@ export function over(readers, box) {
   return held;
 }
 const TRANSPARENT = '[data-navigationbar="transparent"]';
+/** A reader whose classes read an input, as the JS compiler marks it. */
+const CLASS_READER = '[data-exact-safe-area~="reader"]';
 /** A box whose inline style declares a reservation, as the emitter writes one. */
 const RESERVING = '[style*="--exact-additional-safe-area-"], [style*="--exact-safe-area-padding-"]';
 /** A box that may scroll: one whose inline style says how it overflows, one the JS target marks for a class that does
@@ -373,7 +387,7 @@ const HOLDS = `${TRANSPARENT}, ${RESERVING}, ${SCROLLING}`;
  * `tolerance` and starting apart otherwise; and a route's transparent bar from the route's padding edge to the bar's
  * bottom, on the top edge. `at` reads a box as laid out and `reserved` its reservation, each once a round, and `box` its
  * style once a transaction. */
-export function area(held, band, width, height, at, box, tolerance, reserved = reservedIn(new Map())) {
+export function area(held, band, width, height, at, box, tolerance, reserved) {
   const sides = [0, 1, 2, 3].map((e) => [0, held?.cut ? 0 : band[e]]);
   for (const step of held?.steps ?? []) {
     const r = at(step.box);
@@ -458,11 +472,14 @@ export function styles() {
 export const RESERVED = ["additional-safe-area", "safe-area-padding"].flatMap((f) => ["top", "right", "bottom", "left"].map((e) => `--exact-${f}-${e}`));
 
 
-/** A round's reading of what each reserving box reserves (`reservation`), once each, kept in `seen`. */
-export const reservedIn = (seen) => (el) => {
-  if (!seen.has(el)) seen.set(el, reservation(getComputedStyle(el)));
-  return seen.get(el);
-};
+/** A round's reading of what each reserving box reserves (`reservation`), each box read once. */
+export function reservations() {
+  const seen = new Map();
+  return (el) => {
+    if (!seen.has(el)) seen.set(el, reservation(getComputedStyle(el)));
+    return seen.get(el);
+  };
+}
 
 /** What a box with the computed style `s` reserves (`RESERVED`), or null where it reserves nothing. */
 function reservation(s) {

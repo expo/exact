@@ -1007,7 +1007,7 @@ impl Em<'_> {
         if parts.tag == "canvas" {
             attrs.extend(style::canvas_bitmap(plan, row)?);
         }
-        attrs.extend(crate::safe_area::marks(&css).map(|m| ("data-exact-safe-area".into(), m))); // LLP 1123 D17
+        attrs.extend(crate::safe_area::attribute(&parts.css)); // LLP 1123 D17
         let class = if css.is_empty() {
             "0".to_string()
         } else {

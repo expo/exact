@@ -1,10 +1,11 @@
 // @ref LLP 1123 D17, "The web: observers" — what a page's `ResizeObserver` and `IntersectionObserver` deliver after a
 // commit carries no Exact generation, so the host keeps the geometry it sampled for each observed target in commit g's
 // settled layout and suppresses a delivery only when that sample accounts for it: a resize entry whose box sizes, or an
-// intersection entry whose target box and intersection with the viewport, are the sample's within half a device pixel. Any other delivery carries a change
-// from outside the commit (an author's style, a font, a scroll), which schedules commit g+1. A target with no sample is
-// always outside. Activation (stage 5) samples after each commit's rounds and routes the host's own observers' entries
-// through it; until then only its tests do.
+// intersection entry whose target box and intersection with the viewport, are the sample's within half a device pixel,
+// for an observer rooted at the viewport with no root or scroll margin that does not track visibility. Any other delivery
+// carries a change from outside the commit (an author's style, a font, a scroll), which schedules commit g+1. A target
+// with no sample is always outside. Activation (stage 5) samples after each commit's rounds and routes the host's own
+// observers' entries through it; until then only its tests do.
 
 /** A new account of commit samples: `sample` records the observed `targets` in the layout as it now stands, for
  * `generation`; `outside` returns the entries of one delivery that no sample accounts for, and the generation the
@@ -15,12 +16,14 @@ export function account() {
     sample(targets, generation) {
       for (const el of targets) samples.set(el, { generation, ...measure(el) });
     },
-    /** The entries of one delivery that no sample accounts for; `observer`, the options an `IntersectionObserver` was made
-     * with, tells which of its entries the samples can account for: only one whose root is the viewport, with no margin.
-     * Without it, every intersection entry is outside. */
+    /** The entries of one delivery that no sample accounts for; `observer`, the `IntersectionObserver` that delivered
+     * them, tells whether the samples can account for its entries: only where its root is the viewport, its root and
+     * scroll margins are zero and it does not track visibility, as the samples hold geometry alone. Without it, every
+     * intersection entry is outside. */
     outside(entries, observer) {
       const tolerance = 0.5 / (globalThis.devicePixelRatio || 1);
-      const viewport = !!observer && (observer.root ?? null) === null && /^(0(px|%)?\s*)+$/.test((observer.rootMargin ?? "0px").trim() + " ");
+      const viewport = !!observer && (observer.root ?? null) === null && zero(observer.rootMargin) && zero(observer.scrollMargin)
+        && !observer.trackVisibility;
       return entries.filter((entry) => !accounts(samples.get(entry.target), entry, tolerance, viewport));
     },
     generation(target) {
@@ -29,8 +32,14 @@ export function account() {
   };
 }
 
+/** Whether an observer's margin, as it serializes it (`rootMargin`, `scrollMargin`; absent where the browser has none),
+ * is zero on every side. */
+function zero(margin = "0px") {
+  return /^(0(px|%)?\s*)+$/.test(`${margin.trim()} `);
+}
+
 /** Whether `sample` accounts for `entry`, each length within `tolerance`, an intersection entry only from an observer
- * rooted at the viewport with no margin (`viewport`). */
+ * rooted at the viewport with no margin that does not track visibility (`viewport`). */
 function accounts(sample, entry, tolerance, viewport) {
   if (!sample) return false;
   const near = (a, b) => Math.abs(a - b) <= tolerance;
@@ -39,7 +48,7 @@ function accounts(sample, entry, tolerance, viewport) {
     return !!border && !!content && near(border.inlineSize, sample.border[0]) && near(border.blockSize, sample.border[1])
       && near(content.inlineSize, sample.content[0]) && near(content.blockSize, sample.content[1]);
   }
-  // An intersection the sample can tell only for the viewport as the root with no margin, as the target box clipped by
+  // An intersection the sample can tell only for the viewport as the root with no margins, as the target box clipped by
   // the boxes that clip it; any other observer's delivery is kept as outside, so no change of its root or clip is lost
   if (!viewport) return false;
   const r = entry.boundingClientRect, s = sample.rect, v = sample.visible;

@@ -36,7 +36,11 @@ const PAGE = `<!doctype html><style>body { margin: 0; height: 3000px }</style>
     observe([el], [47, 0, 34, 0]);
     books.sample([el], 1);
     await frame();
-    const commit = { resized: resized.length, crossed: crossed.length, outside: books.outside([...resized, ...crossed], io).length, unbound: books.outside(crossed).length, generation: books.generation(el) };
+    // The commit's crossing as an observer with a scroll margin, or one tracking visibility, would deliver it: the
+    // account reads only an observer's options, and not every engine has these
+    const margined = { root: null, rootMargin: '0px 0px 0px 0px', scrollMargin: '0px 0px 20px 0px' }, tracking = { root: null, rootMargin: '0px', trackVisibility: true };
+    const commit = { resized: resized.length, crossed: crossed.length, outside: books.outside([...resized, ...crossed], io).length, unbound: books.outside(crossed).length,
+      margined: books.outside(crossed, margined).length, tracking: books.outside(crossed, tracking).length, generation: books.generation(el) };
     resized.length = 0;
     el.style.width = '150px';
     await frame();
@@ -59,7 +63,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a commit's sample 
     expect(r.height).toBe(60);
     // The commit's resize and its crossing of the observer's thresholds are the sample's
     // Given the observer, the account takes both as the commit's; without it, the crossing could be any observer's
-    expect(r.commit).toEqual({ resized: 1, crossed: 1, outside: 0, unbound: 1, generation: 1 });
+    expect(r.commit).toEqual({ resized: 1, crossed: 1, outside: 0, unbound: 1, margined: 1, tracking: 1, generation: 1 });
     // The author's widening is outside it, as is the scroll that moves it partly out of view
     expect(r.author).toEqual({ resized: 1, outside: 1 });
     expect(r.scrolled.crossed).toBeGreaterThan(0);

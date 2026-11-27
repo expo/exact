@@ -10,7 +10,7 @@
 // edges a box names otherwise.
 
 import { own, register } from "./inputs.js";
-import { area, atRest, depth, documentBand, edgesOf, laid, over, reservedIn, scrolling, styles } from "./observe.js";
+import { area, atRest, depth, documentBand, edgesOf, laid, over, reservations, scrolling, styles } from "./observe.js";
 import { keyboardInset } from "./environment.js";
 
 const EDGES = ["top", "right", "bottom", "left"], ALL = [true, true, true, true], NONE = [0, 0, 0, 0];
@@ -23,7 +23,8 @@ export function reach(boxes, band = documentBand(), { reaches } = {}) {
 }
 
 /** Each of `boxes` with, on each edge, its reach (`reach`), how far past its border box its stopping ancestors leave it
- * room (`room`, at most `Infinity`), its laid-out box (`rect`) and the area it lies in (`sides`). Reads only. */
+ * room (`room`, at most `Infinity`), its laid-out box (`rect`), the area it lies in (`sides`) and whether a scroller
+ * above it takes the keyboard (`taken`). Reads only. */
 function measure(boxes, band, box, { reaches = () => ALL, cut = () => false } = {}) {
   const held = over(boxes, box), out = new Map();
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
@@ -31,7 +32,7 @@ function measure(boxes, band, box, { reaches = () => ALL, cut = () => false } = 
   return atRest(boxes, box, () => {
     // A box is unscrolled through its containing blocks only where an ancestor is scrolled, as one that scrolls nothing
     // has offsets of 0; whether one is, once an ancestor, since boxes share them
-    const scrolled = new Map(), seen = new Map(), pads = new Map(), reserved = reservedIn(new Map());
+    const scrolled = new Map(), seen = new Map(), pads = new Map(), reserved = reservations();
     const under = (a) => {
       if (!a) return false;
       let s = scrolled.get(a);
@@ -68,7 +69,7 @@ function measure(boxes, band, box, { reaches = () => ALL, cut = () => false } = 
           stops.forEach((stop, e) => { if (stop) room[e] = Math.min(room[e], Math.max(0, left[e])); });
         }
       }
-      out.set(el, { reach: reached.map((d, e) => Math.min(d, room[e])), room, rect: r, sides, held: !!held.get(el)?.cut });
+      out.set(el, { reach: reached.map((d, e) => Math.min(d, room[e])), room, rect: r, sides, taken: !!held.get(el)?.keys });
     }
     return out;
   });
@@ -130,23 +131,23 @@ export const OCCUPIED = EDGES.map((e) => `--exact-scroll-occupied-${e}`);
 
 /** Write on each of `scrollers` how deep the unsafe area occupies it on each edge (D14's occupied terms): how far the
  * area a box there observes reaches into the scroller's frame as its reach carries it (`reaches`, as `reach` takes it),
- * at most that area's depth, and on the bottom edge of a vertical scroller that no other scroller holds the docked
- * keyboard's overlap with that frame (`keyboard`, the depth up from the viewport's bottom; the caller gives 0 where the
- * keyboard policy is not `resizes-visual`) where that is deeper. The web has no platform adjustment, so the whole occupied depth is the scroller's (D14's P is 0). Every
- * scroller is read before any is written. */
+ * at most that area's depth, and on the bottom edge of a vertical scroller that no other vertical scroller holds the
+ * docked keyboard's overlap with that frame (`keyboard`, the depth up from the viewport's bottom; the caller gives 0 where the
+ * keyboard policy is not `resizes-visual`) where that is deeper. The web has no platform adjustment, so the whole
+ * occupied depth is the scroller's (D14's P is 0). Every scroller is read before any is written. */
 export function insets(scrollers, band = documentBand(), keyboard = keyboardInset(), { reaches } = {}) {
   register(OCCUPIED);
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
   const writes = [], box = styles();
-  for (const [el, { reach: d, rect, sides, held }] of measure(scrollers, band, box, { reaches })) {
+  for (const [el, { reach: d, rect, sides, taken }] of measure(scrollers, band, box, { reaches })) {
     if (!el.isConnected) continue;
     if (!rect) {
       writes.push([el, NONE]);
       continue;
     }
     const occupied = edgesOf(rect, width, height).map((x, e) => depth(sides[e], x - d[e]));
-    // Only a vertical scroller takes the keyboard, and none inside another scroller, which takes it already (D7)
-    if (box(el).scrollsY && !held) {
+    // Only a vertical scroller takes the keyboard, and none under another vertical one, which takes it already (D7)
+    if (box(el).scrollsY && !taken) {
       const top = rect.top - d[0], bottom = rect.bottom + d[2];
       occupied[2] = Math.max(occupied[2], Math.max(0, Math.min(bottom, height) - Math.max(top, height - keyboard)));
     }

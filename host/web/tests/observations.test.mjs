@@ -23,6 +23,7 @@ beforeAll(() => {
     if (path === '/observed') return new Response(OBSERVED, { headers: { 'content-type': 'text/html' } });
     if (path === '/readers') return new Response(READERS, { headers: { 'content-type': 'text/html' } });
     if (path === '/motion') return new Response(MOTION, { headers: { 'content-type': 'text/html' } });
+    if (path === '/handoff') return new Response(HANDOFF, { headers: { 'content-type': 'text/html' } });
     if (path === '/placed') return new Response(PLACED, { headers: { 'content-type': 'text/html' } });
     if (path === '/clamped') return new Response(CLAMPED, { headers: { 'content-type': 'text/html' } });
     if (path === '/delayed') return new Response(DELAYED, { headers: { 'content-type': 'text/html' } });
@@ -184,18 +185,20 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's clamped 
 }, 30_000);
 
 // A reader its input moves through several heights in the rounds, watched by a ResizeObserver and an
-// IntersectionObserver, which the browser delivers at its rendering step, after the task the rounds run in
+// IntersectionObserver, which the browser delivers at its rendering step, after the task the rounds run in. A 45-point
+// clip shows 15 of its 20 at rest, 0.75, and 32 of 54 once settled, so the settled layout crosses the observer's 0.7
 const OBSERVED = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
-  <div id="grows" style="top:calc(30px - 0.5 * var(--exact-safe-area-inset-top, 0px));height:calc(20px + var(--exact-safe-area-inset-top, 0px))"></div>
+  <div style="top:0;height:45px;overflow:hidden"><div id="grows" style="top:calc(30px - 0.5 * var(--exact-safe-area-inset-top, 0px));height:calc(20px + var(--exact-safe-area-inset-top, 0px))"></div></div>
   <script type="module">
     import { observe } from '/observe.js';
     const el = document.getElementById('grows'), sizes = [], crossings = [];
     await new Promise((done) => new ResizeObserver((entries) => { for (const e of entries) sizes.push(e.contentRect.height); done(); }).observe(el));
-    await new Promise((done) => new IntersectionObserver((entries) => { for (const e of entries) crossings.push(Math.round(e.intersectionRect.height)); done(); }).observe(el));
+    await new Promise((done) => new IntersectionObserver((entries) => { for (const e of entries) crossings.push(e.intersectionRect.height); done(); }, { threshold: [0.7] }).observe(el));
     sizes.length = crossings.length = 0;
     const { rounds } = observe([el], [47, 0, 34, 0]);
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    window.result = { rounds, sizes, crossings, height: el.getBoundingClientRect().height };
+    const box = el.getBoundingClientRect();
+    window.result = { rounds, sizes, crossings, height: box.height, shown: 45 - box.top };
   </script>`;
 
 for (const engine of ['chromium', 'webkit', 'firefox']) test(`observers see only the settled layout, not a round's, in ${engine}`, async () => {
@@ -211,7 +214,10 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`observers see only
     expect(r.height).toBeCloseTo(54, 0);
     expect(r.sizes.length).toBe(1);
     expect(r.sizes[0]).toBeCloseTo(r.height, 2);
-    expect(r.crossings.length).toBeLessThanOrEqual(1);
+    // The intersection observer delivered the settled crossing once, 32 shown
+    expect(r.crossings.length).toBe(1);
+    expect(r.crossings[0]).toBeCloseTo(r.shown, 1);
+    expect(r.shown).toBeCloseTo(32, 0);
   } finally {
     await browser.close();
   }
@@ -278,6 +284,36 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`the rounds follow 
     // Once the box has gone, the reader rests at 10, under 37 of the band, measured there without a commit
     expect(r.settled).toBe('37px');
     expect(r.still).toBe(0);
+  } finally {
+    await browser.close();
+  }
+}, 30_000);
+
+// A reader an animation moves up from 200 to 20 in 0.3 s, under the 47-point band, and one after an element whose width
+// animates for 1.2 s: the first's move ends while the second animation still runs
+const HANDOFF = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; width: 100px }</style>
+  <div id="mover" style="top:20px;left:0;height:20px;padding-top:var(--exact-safe-area-inset-top, 0px)"></div>
+  <div id="long" style="top:500px;left:200px;height:10px"></div>
+  <div id="rider" style="top:600px;left:200px;height:20px;padding-top:var(--exact-safe-area-inset-top, 0px)"></div>
+  <script type="module">
+    import { follow } from '/observe.js';
+    const el = (id) => document.getElementById(id);
+    el('mover').animate([{ top: '200px' }, { top: '20px' }], { duration: 300 });
+    el('long').animate([{ width: '10px' }, { width: '60px' }], { duration: 1200 });
+    const stop = follow(['mover', 'rider'].map(el), [47, 0, 34, 0], 0);
+    await new Promise((r) => setTimeout(r, 1500));
+    stop();
+    window.result = { mover: el('mover').style.getPropertyValue('--exact-safe-area-inset-top'), rider: el('rider').style.getPropertyValue('--exact-safe-area-inset-top') };
+  </script>`;
+
+for (const engine of ['chromium', 'webkit', 'firefox']) test(`a reader whose move ends while another runs is measured where it rests, in ${engine}`, async () => {
+  const browser = await suiteBrowser(engine);
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    await page.goto(`${server.url.href}handoff`);
+    await page.waitForFunction(() => window.result, null, { timeout: 10_000 });
+    // At rest at 20 under 27 of the band; the other clear of it
+    expect(await page.evaluate(() => window.result)).toEqual({ mover: '27px', rider: '0px' });
   } finally {
     await browser.close();
   }
