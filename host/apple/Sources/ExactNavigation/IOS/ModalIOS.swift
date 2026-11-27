@@ -220,6 +220,14 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
         container.addGestureRecognizer(tap)
         backdropTap = tap
     }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Some dismissals finish without the adaptive presentation delegate callback.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, presentingViewController == nil else { return }
+            host?.platformDidDismiss(self)
+        }
+    }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         if CanvasInputs.owns(touch.view) { return false }
         guard let container = presentationController?.containerView,
@@ -921,7 +929,11 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     }
 
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        guard let layer = layers.last, layer.controller === presentationController.presentedViewController else { return }
+        platformDidDismiss(presentationController.presentedViewController)
+    }
+
+    fileprivate func platformDidDismiss(_ controller: UIViewController) {
+        guard let layer = layers.last, layer.controller === controller, !layer.alreadyDismissed else { return }
         HostLog.note(presenter.session, "presentation: the person dismissed the \(layer.kind) \(layer.route.props["navigationKey"] ?? "?")")
         closing = true
         presenter.cancelPendingFocus()

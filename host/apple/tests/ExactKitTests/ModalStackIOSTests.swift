@@ -512,6 +512,36 @@ final class ModalStackIOSTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), 0.3)
     }
 
+    func testUIKitDismissalWithoutDelegateCallbackRestoresBackgroundInput() throws {
+        guard hostedWindowScene() != nil else {
+            throw missing("scene", "UIKit must present and dismiss the sheet")
+        }
+        let session = try fixture("dismissal-without-delegate", fullScreen: true)
+        let presenter = session.presenter
+        let modals = presenter.modalHost
+        let agent = Agent(session: session)
+        let background = try XCTUnwrap(presenter.navigationHost.primaryOwner?.view)
+        XCTAssertTrue(background.isUserInteractionEnabled)
+        XCTAssertFalse(background.accessibilityElementsHidden)
+
+        try press(session, "sheet")
+        until("the sheet is visible") { modals.active && !agent.nativeInFlight() }
+        let sheet = try XCTUnwrap(presented().last)
+        let owner = try XCTUnwrap(sheet.presentingViewController)
+        XCTAssertFalse(background.isUserInteractionEnabled)
+        XCTAssertTrue(background.accessibilityElementsHidden)
+
+        owner.dismiss(animated: true)
+        until("the dismissed sheet no longer owns the background") { !modals.active && !agent.nativeInFlight() }
+        XCTAssertNil(owner.presentedViewController)
+        XCTAssertTrue(background.isUserInteractionEnabled)
+        XCTAssertFalse(background.accessibilityElementsHidden)
+
+        let openSheet = try node(session, "sheet")
+        XCTAssertNil(agent.tap(["id": Int(openSheet.id)])["error"])
+        until("a tap can open the sheet again") { modals.active && !agent.nativeInFlight() }
+    }
+
     /// LLP 1035.001 D1: a root whose key names no route keeps what is left of
     /// the stack it showed. Chat-rooms (bake-off round 6) keyed its list route
     /// "rooms" while its root named the visit, `${top(nav).id}`, "0" at the
