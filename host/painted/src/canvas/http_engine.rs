@@ -1,8 +1,9 @@
 //! Remote pictures through the platform's `HttpEngine` (API 34 and later),
 //! the reader's `ImageFetch` (Kotlin): every picture of an origin over one
 //! HTTP/2 connection, as the platform's own clients have it. Below API 34,
-//! or in a reader without the class, `image/remote.rs` keeps ibex2's rustls
-//! transport (HTTP/1.1, a connection per download).
+//! in a reader without the class, or where the engine cannot be built,
+//! `image/remote.rs` keeps ibex2's rustls transport (HTTP/1.1, a connection
+//! per download).
 #![allow(unsafe_code)]
 use ibex2::boundary::HostError;
 use ibex2::stdlib::abort::{AbortRegistration, AbortSignal};
@@ -23,9 +24,12 @@ pub struct Engine {
     head: jmethodID,
     read: jmethodID,
     cancel: jmethodID,
+    available: jmethodID,
     status: jfieldID,
     headers: jfieldID,
     failure: jfieldID,
+    /// Whether the engine could be built, asked at the first picture.
+    ready: OnceLock<bool>,
 }
 // SAFETY: a JavaVM pointer, a global class reference and method and field
 // ids are the process's, valid on every thread.
@@ -34,9 +38,19 @@ unsafe impl Sync for Engine {}
 
 static ENGINE: OnceLock<Option<Engine>> = OnceLock::new();
 
-/// The platform's transport, once [`attach`] found it.
+/// The platform's transport, once [`attach`] found it and its engine could
+/// be built; otherwise the rustls client for the process.
 pub fn transport() -> Option<&'static Engine> {
-    ENGINE.get()?.as_ref()
+    let engine = ENGINE.get()?.as_ref()?;
+    let ready = engine.ready.get_or_init(|| {
+        engine
+            .with(|env| unsafe {
+                let call = (**env).CallStaticBooleanMethodA.expect("jni");
+                Ok(call(env, engine.class, engine.available, [].as_ptr()) != 0)
+            })
+            .unwrap_or(false)
+    });
+    ready.then_some(engine)
 }
 
 /// Find `ImageFetch` from a JNI entry, whose class loader sees the reader's
@@ -45,6 +59,11 @@ pub fn transport() -> Option<&'static Engine> {
 /// # Safety
 /// `env` and `context` are the JNI call's.
 pub unsafe fn attach(env: *mut JNIEnv, context: jobject) {
+    // An exception the caller left pending (the TLS verifier's) is Java's to
+    // throw, and no JNI call may run under it.
+    if ((**env).ExceptionCheck.expect("jni"))(env) != 0 {
+        return;
+    }
     ENGINE.get_or_init(|| {
         let engine = find(env, context);
         if ((**env).ExceptionCheck.expect("jni"))(env) != 0 {
@@ -83,15 +102,18 @@ unsafe fn find(env: *mut JNIEnv, context: jobject) -> Option<Engine> {
         head: method(c"head", c"(J)Z"),
         read: method(c"read", c"([BIJ)I"),
         cancel: method(c"cancel", c"()V"),
+        available: static_method(c"available", c"()Z"),
         status: field(c"status", c"I"),
         headers: field(c"headers", c"Ljava/lang/String;"),
         failure: field(c"failure", c"Ljava/lang/String;"),
+        ready: OnceLock::new(),
     };
     let ids = [
         engine.start,
         engine.head,
         engine.read,
         engine.cancel,
+        engine.available,
         install,
     ];
     if ids.iter().any(|id| id.is_null())
@@ -108,7 +130,7 @@ unsafe fn find(env: *mut JNIEnv, context: jobject) -> Option<Engine> {
         return None;
     }
     let class = ((**env).NewGlobalRef?)(env, local);
-    Some(Engine { class, ..engine })
+    (!class.is_null()).then_some(Engine { class, ..engine })
 }
 
 /// A thread attached for a call stays attached until it ends, as download
@@ -142,15 +164,16 @@ impl Engine {
                     attached.get_or_init(|| Attached(vm));
                 });
             }
-            let frame = ((**env).PushLocalFrame.expect("jni"))(env, 8) == JNI_OK;
+            if ((**env).PushLocalFrame.expect("jni"))(env, 8) != JNI_OK {
+                ((**env).ExceptionClear.expect("jni"))(env);
+                return Err(HostError::Failed("out of JNI local references".into()));
+            }
             let mut result = f(env);
             if ((**env).ExceptionCheck.expect("jni"))(env) != 0 {
                 ((**env).ExceptionClear.expect("jni"))(env);
                 result = Err("the platform's HttpEngine threw".into());
             }
-            if frame {
-                ((**env).PopLocalFrame.expect("jni"))(env, std::ptr::null_mut());
-            }
+            ((**env).PopLocalFrame.expect("jni"))(env, std::ptr::null_mut());
             result.map_err(HostError::Failed)
         }
     }
@@ -308,8 +331,12 @@ impl Transport for Engine {
             let got = [jvalue {
                 j: remaining_ms(deadline),
             }];
-            if ((**env).CallBooleanMethodA.expect("jni"))(env, object, self.head, got.as_ptr()) == 0
-            {
+            let came =
+                ((**env).CallBooleanMethodA.expect("jni"))(env, object, self.head, got.as_ptr());
+            if ((**env).ExceptionCheck.expect("jni"))(env) != 0 {
+                return Err("the platform's HttpEngine threw".into());
+            }
+            if came == 0 {
                 return Err(self.failure(env, object));
             }
             let status = ((**env).GetIntField.expect("jni"))(env, object, self.status);

@@ -85,12 +85,18 @@ class ImageFetch private constructor() : UrlRequest.Callback {
         private const val CHUNK = 64 * 1024
         private val DONE = Any()
         @Volatile private var context: Context? = null
-        /** Built at the first picture, on its download thread: it loads the engine's native code. */
+        /**
+         * Built at the first picture, on its download thread: it loads the engine's native code. Null when the platform's
+         * provider cannot load; exact2 then keeps its own transport.
+         */
         private val engine by lazy {
-            HttpEngine.Builder(context!!)
-                .setEnableHttp2(true)
-                .setEnableHttpCache(HttpEngine.Builder.HTTP_CACHE_DISABLED, 0)
-                .build()
+            runCatching {
+                HttpEngine.Builder(context!!)
+                    .setEnableHttp2(true)
+                    .setEnableBrotli(true)
+                    .setEnableHttpCache(HttpEngine.Builder.HTTP_CACHE_DISABLED, 0)
+                    .build()
+            }.getOrNull()
         }
         /** The engine's callbacks only hand events over. */
         private val callbacks = Executors.newSingleThreadExecutor()
@@ -102,9 +108,12 @@ class ImageFetch private constructor() : UrlRequest.Callback {
             return true
         }
 
+        /** Whether the engine could be built. */
+        @JvmStatic fun available(): Boolean = engine != null
+
         /** Start a GET of `url` with `headers` (`name\nvalue\n` pairs). */
         @JvmStatic fun start(url: String, headers: String): ImageFetch = ImageFetch().apply {
-            val builder = engine.newUrlRequestBuilder(url, callbacks, this)
+            val builder = engine!!.newUrlRequestBuilder(url, callbacks, this)
             headers.split('\n').chunked(2).forEach { if (it.size == 2) builder.addHeader(it[0], it[1]) }
             request = builder.build()
             request.start()
