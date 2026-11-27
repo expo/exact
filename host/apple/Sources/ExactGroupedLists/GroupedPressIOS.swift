@@ -71,27 +71,20 @@ extension GroupedListHost {
         return nil
     }
 
-    func select(_ node: NodeView) -> NodeView? {
+    func pressSelected(_ node: NodeView, _ press: () -> Void) -> Bool {
         #if os(iOS)
         for list in lists.values {
             guard let row = list.rows[node.id] else { continue }
-            guard row.custom, GroupedListView.pressIsCells(row, node), list.pressable(node.id),
-                  let path = list.source.indexPath(for: node.id) else { return nil }
-            list.collection.selectItem(at: path, animated: false, scrollPosition: [])
-            return node
+            guard row.custom, GroupedListView.pressIsCells(row, node), list.pressable(node.id) else { return false }
+            let screen = list.screen
+            if let path = list.source.indexPath(for: node.id), list.collection.indexPathsForSelectedItems?.contains(path) != true {
+                list.collection.selectItem(at: path, animated: false, scrollPosition: [])
+            }
+            list.pressSelected(node.id, on: screen, press)
+            return true
         }
         #endif
-        return nil
-    }
-
-    func ran(_ row: NodeView, on screen: UIViewController?) {
-        #if os(iOS)
-        guard let list = lists.values.first(where: { $0.rows[row.id] != nil }) else { return }
-        if list.sidebar { return presenter.afterBatch { [weak list] in list?.selectDetailRow() } }
-        if let screen, let stack = screen.navigationController, stack.viewControllers.contains(screen), stack.topViewController !== screen { return }
-        guard let path = list.source.indexPath(for: row.id) else { return }
-        list.collection.deselectItem(at: path, animated: !ExactEnv.agentFreezes)
-        #endif
+        return false
     }
 }
 

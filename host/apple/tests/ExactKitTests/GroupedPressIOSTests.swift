@@ -31,16 +31,18 @@ final class GroupedPressIOSTests: GroupedListFixture {
         XCTAssertNil(row.layer.animation(forKey: "pressDim"))
     }
 
-    /// A tap on a custom row whose press is its cell's selects the cell
-    /// before the press runs, as UIKit selects a tapped standard row, and a
-    /// press that pushed no screen lets it go.
-    func testATappedCustomRowSelectsItsCellUntilItsPressHasRun() throws {
+    /// A tapped custom row whose press is its cell's runs its press with its
+    /// cell selected, as UIKit runs a tapped standard row's, and lets go when
+    /// the press pushed nothing; a standard row's press is UIKit's own.
+    func testATappedCustomRowsPressRunsWithItsCellSelected() throws {
         let p = presenter { self.model(custom: true) }
         let row = try XCTUnwrap(p.views[21]), lists = try XCTUnwrap(p.groupedLists)
-        XCTAssertTrue(lists.select(row) === row)
-        XCTAssertTrue(try cell(p, 21).isSelected, "selected while its press runs")
-        lists.ran(row, on: nil)
+        _ = try cell(p, 21)
+        var selectedWhilePressed = false
+        XCTAssertTrue(lists.pressSelected(row) { selectedWhilePressed = (try? self.cell(p, 21).isSelected) == true })
+        XCTAssertTrue(selectedWhilePressed, "selected while its press runs")
         XCTAssertFalse(try cell(p, 21).isSelected, "and let go when it pushed nothing")
+        XCTAssertFalse(lists.pressSelected(try XCTUnwrap(p.views[20])) {}, "a standard row's press is UIKit's selection")
     }
 
     /// A context menu on a custom row whose press is its cell's lifts the

@@ -61,14 +61,11 @@ package protocol GroupedLists: AnyObject {
     /// cell's highlight (`press`): a context menu lifts the whole cell, its
     /// highlight with it, as a collection view lifts its own; nil otherwise.
     func cell(carrying node: NodeView) -> UIView?
-    /// A tap landed on `node`, before its press runs: a custom row whose
-    /// press is its cell's is selected, as a tapped standard row is. Returns
-    /// the row, for `ran`.
-    func select(_ node: NodeView) -> NodeView?
-    /// The press of a row `select` selected has run: it stays selected under
-    /// a screen it pushed over `screen`, as a standard row does, a sidebar's
-    /// selection goes back to the detail's row, and any other lets go.
-    func ran(_ row: NodeView, on screen: UIViewController?)
+    /// Runs the press of a tapped custom row `node` whose press is its
+    /// cell's as UIKit's selection runs a tapped standard row's
+    /// (`GroupedListView.pressSelected`); false for any other node, whose
+    /// press its caller runs.
+    func pressSelected(_ node: NodeView, _ press: () -> Void) -> Bool
     /// The agent's `tap` on a row UIKit draws.
     func activate(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]?
     /// The custom choice row whose carried radio is `node`.
