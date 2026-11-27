@@ -1345,6 +1345,11 @@ test.each(['moved clock', 'resource date', 'pinned date', 'duplicate names', 'ex
     }}));
   `);
   try {
+    const evidence = resolve(dir, '.exact', 'verify');
+    if (authoredShot) {
+      mkdirSync(evidence, { recursive: true });
+      for (const name of ['web-stale.png', 'android-stale.png', 'web-notes.txt']) writeFileSync(resolve(evidence, name), 'previous run');
+    }
     const r = spawnSync(process.execPath, ['--preload', preload, resolve(import.meta.dir, 'verify.mjs'), 'web', '--app', dir, '--json', '--shots', resolve(dir, 'shots')],
       {encoding:'utf8',timeout:30000});
     const verdict = JSON.parse(r.stdout);
@@ -1362,6 +1367,8 @@ test.each(['moved clock', 'resource date', 'pinned date', 'duplicate names', 'ex
     } else if (!['end screenshot','first screen crash'].includes(scenario)) assert.ok(verdict.relaunch.problems?.some(p=>p.includes('lost')), r.stdout + r.stderr);
     const captures = JSON.parse(readFileSync(resolve(dir, 'captures.json'), 'utf8'));
     if (authoredShot) {
+      assert.equal(existsSync(resolve(evidence, 'web-stale.png')), false);
+      for (const name of ['android-stale.png', 'web-notes.txt']) assert.equal(readFileSync(resolve(evidence, name), 'utf8'), 'previous run');
       assert.equal(captures[authoredShot],1,'replay must not overwrite an authored screenshot, even if replay fails');
       assert.equal(readFileSync(resolve(dir,'shots','web-t1-authored.png'),'utf8'),'1');
       assert.ok(Object.keys(captures).some(p=>p.includes('/replay/')), 'replay writes its own screenshot');
