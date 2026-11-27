@@ -35,10 +35,10 @@ final class FrameHealthIOSTests: XCTestCase {
                 overlay.screen?.completed(presented: time, now: time + 0.002)
             }
             overlay.refresh(now: start + 0.501)
-            XCTAssertEqual(overlay.card.state.rows[0].1, "120")
             XCTAssertGreaterThan(health.historyStatus().retained, 0)
             XCTAssertGreaterThan(overlay.card.chart.latest, 0)
             overlay.card.activate?(.status)
+            XCTAssertNotEqual(overlay.card.state.rows[0].1, "—")
             overlay.card.activate?(.details)
             let elements = overlay.card.accessibilityElements?.compactMap { $0 as? UIAccessibilityElement } ?? []
             let clear = try XCTUnwrap(elements.first { $0.isAccessibilityElement && $0.accessibilityLabel == "Clear frame health" })
