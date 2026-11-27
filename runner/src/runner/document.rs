@@ -20,17 +20,25 @@ impl<D: DataSource> Runner<D> {
         // A drag carries what a commit admits (`admit_drag_files`); a
         // detached runner builds no prop op, so nothing journals a refusal.
         for node in doc.nodes_mut() {
-            for prop in [PropId::DataTransferFiles, PropId::DataTransferUrl] {
-                let Some(value) = node.props.str(prop).map(str::to_owned) else {
-                    continue;
-                };
-                match self.admitted_drag(prop, &value).0 {
-                    kept if kept.is_empty() => {
-                        node.props.remove(prop);
-                    }
-                    kept => {
-                        node.props.set(prop, PropValue::Str(kept.into()));
-                    }
+            let mut admitted = Vec::new();
+            if let Some(url) = node.props.str(PropId::DataTransferUrl) {
+                admitted.push((PropId::DataTransferUrl, self.admitted_url(url).0));
+            }
+            let files = match (node.props.str(PropId::DataTransferEntries), node.props.str(PropId::DataTransferFiles)) {
+                (Some(entries), _) => Some(self.admitted_entries(entries).0),
+                (None, Some(files)) => Some(self.admitted_files(files).0),
+                (None, None) => None,
+            };
+            if let Some(files) = files {
+                admitted.push((PropId::DataTransferFiles, files.files));
+                admitted.push((PropId::DataTransferNames, files.names));
+            }
+            node.props.remove(PropId::DataTransferEntries);
+            for (prop, kept) in admitted {
+                if kept.is_empty() {
+                    node.props.remove(prop);
+                } else {
+                    node.props.set(prop, PropValue::Str(kept.into()));
                 }
             }
         }

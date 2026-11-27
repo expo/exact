@@ -1726,7 +1726,19 @@
       "id": 317,
       "name": "dataTransferFiles",
       "kind": "str",
-      "_comment": "@ref LLP 1094.000 D2: `DataTransfer(files=)`, newline-joined: each a shipped `assets/` file or an `app:/` path. The runner rewrites it to the entries its file rule admits for the host before a batch is sent. The compiler's, never authored."
+      "_comment": "@ref LLP 1094.000 D2: `DataTransfer(files=)`, newline-joined: each a shipped `assets/` file or an `app:/` path, the entries the runner admits for the host before a batch is sent; a plan compiled before LLP 1094.000 D14 binds it directly. The compiler's and the runner's, never authored."
+    },
+    {
+      "id": 348,
+      "name": "dataTransferEntries",
+      "kind": "str",
+      "_comment": "@ref LLP 1094.000 D14: `DataTransfer(files=, names=)` as the compiler binds them: each file percent-encoded and followed by a line feed, then, with `names=`, U+001E and each name likewise. The runner decodes it, admits each file with its name and writes `dataTransferFiles` and `dataTransferNames`; it reaches no host. The compiler's, never authored."
+    },
+    {
+      "id": 349,
+      "name": "dataTransferNames",
+      "kind": "str",
+      "_comment": "@ref LLP 1094.000 D14: the name a destination is offered for each admitted file, newline-joined beside `dataTransferFiles`, empty for a file's own. The runner's, never authored."
     },
     {
       "id": 255,

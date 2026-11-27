@@ -5,12 +5,13 @@ import { inertAncestor, modalLayers } from './navigation.js';
 /** The runner's object of strings as one attribute per word; a word the
  * element's last value had and this one lacks goes. A hatched node's hatch
  * hears the change (hatches.js, LLP 1075.003.000). A drag's carrier words
- * are left out: the page writes `data-datatransferurl` and
- * `data-datatransferfiles` from the values drag.js admits, and
- * `data-datatransfertext` from the text prop (LLP 1094.000 D2), and Contract
- * refuses them as an app's words, which a plan baked before it did may still
- * hold. */
-const CARRIERS = new Set(["datatransferurl", "datatransferfiles", "datatransfertext"]);
+ * are left out: the page writes `data-datatransferurl`,
+ * `data-datatransferfiles` and `data-datatransfernames` from the values
+ * drag.js admits, the last two from `data-datatransferentries`, and
+ * `data-datatransfertext` from the text prop (LLP 1094.000 D2, D14), and
+ * Contract refuses them as an app's words, which a plan baked before it did
+ * may still hold. */
+const CARRIERS = new Set(["datatransferurl", "datatransferfiles", "datatransferentries", "datatransfernames", "datatransfertext"]);
 export function ds(e, json) {
   const words = Object.fromEntries(Object.entries(JSON.parse(json ?? "{}")).filter(([w]) => !CARRIERS.has(w))), last = e.$ds ?? [];
   let changed = false;

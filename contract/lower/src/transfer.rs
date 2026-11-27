@@ -1,15 +1,16 @@
-//! @ref LLP 1094.000 D1, D2, D8, D11 — a drag out of the app: `draggable`,
-//! HTML's attribute, and `dataTransfer=DataTransfer(text=, url=, files=)`,
-//! what the drag carries, bound to props the host holds before the gesture.
+//! @ref LLP 1094.000 D1, D2, D8, D11, D14 — a drag out of the app:
+//! `draggable`, HTML's attribute, and `dataTransfer=DataTransfer(text=, url=,
+//! files=, names=)`, what the drag carries, bound to props the host holds
+//! before the gesture.
 //! The type checker reads the arguments; this binds them and refuses what a
 //! node cannot be: a draggable with nothing to carry, data with no drag, a
 //! node that has a drag or gesture of its own or is a run of text, a gesture
 //! that claims the same movement, and anything inside a grouped list.
 use crate::{err, expr, tags, LowerError, Lowerer};
-use contract_syntax::{Attr, Expr};
+use contract_syntax::{Attr, Expr, TemplatePart};
 use contract_types::{Scope, Ty};
 use exact_kernel::{NodeType, PropId};
-use exact_plan::{asm::Asm, BindingsRow, Stdlib};
+use exact_plan::{asm::Asm, BindingsRow};
 
 /// Gestures that claim the movement a drag's lift does, on one node (D8).
 const GESTURES: [&str; 5] = [
@@ -25,8 +26,9 @@ const GESTURES: [&str; 5] = [
 const REFUSED_BOXES: [&str; 2] = ["main", "dialog"];
 
 impl Lowerer<'_> {
-    /// `dataTransfer=DataTransfer(…)`: each argument's own expression bound
-    /// to its prop, `files` joined by newlines as `midiinputs=` is.
+    /// `dataTransfer=DataTransfer(…)`: `text` and `url` each bound to its
+    /// prop, and `files`, with `names` when given, to `dataTransferEntries`
+    /// as D14 encodes them.
     pub(crate) fn data_transfer(
         &mut self,
         a: &Attr,
@@ -41,26 +43,79 @@ impl Lowerer<'_> {
                 a.span,
             );
         };
+        let named = |want: &str| {
+            args.iter().find_map(|arg| match arg {
+                Expr::NamedArg(name, value, _) if name == want => Some(&**value),
+                _ => None,
+            })
+        };
+        // In the order written, so a commit journals refusals in that order
         for arg in args {
             let Expr::NamedArg(name, value, _) = arg else {
                 continue;
             };
-            let prop = match name.as_str() {
-                "text" => PropId::DataTransferText,
-                "url" => PropId::DataTransferUrl,
-                _ => PropId::DataTransferFiles,
-            };
-            let (mut asm, mut depth) = (Asm::new(), locals);
-            let ty = expr::compile(self, &mut asm, value, scope, &mut depth)?;
-            if matches!(&ty, Ty::List(_)) {
-                asm.str(self.b.str("\n"));
-                asm.call(Stdlib::Join);
+            match name.as_str() {
+                "text" => self.data_transfer_row(PropId::DataTransferText, value, scope, locals, a.written, bindings)?,
+                "url" => self.data_transfer_row(PropId::DataTransferUrl, value, scope, locals, a.written, bindings)?,
+                "files" => {
+                    let entries = drag_entries(value, named("names"));
+                    self.data_transfer_row(PropId::DataTransferEntries, &entries, scope, locals, a.written, bindings)?;
+                }
+                _ => {}
             }
-            let code = self.b.code(asm);
-            bindings.push(crate::prop_row(prop, code, a.written));
         }
         Ok(())
     }
+
+    fn data_transfer_row(
+        &mut self,
+        prop: PropId,
+        value: &Expr,
+        scope: &Scope,
+        locals: u16,
+        written: bool,
+        bindings: &mut Vec<BindingsRow>,
+    ) -> Result<(), LowerError> {
+        let (mut asm, mut depth) = (Asm::new(), locals);
+        let ty = expr::compile(self, &mut asm, value, scope, &mut depth)?;
+        debug_assert!(!matches!(&ty, Ty::List(_)), "each argument binds a string");
+        let code = self.b.code(asm);
+        bindings.push(crate::prop_row(prop, code, written));
+        Ok(())
+    }
+}
+
+/// `files` and `names` as one string (LLP 1094.000 D14): each file
+/// percent-encoded and followed by a line feed, then, with `names`, U+001E
+/// and each name likewise, so no line break in a bound value can shift an
+/// entry and an empty name keeps its place.
+fn drag_entries(files: &Expr, names: Option<&Expr>) -> Expr {
+    let encoded = |list: &Expr| {
+        let span = list.span();
+        let each = Expr::Arrow {
+            params: vec!["dragEntry".into()],
+            body: Box::new(Expr::Template(
+                vec![
+                    TemplatePart::Expr(Expr::Call(
+                        "encodeURIComponent".into(),
+                        vec![Expr::Ident("dragEntry".into(), span)],
+                        span,
+                    )),
+                    TemplatePart::Text("\n".into()),
+                ],
+                span,
+            )),
+            span,
+        };
+        let mapped = Expr::Call("map".into(), vec![list.clone(), each], span);
+        TemplatePart::Expr(Expr::Call("join".into(), vec![mapped, Expr::Str(String::new(), span)], span))
+    };
+    let mut parts = vec![encoded(files)];
+    if let Some(names) = names {
+        parts.push(TemplatePart::Text(exact_plan::DRAG_NAMES_MARK.to_string()));
+        parts.push(encoded(names));
+    }
+    Expr::Template(parts, files.span())
 }
 
 /// The node's own rules: where `draggable` goes, that it carries something,

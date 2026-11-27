@@ -1490,8 +1490,11 @@ impl Em<'_> {
     }
 }
 
-/// A drag's `url` or `files`: bound even when constant, for `drag.js`'s hooks
-/// to admit as the runner does on other hosts (LLP 1094.000 D1, D2).
+/// A drag's `url`, `files` or files and names: bound even when constant, for
+/// `drag.js`'s hooks to admit as the runner does on other hosts (LLP 1094.000
+/// D1, D2, D14).
 pub fn admitted_on_the_page(id: u16) -> bool {
-    id == PropId::DataTransferUrl as u16 || id == PropId::DataTransferFiles as u16
+    id == PropId::DataTransferUrl as u16
+        || id == PropId::DataTransferFiles as u16
+        || id == PropId::DataTransferEntries as u16
 }

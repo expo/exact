@@ -4,9 +4,21 @@
 //! `dataTransfer…` props carry. The reader builds the drag and its shadow;
 //! the presenter names the node, its box and the data, each file as the
 //! node names it (a shipped `assets/…` name or an `app:/` path), which the
-//! reader resolves as it does a `video`'s.
+//! reader resolves as it does a `video`'s, with the name it is offered under
+//! (D14).
 use super::*;
 use exact_kernel::NodeKey;
+
+/// A dragged file (LLP 1094.000 D14): the entry the node names it by, and
+/// the name a destination is offered for it, the entry's own unless the
+/// node's `dataTransferNames` gives one at its place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DragFile {
+    /// A shipped `assets/…` name or an `app:/` path.
+    pub entry: String,
+    /// The name a destination is offered.
+    pub name: String,
+}
 
 /// What the reader drags: the node's box and the finger's point in the
 /// view's pixels, whether an assistive service started it, then its text,
@@ -26,13 +38,14 @@ pub struct DragOut {
     pub text: String,
     /// `url`, empty for none.
     pub url: String,
-    /// Each file as the node names it.
-    pub files: Vec<String>,
+    /// Each file as the node names it, with the name it is offered under.
+    pub files: Vec<DragFile>,
 }
 
 impl DragOut {
     /// The words the reader reads: the node, the box, the point, 1 for a
-    /// service's drag, the text, the url, then the files' count and each.
+    /// service's drag, the text, the url, then the files' count and each
+    /// file's entry and name.
     pub(super) fn encode(&self, out: &mut Vec<i32>) {
         out.push(self.node as i32);
         out.extend(self.rect);
@@ -42,7 +55,8 @@ impl DragOut {
         requests::string(out, &self.url);
         out.push(self.files.len() as i32);
         for file in &self.files {
-            requests::string(out, file);
+            requests::string(out, &file.entry);
+            requests::string(out, &file.name);
         }
     }
 }
@@ -218,8 +232,9 @@ impl<D: exact_runner::DataSource> Presenter<D> {
 }
 
 impl<D: exact_runner::DataSource> Presenter<D> {
-    /// What `id` carries: its `text`, its `url` and each of its files.
-    fn carried_values(&self, id: ViewId) -> (String, String, Vec<String>) {
+    /// What `id` carries: its `text`, its `url` and each of its files with
+    /// the name it is offered under.
+    fn carried_values(&self, id: ViewId) -> (String, String, Vec<DragFile>) {
         let props = |prop| {
             self.host
                 .kernel()
@@ -228,10 +243,16 @@ impl<D: exact_runner::DataSource> Presenter<D> {
                 .unwrap_or_default()
                 .to_string()
         };
+        let names = props(PropId::DataTransferNames);
+        let mut names = names.split('\n');
         let files = props(PropId::DataTransferFiles)
             .split('\n')
             .filter(|entry| !entry.is_empty())
-            .map(str::to_string)
+            .map(|entry| {
+                let own = entry.rsplit('/').next().unwrap_or(entry);
+                let name = names.next().filter(|name| !name.is_empty()).unwrap_or(own);
+                DragFile { entry: entry.to_string(), name: name.to_string() }
+            })
             .collect();
         (
             props(PropId::DataTransferText),
@@ -291,8 +312,9 @@ pub struct Lift {
     pub text: String,
     /// `url`, empty for none or when not offered.
     pub url: String,
-    /// Each file as the node names it, none when not offered.
-    pub files: Vec<String>,
+    /// Each file as the node names it, with the name it is offered under,
+    /// none when not offered.
+    pub files: Vec<DragFile>,
     /// The generation whose shipped files `files` names, pinned at the lift
     /// (LLP 1094.000 D3).
     pub assets: crate::image::Assets,
@@ -375,6 +397,9 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         let mut digest = std::collections::hash_map::DefaultHasher::new();
         for prop in offers.props() {
             node.props.str(prop).hash(&mut digest);
+        }
+        if offers.files {
+            node.props.str(PropId::DataTransferNames).hash(&mut digest);
         }
         digest.finish()
     }

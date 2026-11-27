@@ -2206,6 +2206,10 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   element's picture in a drag, a drag that gathers several nodes, drags from
   a grouped list's rows, and a gesture arena; drags into the app are
   LLP 1094.001's, next.
+  **Amended (LLP 1094.000 D14; James Ide, 2026-11-26: "Yes I think it's
+  good for the sending app to be able to choose a name optionally if the
+  host platform makes it easy"):** `names=` beside `files=` gives the name
+  a destination is offered for each file, where the host takes one.
   **Expanded (LLP 1094.001; the waiver that covers LLP 1094.000, no take;
   James Ide, 2026-11-23: "Yes, we have a waiver"):** drags into the app:
   `drop`'s `DragEvent` carries the drag's `text` and `url` beside its

@@ -7,6 +7,7 @@
 
 use exact_painted::image::Assets;
 use exact_painted::picker::AppFiles;
+use exact_painted::presenter::drag_out::DragFile;
 use rustix::fs::{self as rfs, AtFlags, Dir, Mode, OFlags, StatxFlags};
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::File;
@@ -32,11 +33,11 @@ pub(super) struct Staging {
     ready: Condvar,
 }
 
-/// The files a node names, the generation their shipped files are read
-/// from, and the session's own files, both pinned at the lift (LLP
-/// 1094.000 D3).
+/// The files a node names, each with the name its copy takes (D14), the
+/// generation their shipped files are read from, and the session's own
+/// files, both pinned at the lift (LLP 1094.000 D3).
 struct Job {
-    names: Vec<String>,
+    files: Vec<DragFile>,
     assets: Assets,
     app: Option<AppFiles>,
 }
@@ -114,9 +115,9 @@ impl Copies {
 const FOUND: OFlags = OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
 
 impl Staging {
-    pub(super) fn new(names: Vec<String>, assets: Assets, app: Option<AppFiles>) -> Arc<Self> {
+    pub(super) fn new(files: Vec<DragFile>, assets: Assets, app: Option<AppFiles>) -> Arc<Self> {
         Arc::new(Staging {
-            job: Mutex::new(Some(Job { names, assets, app })),
+            job: Mutex::new(Some(Job { files, assets, app })),
             copies: Mutex::new(None),
             ready: Condvar::new(),
         })
@@ -186,7 +187,7 @@ fn stage(job: &Job, journal: &dyn Fn(String)) -> Copies {
         temporary_large()
     };
     match base {
-        Some(base) => stage_in(&base, &job.names, &job.assets, job.app.as_ref(), journal),
+        Some(base) => stage_in(&base, &job.files, &job.assets, job.app.as_ref(), journal),
         None => {
             journal("drag: its files were not copied: no folder takes them".into());
             Copies::default()
@@ -194,12 +195,12 @@ fn stage(job: &Job, journal: &dyn Fn(String)) -> Copies {
     }
 }
 
-/// [`stage`] in `base`: each file in a folder of its own, so two files of
-/// one name keep it, each made through the descriptor of the folder above
-/// it, following no link.
+/// [`stage`] in `base`: each file in a folder of its own under the name it
+/// is offered under, so two files of one name keep it, each made through
+/// the descriptor of the folder above it, following no link.
 fn stage_in(
     base: &Path,
-    names: &[String],
+    dragged: &[DragFile],
     assets: &Assets,
     app: Option<&AppFiles>,
     journal: &dyn Fn(String),
@@ -219,8 +220,9 @@ fn stage_in(
         }
     };
     let mut files = Vec::new();
-    for (n, name) in names.iter().enumerate() {
-        let Some(leaf) = name.rsplit('/').next().filter(|leaf| !leaf.is_empty()) else {
+    for (n, DragFile { entry: name, name: offered }) in dragged.iter().enumerate() {
+        // The name is a basename (D14's rule, or the entry's own); anything else is no copy's
+        let Some(leaf) = Some(offered.as_str()).filter(|leaf| !leaf.is_empty() && !leaf.contains('/')) else {
             continue;
         };
         let Ok(leaf) = CString::new(leaf) else {

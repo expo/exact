@@ -50,10 +50,11 @@ class DragOutTest {
      * step. */
     @Test fun theRequestReadsAsThePresenterWritesIt() {
         val words = intArrayOf(7, 10, 20, 30, 40, 15, 25, 1, 4, 1768584518, 21, 1886680168, 791624307, 1835104357, 778398832,
-            795701091, 49, 2, 12, 1702064993, 1630499700, 1735290926, 15, 980447329, 1952539695, 778186593, 6710384)
+            795701091, 49, 2, 12, 1702064993, 1630499700, 1735290926, 5, 1852845665, 103, 15, 980447329, 1952539695, 778186593,
+            6710384, 9, 1702129486, 1685073523, 102)
         val ask = DragOut.read(intArrayOf(99) + words, 1)
         assertEquals(DragOut.Ask(7, Rect(10, 20, 40, 60), Point(15, 25), true, "Fuji", "https://example.com/1",
-            listOf("assets/a.png", "app:/data/b.pdf")), ask)
+            listOf(DragOut.Dragged("assets/a.png", "a.png"), DragOut.Dragged("app:/data/b.pdf", "Notes.pdf"))), ask)
     }
 
     @Test fun aShippedFileAnAppFileTheUrlAndTheTextAreItsItems() {
@@ -61,7 +62,8 @@ class DragOutTest {
         File(assets, "assets/fuji.png").writeText("png")
         Journal.saved.writeText("saved")
 
-        val clip = DragOut.clip(context, "Mount Fuji", "https://example.com/1016", listOf("assets/fuji.png", "app:/data/saved.txt"))!!
+        val clip = DragOut.clip(context, "Mount Fuji", "https://example.com/1016",
+            listOf(DragOut.Dragged("assets/fuji.png", "fuji.png"), DragOut.Dragged("app:/data/saved.txt", "saved.txt")))!!
 
         assertEquals(4, clip.itemCount)
         val authority = "${context.packageName}.exact.files"
@@ -69,6 +71,7 @@ class DragOutTest {
         assertEquals(authority, clip.getItemAt(0).uri.authority)
         assertEquals(listOf("shipped", "assets", "fuji.png"), clip.getItemAt(0).uri.pathSegments)
         assertEquals(listOf("app", "data", "saved.txt"), clip.getItemAt(1).uri.pathSegments)
+        assertNull("a file offered under its own name carries none", clip.getItemAt(0).uri.query)
         assertEquals("https://example.com/1016", clip.getItemAt(2).text)
         assertNull("a URL is no content to open", clip.getItemAt(2).uri)
         assertEquals("Mount Fuji", clip.getItemAt(3).text)
@@ -79,14 +82,34 @@ class DragOutTest {
         assertEquals(listOf<String>(), Journal.lines)
     }
 
+    /** A named file's URI still names its source, which types it, and carries the name it is offered under, which the
+     * provider answers as its display name and the drag's label shows (LLP 1094.000 D14). */
+    @Test fun aNamedFileIsOfferedUnderItsName() {
+        shadowOf(android.webkit.MimeTypeMap.getSingleton()).addExtensionMimeTypeMapping("jpg", "image/jpeg")
+        File(assets, "assets/apple/1016.jpg").apply { parentFile!!.mkdirs(); writeText("jpeg") }
+        val clip = DragOut.clip(context, "", "", listOf(DragOut.Dragged("assets/apple/1016.jpg", "Mount Fuji & Hakone?.jpg")))!!
+        val uri = clip.getItemAt(0).uri
+        assertEquals(listOf("shipped", "assets", "apple", "1016.jpg"), uri.pathSegments)
+        assertEquals("Mount Fuji & Hakone?.jpg", uri.getQueryParameter("name"))
+        assertEquals("Mount Fuji & Hakone?.jpg", clip.description.label)
+        assertTrue(clip.description.hasMimeType("image/jpeg"))
+        val provider = org.robolectric.Robolectric.setupContentProvider(Files::class.java, uri.authority)
+        provider.query(uri, null, null, null, null).use { row ->
+            row.moveToFirst()
+            assertEquals("Mount Fuji & Hakone?.jpg", row.getString(row.getColumnIndexOrThrow(android.provider.OpenableColumns.DISPLAY_NAME)))
+        }
+        assertEquals("image/jpeg", provider.getType(uri))
+        assertEquals("jpeg", provider.openFile(uri, "r").use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).readBytes().decodeToString() })
+    }
+
     /** A missing file, one outside the assets that exists, and an unknown scheme are left out and journaled; with
      * nothing else, there is no drag, and with no file there is no label. */
     @Test fun aFileTheAppDoesNotHaveIsLeftOut() {
         File(context.filesDir, "outside.txt").writeText("not shipped")
         val refused = listOf("assets/missing.png", "../outside.txt", "file:///etc/hosts", "app:/data/gone")
-        assertNull(DragOut.clip(context, "", "", refused))
+        assertNull(DragOut.clip(context, "", "", refused.map { DragOut.Dragged(it, it.substringAfterLast('/')) }))
         assertEquals(refused.map { "drag: $it could not be read: the app has no such file, so the drag leaves it out" }, Journal.lines)
-        val clip = DragOut.clip(context, "kept", "", listOf("assets/missing.png"))!!
+        val clip = DragOut.clip(context, "kept", "", listOf(DragOut.Dragged("assets/missing.png", "missing.png")))!!
         assertEquals("kept", clip.getItemAt(0).text.toString())
         assertNull("other windows see the label before any drop", clip.description.label)
     }

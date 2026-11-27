@@ -1,10 +1,11 @@
-// The JS target's port of the runner's admission of a drag's data (LLP 1094.000 D2): the same entries kept and the
-// same refusals journaled as `contract/cli/tests/it/drag_out.rs` asserts of the runner booted as the web, through
-// the hooks `install` registers, which journal a value once while it stands and remove a prop left with nothing.
+// The JS target's port of the runner's admission of a drag's data (LLP 1094.000 D2, D14): the same entries kept, the
+// same names offered and the same refusals journaled as `contract/cli/tests/it/drag_out.rs`, `drag_names.rs` and
+// `plan/src/drag_name.rs` assert, through the hooks `install` registers, which journal a refusal once while it stands
+// and remove a prop left with nothing.
 import { afterEach, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { admit, admitUrl, install, shipped } from './drag.js';
+import { admit, admitEntries, admitUrl, decodeEntries, install, nameRefusal, offeredName, shipped } from './drag.js';
 import { createDocument } from './dom.js';
 import { listOwner, viewChildren } from '../web/navigation/lists.js';
 import { glueDeclarations } from '../web/tests/glue-fixture.mjs';
@@ -46,7 +47,7 @@ test('the rules keep shipped files and absolute URLs, and refuse the rest in the
   ]);
 });
 
-test('the hooks write what is admitted, remove an empty prop and journal a value once', () => {
+test('the hooks write what is admitted, remove an empty prop and journal a refusal once while it stands', () => {
   const PropHooks = {}, journal = [];
   install({ PropHooks, say: (line) => journal.push(line) });
   const attrs = new Map(), el = { setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k) };
@@ -58,7 +59,65 @@ test('the hooks write what is admitted, remove an empty prop and journal a value
   expect(attrs.has('data-datatransferfiles')).toBe(false);
   url(el, 'https://example.com/1016');
   expect(attrs.get('data-datatransferurl')).toBe('https://example.com/1016');
-  expect(journal).toEqual(['drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web', 'drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web']);
+  expect(journal).toEqual(['drag: refused: app:/data/b.pdf: an app:/ file cannot be dragged on the web']);
+});
+
+test('a name is a portable basename and keeps the file’s suffix, as the plan’s rule has it', () => {
+  for (const ok of ['Mount Fuji.jpg', 'St. Paul', 'Fuji', '.profile', 'a'.repeat(255), 'COM0.txt', 'CONSOLE']) expect(nameRefusal(ok)).toBe(null);
+  for (const [bad, why] of [
+    ['', 'a name is 1 to 255 bytes of UTF-8'], ['é'.repeat(128), 'a name is 1 to 255 bytes of UTF-8'],
+    ['a\nb', 'a name holds no control character'], ['a\u007f', 'a name holds no control character'],
+    ['photos/1016.jpg', 'a name holds none of < > : " / \\ | ? *'], ['a:b', 'a name holds none of < > : " / \\ | ? *'],
+    [' a', 'a name neither begins nor ends with a space'], ['a ', 'a name neither begins nor ends with a space'],
+    ['Fuji.', 'a name does not end with a dot'], ['.', 'a name does not end with a dot'], ['..', 'a name does not end with a dot'],
+    ['con', 'Windows keeps that name for a device'], ['Nul.txt', 'Windows keeps that name for a device'],
+    ['COM9.tar.gz', 'Windows keeps that name for a device'], ['lpt³', 'Windows keeps that name for a device'],
+  ]) expect([bad, nameRefusal(bad)]).toEqual([bad, why]);
+  for (const [file, name, offered] of [
+    ['assets/apple/1016.jpg', 'Mount Fuji.jpg', 'Mount Fuji.jpg'], ['assets/apple/1016.jpg', 'Fuji.JPG', 'Fuji.JPG'],
+    ['assets/apple/1016.jpg', 'Fuji.jpeg', 'Fuji.jpeg'], ['app:/data/notes.md', 'Notes.markdown', 'Notes.markdown'],
+    ['assets/apple/1016.jpg', 'Mount Fuji', 'Mount Fuji.jpg'], ['assets/apple/1016.jpg', 'St. Paul', 'St. Paul.jpg'],
+    ['assets/apple/1016.jpg', 'Fuji.png', 'Fuji.png.jpg'], ['assets/apple/1016.jpg', '.profile', '.profile.jpg'],
+    ['assets/README', 'Read me.txt', 'Read me.txt'], ['assets/.profile', 'Profile', 'Profile'],
+  ]) expect(offeredName(file, name)).toBe(offered);
+  expect(decodeEntries('')).toEqual({ files: [], names: undefined });
+  expect(decodeEntries('a\n\u001e')).toEqual({ files: ['a'], names: [] });
+  expect(decodeEntries('a\n\u001e\n')).toEqual({ files: ['a'], names: [''] });
+  expect(decodeEntries('assets%2Fa.jpg\nassets%2Fb.jpg\n\u001e\nB%20b\n')).toEqual({ files: ['assets/a.jpg', 'assets/b.jpg'], names: ['', 'B b'] });
+  for (const broken of ['a', 'a\n\u001eb', '%4', '%zz\n', '%FF\n']) expect(decodeEntries(broken)).toBe(null);
+});
+
+test('the entries hook admits each file with its name, a refused file taking its name with it', () => {
+  const PropHooks = {}, journal = [];
+  install({ PropHooks, say: (line) => journal.push(line), document: null });
+  const attrs = new Map(), el = { setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k) };
+  const entries = (files, names) => files.map((f) => `${encodeURIComponent(f)}\n`).join('')
+    + (names ? `\u001e${names.map((n) => `${encodeURIComponent(n)}\n`).join('')}` : '');
+  const hook = PropHooks['data-datatransferentries'];
+  hook(el, entries(['app:/data/a.jpg', 'assets/a\nb.jpg', 'assets/b.jpg', 'assets/c.jpg', 'assets/d.jpg', 'assets/e.jpg'],
+    ['Gone', 'Split', '', 'Mount Fuji', 'Fuji.', 'Photo.jpeg', 'Extra']));
+  expect([attrs.get('data-datatransferfiles'), attrs.get('data-datatransfernames')])
+    .toEqual(['assets/b.jpg\nassets/c.jpg\nassets/d.jpg\nassets/e.jpg', '\nMount Fuji.jpg\n\nPhoto.jpeg']);
+  expect(journal).toEqual([
+    'drag: refused: app:/data/a.jpg: an app:/ file cannot be dragged on the web',
+    'drag: refused: "assets/a\\nb.jpg": a file with a line break cannot be carried',
+    'drag: refused: name "Fuji.": a name does not end with a dot',
+    'drag: refused: name "Extra": there is no file in files= for it',
+  ]);
+  // A name changed beside a standing refusal journals only what is new
+  hook(el, entries(['app:/data/a.jpg', 'assets/b.jpg'], ['', 'Second']));
+  expect([attrs.get('data-datatransferfiles'), attrs.get('data-datatransfernames')]).toEqual(['assets/b.jpg', 'Second.jpg']);
+  expect(journal.length).toBe(4);
+  // All names empty carry none, and a cleared value removes both
+  hook(el, entries(['assets/b.jpg'], ['']));
+  expect(attrs.has('data-datatransfernames')).toBe(false);
+  hook(el, null);
+  expect([attrs.has('data-datatransferfiles'), attrs.has('data-datatransfernames')]).toEqual([false, false]);
+  // A plan compiled before D14 binds its files alone, read as before, whatever they look like
+  journal.length = 0;
+  PropHooks['data-datatransferfiles'](el, entries(['assets/b.jpg'], ['Named']));
+  expect(attrs.has('data-datatransferfiles')).toBe(false);
+  expect(journal.length).toBe(2);
 });
 
 test('a render on the server admits the data and hears no drag', () => {

@@ -602,6 +602,9 @@ pub struct Runner<D: DataSource> {
     geometry: geometry_facts::Facts,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     platform: crate::page::Platform,
+    // @ref LLP 1094.000 D2 — each node's standing drag refusals, by its url
+    // or its files, so a refusal is journaled once while it stands.
+    drag_refused: std::collections::HashMap<(exact_kernel::ViewId, bool), Vec<String>>,
     page: crate::page::Page,
     presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)
     window_name: String,               // the page's `name` (LLP 1030.004 D2)
@@ -997,6 +1000,7 @@ impl<D: DataSource> Runner<D> {
             text_axes: seams::TextAxesState(seams.text_axes.state()),
             place: launched_place.clone().unwrap_or_default(),
             platform: crate::page::Platform::at_boot(),
+            drag_refused: Default::default(),
             window_name: crate::time::launch_window_name(),
             host_direction: crate::time::launch_direction(),
             surface_records: Default::default(),

@@ -14,12 +14,24 @@ fn shipped(files: &[(&str, &str)]) -> tempfile::TempDir {
     root
 }
 
+/// Each of `entries` as a dragged file of its own name.
+fn own(entries: &[&str]) -> Vec<DragFile> {
+    entries
+        .iter()
+        .map(|entry| DragFile { entry: (*entry).to_owned(), name: entry.rsplit('/').next().unwrap().to_owned() })
+        .collect()
+}
+
 /// `stage_in` a new folder, with the journal's lines.
 fn staged(names: &[&str], assets: &Assets) -> (tempfile::TempDir, Vec<PathBuf>, Vec<String>) {
+    staged_files(&own(names), assets)
+}
+
+/// [`staged`] of files with names of their own.
+fn staged_files(names: &[DragFile], assets: &Assets) -> (tempfile::TempDir, Vec<PathBuf>, Vec<String>) {
     let base = tempfile::tempdir().unwrap();
     let lines = RefCell::new(Vec::new());
-    let names: Vec<String> = names.iter().map(|n| (*n).to_owned()).collect();
-    let copies = stage_in(base.path(), &names, assets, None, &|line| {
+    let copies = stage_in(base.path(), names, assets, None, &|line| {
         lines.borrow_mut().push(line)
     });
     let paths = copies.paths().into_iter().map(Path::to_path_buf).collect();
@@ -53,6 +65,22 @@ fn each_copy_keeps_its_files_name_in_a_folder_of_its_own() {
     );
     assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), "Fuji");
     assert_eq!(std::fs::read_to_string(&copies[1]).unwrap(), "Etna, 3357 m");
+}
+
+/// A copy takes the name the file is offered under (LLP 1094.000 D14), and
+/// two files given one name each keep it in their own folders.
+#[test]
+fn each_copy_takes_the_name_it_is_offered_under() {
+    let root = shipped(&[("assets/1016.jpg", "Fuji"), ("assets/1017.jpg", "Etna")]);
+    let assets = Assets::embedded(root.path().to_owned());
+    let named = |entry: &str, name: &str| DragFile { entry: entry.into(), name: name.into() };
+    let (_base, copies, lines) =
+        staged_files(&[named("assets/1016.jpg", "Mount Fuji.jpg"), named("assets/1017.jpg", "Mount Fuji.jpg")], &assets);
+    assert!(lines.is_empty(), "{lines:?}");
+    let folder = copies[0].parent().unwrap().parent().unwrap();
+    assert_eq!(copies, [folder.join("0/Mount Fuji.jpg"), folder.join("1/Mount Fuji.jpg")]);
+    assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), "Fuji");
+    assert_eq!(std::fs::read_to_string(&copies[1]).unwrap(), "Etna");
 }
 
 #[test]
@@ -175,7 +203,7 @@ fn a_copy_is_found_again_only_while_it_is_the_file_the_drag_made() {
     let root = shipped(&[("assets/notes.txt", "Fuji")]);
     let assets = Assets::embedded(root.path().to_owned());
     let base = tempfile::tempdir().unwrap();
-    let names = vec!["assets/notes.txt".to_owned()];
+    let names = own(&["assets/notes.txt"]);
     let copies = stage_in(base.path(), &names, &assets, None, &|line| panic!("{line}"));
     let copy = copies.paths()[0].to_path_buf();
     let opened = copies.open(0).unwrap();
