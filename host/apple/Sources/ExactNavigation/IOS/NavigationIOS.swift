@@ -1401,7 +1401,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // While the inspector's column shows the selected route, a swipe in the detail takes the detail's top and
         // the inspector's route above it (LLP 1127 D14)
         let selected = selectedKey ?? ""
-        let topKey = NavigationRules.poppedTop(selected: selected, inspecting: inspectorKey, shownKeys: shownKeys)
+        let topKey = NavigationRules.poppedTop(selected: selected, inspecting: poppingInspectorKey, shownKeys: shownKeys)
         let dispatches = (viewController as? RouteController).map {
             NavigationRules.dispatchesBack(shownKey: $0.key, rootKey: topKey, sourceKey: sourceKey,
                                            sourceReplaced: sourceReplaced, modalActive: presenter.modalHost.inTransition)
@@ -1412,7 +1412,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         for route in poppedByUIKit() where pops(route, on: navigationController) { route.held = false }
         lastTransition = "completed"
-        if let to = NavigationRules.beneathPoppedTop(selected: selected, inspecting: inspectorKey, shownKeys: shownKeys) {
+        if let to = NavigationRules.beneathPoppedTop(selected: selected, inspecting: poppingInspectorKey, shownKeys: shownKeys) {
             goBack(from: selected, to: to)
         } else {
             goBack()

@@ -1453,6 +1453,22 @@ extension SplitIOSTests {
         until("the inspector and notes close") { split.detail.topViewController === book && split.inspecting == nil }
     }
 
+    /// UIKit's pop of the detail's top, the Back button's, while the inspector's column shows the visit above it goes
+    /// back past both, and stays there: the pop's meaning is read as it began, though UIKit has emptied the column by
+    /// its end (the inspector, LLP 1127 §7)
+    func testUIKitsPopUnderTheInspectorGoesBackPastBoth() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit animates a pop only in a window a scene holds") }
+        let (session, agent, split) = try inspectedNotes()
+        let navigation = session.presenter.navigationHost, visits = navigation.shownKeys
+        let book = try XCTUnwrap(split.detail.viewControllers.first)
+        split.detail.popViewController(animated: true)
+        until("the notes and their info are gone") { split.detail.topViewController === book && split.inspecting == nil && !agent.nativeInFlight() }
+        waitForMainQueue("a sync after the pop")
+        until("the router follows and the columns stay") { navigation.shownKeys == Array(visits.prefix(2)) && split.detail.topViewController === book && !agent.nativeInFlight() }
+        XCTAssertNil(split.inspecting)
+    }
+
     /// The expanded split at the Duo's open width: the book in the detail,
     /// its notes over it, and the notes' info in the inspector's column.
     @available(iOS 26.0, *)

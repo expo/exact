@@ -24,6 +24,26 @@ final class SearchLevelsIOSTests: XCTestCase {
         super.tearDown()
     }
 
+    /// UIKit's pop of the detail's top, the Back button's, while the inspector's column shows the visit above it
+    /// goes back past both, and stays there: the pop's meaning is read as it began, though UIKit has emptied the
+    /// column by its end (the inspector, LLP 1127 §7)
+    func testUIKitsPopOfTheDetailUnderTheInspectorGoesBackPastBoth() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        let fixture = try boot(regular: true)
+        try fixture.navigate("/book/a")
+        try fixture.navigate("/push-b")
+        try fixture.navigate("/inspect")
+        let visits = fixture.host.shownKeys
+        XCTAssertEqual(visits.count, 4, fixture.splitFacts)
+        XCTAssertNotNil(fixture.split.inspecting, fixture.splitFacts)
+        fixture.split.detail.popViewController(animated: true)
+        fixture.settle("UIKit's pop of the detail ends")
+        XCTAssertEqual(fixture.host.shownKeys, Array(visits.prefix(2)), fixture.splitFacts)
+        XCTAssertNil(fixture.split.inspecting, fixture.splitFacts)
+        XCTAssertEqual(fixture.split.detailRoutes.map(\.key), [visits[1]], fixture.splitFacts)
+    }
+
     func testResultsBindOnlyToAUniqueBodyRootAndKeepTheirController() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
         let fixture = try boot()

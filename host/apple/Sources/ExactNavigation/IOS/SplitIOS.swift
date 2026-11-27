@@ -368,6 +368,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         if let route, let nav = made, !controller.isCollapsed, move != .collapsing {
             // A close still in its transition is superseded: its end must not empty the column.
             closing = nil
+            carried = nil
             endSlide()
             inspector = nav
             // The column is the split's again after a collapse took it (`topColumnForCollapsing`).
@@ -439,6 +440,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// for later, it would vanish and slide in again. `inspect(nil)` keeps the
     /// route in the column until the column has gone.
     func closeInspector(along pop: UIViewControllerTransitionCoordinator) {
+        carried = (inspector?.viewControllers.first as? RouteController)?.key
         if pop.isInteractive, let nav = inspector, let route = nav.viewControllers.first as? RouteController {
             pop.animate(alongsideTransition: nil) { [weak self, weak nav, weak route] context in
                 // A batch that took the route while the finger was down left it sliding out: the deferred sync decides
@@ -475,6 +477,11 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         if !taken { letGo() }
     }
 
+
+    /// The visit the inspector's column showed when a pop of the detail began, which the pop carries away with the
+    /// route it was over (`closeInspector(along:)`): by the pop's end UIKit has taken it out of the column, and what the
+    /// pop meant is what it was as it began. The next route the column shows replaces it.
+    private(set) var carried: String?
 
     /// Exact's close of the inspector's column, until its transition ends:
     /// UIKit's report of it is not the person's. Each close has its number,

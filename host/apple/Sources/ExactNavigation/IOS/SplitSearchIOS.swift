@@ -248,7 +248,7 @@ extension NavigationHost {
         let removed = nav.topViewController === landing && !nav.viewControllers.contains { $0 === removedController }
             && (nav !== split.list || state.detailWasNested)
         guard namesEndpoints || removed,
-              source.key == NavigationRules.poppedTop(selected: origin, inspecting: inspectorKey, shownKeys: shownKeys),
+              source.key == NavigationRules.poppedTop(selected: origin, inspecting: poppingInspectorKey, shownKeys: shownKeys),
               let first = shownKeys.firstIndex(of: landingKey), let last = shownKeys.firstIndex(of: source.key), first < last else { return }
         let pop = SplitSearchState.Pop(in: nav, origin: origin, source: source.key, to: landing,
                                        landing: landingKey, returnsToResults: toResults, steps: last - first, revision: routerRevision)
@@ -278,7 +278,7 @@ extension NavigationHost {
         if cancelled { lastTransition = "cancelled"; return }
         // `replace` preserves visit identity even if it recreates the route's node. `open` mints a new visit.
         guard selectedKey == pop.origin, shownKeys.contains(pop.landing),
-              NavigationRules.poppedTop(selected: pop.origin, inspecting: inspectorKey, shownKeys: shownKeys) == pop.source,
+              NavigationRules.poppedTop(selected: pop.origin, inspecting: poppingInspectorKey, shownKeys: shownKeys) == pop.source,
               (state.reveal?.revision ?? 0) <= pop.revision else { return }
         let clearing = pop.landing == shownKeys.first
         let location = pop.returnsToResults ? presenter.session?.runtime.visitLocation(pop.landing) : nil

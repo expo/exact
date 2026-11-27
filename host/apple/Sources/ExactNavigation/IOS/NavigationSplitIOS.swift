@@ -298,6 +298,13 @@ extension NavigationHost {
         return route.key
     }
 
+    /// The selected visit a pop of the detail carries away from the inspector's column with the route it was over
+    /// (the inspector, LLP 1127 §7): the one the column shows, or the one it showed as the pop began, which UIKit's pop has taken
+    /// out of the column by the time the pop is followed (`SplitIOS.carried`).
+    var poppingInspectorKey: String? {
+        inspectorKey ?? split?.carried.flatMap { $0 == selectedKey ? $0 : nil }
+    }
+
     /// The sheet an expanded split can show in its inspector column.
     func inspectorRoute(_ parts: [Range<Int>], _ wanted: [RouteController]) -> RouteController? {
         guard let split, split.inspects, !split.controller.isCollapsed, parts.count == 2, parts[1].count == 1 else { return nil }
