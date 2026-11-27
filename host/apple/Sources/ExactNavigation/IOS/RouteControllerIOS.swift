@@ -357,14 +357,16 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     #if os(iOS)
     /// Under a search in the bar the route keeps its layout (`block(in:)`) and takes the keys as safe
     /// area, as SwiftUI's keyboard region is: UIKit insets its edge scroller so the last rows reach
-    /// above them. A visual viewport takes them as its inset instead, without reflow. Exact's part is
-    /// on the route's ledger, what an app's hatch set there staying (LLP 1123 D11).
+    /// above them. A visual viewport takes them as its inset instead, without reflow. A route that
+    /// ignores the keyboard (`-exact-safe-area-ignore`) takes none, its search open or closing. Exact's
+    /// part is on the route's ledger, what an app's hatch set there staying (LLP 1123 D11).
     private func fitSearchKeys(editor: UIView?, paired: Bool) {
         guard let presenter = host?.presenter else { return }
         let view = surface, ledger = ContributionsIOS.of(self)
         let id = ContributionsIOS.Identity(node: node.id, operation: .keyboardInsets)
         var keys: CGFloat = 0
-        if !paired, contentViewport == nil || presenter.keyboardPolicy != "resizes-visual", presenter.keyboardPolicy != "overlays-content",
+        if !paired, !SearchClearance.ignoresKeyboard(node),
+           contentViewport == nil || presenter.keyboardPolicy != "resizes-visual", presenter.keyboardPolicy != "overlays-content",
            editor?.isDescendant(of: view) != true, !presentedOver, let top = presenter.keyboardTop, let window = view.window {
             let edge = view.convert(CGPoint(x: 0, y: top), from: window).y
             // Extend the safe area the route has without it (a row beside the tabs, and an app's own

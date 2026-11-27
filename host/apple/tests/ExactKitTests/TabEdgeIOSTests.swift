@@ -1297,6 +1297,43 @@ final class TabEdgeIOSTests: XCTestCase {
         waitFor("dismissing the keyboard restores the row's inset") { abs(scroll.adjustedContentInset.bottom - obstruction) < 0.5 }
     }
 
+    /// A route that ignores the keyboard (`-exact-safe-area-ignore="keyboard"`) takes none of it as safe area under a
+    /// search in its bar, open or closing: UIKit's insets for its scroller stay as they were (LLP 1123 D7). Taken as the
+    /// route's safe area, the keys moved its list as the search closed while UIKit moved the bar.
+    func testARouteThatIgnoresTheKeyboardTakesNoneOfItUnderItsSearch() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
+        guard hostedWindowScene() != nil else {
+            throw missing("scene", "native search editing needs the hosted app responder lifecycle")
+        }
+        let session = try fixture(wholeScreen: true), p = session.presenter
+        try tap("tab-grid", route: "grid")
+        try press("select-grid", route: "grid")
+        let route = try XCTUnwrap(p.navigationHost.activeRoute)
+        let scroll = try XCTUnwrap(try node("content-grid").scrollView)
+        route.node.style["safe_area_ignore"] = .number(2)
+        let inset = route.additionalSafeAreaInsets.bottom, adjusted = scroll.adjustedContentInset.bottom
+        let search = try XCTUnwrap(route.navigationItem.searchController)
+        search.isActive = true
+        let field = search.searchBar.searchTextField
+        XCTAssertTrue(field.becomeFirstResponder())
+        waitFor("the search field is presented") { search.isActive && !search.isBeingPresented && field.window != nil }
+        setKeyboard(p, top: try XCTUnwrap(window).bounds.maxY - 300, responder: field)
+        defer {
+            setKeyboard(p, top: nil)
+            field.resignFirstResponder()
+            search.isActive = false
+        }
+        route.view.setNeedsLayout(); route.view.layoutIfNeeded()
+        waitForMainQueue("the route's fit after the keyboard")
+        XCTAssertEqual(route.additionalSafeAreaInsets.bottom, inset, accuracy: 0.5, "the keys are not the route's safe area")
+        XCTAssertEqual(scroll.adjustedContentInset.bottom, adjusted, accuracy: 0.5, "nor its scroller's inset")
+        // Closing, the search is no longer active while the keys are still up
+        search.isActive = false
+        route.view.setNeedsLayout(); route.view.layoutIfNeeded()
+        waitForMainQueue("the route's fit as the search closes")
+        XCTAssertEqual(route.additionalSafeAreaInsets.bottom, inset, accuracy: 0.5, "nor as the search closes")
+    }
+
     /// A route's reactions to its safe area's change and to its layout are held apart through a change in steps: one laid
     /// out within the steps still reports its covers once they end (LLP 1123 D11).
     func testARouteLaidOutWithinAChangeInStepsStillReportsItsCovers() throws {

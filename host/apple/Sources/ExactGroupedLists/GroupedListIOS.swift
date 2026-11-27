@@ -755,7 +755,6 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         theme = ThemeRoles.generation
         let writes = owner.wrote("background_color"), flipped = followSidebar()
         let restyled = next.style != previous.style || rethemed || writes != writesGround || flipped
-        collection.followsBar = sidebar
         writesGround = writes
         // Beside its detail, the list's ground is UIKit's sidebar's (`groundIsSidebars`); collapsed, its own again
         if flipped { owner.applyBoxLayer() }
