@@ -1,4 +1,4 @@
-use ArrangementScreen, PaneViewport, foldRight, foldSpring from "./arrangement.contract"
+use ArrangementScreen, PaneViewport, foldBand, foldFirst, foldSpring from "./arrangement.contract"
 use ArrangementView, ArrangementSettings from "./arrangement-view.contract"
 
 // Duo Lab (LLP 1078 D8): the first consumer of `device-posture` and the
@@ -163,10 +163,15 @@ component DuoLab
   // panel, so a fold hardly resizes it; it is centred on the display, as UIKit centres a
   // form sheet there. Its padding keeps only the part of an inset that its margin does
   // not clear.
-  // The tablist's tabs, where it is a bar along the bottom, keep to the trailing segment too,
-  // where UIKit keeps its tab bar on the open Duo, and move on the panes' spring. On one
-  // segment the bar keeps the web's left safe-area padding, which an authored value replaces.
-  derive tabsLeft = twoAcross ? foldRight(paneViewport) : "env(safe-area-inset-left, 0px)"
+  // The tablist's tabs, on a book fold, keep off the band between the segments, as Apple keeps
+  // controls off the hinge: the first three share the first segment inside the bar's left
+  // padding, the fourth starts after the band, and the rest share the second segment with it.
+  // The bar writes that padding itself, since the web drops its own where Safari's keyboard
+  // lifts the bar. Duo Lab is left to right (it has no strings table), so the first segment is
+  // the left one, and each segment holds its tabs, as the Duo's do; one too narrow for them
+  // would push them off it. Each tab moves on the panes' spring.
+  derive tabBasis = twoAcross ? `calc((${foldFirst(paneViewport)} - env(safe-area-inset-left, 0px)) / 3)` : "0%"
+  derive tabBand = twoAcross ? foldBand(paneViewport) : "0px"
   derive spring = foldSpring(paneViewport)
   derive gutter = "max(0px, calc((100% - 480px) / 2))"
   derive paneLeft = twoAcross ? "env(viewport-segment-left 1 0)" : gutter
@@ -436,20 +441,18 @@ component DuoLab
                       input appearance="none" value=title input=writeTitle focus=focusIn blur=focusOut placeholder="Title" testId="note-title-input" aria-label="Title" width="100%" box-sizing="border-box" padding=10 border-width=1 border-style="solid" border-color="-exact-separator" border-radius=10 font-size=16
                       textarea appearance="none" value=draft input=write focus=focusIn blur=focusOut placeholder="Write, then fold" testId="note-textarea" aria-label="Note" width="100%" min-height=96 box-sizing="border-box" padding=12 border-width=1 border-style="solid" border-color="-exact-separator" border-radius=10 font-size=16 line-height="22px"
       // Hidden on the note screen, an editor, as the guide hides a route's tab bar
-      // (docs/contract-for-agents.md, "Hide the tab bar on a route"). On a book
-      // fold its tabs keep to the trailing segment with the panes, and slide there as the
-      // Duo folds and back as it opens.
-      row role="tablist" testId="tab-bar" position="sticky" bottom=0 display=(current.name == "note" ? "none" : "flex") padding-left=tabsLeft
-        button role="tab" aria-controls="panel-fold" aria-selected=(nav.tab == "fold") press=selectTab("fold") testId="tab-fold" -exact-layout-transition=spring flex=1
+      // (docs/contract-for-agents.md, "Hide the tab bar on a route").
+      row role="tablist" testId="tab-bar" position="sticky" bottom=0 display=(current.name == "note" ? "none" : "flex") padding-left="env(safe-area-inset-left, 0px)"
+        button role="tab" aria-controls="panel-fold" aria-selected=(nav.tab == "fold") press=selectTab("fold") testId="tab-fold" -exact-layout-transition=spring flex-grow=(twoAcross ? 0 : 1) flex-shrink=(twoAcross ? 0 : 1) flex-basis=tabBasis
           image "symbol:book"
           text "Fold"
-        button role="tab" aria-controls="panel-panes" aria-selected=(nav.tab == "panes") press=selectTab("panes") testId="tab-panes" -exact-layout-transition=spring flex=1
+        button role="tab" aria-controls="panel-panes" aria-selected=(nav.tab == "panes") press=selectTab("panes") testId="tab-panes" -exact-layout-transition=spring flex-grow=(twoAcross ? 0 : 1) flex-shrink=(twoAcross ? 0 : 1) flex-basis=tabBasis
           image "symbol:layers"
           text "Panes"
-        button role="tab" aria-controls="panel-images" aria-selected=(nav.tab == "images") press=selectTab("images") testId="tab-images" -exact-layout-transition=spring flex=1
+        button role="tab" aria-controls="panel-images" aria-selected=(nav.tab == "images") press=selectTab("images") testId="tab-images" -exact-layout-transition=spring flex-grow=(twoAcross ? 0 : 1) flex-shrink=(twoAcross ? 0 : 1) flex-basis=tabBasis
           image "symbol:photo"
           text "Images"
-        button role="tab" aria-controls="panel-reflow" aria-selected=(nav.tab == "reflow") press=selectTab("reflow") testId="tab-reflow" -exact-layout-transition=spring flex=1
+        button role="tab" aria-controls="panel-reflow" aria-selected=(nav.tab == "reflow") press=selectTab("reflow") testId="tab-reflow" -exact-layout-transition=spring flex=1 margin-left=tabBand
           image "symbol:document"
           text "Reflow"
         button role="tab" aria-controls="panel-combos" aria-selected=(nav.tab == "combos") press=selectTab("combos") testId="tab-combos" -exact-layout-transition=spring flex=1
