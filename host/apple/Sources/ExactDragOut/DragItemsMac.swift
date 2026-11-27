@@ -35,11 +35,12 @@ enum DragItemsMac {
             words.forEach { item.setString($0.0, forType: $0.1) }
             writers = [item]
         } else {
-            writers += words.map { word, type in
+            // The words first, a caption above its photo where a destination places every item (LLP 1094.000 D5)
+            writers = words.map { word, type in
                 let item = NSPasteboardItem()
                 item.setString(word, forType: type)
                 return item
-            }
+            } + writers
         }
         return writers.map { writer in
             let item = NSDraggingItem(pasteboardWriter: writer)

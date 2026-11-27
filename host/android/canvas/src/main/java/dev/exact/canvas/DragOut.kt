@@ -123,8 +123,9 @@ internal object DragOut {
     }
 
     /**
-     * The clip: one item a file, as a content URI the app's [Files] provider serves under the name the file is
-     * offered under, then the URL and the text, each as text. A URL is no item's URI: a receiver opens an item's URI
+     * The clip: the URL and the text, each as text, then one item a file, as a content URI the app's [Files] provider
+     * serves under the name the file is offered under, so a receiver that places every item puts a caption above its
+     * photo. A URL is no item's URI: a receiver opens an item's URI
      * as a file's content, as Chrome's page does for every item with one. A file is a shipped `assets/…` name or an
      * `app:/` path ([Files.uri]); one the app does not have is left out and journaled. Null when it carries nothing.
      */
@@ -135,9 +136,9 @@ internal object DragOut {
             uri?.let { it to file.name }
         }
         val words = listOf(url, text).filter { it.isNotEmpty() }
-        val items = found.map { ClipData.Item(it.first) } + words.map { ClipData.Item(it) }
+        val items = words.map { ClipData.Item(it) } + found.map { ClipData.Item(it.first) }
         if (items.isEmpty()) return null
-        val types = found.map { Files.type(it.first.lastPathSegment ?: "") } + words.map { ClipDescription.MIMETYPE_TEXT_PLAIN }
+        val types = words.map { ClipDescription.MIMETYPE_TEXT_PLAIN } + found.map { Files.type(it.first.lastPathSegment ?: "") }
         // Other windows see the label when the drag starts, before any drop: a file's name, else none, as a TextView's
         // drag of text has.
         val label = found.firstOrNull()?.second

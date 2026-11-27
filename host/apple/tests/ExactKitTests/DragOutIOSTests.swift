@@ -257,20 +257,21 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertEqual(drag.name, "Share")
     }
 
-    /// With files, the URL and the text are items of their own (LLP 1094.000 D4).
-    func testTheItemsAreTheFilesThenTheURLThenTheText() throws {
+    /// With files, the URL and the text are items of their own, ahead of the files, so a destination that places
+    /// every item puts the words above the photo (LLP 1094.000 D4).
+    func testTheItemsAreTheURLThenTheTextThenTheFiles() throws {
         let p = page(["draggable": "true", "dataTransferFiles": "assets/apple/1016-thumb.jpg\napp:/data/notes.pdf",
                       "dataTransferUrl": "https://example.com/1016", "dataTransferText": "Mount Fuji"])
         let items = DragItems.items(of: try XCTUnwrap(p.views[10]), in: nil)
-        XCTAssertEqual(items.count, 4, "one item a file, then the URL and the text")
+        XCTAssertEqual(items.count, 4, "the URL and the text, then one item a file")
         guard items.count == 4 else { return }
-        XCTAssertEqual(items.prefix(2).map { $0.itemProvider.suggestedName }, ["1016-thumb.jpg", "notes.pdf"])
-        XCTAssertEqual(items[0].itemProvider.registeredTypeIdentifiers, [UTType.jpeg.identifier], "the file alone, its type its extension's")
-        XCTAssertEqual(items[1].itemProvider.registeredTypeIdentifiers, [UTType.pdf.identifier])
-        XCTAssertTrue(items[2].itemProvider.hasItemConformingToTypeIdentifier(UTType.url.identifier))
-        XCTAssertFalse(items[2].itemProvider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier))
-        XCTAssertTrue(items[3].itemProvider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier))
-        XCTAssertFalse(items[3].itemProvider.hasItemConformingToTypeIdentifier(UTType.url.identifier))
+        XCTAssertTrue(items[0].itemProvider.hasItemConformingToTypeIdentifier(UTType.url.identifier))
+        XCTAssertFalse(items[0].itemProvider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier))
+        XCTAssertTrue(items[1].itemProvider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier))
+        XCTAssertFalse(items[1].itemProvider.hasItemConformingToTypeIdentifier(UTType.url.identifier))
+        XCTAssertEqual(items.suffix(2).map { $0.itemProvider.suggestedName }, ["1016-thumb.jpg", "notes.pdf"])
+        XCTAssertEqual(items[2].itemProvider.registeredTypeIdentifiers, [UTType.jpeg.identifier], "the file alone, its type its extension's")
+        XCTAssertEqual(items[3].itemProvider.registeredTypeIdentifiers, [UTType.pdf.identifier])
         XCTAssertEqual(items.map { ($0.localObject as? DragItems.Lifted)?.id }, [10, 10, 10, 10])
     }
 

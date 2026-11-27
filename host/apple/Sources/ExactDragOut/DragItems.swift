@@ -27,10 +27,10 @@ enum DragItems {
         return url(of: node)?.absoluteString
     }
 
-    /// One item per file, its type read from its own extension and its
-    /// suggested name the one it is offered under, then `url` and `text` each an item of its own: a
-    /// destination usually takes one of an item's representations, so on a
-    /// file's item they would be hidden behind it. With no file one item carries
+    /// `url` and `text` each an item of its own, then one item per file, its type read from its own extension and its
+    /// suggested name the one it is offered under: a destination usually takes one of an item's representations, so
+    /// on a file's item they would be hidden behind it, and one that takes every item, as Notes does, places them in
+    /// order, a photo's caption above it (LLP 1094.000 D4). With no file one item carries
     /// `url` and then `text`, since a provider lists its higher-fidelity
     /// types first (Document: `NSItemProvider.h`).
     /// An empty `url` or `text` is none, as `tree` reads it, and so is a
@@ -57,11 +57,11 @@ enum DragItems {
             words.forEach { provider.registerObject($0, visibility: .all) }
             providers = [provider]
         } else {
-            providers += words.map { word in
+            providers = words.map { word in
                 let provider = NSItemProvider()
                 provider.registerObject(word, visibility: .all)
                 return provider
-            }
+            } + providers
         }
         let lifted = Lifted(node)
         return providers.map { provider in

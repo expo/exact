@@ -57,7 +57,8 @@ class DragOutTest {
             listOf(DragOut.Dragged("assets/a.png", "a.png"), DragOut.Dragged("app:/data/b.pdf", "Notes.pdf"))), ask)
     }
 
-    @Test fun aShippedFileAnAppFileTheUrlAndTheTextAreItsItems() {
+    /** The URL and the text come first, so a receiver that places every item puts the words above the photo. */
+    @Test fun theUrlTheTextAShippedFileAndAnAppFileAreItsItems() {
         shadowOf(android.webkit.MimeTypeMap.getSingleton()).addExtensionMimeTypeMapping("png", "image/png")
         File(assets, "assets/fuji.png").writeText("png")
         Journal.saved.writeText("saved")
@@ -67,14 +68,14 @@ class DragOutTest {
 
         assertEquals(4, clip.itemCount)
         val authority = "${context.packageName}.exact.files"
-        assertEquals("content", clip.getItemAt(0).uri.scheme)
-        assertEquals(authority, clip.getItemAt(0).uri.authority)
-        assertEquals(listOf("shipped", "assets", "fuji.png"), clip.getItemAt(0).uri.pathSegments)
-        assertEquals(listOf("app", "data", "saved.txt"), clip.getItemAt(1).uri.pathSegments)
-        assertNull("a file offered under its own name carries none", clip.getItemAt(0).uri.query)
-        assertEquals("https://example.com/1016", clip.getItemAt(2).text)
-        assertNull("a URL is no content to open", clip.getItemAt(2).uri)
-        assertEquals("Mount Fuji", clip.getItemAt(3).text)
+        assertEquals("https://example.com/1016", clip.getItemAt(0).text)
+        assertNull("a URL is no content to open", clip.getItemAt(0).uri)
+        assertEquals("Mount Fuji", clip.getItemAt(1).text)
+        assertEquals("content", clip.getItemAt(2).uri.scheme)
+        assertEquals(authority, clip.getItemAt(2).uri.authority)
+        assertEquals(listOf("shipped", "assets", "fuji.png"), clip.getItemAt(2).uri.pathSegments)
+        assertEquals(listOf("app", "data", "saved.txt"), clip.getItemAt(3).uri.pathSegments)
+        assertNull("a file offered under its own name carries none", clip.getItemAt(2).uri.query)
         assertEquals("fuji.png", clip.description.label)
         assertTrue(clip.description.hasMimeType("image/png"))
         assertFalse(clip.description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST))
