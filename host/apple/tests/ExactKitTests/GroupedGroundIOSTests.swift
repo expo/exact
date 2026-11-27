@@ -61,6 +61,46 @@ final class GroupedGroundIOSTests: GroupedListFixture {
         XCTAssertTrue(all.allSatisfy { $0 == rgba(.systemBackground, light) }, "\(all)")
     }
 
+    /// `listStyle="sidebar"` (LLP 1127 D17) is UIKit's sidebar list at every width, as a stock one is: the ground UIKit
+    /// gives its collection view, in light and dark, UIKit's separators, which are none, and no card, so a theme's card
+    /// role fills no row.
+    func testASidebarListIsUIKitsSidebarListOnItsGround() throws {
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["secondary-grouped-background": [10, 20, 30, 255]]]]).ops[0])
+        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0]) }
+        let p = presenter { self.model("sidebar") }
+        let l = try list(p)
+        XCTAssertFalse(l.sidebar, "no split: the author's style")
+        XCTAssertEqual(l.listAppearance, .sidebar)
+        let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, item in
+            var content = cell.defaultContentConfiguration()
+            content.text = "\(item)"
+            cell.contentConfiguration = content
+        }
+        let stock = UICollectionView(frame: window.bounds, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: .init(appearance: .sidebar)))
+        let source = UICollectionViewDiffableDataSource<Int, Int>(collectionView: stock) { view, path, item in
+            view.dequeueConfiguredReusableCell(using: rows, for: path, item: item)
+        }
+        var snapshot = NSDiffableDataSourceSnapshot<Int, Int>()
+        snapshot.appendSections([0])
+        snapshot.appendItems([1, 2])
+        source.apply(snapshot, animatingDifferences: false)
+        window.insertSubview(stock, at: 0)
+        defer { stock.removeFromSuperview() }
+        stock.layoutIfNeeded()
+        for traits in [light, dark] {
+            XCTAssertEqual(rgba(l.collection.backgroundColor, traits), rgba(stock.backgroundColor, traits), "UIKit's sidebar ground")
+        }
+        // UIKit's list draws a separator as a view of its own, which an inset grouped list of the same rows has
+        func separators(_ view: UIView) -> Int { view.subviews.reduce(NSStringFromClass(type(of: view)).contains("Separator") ? 1 : 0) { $0 + separators($1) } }
+        XCTAssertEqual(separators(l.collection), separators(stock), "UIKit's sidebar list draws none")
+        let row = try cell(p, 10), stockRow = try XCTUnwrap(stock.cellForItem(at: IndexPath(item: 0, section: 0)))
+        XCTAssertEqual(rgba(row.backgroundConfiguration?.resolvedBackgroundColor(for: row.tintColor), light),
+                       rgba(stockRow.backgroundConfiguration?.resolvedBackgroundColor(for: stockRow.tintColor), light), "a stock sidebar row's")
+        let grouped = try list(presenter { self.model() })
+        grouped.collection.layoutIfNeeded()
+        XCTAssertGreaterThan(separators(grouped.collection), 0)
+    }
+
     /// A theme's page ground (LLP 1095 D4) is a plain list's, its `Canvas` where it sets no `background`, as a page's is.
     func testAThemedPlainListsGroundIsThePagesGround() throws {
         ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Canvas": [253, 246, 227, 255]]]]).ops[0])

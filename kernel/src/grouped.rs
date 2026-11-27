@@ -45,7 +45,7 @@ pub use separator::GroupedSeparator;
 /// A grouped list as a host draws it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupedList {
-    /// `listStyle`: `inset-grouped`, `grouped` or `plain`.
+    /// `listStyle`: `inset-grouped`, `grouped`, `plain` or `sidebar`.
     pub style: String,
     /// Its sections, in order.
     pub sections: Vec<GroupedSection>,

@@ -266,8 +266,8 @@ fn liststyle_names_the_style_and_is_checked() {
     let list = r.kernel().grouped_list(id(&r, "list")).unwrap();
     assert_eq!(list.style, "plain");
     assert!(
-        refused("list appearance=\"auto\" listStyle=\"sidebar\"\n  section\n    text \"x\"")
-            .contains("inset-grouped, grouped, plain")
+        refused("list appearance=\"auto\" listStyle=\"source\"\n  section\n    text \"x\"")
+            .contains("inset-grouped, grouped, plain, sidebar")
     );
     assert!(refused("list listStyle=\"plain\"\n  text \"x\"").contains("appearance"));
     assert!(

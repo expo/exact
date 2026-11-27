@@ -1525,7 +1525,7 @@
       "id": 225,
       "name": "listStyle",
       "kind": "str",
-      "_comment": "@ref LLP 1084 D2: a grouped list's style, `inset-grouped`, `grouped` or `plain`; set by Contract on every `list` whose appearance is `auto` (UICollectionLayoutListConfiguration.Appearance on iOS)."
+      "_comment": "@ref LLP 1084 D2, LLP 1127 D17: a grouped list's style, `inset-grouped`, `grouped`, `plain` or `sidebar`; set by Contract on every `list` whose appearance is `auto` (UICollectionLayoutListConfiguration.Appearance on iOS; a host with no sidebar list draws `sidebar` as `plain`)."
     },
     {
       "id": 226,

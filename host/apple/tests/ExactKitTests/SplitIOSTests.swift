@@ -698,6 +698,34 @@ final class SplitIOSTests: XCTestCase {
         until("nothing selected at the list") { split.shown.count == 1 && selected() == [] && !agent.nativeInFlight() }
     }
 
+    /// LLP 1127 D17: a list whose author asks for the sidebar style is UIKit's sidebar list at both widths, so it keeps
+    /// one layout through a collapse and an expansion. Beside the detail its row drops its disclosure chevron, as every
+    /// list's does there, since the row selects rather than travels; collapsed, back at the list, the chevron returns.
+    func testAnAuthoredSidebarKeepsItsLayoutThroughACollapseAndAnExpansion() throws {
+        let session = try boot("SPLIT_SIDEBAR", size: CGSize(width: 1100, height: 800), width: .regular)
+        let agent = Agent(session: session)
+        let split = try split(session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        let books = try node(session, "books").id, rowA = try node(session, "row-a").id
+        let host = try XCTUnwrap(session.presenter.groupedLists as? GroupedListHost)
+        until("the list is laid out") { host.lists[books] != nil }
+        let list = try XCTUnwrap(host.lists[books]), layout = list.collection.collectionViewLayout
+        XCTAssertTrue(list.authoredSidebar && list.sidebar && !list.hostSidebar)
+        let cell = { list.source.indexPath(for: rowA).flatMap { list.collection.cellForItem(at: $0) as? UICollectionViewListCell } }
+        try tap(session, "row-a")
+        until("book a is the detail") { has(session, "book-a") && !agent.nativeInFlight() }
+        XCTAssertEqual(try XCTUnwrap(cell()).accessories.count, 0, "beside the detail the row selects: no chevron")
+        window?.traitOverrides.horizontalSizeClass = .compact
+        until("collapsed") { split.controller.isCollapsed && !list.sidebar && !agent.nativeInFlight() }
+        XCTAssertTrue(list.collection.collectionViewLayout === layout, "one layout across the collapse")
+        XCTAssertNil(agent.back()["error"])
+        until("back at the list, the row's chevron") { split.shown.count == 1 && cell()?.accessories.count == 1 && !agent.nativeInFlight() }
+        window?.traitOverrides.horizontalSizeClass = .regular
+        until("expanded again") { !split.controller.isCollapsed && list.sidebar && !agent.nativeInFlight() }
+        XCTAssertTrue(list.collection.collectionViewLayout === layout, "and across the expansion")
+        XCTAssertEqual(try XCTUnwrap(cell()).accessories.count, 0)
+    }
+
     /// LLP 1127 D3, D7: beside its detail, the sidebar's selected row is the
     /// base's, whatever a row's press did or a push within the detail added:
     /// UIKit's selection on a row that changed no detail goes back to it once
