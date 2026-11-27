@@ -93,6 +93,7 @@ mod tests {
         Scroller {
             id: 1,
             axes: (max.0 > 0., max.1 > 0.),
+            min: (0., 0.),
             max,
             offset,
             from_right: false,
