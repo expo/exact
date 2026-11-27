@@ -286,6 +286,7 @@ mod share;
 mod share_target;
 mod shared_derives;
 mod sheet_page;
+mod shelf_quote;
 mod sign_in;
 mod sound;
 mod source;
