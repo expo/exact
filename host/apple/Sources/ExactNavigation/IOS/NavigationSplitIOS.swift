@@ -65,9 +65,10 @@ extension NavigationHost {
         split.rule = rule
         split.changed = { [weak self, weak split] in
             guard let self, let split else { return }
-            if self.split === split { splitChanged() } else { runHeldSync() }
+            if self.split === split { splitChanged() } else if !split.moving { runHeldSync(); completeOwedTransitions() }
         }
         split.willPush = { [weak self] route, beneath in self?.prepareRoutePush(route, beneath: beneath) }
+        split.willMove = { [weak self] in self?.recordPops() }
         split.baseChanged = { [weak self, weak split] base in
             guard let self, let split else { return }
             self.prepareColumnTransition(base, in: split)
@@ -192,10 +193,23 @@ extension NavigationHost {
         controller as? RouteController ?? (controller === split?.detail ? split?.detailRoutes.last : nil)
     }
 
+    /// The transitions' ends a split's move held, run once it settles: the pops
+    /// they took reach the router from this fresh turn, and what follows a
+    /// transition's end (the held sync, the fit, focus, the bars) runs once.
+    func completeOwedTransitions() {
+        let owed = transitionEndsOwed
+        transitionEndsOwed = []
+        for nav in owed { completeTransition(nav, swipe: nil, cancelled: false) }
+    }
+
+    /// Whether UIKit is collapsing or expanding any of the host's splits.
+    var splitsMoving: Bool { split?.moving == true || tabSplits.values.contains { $0.moving } }
+
     /// UIKit changed what the split shows: the bars, the routes' insets,
     /// which routes are live (`routesShown`) and a sync its move held follow.
     func splitChanged() {
-        guard let split else { return }
+        // A move that began since its settling was told settles in turn
+        guard let split, !split.moving else { return }
         // Nested, N1's bar is UIKit's; N0's shows the top of the column on top (`showBar`)
         if !split.nested { showBar(split.detail, animated: false) }
         showBar(split.list, animated: false)
@@ -204,6 +218,7 @@ extension NavigationHost {
         // Beside the detail the list is UIKit's sidebar list, collapsed its authored style (LLP 1127 D7)
         presenter.groupedLists?.sync(changed: nil)
         runHeldSync()
+        completeOwedTransitions()
     }
 
     /// Whether UIKit's pop recognizer of `nav` pops a route of the router's:

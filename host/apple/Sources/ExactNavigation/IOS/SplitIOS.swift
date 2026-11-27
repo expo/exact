@@ -22,6 +22,7 @@ private final class SplitController: UISplitViewController {
     }
 }
 
+
 final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private let write: ([UIViewController], UINavigationController, Bool) -> Bool
     let controller: UISplitViewController = SplitController(style: .doubleColumn)
@@ -35,6 +36,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var changed: () -> Void = {}
     /// UIKit is about to push a route within N1, over the route beneath it.
     var willPush: (_ route: RouteController, _ beneath: RouteController) -> Void = { _, _ in }
+    /// UIKit is about to move N1 between the columns: read the person's pops
+    /// now, while UIKit still tells them apart from its move (LLP 1127 D15).
+    var willMove: () -> Void = {}
     /// N1 has a new base, or none: prepare N1's own transition, which N0's
     /// push and pop of N1 play, as the base's zoom
     /// (`NavigationHost.prepareColumnTransition`).
@@ -69,8 +73,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// moves its location, and is a new detail all the same (`show`).
     var rule: StackSplit?
     var topLocation: String?
-    /// The latest requested stack, root first, reapplied when the move settles.
-    private var stack: [RouteController] = []
+    /// The list over the detail alone, owed by a return to the root that a
+    /// collapse or an expansion interrupted, until a write shows it or a
+    /// detail arrives (LLP 1127 D15).
+    private var revealOwed = false
     /// What `changed` last reported.
     private var told: Showing?
     private struct Showing: Equatable {
@@ -80,6 +86,14 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// until it says it is done (`moving`).
     private var move: Move?
     private enum Move { case expanding, collapsing }
+    /// Counts UIKit's questions, so that a question asked inside another's
+    /// work owns the move from then on (`finishOwnTransitions`).
+    private var questions = 0
+    /// Whether a question's answer is being worked out. UIKit can report a
+    /// move done from inside it, while D23's call ends a column's transition
+    /// (an expansion's question heard `didExpand` from that call), before
+    /// it has moved anything: the move goes on.
+    private var answering = false
 
     init(list: UINavigationController, detail: UINavigationController,
          write: @escaping ([UIViewController], UINavigationController, Bool) -> Bool) {
@@ -104,18 +118,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         controller.setViewController(detail, for: .secondary)
     }
 
-    /// Whether UIKit is moving N1 between the columns: expanding, from asking
-    /// which display mode to expand to until it has, while the split still
-    /// reads collapsed (an iPhone Duo unfolding); collapsing, from asking
-    /// which column to put on top until it says it collapsed, while it still
-    /// reads expanded. A move of N1 meanwhile is no Back.
-    var moving: Bool {
-        switch move {
-        case .expanding?: controller.isCollapsed
-        case .collapsing?: true
-        case nil: false
-        }
-    }
+    /// Whether UIKit is moving N1 between the columns: from its question
+    /// (which display mode to expand to, which column to put on top) until it
+    /// says it expanded or collapsed, or a later turn finds the split at the
+    /// target with no transition running (`settleCheckSoon`). Not until the split
+    /// reads expanded: UIKit can lay the split out expanded inside its own
+    /// question, still in its move. A move of N1 meanwhile is no Back.
+    var moving: Bool { move != nil }
     /// Whether UIKit nests N1 in N0 now (collapsed, or collapsing).
     var nested: Bool { list.viewControllers.contains { $0 === detail } }
     /// Whether N1's routes are in the stack UIKit shows: in their column, or
@@ -183,11 +192,11 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// went through, including a stack already in place.
     @discardableResult
     func show(_ stack: [RouteController], animated: Bool, relocated: Bool = false) -> Bool {
-        self.stack = stack
-        // UIKit is moving N1 between the columns: the stack shows once it has
-        // expanded or collapsed (`settle`). Written now, the columns would be
-        // set from the split's state before the move, and UIKit, finding
-        // them changed, pushed the detail twice and asserted.
+        // UIKit is moving N1 between the columns, and is their one writer until
+        // it has expanded or collapsed: the host projects the router's visits
+        // as they then stand (`settle`). Written now, the columns would be set
+        // from the split's state before the move, and UIKit, finding them
+        // changed, pushed the detail twice and asserted.
         if moving { return false }
         guard let root = stack.first else {
             keepTransition([])
@@ -211,6 +220,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         }
         let next: [UIViewController] = rest.isEmpty ? [empty] : rest
         let writingDetail = !Self.same(detail.viewControllers, next)
+        // A return to the root over the detail alone shows the list; owed until shown, since a question UIKit asks
+        // inside the write below ends this pass, and the next finds no detail to return from
+        if !collapsed, rest.isEmpty, hadDetail, controller.displayMode == .secondaryOnly { revealOwed = true }
+        if !rest.isEmpty { revealOwed = false }
         if !collapsed || !rest.isEmpty || writingDetail { keepTransition(rest) }
         if writingDetail {
             // Animate within N1 when it is nested or expanded. Expanded, a replacement over the
@@ -221,14 +234,17 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
             if movesWithinDetail, let top = rest.last, !current.contains(where: { $0 === top }), collapsed || rest.count > 1 {
                 willPush(top, rest.count > 1 ? rest[rest.count - 2] : root)
             }
-            guard write(next, detail, animated && movesWithinDetail) else { return false }
+            guard write(next, detail, animated && movesWithinDetail), !moving else { return false }
         }
         if collapsed {
             // UIKit animates the push of N1 itself when it is outside N0
             if !rest.isEmpty, !nested { reveal(.secondary, animated: animated) }
         } else if moved {
             if !rest.isEmpty, [.oneOverSecondary, .twoOverSecondary].contains(controller.displayMode) { reveal(.secondary, animated: animated) }
-            if rest.isEmpty, hadDetail, controller.displayMode == .secondaryOnly { reveal(.primary, animated: animated) }
+        }
+        if revealOwed, !collapsed, rest.isEmpty {
+            revealOwed = false
+            if controller.displayMode == .secondaryOnly { reveal(.primary, animated: animated) }
         }
         return true
     }
@@ -259,36 +275,133 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private static func same(_ held: [UIViewController], _ next: [UIViewController]) -> Bool { held.elementsEqual(next, by: ===) }
 
     /// After each layout: what shows is reported when it changed, and a move
-    /// UIKit ended without saying so ends here, its stack shown.
+    /// UIKit may have ended without saying so is checked on a later turn.
     private func laidOut() {
-        if move != nil, !moving || (move == .collapsing && controller.isCollapsed && controller.transitionCoordinator == nil) { settle() }
+        if move != nil { settleCheckSoon() }
         let now = Showing(collapsed: controller.isCollapsed, mode: controller.displayMode, nested: nested)
         guard now != told else { return }
         told = now
         DispatchQueue.main.async { [weak self] in self?.changed() }
     }
 
-    /// UIKit expanded or collapsed: the stack shows as the columns now are.
+    /// Whether a later turn checks if UIKit ended the move (`settleCheckSoon`).
+    private var settleCheckOwed = false
+
+    /// On the main queue's next turn, outside UIKit's layout: a move whose
+    /// split reads the target state, with neither the split nor a column in a
+    /// transition, is over, as UIKit's own report would say (a split laid out
+    /// wide from the start sends its delegate no expansion). A move waiting on
+    /// a transition checks again when that transition ends: UIKit may neither
+    /// report the move nor lay the split out again. N1's own push or pop asked
+    /// for in the turn of an expansion has not begun, and UIKit leaves it, and
+    /// the expansion with it, waiting for a layout N1 never gets in no window
+    /// (the list across the window, the detail in none). Laid out inside the
+    /// question it traps; laid out here, a turn later, it runs and the
+    /// expansion ends (plain UIKit, 3 of 3).
+    func settleCheckSoon() {
+        guard !settleCheckOwed else { return }
+        settleCheckOwed = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            settleCheckOwed = false
+            guard let move else { return }
+            if move == .expanding, let own = NavigationHost.pushOrPop(on: detail), own.viewController(forKey: .to)?.viewIfLoaded?.window == nil {
+                detail.view.layoutIfNeeded()
+            }
+            let reached = move == .expanding ? !controller.isCollapsed : controller.isCollapsed
+            let running = [controller.transitionCoordinator].compactMap { $0 }
+                + [list, detail].compactMap { NavigationHost.pushOrPop(on: $0) }
+            // A target UIKit abandoned (no transition runs, and the size class
+            // now asks for the other state) is dropped (LLP 1127 D15)
+            let sizeClass = controller.traitCollection.horizontalSizeClass
+            let abandoned = move == .expanding ? sizeClass == .compact : sizeClass == .regular
+            if running.isEmpty, reached || abandoned { settle(); return }
+            for transition in running {
+                transition.animate(alongsideTransition: nil) { [weak self] _ in self?.settleCheckSoon() }
+            }
+        }
+    }
+
+    /// UIKit expanded or collapsed. Settling writes nothing here, inside
+    /// UIKit's adaptation: the host's next turn projects the router's visits
+    /// as they now stand and publishes (`changed`, `NavigationHost.splitChanged`).
     private func settle() {
         move = nil
-        show(stack, animated: false)
         DispatchQueue.main.async { [weak self] in self?.changed() }
     }
 
-    // Collapsed, the detail is on top while N1 holds a route (LLP 1127 D3's
-    // answer), wherever a presentation over the split was opened from.
+    /// At UIKit's question, D23's call (LLP 1127 D23): each column of
+    /// `columns`, in order, whose own push or pop runs ends it at once,
+    /// completed, as a plain navigation controller's ends at a fold; moving N1
+    /// between the columns while one runs crashes UIKit ("Layout requested for
+    /// visible navigation bar", RESULTS §3, §10). A coordinator a column only
+    /// inherits is none of its own. At a collapse, one asked for in the same
+    /// turn has not begun (its destination is not yet on screen) and would
+    /// begin at UIKit's next layout with N1 nested, which crashes as well: it
+    /// begins here, unanimated, so that the call ends it. That layout can run
+    /// app delegates, which can end the transition and begin another: a
+    /// replacement is tested afresh. At an expansion it is not laid out: the
+    /// layout runs UIKit's scheduled expansion inside its own question, which
+    /// then traps ("expected scheduled transition"), while the call alone
+    /// leaves no crash (plain UIKit, a same-turn pop and size-class change,
+    /// 2 of 2 each). A question asked meanwhile owns the move, and its own
+    /// calls finish the columns.
+    private func finishOwnTransitions(_ columns: [UINavigationController], beginUnbegun: Bool) {
+        let question = questions
+        for nav in columns {
+            let begun = NSHashTable<AnyObject>.weakObjects()
+            while beginUnbegun, questions == question, let transition = NavigationHost.pushOrPop(on: nav),
+                  transition.viewController(forKey: .to)?.viewIfLoaded?.window == nil, !begun.contains(transition as AnyObject) {
+                begun.add(transition as AnyObject)
+                UIView.performWithoutAnimation { nav.view.layoutIfNeeded() }
+            }
+            guard questions == question else { return }
+            guard NavigationHost.pushOrPop(on: nav) != nil else { continue }
+            UIView.performWithoutAnimation { nav.setViewControllers(nav.viewControllers, animated: false) }
+        }
+    }
+
+    // At each question the person's pops are read first, while UIKit still
+    // tells them apart from its move (`willMove`); then the move is recorded
+    // and D23 finishes the columns' own transitions, and the pops are read
+    // again for a swipe D23 completed. Collapsing, N0's transition ends and
+    // then N1's. Expanding, only N1's: N0's push and pop of N1 survived an
+    // unfold left to UIKit (RESULTS §10), and ending N0's pop in the turn it
+    // was asked trapped. Collapsed, the detail is on top while N1 holds a
+    // route (LLP 1127 D4), wherever a presentation over the split was opened
+    // from: UIKit can propose the list then (a size-class collapse), and the
+    // list on top would leave N1 out of N0, read as the person's Back.
     func splitViewController(_ svc: UISplitViewController,
                              topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column) -> UISplitViewController.Column {
-        move = .collapsing
+        ask(.collapsing, finishing: [list, detail])
         return detailRoutes.isEmpty ? .primary : .secondary
     }
     func splitViewController(_ svc: UISplitViewController,
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
-        move = .expanding
+        ask(.expanding, finishing: [detail])
         return proposedDisplayMode
     }
-    func splitViewControllerDidCollapse(_ svc: UISplitViewController) { settle() }
-    func splitViewControllerDidExpand(_ svc: UISplitViewController) { settle() }
+    /// One question's work, before its answer: the pops read, the move
+    /// recorded, the columns' own transitions finished (a not-yet-begun one
+    /// begun first only at a collapse), the pops read again, and a check of the
+    /// move on the next turn, for a move UIKit ends without laying the split out
+    /// again.
+    private func ask(_ target: Move, finishing columns: [UINavigationController]) {
+        questions &+= 1
+        answering = true
+        defer { answering = false; settleCheckSoon() }
+        willMove()
+        move = target
+        finishOwnTransitions(columns, beginUnbegun: target == .collapsing)
+        willMove()
+    }
+
+    func splitViewControllerDidCollapse(_ svc: UISplitViewController) {
+        if !answering { settle() }
+    }
+    func splitViewControllerDidExpand(_ svc: UISplitViewController) {
+        if !answering { settle() }
+    }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
         DispatchQueue.main.async { [weak self] in self?.changed() }
     }

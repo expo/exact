@@ -4,7 +4,8 @@
 // the detail (D7). A book's row pushes the book, and a row chosen beside a
 // book replaces it, as the list-detail pattern's rows do; the book pushes
 // its notes, a sheet and a full-screen cover. `renew` writes the book's
-// route anew under its key, and `swap` replaces the notes with another visit.
+// route anew under its key, `swap` replaces the notes with another visit,
+// and `home` goes from the notes back to the list in one batch.
 // A collapsed split animates as a pushed stack: a page's own entrance and
 // exit (`Slides`), a photo's zoom from its `navigationSource`, and Next's
 // `replace` of the book with a page as UIKit's push. A row that only counts,
@@ -56,6 +57,8 @@ component App
     renewals = renewals + 1
   action swap
     nav = push(back(nav), path("notes", "z"))
+  action home
+    nav = go(nav, "/")
   action openPhoto(id: string)
     nav = push(nav, path("photo", id))
   action next
@@ -134,6 +137,8 @@ component App
             text "Notes on the book"
             button press=swap testId=`swap-${e.params.id}`
               text "Swap"
+            button press=home testId=`home-${e.params.id}`
+              text "Home"
             button id="back" press=back testId=`back-notes-${e.params.id}`
               text "Back"
         if e.name == "share"
