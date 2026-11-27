@@ -1097,7 +1097,8 @@ component StatusControl
     choose: action
     prefix: string
   view
-    row role="tablist" aria-label="Status" testId=prefix
+    // In a list's transparent section the tabs span the card, so the control lines up with the fields' cards
+    row role="tablist" aria-label="Status" testId=prefix padding-left=0 padding-right=0
       button role="tab"
         aria-selected=(status == "want")
         press=choose("want")
