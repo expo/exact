@@ -254,6 +254,28 @@ final class MouseChain {
     /// (the view left its window) waits for the bubbling too.
     var earlyBubbling = false, heldUp: NSEvent?, releaseAfterBubbling = false
     private(set) var order: [MouseRecognizer] = []
+    /// The down of a contact only a drag takes (`downDragOnly`), until its up.
+    private(set) var dragOnly: NSEvent?
+    /// The first mouse a view took for a drag alone (`shouldDelayWindowOrdering`,
+    /// `acceptsFirstMouse`), and that view, until the down AppKit then gives it.
+    private var firstMouseDrag: (event: NSEvent, view: ObjectIdentifier)?
+    /// Records `event` as a first mouse `view` takes for a drag alone when `drags`, and answers it.
+    func decideFirstMouseDrag(_ event: NSEvent, at view: NSView, _ drags: Bool) -> Bool {
+        if drags { firstMouseDrag = (event, ObjectIdentifier(view)) }
+        return drags
+    }
+    /// Whether `event` at `view` is the down recorded as a drag's first mouse:
+    /// the same event, or one AppKit sends again for it, at the same view.
+    func isFirstMouseDrag(_ event: NSEvent, at view: NSView) -> Bool {
+        guard let (first, at) = firstMouseDrag, at == ObjectIdentifier(view) else { return false }
+        return first === event || (first.type == event.type && first.timestamp == event.timestamp && first.modifierFlags == event.modifierFlags
+            && first.windowNumber == event.windowNumber && first.locationInWindow == event.locationInWindow)
+    }
+    /// The recorded first mouse, taken by its down.
+    func takeFirstMouseDrag(_ event: NSEvent, at view: NSView) -> Bool {
+        defer { firstMouseDrag = nil }
+        return isFirstMouseDrag(event, at: view)
+    }
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     /// Rule 4's rank on one node, the tie-break after depth.
@@ -272,6 +294,17 @@ final class MouseChain {
         order = MouseChain.ordered(recognizers.map { $0.armed.flatMap { MouseChain.depth(of: $0, from: node) } })
             .map { recognizers[$0] }
     }
+    /// A first click in a window that is not key that only a drag takes
+    /// (LLP 1094.000 D5, which `DragOutCapability.arms` decides with no other
+    /// candidate on the way): the drag out of the app arms alone, and nothing
+    /// else hears the contact, through its up.
+    func downDragOnly(_ node: NodeView, event: NSEvent) {
+        downEvent = event
+        dragOnly = event
+        guard let drag = presenter?.mouseDragOut else { order = []; return }
+        drag.arm(node, event: event)
+        order = drag.armed == nil ? [] : [drag]
+    }
     func drag(_ event: NSEvent) -> Bool {
         if let owner = order.first(where: { $0.engaged }) { return owner.drag(event) }
         for recognizer in order where recognizer.armed != nil {
@@ -280,8 +313,8 @@ final class MouseChain {
                 bubbledPress?.cancel()
                 for other in order where other !== recognizer { other.cancel() }
                 order = [recognizer]
-                // A drag must not also dispatch the click armed at down.
-                if let presenter {
+                // A drag must not also dispatch the click armed at down; a drag-only contact armed none and keeps the selection.
+                if dragOnly == nil, let presenter {
                     presenter.selection.clear()
                     for view in presenter.views.values where view.pressed { view.pressed = false }
                 }
@@ -292,7 +325,7 @@ final class MouseChain {
     }
     func up(_ event: NSEvent) -> Bool {
         let recognizers = order
-        order = []; downEvent = nil
+        order = []; downEvent = nil; dragOnly = nil
         var taken = false
         for recognizer in recognizers { taken = recognizer.up(event) || taken }
         return taken

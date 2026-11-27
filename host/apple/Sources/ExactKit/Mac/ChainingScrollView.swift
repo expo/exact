@@ -59,6 +59,9 @@ package final class ChainingScrollView: NSScrollView {
     package override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         pointerOwner?.acceptsFirstMouse(for: event) ?? super.acceptsFirstMouse(for: event)
     }
+    package override func shouldDelayWindowOrdering(for event: NSEvent) -> Bool {
+        pointerOwner?.shouldDelayWindowOrdering(for: event) ?? super.shouldDelayWindowOrdering(for: event)
+    }
     package override func mouseDown(with event: NSEvent) {
         if let pointerOwner {
             mouseHeld = true

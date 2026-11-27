@@ -1250,9 +1250,34 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     }
 
     /// The click that activates a window presses a control and nothing else,
-    /// as in AppKit (LLP 1115.000 D7.9; `clicksThrough`, FocusMac.swift).
-    /// The agent's window is never key, so its every click counts.
-    package override func acceptsFirstMouse(for event: NSEvent?) -> Bool { Self.countsFirstMouse(event) || clicksThrough }
+    /// as in AppKit (LLP 1115.000 D7.9; `clicksThrough`, FocusMac.swift),
+    /// unless it would arm a drag, which it then may do alone (LLP 1094.000
+    /// D5). AppKit asks `shouldDelayWindowOrdering(for:)` first, while the
+    /// app is still inactive, and this once it has made the window key: the
+    /// down decided on there is the drag's. The agent's window is never key,
+    /// so its every click counts.
+    package override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        if Self.countsFirstMouse(event) || clicksThrough { return true }
+        guard let event, let chain = presenter?.mouseChain else { return false }
+        if chain.isFirstMouseDrag(event, at: self) { return true }
+        return chain.decideFirstMouseDrag(event, at: self, firstMouseDrags(event))
+    }
+    /// A first click that may arm a drag leaves the window where it is until
+    /// its up, or for good once the drag begins (LLP 1094.000 D5).
+    package override func shouldDelayWindowOrdering(for event: NSEvent) -> Bool {
+        guard let chain = presenter?.mouseChain else { return false }
+        return chain.decideFirstMouseDrag(event, at: self, firstMouseDrags(event))
+    }
+    /// Whether `event` is a first click a drag takes alone (LLP 1094.000 D5,
+    /// "From an inactive window"): a left press in a window that is not key,
+    /// or of an app that is not active, which would not reach the node
+    /// already (a control or a list row clicks through), on a node a press
+    /// would arm a drag from. A Control-click is a contextual click.
+    func firstMouseDrags(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseDown, !event.modifierFlags.contains(.control), let window, let presenter,
+              !(NSApp.isActive && window.isKeyWindow), !Self.countsFirstMouse(event), !clicksThrough else { return false }
+        return DragOutLink.installed?.arms(self, in: presenter) ?? false
+    }
 
     // Press: down and up inside the bounds. A click on a button or a
     // pressable leaves the first responder where it is, as a click on an

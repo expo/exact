@@ -15,6 +15,23 @@ public enum ExactDragOut {
 
 final class DragOutHost: DragOutCapability {
     func mouseDrag(_ presenter: Presenter) -> MouseRecognizer { MouseDragOut(presenter) }
+    /// A first click's drag (D5) needs no other candidate of the chain on
+    /// the way: no node from `node` up to the source hears a pan or a swipe,
+    /// reorders, or is a transform or a height handle, any of which rule 4
+    /// may rank first. Read from the nodes, arming nothing.
+    func arms(_ node: NodeView, in presenter: Presenter) -> Bool {
+        guard !ExactEnv.agentMode, let source = MouseDragOut.source(from: node, in: presenter) else { return false }
+        var at: NSView? = node
+        while let view = at {
+            if let found = view as? NodeView {
+                if !found.handlers.isDisjoint(with: ["pan", "panrelease", "swipeleft", "swiperight"])
+                    || !(found.props["reorderFor"] ?? "").isEmpty || presenter.drags.handles(found.id) { return false }
+                if found === source { return true }
+            }
+            at = view.superview
+        }
+        return false
+    }
 }
 
 /// Armed on a down at the innermost draggable node the press reaches
@@ -40,6 +57,9 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
     /// whether or not the node is still there.
     private weak var sessionWindow: NSWindow?
     private var origin = CGPoint.zero
+    /// Whether the down was in a window that was not key, or of an app that
+    /// was not active: the drag then keeps the window where it was (D5).
+    private(set) var fromBackground = false
     /// AppKit's session, begun from the node; a test's stand-in records it,
     /// since a session follows the hardware mouse.
     var begin: (NodeView, [NSDraggingItem], NSEvent, NSDraggingSource) -> Void = { $0.beginDraggingSession(with: $1, event: $2, source: $3) }
@@ -52,6 +72,7 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         guard !ExactEnv.agentMode, let presenter, node.window?.windowNumber == event.windowNumber else { return }
         armed = Self.source(from: node, in: presenter)
         carried = armed.map(Self.carried) ?? []
+        fromBackground = !(NSApp.isActive && node.window?.isKeyWindow == true)
         down = node
         downWindow = node.window
         origin = event.locationInWindow
@@ -77,6 +98,8 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         }
         let items = DragItemsMac.items(of: armed, in: presenter.session)
         guard !items.isEmpty else { self.armed = nil; return false }
+        // A drag from a window that was not key leaves it where it was, and the app inactive (D5)
+        if fromBackground { NSApp.preventWindowOrdering() }
         began(in: downWindow)
         // AppKit tracks the mouse from here; the session's end resets this.
         begin(armed, items, event, self)

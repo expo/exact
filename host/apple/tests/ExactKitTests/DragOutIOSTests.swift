@@ -114,6 +114,36 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertNil(bar.accessibilityDragSourceDescriptors, "none once the card does not drag")
     }
 
+    /// During a drag, a tap on another card that could lift adds its items,
+    /// checked as a lift is; a card the drag already carries, or a point off
+    /// the card, adds none (D4, "Adding to a drag").
+    func testATapAddsAnotherCardToADragInFlight() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("none while the agent paints (D4)") }
+        let p = presenter(card(10, ["draggable": "true", "dataTransferText": "Mount Fuji"])
+            + card(20, ["draggable": "true", "dataTransferText": "Rainbow Mountain"])
+            + [["op": "frame", "id": 20, "x": 20.0, "y": 200.0, "w": 200.0, "h": 120.0],
+               ["op": "create", "id": 1, "kind": "view"], ["op": "children", "id": 1, "ids": [10, 20]],
+               ["op": "roots", "ids": [1]], ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0]])
+        let first = try XCTUnwrap(drags(try XCTUnwrap(p.views[10])).first)
+        let second = try XCTUnwrap(drags(try XCTUnwrap(p.views[20])).first)
+        let session = PointDragSession(at: CGPoint(x: 120, y: 80), in: window)
+        session.carried = try sources(p).dragInteraction(first, itemsForBeginning: session)
+        XCTAssertEqual(session.carried.count, 1, "the first card lifts")
+        let added = try sources(p).dragInteraction(second, itemsForAddingTo: session, withTouchAt: CGPoint(x: 100, y: 60))
+        XCTAssertEqual(added.map { ($0.localObject as? DragItems.Lifted)?.id }, [20], "the tapped card's items, each from its own node")
+        session.carried += added
+        XCTAssertTrue(try sources(p).dragInteraction(second, itemsForAddingTo: session, withTouchAt: CGPoint(x: 100, y: 60)).isEmpty, "none twice")
+        XCTAssertTrue(try sources(p).dragInteraction(first, itemsForAddingTo: session, withTouchAt: CGPoint(x: 100, y: 60)).isEmpty, "none from the card lifted")
+        session.carried = []
+        XCTAssertTrue(try sources(p).dragInteraction(second, itemsForAddingTo: session, withTouchAt: CGPoint(x: 300, y: 60)).isEmpty, "off the card")
+        // Beside a drag the tap's own touch began, the tap adds to the one the person holds
+        let held = PointDragSession(at: CGPoint(x: 120, y: 80), in: window), begun = PointDragSession(at: CGPoint(x: 120, y: 260), in: window)
+        held.carried = try sources(p).dragInteraction(first, itemsForBeginning: held)
+        begun.carried = try sources(p).dragInteraction(second, itemsForBeginning: begun)
+        XCTAssertTrue(try sources(p).dragInteraction(second, sessionForAddingItems: [begun, held], withTouchAt: CGPoint(x: 100, y: 60)) === held)
+        XCTAssertNil(try sources(p).dragInteraction(second, sessionForAddingItems: [held], withTouchAt: CGPoint(x: 300, y: 60)), "off the card")
+    }
+
     /// The lift reads what the touch lands on now, as the window routes it:
     /// the card's text lifts the card; a view put over it since the touch
     /// began, or a point off the card, lifts nothing.
@@ -736,9 +766,11 @@ final class DragOutIOSTests: XCTestCase {
 final class PointDragSession: NSObject, UIDragSession {
     let at: CGPoint
     weak var window: UIView?
+    /// The items the drag carries so far.
+    var carried: [UIDragItem] = []
     init(at: CGPoint, in window: UIView) { self.at = at; self.window = window }
     var localContext: Any?
-    var items: [UIDragItem] { [] }
+    var items: [UIDragItem] { carried }
     func location(in view: UIView) -> CGPoint { window.map { view.convert(at, from: $0) } ?? at }
     var allowsMoveOperation: Bool { false }
     var isRestrictedToDraggingApplication: Bool { false }

@@ -170,6 +170,29 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         return DragItems.items(of: node, in: presenter?.session)
     }
 
+    /// A tap on another node that could lift, while a drag is under way,
+    /// adds that node's items to it (D4, "Adding to a drag"): checked as a
+    /// lift is, and none from a node whose items the drag already carries.
+    func dragInteraction(_ interaction: UIDragInteraction, itemsForAddingTo session: UIDragSession, withTouchAt point: CGPoint) -> [UIDragItem] {
+        guard let view = interaction.view, let window = view.window,
+              let node = lifted(by: interaction, atWindowPoint: view.convert(point, to: window)) else { return [] }
+        let carried = session.items.contains { item in
+            (item.localObject as? DragItems.Lifted).map { $0.id == node.id && $0.incarnation == node.incarnation } ?? false
+        }
+        return carried ? [] : DragItems.items(of: node, in: presenter?.session)
+    }
+
+    /// The drag a tap adds to (D4, "Adding to a drag"): the one the person is
+    /// holding, which carries an item from another node, not one the tap's
+    /// own touch began.
+    func dragInteraction(_ interaction: UIDragInteraction, sessionForAddingItems sessions: [UIDragSession], withTouchAt point: CGPoint) -> UIDragSession? {
+        guard let view = interaction.view, let window = view.window,
+              let node = lifted(by: interaction, atWindowPoint: view.convert(point, to: window)) else { return nil }
+        return sessions.first { session in
+            session.items.contains { item in (item.localObject as? DragItems.Lifted).map { $0.id != node.id } ?? true }
+        }
+    }
+
     /// The node from whose view UIKit shows a context menu (D4). A request for
     /// its items then is the menu's, Ask Siri's (WWDC26 session 278) or a drag of
     /// the menu's preview, with no touch on the node, so it is answered as a
@@ -187,10 +210,16 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     /// node must still be the same one, in the same incarnation and window,
     /// holding the same interaction, after it.
     private func lifted(by interaction: UIDragInteraction, at session: UIDragSession) -> NodeView? {
+        guard let window = interaction.view?.window else { return nil }
+        return lifted(by: interaction, atWindowPoint: session.location(in: window))
+    }
+
+    /// The node `interaction` lifts at `point` in its window, as `lifted(by:at:)` reads a session's touch.
+    private func lifted(by interaction: UIDragInteraction, atWindowPoint point: CGPoint) -> NodeView? {
         guard let presenter, let id = interactions.first(where: { $0.value === interaction })?.key, let node = presenter.views[id],
-              let window = node.window else { return nil }
+              let window = node.window, interaction.view?.window === window else { return nil }
         let incarnation = node.incarnation
-        guard let hit = window.hitTest(session.location(in: window), with: nil), presenter.views[id] === node, node.incarnation == incarnation,
+        guard let hit = window.hitTest(point, with: nil), presenter.views[id] === node, node.incarnation == incarnation,
               node.window === window,
               interactions[id] === interaction, interaction.view === node,
               Self.lifts(node), hit.isDescendant(of: node), !Self.keepsContact(node, from: hit, in: presenter) else { return nil }
