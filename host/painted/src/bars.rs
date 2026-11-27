@@ -108,7 +108,7 @@ impl<D: DataSource> Host<D> {
         } else {
             (above, above)
         };
-        self.set_bar_rooms(room, above, sheet_above)
+        self.set_sheet_bar_rooms(room, above, sheet_above, self.navigation.bars.sheet_minimum)
     }
 
     /// Like [`Host::set_bar_room`], with a separate top room for routes whose
@@ -120,6 +120,17 @@ impl<D: DataSource> Host<D> {
         subtitled_above: f32,
         sheet_above: (f32, f32),
     ) -> Result<bool, String> {
+        self.set_sheet_bar_rooms(room, subtitled_above, sheet_above, None)
+    }
+
+    pub(crate) fn set_sheet_bar_rooms(
+        &mut self,
+        room: Option<(f32, f32, f32)>,
+        subtitled_above: f32,
+        sheet_above: (f32, f32),
+        sheet_minimum: Option<(f32, f32)>,
+    ) -> Result<bool, String> {
+        let sheet_minimum = room.and(sheet_minimum);
         let subtitled_above = if room.is_some() { subtitled_above } else { 0.0 };
         let sheet_above = if room.is_some() {
             sheet_above
@@ -129,12 +140,14 @@ impl<D: DataSource> Host<D> {
         if self.navigation.bars.room == room
             && self.navigation.bars.subtitled_above == subtitled_above
             && self.navigation.bars.sheet_above == sheet_above
+            && self.navigation.bars.sheet_minimum == sheet_minimum
         {
             return Ok(false);
         }
         self.navigation.bars.room = room;
         self.navigation.bars.subtitled_above = subtitled_above;
         self.navigation.bars.sheet_above = sheet_above;
+        self.navigation.bars.sheet_minimum = sheet_minimum;
         match self.project_bars() {
             true => self.layout().map(|_| true),
             false => Ok(false),
@@ -157,6 +170,24 @@ impl<D: DataSource> Host<D> {
         self.navigation.shown_popover = id;
         self.project_bars();
         self.layout().map(|_| ())
+    }
+
+    pub(crate) fn sheet_header_height(&self, header: ViewId, subtitled: bool) -> f32 {
+        let pick = |(plain, supporting)| if subtitled { supporting } else { plain };
+        let bars = &self.navigation.bars;
+        if let Some(minimum) = bars.sheet_minimum {
+            if let Some(exact_kernel::Dimension::Points(height)) = self
+                .runner
+                .kernel()
+                .node(header)
+                .map(|node| &node.style.height)
+            {
+                if height.is_finite() && *height > 0.0 {
+                    return height.max(pick(minimum));
+                }
+            }
+        }
+        pick(bars.sheet_above)
     }
 
     /// Read the navigation root's bars from the tree as it now stands and
@@ -271,11 +302,7 @@ impl<D: DataSource> Host<D> {
                         let mut bar_top = 0.0;
                         if let Some(shape) = shape.filter(|_| shows) {
                             let subtitle = kernel.header_subtitle(&shape);
-                            bar_top = if subtitle.is_some() {
-                                self.navigation.bars.sheet_above.1
-                            } else {
-                                self.navigation.bars.sheet_above.0
-                            };
+                            bar_top = self.sheet_header_height(shape.header, subtitle.is_some());
                             for id in lifted(kernel, &shape) {
                                 wanted.insert(id, HostCover::Whole);
                             }

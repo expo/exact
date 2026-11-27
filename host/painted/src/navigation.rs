@@ -231,6 +231,7 @@ pub struct Projection {
     /// Top bar content heights `(plain, subtitled)` without status bar padding,
     /// used for projected modal sheet headers (LLP 1156.008.001 B5).
     pub(crate) sheet_above: (f32, f32),
+    pub(crate) sheet_minimum: Option<(f32, f32)>,
     /// The navigation root.
     pub root: Option<ViewId>,
     /// Its routes whose header is a bar, in every stack.

@@ -78,10 +78,11 @@ impl<D: DataSource> Presenter<D> {
             return Err(HostError::Layout(error));
         }
         // The room a shell's bars take, without which the new host projects no bars.
-        host.set_bar_rooms(
+        host.set_sheet_bar_rooms(
             self.host.bars().room,
             self.host.bars().subtitled_above,
             self.host.bars().sheet_above,
+            self.host.bars().sheet_minimum,
         )
         .map_err(HostError::Layout)?;
         let time = self.host.runner().wall_time();

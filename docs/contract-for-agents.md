@@ -5051,6 +5051,10 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   - **Android's top app bar and tvOS's bar leave out a readout**, and Android also leaves
     out the title's avatar, glyph-line subtitles and tap on the title (plain-text subtitles
     after the heading project into Material's small top app bar, LLP 1115.001 D11).
+    Inside an Android sheet, a positive fixed `height` on the projected `header` sets its
+    requested height in dp. For example, `header height=56` reserves 56 dp above the list
+    at normal text size. The bar still fits its 48 dp action targets and scaled title and
+    subtitle. Leave the height unsaid for the default 64 dp bar; page bars are unchanged.
     The Mac's toolbar takes a header only when it has a place for every part: the heading, the first text
     after it (in a box or not) as the window's subtitle, buttons whose face is words,
     symbols, dots and at most one picture, readouts of words, symbols and dots, one

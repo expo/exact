@@ -59,8 +59,12 @@ pub fn top_height() -> f32 {
 /// (LLP 1115.001 D11): 64 dp (`AppBarSmallTokens.ContainerHeight`), or the
 /// scaled title (and optional subtitle) line heights when larger.
 pub fn top_content_height(font_scale: f32, subtitled: bool) -> f32 {
+    top_height().max(top_minimum(font_scale, subtitled))
+}
+
+pub(super) fn top_minimum(font_scale: f32, subtitled: bool) -> f32 {
     let lines = TITLE_LARGE.1 + if subtitled { LABEL_MEDIUM.1 } else { 0.0 };
-    top_height().max(lines * font_scale)
+    ICON_BUTTON.max(lines * font_scale)
 }
 
 /// A badge with text: its least size, its text's inset, and where it sits
@@ -179,6 +183,15 @@ pub struct Top {
     pub trailing: Vec<Button>,
     /// Whether the route's content has scrolled under it.
     pub scrolled: bool,
+}
+
+impl Top {
+    fn has_subtitle(&self) -> bool {
+        self.heading.is_some()
+            && !self.title.is_empty()
+            && self.subtitle_node.is_some()
+            && !self.subtitle.is_empty()
+    }
 }
 
 /// One destination of the navigation bar.
@@ -452,6 +465,20 @@ impl Layout {
 
     /// Material's small top app bar for `top`.
     pub fn top(engine: &mut TextEngine, top: &Top, inputs: &Inputs) -> Layout {
+        Self::top_at_height(
+            engine,
+            top,
+            inputs,
+            top_content_height(inputs.font_scale, top.has_subtitle()),
+        )
+    }
+
+    pub(super) fn top_at_height(
+        engine: &mut TextEngine,
+        top: &Top,
+        inputs: &Inputs,
+        h: f32,
+    ) -> Layout {
         let inputs = if top.direction == Direction::Rtl {
             &Inputs {
                 sides: (inputs.sides.1, inputs.sides.0),
@@ -461,11 +488,8 @@ impl Layout {
             inputs
         };
         let (dark, scale) = (inputs.dark, inputs.font_scale);
-        let has_subtitle = top.heading.is_some()
-            && !top.title.is_empty()
-            && top.subtitle_node.is_some()
-            && !top.subtitle.is_empty();
-        let (y0, h) = (inputs.edge, top_content_height(scale, has_subtitle));
+        let has_subtitle = top.has_subtitle();
+        let y0 = inputs.edge;
         // What leads and what trails keep `edge` from the bar's sides, and
         // the title has `edge` of its own either side (`TopAppBarLayout`).
         let (edge, icon) = (dp(metric::TOP_EDGE), dp(metric::TOP_ICON));

@@ -223,10 +223,15 @@ impl<D: DataSource> Presenter<D> {
         let below = (frame[1] + frame[3] - (window.1 - safe[2] - nav)).max(0.0);
         // A sheet's foot reaches under the system's bar (`stage.rs`).
         let foot = (frame[1] + frame[3] - (window.1 - safe[2])).max(0.0);
-        match self
-            .host
-            .set_bar_rooms(Some((above, below, foot)), above_subtitled, sheet_above)
-        {
+        match self.host.set_sheet_bar_rooms(
+            Some((above, below, foot)),
+            above_subtitled,
+            sheet_above,
+            Some((
+                look::top_minimum(scale, false),
+                look::top_minimum(scale, true),
+            )),
+        ) {
             Ok(true) => self.after_commit(),
             Ok(false) => None,
             Err(e) => Some(e),
@@ -564,7 +569,10 @@ impl<D: DataSource> Presenter<D> {
             edge: 0.0,
             sides: ((safe[3] - margin).max(0.0), (safe[1] - margin).max(0.0)),
         };
-        let layout = Layout::top(&mut self.text.borrow_mut(), &plan, &inputs);
+        let height = self
+            .host
+            .sheet_header_height(r.shape.header, r.subtitle.is_some());
+        let layout = Layout::top_at_height(&mut self.text.borrow_mut(), &plan, &inputs, height);
         let frame = [0.0, 0.0, layout.size.0, layout.size.1];
         Some(Shown {
             plan,

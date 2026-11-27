@@ -587,6 +587,8 @@ fn bar_colour(pictures: &Rc<RefCell<Vec<Pixmap>>>) -> [u8; 4] {
     [c.red(), c.green(), c.blue(), c.alpha()]
 }
 
+#[path = "bars_tests/compact.rs"]
+mod compact;
 #[path = "bars_tests/insets.rs"]
 mod insets;
 #[path = "bars_tests/links.rs"]
