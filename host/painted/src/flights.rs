@@ -17,9 +17,10 @@ pub(crate) struct FlightFrame {
     pub progress: f32,
     pub ancestor_opacity: f32,
     /// What takes a route crossing's pose off the destination, in points:
-    /// rest = posed × `[0]` + (`[1]`, `[2]`), so the flight aims at its rest
-    /// (LLP 1013.004 D4). Set by the stage; identity elsewhere.
-    pub unpose: [f32; 3],
+    /// rest = (posed x × `[0]` + `[2]`, posed y × `[1]` + `[3]`), so the
+    /// flight aims at its rest (LLP 1013.004 D4). Set by the stage; identity
+    /// elsewhere.
+    pub unpose: [f32; 4],
     /// A route change's: the reader dissolves the source's drawing into the
     /// destination's (LLP 1013.004 D3 step 4), where an in-page flight
     /// carries the live destination alone (LLP 1013.000 D4).
@@ -135,7 +136,7 @@ impl<D: DataSource> Host<D> {
                         to,
                         progress,
                         ancestor_opacity: 1.0,
-                        unpose: [1.0, 0.0, 0.0],
+                        unpose: [1.0, 1.0, 0.0, 0.0],
                         dissolve: route,
                     },
                     lands_after,
@@ -177,15 +178,20 @@ impl<D: DataSource> Host<D> {
             }
             false
         };
-        let ended: Vec<NodeKey> = (self.flights.running.iter())
-            .filter(|f| f.frame.dissolve && !inside(f.frame.to))
-            .map(|f| f.frame.to)
-            .collect();
-        for to in ended {
-            self.drop_flight_to(to);
-            self.row_dirty.node(to);
-            self.flights.landed = true;
-        }
+        let (engine, row_dirty, landed) = (
+            &mut self.engine,
+            &mut self.row_dirty,
+            &mut self.flights.landed,
+        );
+        self.flights.running.retain(|f| {
+            let ends = f.frame.dissolve && !inside(f.frame.to);
+            if ends {
+                engine.remove(motion_node(f.frame.to) | FLIGHT);
+                row_dirty.node(f.frame.to);
+                *landed = true;
+            }
+            !ends
+        });
     }
 
     /// A predictive Back ended: each flight it seeks goes on to its

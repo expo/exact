@@ -22,9 +22,9 @@ class SharedElementsTest {
     private fun key(k: Long) = intArrayOf(k.toInt(), (k ushr 32).toInt())
     private fun rect(r: RectF) = intArrayOf(f(r.left), f(r.top), f(r.width()), f(r.height()))
     private fun state(alive: List<Long>, pairs: List<Triple<Long, Long, Float>> = emptyList(), reduced: Boolean = false,
-        ancestorOpacity: Float = 1f, dissolve: Boolean = false): IntBuffer {
+        ancestorOpacity: Float = 1f, dissolve: Boolean = false, unpose: FloatArray = floatArrayOf(1f, 1f, 0f, 0f)): IntBuffer {
         val body = arrayListOf(if (reduced) 1 else 0, pairs.size)
-        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity) + f(1f) + f(0f) + f(0f) + (if (dissolve) 1 else 0)).toList())
+        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity) + unpose.map(::f) + (if (dissolve) 1 else 0)).toList())
         body.add(alive.size)
         for (k in alive) body.addAll(key(k).toList())
         return IntBuffer.wrap(intArrayOf(50, body.size) + body.toIntArray())
@@ -98,6 +98,14 @@ class SharedElementsTest {
         assertRect(mid, t.shared.shown(3)!!.box)
         t.shared.begin(state(listOf(3))); t.shared.finish()
         assertFalse(t.shared.isFlying(3)); assertEquals(1f, t.shared.node(3).alpha, 0f)
+    }
+
+    @Test fun aFlightAimsAtItsDestinationUnposedOnEachAxis() {
+        val t = Fixture()
+        t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 10f, 10f))); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 1f)), unpose = floatArrayOf(2f, 4f, -10f, 5f)))
+        t.define(definition(2, RectF(20f, 10f, 70f, 30f))); t.shared.finish(); t.draw()
+        assertRect(RectF(30f, 45f, 130f, 125f), t.shared.shown(2)!!.box)
     }
 
     @Test fun pendingRasterKeepsPhotoAndCropMorphsInPoints() {

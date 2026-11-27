@@ -18,6 +18,9 @@ import UIKit
 import ExactCore
 import ExactKit
 
+/// A leaver held for a route change (`BuiltInFlights.holds`).
+struct Hold { let view: NodeView, to: NodeView, source: FlightSource, lines: CGRect, picture: UIView? }
+
 /// Where a leaver was shown when its name moved on.
 struct FlightSource {
     var rect: CGRect // window coordinates
@@ -68,13 +71,15 @@ final class BuiltInFlights: FlightHosting {
     weak var presenter: Presenter?
     var flights: [UInt32: Flight] = [:]
     /// Leavers of a route the batch destroys, kept for the transition that starts with it (`holdFlights`), with
-    /// where each showed then and its text's lines: the destroy takes an image's raster and a text's layout.
-    var holds: [ObjectIdentifier: (view: NodeView, source: FlightSource, lines: CGRect)] = [:]
+    /// their pair's destination, where each showed then, its text's lines and its picture: the destroy takes an
+    /// image's raster, a text's layout and embedded content.
+    var holds: [ObjectIdentifier: Hold] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
     var isEmpty: Bool { flights.isEmpty }
     func begin(_ op: BatchOp) { presenter?.beginFlight(op) }
-    func land(_ id: UInt32) { if let f = flights[id] { presenter?.landFlight(f) } }
-    func present(_ id: UInt32, _ progress: CGFloat) { presenter?.presentFlight(id, progress) }
+    // A route change's flight took the id from an in-page one, whose animation goes on: the transition lands it.
+    func land(_ id: UInt32) { if let f = flights[id], !f.crossing { presenter?.landFlight(f) } }
+    func present(_ id: UInt32, _ progress: CGFloat) { if flights[id]?.crossing != true { presenter?.presentFlight(id, progress) } }
     func forget(_ id: UInt32) { presenter?.forgetFlight(id) }
     func batchApplied() { presenter?.flightsBatchApplied() }
     func landInside(_ view: UIView) { presenter?.landFlights(inside: view) }

@@ -1186,9 +1186,9 @@ fn a_route_change_ends_the_flights_into_the_route_it_covers() {
     );
 }
 
-#[test]
-fn a_container_whose_arriving_root_is_named_lands() {
-    let plan = PAIRED
+/// A container whose arriving root holds the name.
+fn named_root() -> String {
+    PAIRED
         .replace(
             "box sharedElement=\"photo\" testId=\"thumb\"",
             "box id=\"thumb\" sharedElement=\"photo\" testId=\"thumb\"",
@@ -1200,13 +1200,59 @@ fn a_container_whose_arriving_root_is_named_lands() {
         .replace(
             " sharedElement=\"photo\" testId=\"hero\"",
             " testId=\"hero\"",
-        );
-    let mut p = paired_with(&plan);
+        )
+}
+
+#[test]
+fn a_container_whose_arriving_root_is_named_lands() {
+    let mut p = paired_with(&named_root());
     tap(&mut p, "open");
     assert!(!p.host().flight_frames().is_empty(), "the root flies");
     after(&mut p, 1000.0);
     assert!(p.stage.shift.is_none(), "the crossing ends");
     assert!(p.host().flight_frames().is_empty(), "and its name lands");
+}
+
+#[test]
+fn reduce_motion_during_a_container_lands_its_names() {
+    let mut p = paired_with(&named_root());
+    tap(&mut p, "open");
+    after(&mut p, 50.0);
+    let mut preferences = p.host().runner().viewport().preferences;
+    preferences.reduced_motion = true;
+    p.set_preferences(preferences);
+    after(&mut p, 16.0);
+    preferences.reduced_motion = false;
+    p.set_preferences(preferences);
+    after(&mut p, 16.0);
+    assert!(p.stage.shift.is_none());
+    assert!(p.host().flight_frames().is_empty(), "the root takes input");
+}
+
+/// A container's crossing waits for its arriving root's own flight, one
+/// that is not the container's.
+#[test]
+fn a_container_holds_for_its_roots_own_flight() {
+    let plan = PAIRED
+        .replace(
+            "box sharedElement=\"photo\" testId=\"thumb\"",
+            "box id=\"thumb\" sharedElement=\"photo\" testId=\"thumb\"",
+        )
+        .replace(
+            "testId=\"route-detail\"",
+            "navigationSource=\"thumb\" sharedElement=\"badge\" -exact-layout-transition=\"1s linear\" testId=\"route-detail\"",
+        )
+        .replace(
+            "      for e in stack(nav) key=e.id\n",
+            "      if top(nav).name == \"home\"\n        box sharedElement=\"badge\" position=\"absolute\" top=600 width=40 height=40 -exact-layout-transition=\"1s linear\"\n      for e in stack(nav) key=e.id\n",
+        );
+    let mut p = paired_with(&plan);
+    tap(&mut p, "open");
+    after(&mut p, 600.0);
+    assert!(!p.host().flight_frames().is_empty(), "the badge flies");
+    assert!(p.stage.shift.is_some(), "the crossing waits for it");
+    after(&mut p, 1000.0);
+    assert!(p.stage.shift.is_none());
 }
 
 #[test]
@@ -1253,9 +1299,61 @@ fn a_flight_aims_at_its_destinations_rest_not_its_crossing_pose() {
     // The route comes in from the right; the reader takes that off the hero.
     let posed = rect(&mut p, "route-detail").0;
     assert!(posed > 1.0, "{posed}");
-    let [scale, x, y] = p.brush.shared.frames[0].unpose;
-    assert_eq!((scale, y), (1.0, 0.0));
+    let [sx, sy, x, y] = p.brush.shared.frames[0].unpose;
+    assert_eq!((sx, sy, y), (1.0, 1.0, 0.0));
     assert!(near(x, -posed), "{x}");
+}
+
+/// Under an authored scale, in a route away from the window's origin, the
+/// reader's map takes the posed route back to where it rests.
+#[test]
+fn a_flight_aims_at_the_rest_of_a_scaled_route_off_the_origin() {
+    let plan = PAIRED
+        .replace(
+            "component App",
+            "keyframes grow\n  from scale=\"0.5\"\nstyle Grows\n  ::view-transition-new\n    animation=\"grow 400ms linear both\"\ncomponent App",
+        )
+        .replace(
+            "viewport-fit=\"cover\" width",
+            "viewport-fit=\"cover\" position=\"relative\" left=40 width",
+        )
+        .replace(
+            "testId=\"route-detail\"",
+            "class=Grows testId=\"route-detail\"",
+        );
+    let mut p = paired_with(&plan);
+    tap(&mut p, "open");
+    after(&mut p, 200.0);
+    let posed = rect(&mut p, "route-detail");
+    let view = id(&p, "route-detail");
+    let rest = p.host().kernel().node(view).unwrap().frame;
+    assert!(posed.2 < rest.width - 1.0, "{posed:?} is scaled");
+    let [sx, sy, x, y] = p.brush.shared.frames[0].unpose;
+    assert!(
+        near(posed.0 * sx + x, rest.x),
+        "{} {}",
+        posed.0 * sx + x,
+        rest.x
+    );
+    assert!(near(posed.1 * sy + y, rest.y));
+    assert!(near(posed.2 * sx, rest.width));
+}
+
+#[test]
+fn a_route_part_that_cuts_flies_no_name() {
+    let plan = PAIRED
+        .replace(
+            "component App",
+            "style Cuts\n  ::view-transition-new\n    animation=\"none\"\ncomponent App",
+        )
+        .replace(
+            "testId=\"route-detail\"",
+            "class=Cuts testId=\"route-detail\"",
+        );
+    let mut p = paired_with(&plan);
+    tap(&mut p, "open");
+    after(&mut p, 16.0);
+    assert!(p.host().flight_frames().is_empty());
 }
 
 #[test]

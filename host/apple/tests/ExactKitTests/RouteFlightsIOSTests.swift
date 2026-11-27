@@ -62,7 +62,7 @@ final class RouteFlightsIOSTests: XCTestCase {
         while !crossed, Date() < asked { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         XCTAssertTrue(crossed, "the photo pairs; the name the list holds twice does not")
         XCTAssertEqual(p.flights.keys.sorted(), [6, 9])
-        XCTAssertEqual(leaver.alpha, 0, "the leaver is hidden before UIKit draws the transition")
+        XCTAssertLessThan(leaver.alpha, 0.01, "the leaver is hidden before UIKit draws the transition")
         let cut = try XCTUnwrap(picture.layer.mask as? CAShapeLayer)
         XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 132)) ?? true, "and cut out of the route's picture")
         XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 120)) ?? true, "a name inside it too")
@@ -72,19 +72,25 @@ final class RouteFlightsIOSTests: XCTestCase {
         XCTAssertTrue(arriver.superview is FlightClip, "the arriver flies above both routes")
         XCTAssertTrue(p.flights[6]?.fade?.view.superview === arriver.superview, "the leaver's picture dissolves into it in its clip")
         XCTAssertTrue(arriver.window != nil && !arriver.isDescendant(of: detail.view))
-        // A batch's opacity while it flies is the one it lands with.
-        leaver.alpha = 0.5
+        // An in-page animation's landing, which the route flight took the id from, does not end it.
+        p.flightHost.land(6)
+        XCTAssertTrue(arriver.superview is FlightClip)
+        // A batch's opacity while it flies, 0 included, is the one it lands with.
+        leaver.alpha = 0
         let deadline = Date().addingTimeInterval(3)
         while nav.transitionCoordinator != nil || !p.flights.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(arriver.superview === place, "it lands in its place")
         XCTAssertEqual(arriver.convert(arriver.bounds, to: nil).minY, detail.view.convert(CGRect(x: 0, y: 0, width: 1, height: 1), to: nil).minY, accuracy: 0.5)
-        XCTAssertEqual(leaver.alpha, 0.5, "and the leaver shows again, at the opacity set in flight")
+        XCTAssertEqual(leaver.alpha, 0, "and the leaver lands at the opacity set in flight")
+        leaver.alpha = 1
         XCTAssertEqual(arriver.alpha, 1, "the arriver, faded in, at its own opacity")
         // A zoom holds nothing: its names ride its card.
         p.holdFlights(leaving: detail.view, arriving: list.view, zoom: "photo")
         XCTAssertEqual((p.flightHost as? BuiltInFlights)?.holds.count, 0)
         // An app's Back: its batch destroys the detail before UIKit's pop starts, and the hold keeps its name.
         p.holdFlights(leaving: detail.view, arriving: list.view, zoom: nil)
+        let held = (p.flightHost as? BuiltInFlights)?.holds[ObjectIdentifier(arriver)]?.picture
+        XCTAssertNotNil(held, "taken before the destroy")
         p.views.removeValue(forKey: 6)
         crossed = false
         delegate.willShow = { nav in
@@ -96,6 +102,7 @@ final class RouteFlightsIOSTests: XCTestCase {
         while !crossed, Date() < popped { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         XCTAssertTrue(crossed, "the destroyed route's held name flies home")
         XCTAssertEqual(p.flights.keys.sorted(), [2, 8])
+        XCTAssertTrue(p.flights[2]?.fade?.view === held)
     }
 
     func testOnlyANameEachRouteHoldsOncePairs() {

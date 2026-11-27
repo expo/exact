@@ -8,6 +8,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.RenderNode
 import java.nio.IntBuffer
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -53,7 +54,7 @@ internal class SharedElements(
         val route: Boolean, val content: RenderNode?, val box: RectF?, val contentBox: RectF?) {
         var shown: Pose = from
         /** Takes a route crossing's pose off the destination: rest = posed × [0] + ([1], [2]). */
-        var unpose = floatArrayOf(1f, 0f, 0f)
+        var unpose = floatArrayOf(1f, 1f, 0f, 0f)
     }
     private val elements = LinkedHashMap<Long, Element>()
     private val flights = LinkedHashMap<Long, Flight>()
@@ -74,19 +75,19 @@ internal class SharedElements(
         reduced = b.get(2) != 0
         val next = LinkedHashMap<Long, Flight>()
         repeat(b.get(3)) { n ->
-            val at = 4 + n * 10
+            val at = 4 + n * 11
             val from = key(b, at); val to = key(b, at + 2); val progress = f(b, at + 4)
             val opacity = f(b, at + 5)
             // One from another source has yielded (an in-page handoff to a name a route change pairs).
             val flight = flights[to]?.takeIf { it.source == from } ?: capture(from)?.let {
-                val route = b.get(at + 9) != 0
+                val route = b.get(at + 10) != 0
                 val source = elements[from]?.takeIf { route }
                 Flight(from, it, progress, opacity, route, source?.content, source?.box?.let(::RectF),
                     source?.contentBox?.let(::RectF))
             }
             if (flight != null) {
                 flight.progress = progress; flight.ancestorOpacity = opacity; next[to] = flight
-                flight.unpose = floatArrayOf(f(b, at + 6), f(b, at + 7), f(b, at + 8))
+                flight.unpose = floatArrayOf(f(b, at + 6), f(b, at + 7), f(b, at + 8), f(b, at + 9))
             }
         }
         // A dissolve's source drawing outlives its element only while its flight does.
@@ -96,7 +97,7 @@ internal class SharedElements(
         for (key in flights.keys - next.keys) elements[key]?.content?.setUseCompositingLayer(false, null)
         for (gone in flights.values - next.values.toSet()) gone.content?.setUseCompositingLayer(false, null)
         flights.clear(); flights.putAll(next)
-        val live = 4 + b.get(3) * 10
+        val live = 4 + b.get(3) * 11
         alive.clear()
         repeat(b.get(live)) { order ->
             val key = key(b, live + 1 + order * 2)
@@ -215,8 +216,8 @@ internal class SharedElements(
     }
 
     private fun unposed(pose: Pose, u: FloatArray): Pose {
-        fun map(r: RectF) = RectF(r.left * u[0] + u[1], r.top * u[0] + u[2], r.right * u[0] + u[1], r.bottom * u[0] + u[2])
-        return pose.copy(box = map(pose.box), radius = pose.radius * u[0], crop = map(pose.crop), contentBox = map(pose.contentBox))
+        fun map(r: RectF) = RectF(r.left * u[0] + u[2], r.top * u[1] + u[3], r.right * u[0] + u[2], r.bottom * u[1] + u[3]).apply { sort() }
+        return pose.copy(box = map(pose.box), radius = pose.radius * minOf(abs(u[0]), abs(u[1])), crop = map(pose.crop), contentBox = map(pose.contentBox))
     }
 
     private fun ancestorOpacity(e: Element, flight: Flight): Float {

@@ -13,7 +13,7 @@ import UIKit
 import ExactKit
 
 extension Presenter {
-    private var holds: [ObjectIdentifier: (view: NodeView, source: FlightSource, lines: CGRect)] {
+    private var holds: [ObjectIdentifier: Hold] {
         get { (flightHost as? BuiltInFlights)?.holds ?? [:] }
         set { (flightHost as? BuiltInFlights)?.holds = newValue }
     }
@@ -21,7 +21,10 @@ extension Presenter {
     func holdFlights(leaving: UIView, arriving: UIView, zoom: String?) {
         guard !DisplayPreferences.reducedMotion, zoom == nil else { return }
         let pairs = Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
-        for pair in pairs { holds[ObjectIdentifier(pair.from)] = (pair.from, flightSource(pair.from), pair.from.flightLines) }
+        for pair in pairs {
+            holds[ObjectIdentifier(pair.from)] = Hold(view: pair.from, to: pair.to, source: flightSource(pair.from), lines: pair.from.flightLines,
+                                                      picture: pair.to.kind == "image" ? nil : Self.picture(of: pair.from))
+        }
         // An unanimated pop takes its route out of the window at once and flies nothing: let its holds go.
         DispatchQueue.main.async { [weak self] in self?.holds = self?.holds.filter { $0.value.view.window != nil } ?? [:] }
     }
@@ -44,12 +47,22 @@ extension Presenter {
         var candidates: [ObjectIdentifier: NodeView] = [:]
         for node in views.values where node.props["sharedElement"]?.isEmpty == false { candidates[ObjectIdentifier(node)] = node }
         for held in holds.values { candidates[ObjectIdentifier(held.view)] = held.view }
-        return candidates.values.filter { node in
-            guard node.isDescendant(of: route), !node.bounds.isEmpty else { return false }
-            return !sequence(first: node as UIView, next: { $0 === route ? nil : $0.superview }).contains {
-                $0 !== route && ($0.isHidden || $0.alpha < 0.01)
-            }
+        return candidates.values.filter { draws($0, in: route) }
+    }
+
+    private func draws(_ node: NodeView, in route: UIView) -> Bool {
+        // One flying in its page is its route's where it lands.
+        let at: UIView = flights[node.id].flatMap { $0.view === node ? $0.slot : nil } ?? node
+        guard at.isDescendant(of: route), !node.bounds.isEmpty else { return false }
+        return !sequence(first: at, next: { $0 === route ? nil : $0.superview }).contains {
+            $0 !== route && ($0.isHidden || $0.alpha < 0.01)
         }
+    }
+
+    /// A bitmap of `view` as it shows: a snapshot view goes on following the leaver as its route moves.
+    private static func picture(of view: UIView) -> UIView {
+        let box = view.bounds
+        return UIImageView(image: UIGraphicsImageRenderer(bounds: box).image { _ in view.drawHierarchy(in: box, afterScreenUpdates: false) })
     }
 
     func crossFlights(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?,
@@ -59,11 +72,14 @@ extension Presenter {
         // reads it, so the names stay in their routes and the destination's ride the card, as in a
         // hand-built screen.
         guard coordinator.isAnimated, !DisplayPreferences.reducedMotion, zoom == nil else { holds = [:]; return false }
-        let pairs = Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
+        // A pop flies the pairs its Back commit held, taken before it ran (LLP 1013.004 D1).
+        let kept = holds.values.filter { $0.view.isDescendant(of: leaving) && views[$0.to.id] === $0.to && draws($0.to, in: arriving) }
+        let pairs = (kept.isEmpty ? Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
+                                  : kept.map { (from: $0.view, to: $0.to) }.sorted { $0.from.id < $1.from.id })
             .filter { $0.from.window != nil }
         let sources = holds
-        // A hold lasts until the transition that flies it, or until its route leaves the window.
-        holds = holds.filter { held in held.value.view.window != nil && !pairs.contains { $0.from === held.value.view } }
+        // A hold lasts until the transition that starts with it.
+        holds = [:]
         guard !pairs.isEmpty else { return false }
         // An in-commit handoff of a name the routes pair yields to the pair: the name flies once (LLP 1013.004 D1).
         for pair in pairs { if let f = flights[pair.to.id] { landFlight(f) } }
@@ -75,13 +91,13 @@ extension Presenter {
             h.flight.crossing = true
             flights[h.flight.id] = h.flight
             if pair.to.kind != "image" {
-                // A bitmap: a snapshot view goes on following the leaver as its route moves.
-                let box = h.leaver.bounds
-                let picture = UIImageView(image: UIGraphicsImageRenderer(bounds: box).image { _ in h.leaver.drawHierarchy(in: box, afterScreenUpdates: false) })
-                h.flight.fade = (picture, sources[ObjectIdentifier(h.leaver)]?.lines ?? h.leaver.flightLines)
+                let held = sources[ObjectIdentifier(h.leaver)]
+                h.flight.fade = (held?.picture ?? Self.picture(of: h.leaver), held?.lines ?? h.leaver.flightLines)
             }
         }
-        UIView.performWithoutAnimation { for h in held { h.leaver.alpha = 0 } }
+        // The leaver's alpha while it flies: one no batch writes, so any other, 0 included, is the app's.
+        let hidden = CGFloat(Float(1e-6))
+        UIView.performWithoutAnimation { for h in held { h.leaver.alpha = hidden } }
         if let picture {
             let cut = CAShapeLayer()
             // Their union: a name in another, or two that overlap, leave nothing in between.
@@ -117,8 +133,8 @@ extension Presenter {
                 let p = min(1, max(0, driven.map { CGFloat($0.timeOffset / max($0.duration, 0.001)) } ?? CGFloat(probe.layer.presentation()?.opacity ?? 0)))
                 // Hidden each frame: a batch that applies the leaver's style shows it again.
                 for (i, h) in held.enumerated() where flights[h.flight.id] === h.flight {
-                    if h.leaver.alpha != 0 { alphas[i] = h.leaver.alpha }
-                    h.leaver.alpha = 0
+                    if h.leaver.alpha != hidden { alphas[i] = h.leaver.alpha }
+                    h.leaver.alpha = hidden
                     h.flight.progress = p
                     showFlight(h.flight)
                 }
@@ -145,8 +161,8 @@ extension Presenter {
             probe.removeFromSuperview()
             for (h, alpha) in zip(held, alphas) {
                 if let self, flights[h.flight.id] === h.flight { landFlight(h.flight) }
-                // Not 0: a batch set it since the last frame.
-                h.leaver.alpha = h.leaver.alpha != 0 ? h.leaver.alpha : alpha
+                // Not `hidden`: a batch set it since the last frame.
+                h.leaver.alpha = h.leaver.alpha != hidden ? h.leaver.alpha : alpha
             }
             self?.paintVisibleText()
         })

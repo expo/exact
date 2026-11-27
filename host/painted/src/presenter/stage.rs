@@ -42,7 +42,6 @@ use crate::navigation::{sheet_of, Presented};
 use crate::paint::stage::{destination_path, Cross, Item, Stage};
 use crate::paint::tape::Tape;
 use crate::paint::{Rect4, Shape};
-use exact_kernel::handoff::pair_routes;
 use exact_kernel::{BlockAxis, HostBlock, Kernel, NodeKey};
 use exact_motion::Transition;
 use std::rc::Rc;
@@ -54,6 +53,7 @@ use flights::bounds_spring;
 #[cfg(test)]
 pub(super) mod tests;
 mod touch;
+use touch::{fits, heights};
 mod zoom;
 
 use authored::{Authored, Top};
@@ -357,42 +357,6 @@ pub(super) struct State {
 /// `fit-content` height.
 type Said = (Option<String>, (f32, f32), bool, Option<f32>);
 
-/// Whether `detent` names `fit-content`.
-fn fits(detent: Option<&str>) -> bool {
-    detent.is_some_and(|d| d.split_whitespace().any(|w| w == "fit-content"))
-}
-
-/// The sheet heights `detent` asks for on a page `tallest` high below the
-/// status bar, the bar under the foot `foot` high, its route's content
-/// `fit` high with that bar; unreadable words are left out, and none left
-/// is the tallest.
-fn heights(detent: Option<&str>, tallest: f32, foot: f32, fit: f32) -> Vec<f32> {
-    let mut out: Vec<f32> = (detent.unwrap_or("large").split_whitespace())
-        .filter_map(|d| match d {
-            "large" => Some(tallest),
-            "medium" => Some(tallest / 2.0 + foot),
-            "fit-content" => Some(fit),
-            d => match d.strip_suffix('%') {
-                Some(p) => p.parse::<f32>().ok().filter(|p| *p > 0.0).map(|p| {
-                    if p >= 100.0 {
-                        tallest
-                    } else {
-                        tallest * p / 100.0 + foot
-                    }
-                }),
-                None => d.parse::<f32>().ok().filter(|v| *v > 0.0).map(|v| v + foot),
-            },
-        })
-        .map(|v| v.clamp(1.0, tallest.max(1.0)))
-        .collect();
-    out.sort_by(f32::total_cmp);
-    out.dedup_by(|a, b| (*a - *b).abs() < 0.5);
-    if out.is_empty() {
-        out.push(tallest.max(1.0));
-    }
-    out
-}
-
 impl<D: DataSource> Presenter<D> {
     /// Whether this presenter places sheets and moves routes itself: its
     /// shell shows bars (Android's reader).
@@ -484,16 +448,7 @@ impl<D: DataSource> Presenter<D> {
         self.stage.seen = keys.clone();
         let top_was = self.stage.top.take();
         self.sync_shift(&before, &stack, &keys, &kinds, top_was, now);
-        let epoch = self.host.kernel().epoch();
-        if (self.stage.pops.0, self.stage.pops.1) != (epoch, keys.last().copied()) {
-            let pairs = match keys.len() {
-                n if n > 1 && kinds[n - 1] != Presented::Sheet => {
-                    pair_routes(self.host.kernel(), keys[n - 1], keys[n - 2])
-                }
-                _ => Vec::new(),
-            };
-            self.stage.pops = (epoch, keys.last().copied(), pairs);
-        }
+        self.remember_pops(&keys, &kinds);
         self.sync_sources();
         self.stage.top = self.top_of(&stack, &kinds);
         // Sheets that went slide out from where they were.
@@ -528,19 +483,7 @@ impl<D: DataSource> Presenter<D> {
                 self.stage.gesture = None;
             }
         }
-        // A cancelled preview shows the route beneath until the flights it
-        // sent back have landed.
-        let (host, pairs) = (&self.host, &self.stage.pops.2);
-        self.stage.preview.take_if(|p| {
-            !p.live(&keys) || p.returned(now) && !pairs.iter().any(|(_, to)| host.in_flight(*to))
-        });
-        // A pop whose crossing flies nothing (a fade through) ends a
-        // preview's flights where Back went; a container lets its names go
-        // when it lands.
-        let carries = (self.stage.shift.as_ref()).is_some_and(|s| s.names.is_some());
-        if self.stage.preview.is_none() && !carries {
-            self.host.release_flights(&bounds_spring(), true);
-        }
+        self.settle_preview(&keys, now);
         let tallest = (h - status).max(1.0);
         // What of the page the keyboard covers, where it did not end the
         // page above it (`interactive-widget: overlays-content`).
@@ -646,33 +589,7 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         self.stage.closing.retain(|c| c.top.moving(now));
-        if self.motion_off() {
-            self.stage.shift = None;
-            self.stage.preview = None;
-        }
-        if let Some((names, seeked)) = (self.stage.shift.as_ref()).and_then(|s| {
-            let (names, from) = s.names.as_ref()?;
-            Some((
-                names.clone(),
-                from + (1.0 - from) * s.progress.at(now).clamp(0.0, 1.0),
-            ))
-        }) {
-            self.host.seek_flights(&names, seeked);
-        }
-        // A route that flies in as a whole covers the route beneath only
-        // when it lands, so that one is drawn until then. A container's own
-        // names land with it, below.
-        let flies_in = |s: &Shift| {
-            s.forward
-                && s.names.is_none()
-                && (self.host.kernel().node_by_key(s.incoming))
-                    .is_some_and(|n| self.host.flying(n.id))
-        };
-        if (self.stage.shift.as_ref()).is_some_and(|s| !s.progress.moving(now) && !flies_in(s)) {
-            if self.stage.shift.take().is_some_and(|s| s.names.is_some()) {
-                self.host.land_seeking();
-            }
-        }
+        self.settle_shift(now);
         self.update_hosted_back();
         self.hold_arriving();
         self.place_sheets(&stack, &kinds);
@@ -896,19 +813,12 @@ impl<D: DataSource> Presenter<D> {
             through,
             left,
         });
-        // The names both routes hold fly on the crossing's own timing,
-        // whatever their authored curve (LLP 1013.004 D2, D4).
-        match (through, container) {
-            (true, _) => {}
-            (false, Some(_)) => {
-                let pairs = self.pairs(forward, (*old, *new));
-                self.host.seek_flights(&pairs, seeked);
-                if let Some(s) = self.stage.shift.as_mut() {
-                    s.names = Some((pairs, seeked));
-                }
-            }
-            (false, None) => self.fly_routes(forward, (*old, *new), &bounds_spring()),
-        }
+        self.fly_shift(
+            forward,
+            (*old, *new),
+            (through, container.is_some()),
+            seeked,
+        );
     }
 
     /// Whether anything on the stage moves on its own: frames are owed.
