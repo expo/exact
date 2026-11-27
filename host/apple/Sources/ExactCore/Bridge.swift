@@ -46,6 +46,9 @@ public struct Batch {
     public var canvas = false
     /// A frame task wants every display frame (LLP 1073 D5).
     public var frames = false
+    /// The lists whose rows a runner commit moved: each of their rows
+    /// moves from where it showed, as a collection view's batch update.
+    public var rides: [UInt32] = []
     /// The display link runs only for the present of the page's first picture, on a page with no canvas: its tick sets
     /// the page's `presented` fact as the page's other facts are set (LLP 1069.000 D2 r7), and enters as they do
     public var presentOnly = false

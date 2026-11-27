@@ -327,6 +327,49 @@ fn collection_feedback_rejects_invalid_time_before_mutation() {
     }
 }
 
+/// A commit that moves a list's rows has the presenter ride the move
+/// (`"rides"`), as a collection view's batch update moves its cells; a
+/// report that moves nothing and a resize, which takes places without
+/// motion, do not.
+#[test]
+fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
+    let source = SOURCE
+        .replace("action toggle", "state tall = false\n  action grow\n    tall = true\n  action toggle")
+        .replace(
+            "      if showing\n",
+            "      button press=grow testId=\"grow\"\n        text \"grow\"\n      if showing\n",
+        )
+        .replace(
+            "            text `${row}` testId=`row-${row}`",
+            "            column height=(tall and row == 0 ? 80 : 20)\n              text `${row}` testId=`row-${row}`",
+        );
+    let (mut bridge, _, _) = fixture(&source);
+    let list = snapshot(&bridge).view;
+    let rides = format!("\"rides\":[{list}]");
+    // Reports until the window rests: the last one moves no row
+    let mut rested = String::new();
+    for now in 1..=8 {
+        let before = snapshot(&bridge);
+        rested = send(&mut bridge, &facts(&before, 0.), f64::from(now) / 10.);
+        if snapshot(&bridge).revision == before.revision {
+            break;
+        }
+    }
+    assert!(!rested.contains("\"rides\""), "nothing moved: {rested}");
+    let host = bridge.host.as_ref().unwrap();
+    let kernel = host.runner().kernel();
+    let grow = kernel
+        .node_by_key(kernel.find_by_test_id("grow")[0])
+        .unwrap()
+        .id;
+    let len = bridge.dispatch(grow, 0, 0, 3.);
+    let grown = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(grown.contains(&rides), "the first row grew: {grown}");
+    let len = bridge.resize(400., 600.);
+    let resized = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(!resized.contains("\"rides\""), "{resized}");
+}
+
 #[test]
 fn collection_removal_clears_snapshot_and_recreation_rejects_old_feedback() {
     let (mut bridge, _, _) = fixture(SOURCE);

@@ -160,6 +160,12 @@ final class CollectionHost: ListHosting {
         /// The platform's insets of the port when the batch began
         /// (`portInsets`): one that changed under it moved the port.
         var batchInsets: [Double]?
+        #if os(iOS) || os(tvOS)
+        /// Where each mounted row, and each row still leaving, showed along
+        /// the list's axis when the batch began, relative to the port: a
+        /// batch that moves them rides from there (`rideBatch`).
+        var batchRows: [UInt32: CGFloat] = [:]
+        #endif
         /// What the platform covers of the port at its start and end, as the runner was last told.
         var covered: [Double] = [0, 0]
         /// The reader began a gesture on the port since the host learnt of
@@ -195,6 +201,14 @@ final class CollectionHost: ListHosting {
     var contactEvent: AnyObject?
     var batchDepth = 0
     var correcting = false
+    #if os(iOS) || os(tvOS)
+    /// The exits under way when the outermost batch began, the lists the
+    /// batches under way say a runner commit moved (`Batch.rides`), and the
+    /// lists whose rows this batch's end moves (`rideBatch`).
+    private var batchLeaving = Set<UInt32>()
+    private var rideOwed = Set<UInt32>()
+    var riding = Set<UInt32>()
+    #endif
     private var dirty = Set<UInt32>()
     private(set) var budget = CollectionTurnBudget()
     #if DEBUG
@@ -415,9 +429,20 @@ final class CollectionHost: ListHosting {
         // A kept scroll view has a new collection behind it. Its row epochs,
         // feedback sequences and correction revisions all start over.
         if batch.replacesTree { reset() }
-        if batchDepth == 0 { for (view, entry) in entries { entry.batchInsets = portInsets(view); entry.batchStart = batchOffset(view) } }
+        if batchDepth == 0 {
+            #if os(iOS) || os(tvOS)
+            batchLeaving = presenter.map { Set($0.leaving.keys) } ?? []
+            #endif
+            for (view, entry) in entries {
+                entry.batchInsets = portInsets(view); entry.batchStart = batchOffset(view)
+                #if os(iOS) || os(tvOS)
+                entry.batchRows = rowStarts(view)
+                #endif
+            }
+        }
         batchDepth += 1
         #if os(iOS) || os(tvOS)
+        rideOwed.formUnion(batch.rides)
         invalidateRecords(batch)
         #endif
         for op in batch.ops where op.op == .collections {
@@ -494,6 +519,10 @@ final class CollectionHost: ListHosting {
         // clamp against this coherent extent and suppress correction notifications.
         for (view, entry) in entries {
             guard let port = geometry(view) else { continue }
+            // The rows move once, after the outermost batch has placed them all
+            #if os(iOS) || os(tvOS)
+            if batchDepth == 1, removes(view, began: batchLeaving) || rideOwed.contains(view) { riding.insert(view) }
+            #endif
             let dimensions = [port.portCross, port.portMain, port.cross]
             let planned = entry.cursor.sequence, jumped = entry.cursor.jumpedAt
             if let previous = entry.port, previous != dimensions { entry.cursor.jump() }
@@ -531,12 +560,23 @@ final class CollectionHost: ListHosting {
                entry.cursor.takeCorrection(revision: entry.snapshot.revision,
                    sequence: correction.sequence == planned ? entry.cursor.sequence : correction.sequence, authored: entry.authored) {
                 correcting = true
+                #if os(iOS) || os(tvOS)
+                // A list riding the batch takes its new place at once: its rows move from where they showed
+                correct(view, top: correction.offset, extent: entry.snapshot.extent, smooth: correction.smooth && !riding.contains(view), authored: entry.authored)
+                #else
                 correct(view, top: correction.offset, extent: entry.snapshot.extent, smooth: correction.smooth, authored: entry.authored)
+                #endif
                 correcting = false
             }
+            #if os(iOS) || os(tvOS)
+            if batchDepth == 1, riding.remove(view) != nil { rideBatch(view) }
+            #endif
             entry.batchStart = nil
             dirty.insert(view)
         }
+        #if os(iOS) || os(tvOS)
+        if batchDepth == 1 { riding.removeAll(); batchLeaving.removeAll(); rideOwed.removeAll() }
+        #endif
         batchDepth = max(0, batchDepth - 1)
     }
     /// The collection whose mounted row holds `descendant`: the nearest row

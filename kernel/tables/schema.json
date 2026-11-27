@@ -6634,6 +6634,10 @@
           "member": "frames",
           "codec": "bool"
         },
+        "rides": {
+          "member": "rides",
+          "codec": "ids"
+        },
         "presentOnly": {
           "member": "presentOnly",
           "codec": "bool"
