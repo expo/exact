@@ -5762,6 +5762,22 @@ finger, and `"automatic"`, the default, is the platform's. iOS and tvOS set it a
 `preferredMenuElementOrder`; the web, the Mac and the other hosts always show the rows
 as written, so they have nothing to apply.
 
+A pick closes a native menu unless the author keeps it open, for a menu that takes several
+picks in a row, such as a filter's tags. `keepsMenuPresented=true` on a menu's or a
+submenu's popover column keeps it open for that column's own rows, not for the rows of
+the submenus they open; on a row it says it for that row, and `false` there closes the
+menu again. Those rows leave out `popovertargetaction="hide"`, which still closes the
+menu, as it does on the web; so does a row that follows a link or opens a dialog or
+another popover. iOS sets UIKit's `keepsMenuPresented` on the row and, after each pick,
+updates the open menu in place: its checks, titles and subtitles, rows that come or go,
+and an open submenu's header. Two UIKit limits apply on iOS: a row that hides only its
+submenu closes the whole menu, and a bar button's menu closes when the button's image
+changes. A long-press menu that a hardware keyboard's menu key opens is an edit menu,
+which UIKit cannot update, so it closes at every pick. The web already keeps a menu open
+until a row hides it. macOS, tvOS, Android,
+Linux and Windows close the menu at every pick, and it shows the new checks when it
+opens again.
+
 #### Ask Siri
 
 On iOS 27, where the new Siri is available, UIKit adds its Ask Siri item to a

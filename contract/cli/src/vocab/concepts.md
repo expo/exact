@@ -1012,7 +1012,7 @@ along the gradient line. `background-attachment` takes `scroll` or `fixed`;
 hatch on separate rows does not establish one pattern across the list.
 
 ## menu: a pull-down menu of actions, and a long-press one
-names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu, menu section, section title, displayInline, sectionHeader
+names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu, menu section, section title, displayInline, sectionHeader, keepsMenuPresented, keep menu open, multi-select menu, menuActionDismissBehavior
 
 A menu is HTML's: a `column popover="auto" role="menu"` of `button`s, opened by a button's
 `popovertarget` (on iOS a `UIMenu`; in a `header`, the bar item's pull-down). A long-press
@@ -1061,6 +1061,14 @@ component App
 - iOS puts the first row nearest the finger, so a menu opening upward from near the bottom
   of the screen shows its rows last first. `menuOrder="fixed"` on the trigger keeps them as
   written; `"priority"` always puts the first row nearest the finger.
+- Several picks in one open menu (a filter's tags): `keepsMenuPresented=true` on the menu
+  or submenu column, or on one row (`false` on a row closes it again), and no
+  `popovertargetaction="hide"` on those rows. A row that hides its menu, follows a link or
+  opens something still closes it. iOS keeps the menu open and redraws its checks after
+  each pick, as the web does; the other hosts close it, and its next open shows the checks.
+  On iOS a row that hides only its submenu closes the whole menu, and so does a change to
+  the image of the bar button that opened it; a long-press menu that a keyboard's menu
+  key opened closes at every pick.
 - At the click, as Electron's `Menu.popup({x, y})`: the button's `press` action takes
   `e: MouseEvent`, keeps `e.clientX`, `e.clientY` (both 0 from a key; then leave the insets
   `auto`), and calls `showPopover("menu", source="button")`; the popover writes them as `left`
