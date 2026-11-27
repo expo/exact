@@ -50,18 +50,20 @@ final class HeaderSearchResults: UIViewController {
         guard let owner, let search = owner.search, let host,
               authoredVisible, let view = viewIfLoaded,
               view.window != nil, !view.bounds.isEmpty else { return false }
-        if search.placesResultsInDetail, (!host.splitPrimaryExposed || host.presenter.dialogs.top != nil) { return false }
         if let split = host.split, parent === split.detail {
-            guard search.open, split.detail.topViewController === self,
-                  split.resultsBesidePrimary else { return false }
+            // N1's whenever the split is expanded, the list beside it, over it or hidden (LLP 1127.000 D2)
+            guard search.open, split.detail.topViewController === self, split.resultsInDetail, host.modalNavigation == nil,
+                  !host.presenter.modalHost.inTransition, host.presenter.dialogs.top == nil else { return false }
         } else {
-            guard search.controller.isActive, search.controller.showsSearchResultsController else { return false }
+            // Over the list, they show where the list does
+            guard host.splitPrimaryExposed, !search.placesResultsInDetail || host.presenter.dialogs.top == nil,
+                  search.controller.isActive, search.controller.showsSearchResultsController else { return false }
         }
         return sequence(first: view, next: \.superview).allSatisfy { !$0.isHidden && $0.alpha > 0.01 }
     }
 
     private func visibilityChanged() {
-        if visible != (exposed && host?.splitPrimaryExposed == true) { host?.scheduleSplitProjection() }
+        if visible != exposed { host?.scheduleSplitProjection() }
     }
 
     var coversList: Bool { visible && parent !== host?.split?.detail }
@@ -185,7 +187,7 @@ final class HeaderSearchResults: UIViewController {
     func publishVisibility() {
         guard let host, let owner else { return }
         let wasVisible = visible
-        visible = exposed && host.splitPrimaryExposed
+        visible = exposed
         let inDetail = parent === host.split?.detail
         if !visible {
             covered = root.map { [$0] } ?? []

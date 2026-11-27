@@ -142,11 +142,13 @@ extension NavigationHost {
     func startPairedActivation(from node: NodeView) -> (() -> Void)? {
         guard let split, let owner = split.searchOwner, let search = split.pairedSearch else { return nil }
         let state = split.searchState
-        guard splitPrimaryExposed, presenter.authored(node, inside: owner.node) else {
+        let result = search.results?.visible == true && search.results?.root.map { presenter.authored(node, inside: $0) } == true
+        // A result the detail column shows is the search's wherever UIKit shows the list (LLP 1127.000 D2)
+        let resultInDetail = result && search.results?.parent === split.detail
+        guard splitPrimaryExposed || resultInDetail, presenter.authored(node, inside: owner.node) else {
             if state.detailExposed && split.detail.viewIfLoaded.map({ node.isDescendant(of: $0) }) == true { state.primaryForeground = false }
             return nil
         }
-        let result = search.results?.visible == true && search.results?.root.map { presenter.authored(node, inside: $0) } == true
         if result { searchInteracted(search) }
         return startPairedActivation(result ? .result : .primary, in: split)
     }
@@ -294,7 +296,6 @@ extension NavigationHost {
                 state.reveal = nil
                 state.primaryForeground = true
                 state.collapseToPrimary = split.controller.isCollapsed
-                if !split.controller.isCollapsed && !split.resultsBesidePrimary { split.controller.show(.primary) }
             } else {
                 if routerRevision != pop.revision { state.resultBase = nil }
                 state.primaryForeground = false

@@ -44,6 +44,27 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertEqual(fixture.split.detailRoutes.map(\.key), [visits[1]], fixture.splitFacts)
     }
 
+    /// Expanded, the results are N1's whatever UIKit shows of the list: beside the detail, over it (the open Duo
+    /// turned to portrait) or hidden; they never move into the list's column (LLP 1127.000 D2)
+    func testExpandedResultsStayInTheDetailWhateverUIKitShowsOfTheList() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot(regular: true, detailSearch: true)
+        let results = try XCTUnwrap(fixture.search.results)
+        try fixture.openQuery("Fuji")
+        fixture.settle("the results come into the detail")
+        XCTAssertTrue(fixture.split.detail.topViewController === results, fixture.searchFacts)
+        for mode in [UISplitViewController.DisplayMode.oneOverSecondary, .secondaryOnly] {
+            fixture.split.controller.preferredDisplayMode = mode
+            waitFor("UIKit shows the list as \(mode.rawValue)", facts: { fixture.searchFacts }) {
+                fixture.split.controller.displayMode == mode && fixture.split.controller.transitionCoordinator == nil
+            }
+            fixture.settle("the results after the list's move")
+            XCTAssertTrue(fixture.split.detail.topViewController === results, "\(mode.rawValue): \(fixture.searchFacts)")
+            XCTAssertFalse(results.isInSearchContainer(fixture.search), "\(mode.rawValue): \(fixture.searchFacts)")
+            XCTAssertTrue(results.visible, "\(mode.rawValue): \(fixture.searchFacts)")
+        }
+    }
+
     func testResultsBindOnlyToAUniqueBodyRootAndKeepTheirController() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
         let fixture = try boot()

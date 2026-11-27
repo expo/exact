@@ -103,9 +103,9 @@ extension NavigationHost {
         }
         #if os(iOS)
         if let root = first.first { split.setSearchOwner(root, children: searchChildIDs(of: root.node)) }
-        split.stageForExpansion = { [weak self, weak split] mode in
+        split.stageForExpansion = { [weak self, weak split] in
             guard let self, let split, self.split === split else { return }
-            split.stageExpansion(committedSplitRoutes, mode: mode, awaitingCommit: split.searchState.pop != nil)
+            split.stageExpansion(committedSplitRoutes, awaitingCommit: split.searchState.pop != nil)
         }
         #endif
         split.listWillBeCovered = { [weak split] in
