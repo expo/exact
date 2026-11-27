@@ -2260,15 +2260,26 @@ out (LLP 1157).
   memory, and `test` and `verify` start it (`apps/mosaic/server.ts`); its
   `app.json` needs `"server": { "database": false }`, since the stand-in keeps
   no database. A function's second argument is who asks, `{ identity }`: the
-  `sub` of the JWT the client sent, unchecked, or `null` signed out. Convex's
+  `sub` of the JWT the client sent, unchecked, or `null` signed out. The
+  stand-in takes the socket on any path that ends in `/sync`, and Convex's
   HTTP API answers too (`POST /api/mutation`, `/api/query`, `/api/action`,
   `Authorization: Bearer <jwt>`), so a test's `request` can write as another
-  client; `http: (request) => Response | undefined` answers the app's other
-  routes (an auth endpoint), with CORS headers added. Keep the
+  client; after both, `http: (request) => Response | undefined` answers the
+  app's other routes (an auth endpoint), with CORS headers added. Keep the
   rules both run in a file with no Convex import (`convex/tiles.ts`). Each
   test starts an empty stand-in, including with `database: false`. Remote
   servers stay shared. Only `test` and `agent --test` share an ancestor's server,
   saying so; `verify` refuses an answering local server, including an ancestor's.
+- **The socket origin of a test build.** `test` and `verify` start the
+  stand-in at the socket origin the build reads, when that origin is a loopback
+  address with a port (`ws://127.0.0.1:3210`). With a cloud origin, no stand-in
+  starts and the tests run against that deployment. A setting
+  (`"env": ["CONVEX_SOCKET_URL"]` in app.json, read as
+  `import.meta.env.CONVEX_SOCKET_URL`) has the same value in a test or check
+  build as in any build: the environment's, else `.env.local`'s, else `.env`'s,
+  else the default in app.ts. Give tests, checks and drives the stand-in's
+  origin in the environment:
+  `CONVEX_SOCKET_URL=ws://127.0.0.1:3210 bun exact.mjs verify`.
 - **Driving a native host against a real deployment.** The driver seeds a
   native host's randomness (`EXACT_AGENT_SEED`, 1 by default), so two launches
   draw the same session id and Convex answers the second's writes with the
