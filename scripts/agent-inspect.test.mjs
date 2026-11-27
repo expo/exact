@@ -969,8 +969,8 @@ test('tree shows what a node\'s drag carries, each named file with its name (LLP
     '  View#8 [off]',
   ]);
   // A granted path holding a control character is quoted with its escapes, never written raw to the terminal
-  const tabbed = render('tree', { epoch: 1, incarnation: 1, clock: 0, nodes: [{ id: 9, depth: 0, type: 'View', props: { draggable: true, dataTransferFiles: 'app:/data/a\tb.txt' } }] });
-  expect(tabbed.split('\n')[1]).toBe('View#9 drag{text/plain "app:/data/a\\tb.txt"}');
+  const tabbed = render('tree', { epoch: 1, incarnation: 1, clock: 0, nodes: [{ id: 9, depth: 0, type: 'View', props: { draggable: true, dataTransferFiles: 'app:/data/a\tb.txt\napp:/data/c\u007fd.txt' } }] });
+  expect(tabbed.split('\n')[1]).toBe('View#9 drag{text/plain "app:/data/a\\tb.txt", text/plain "app:/data/c\\u007fd.txt"}');
 });
 
 test("a world's perf prints its counters; only `state <canvas> draws` is a draw list (#207)", () => {

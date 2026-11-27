@@ -24,13 +24,16 @@ const offered = (drag) => [
   ...(drag?.text ? [{ type: 'text/plain', value: drag.text }] : []),
 ];
 
+/** `s` quoted with JSON's escapes, and DEL's too, which JSON leaves as an invisible character. */
+const quoted = (s) => JSON.stringify(s).replace(/\u007f/g, '\\u007f');
+
 /** A path as written, or quoted with its escapes when it holds a control character, which a terminal would act on. */
-const shown = (path) => (/[\u0000-\u001f\u007f]/.test(path) ? JSON.stringify(path) : path);
+const shown = (path) => (/[\u0000-\u001f\u007f]/.test(path) ? quoted(path) : path);
 
 /** Each offer as `tree` reads it: a file by its path, and the name it is offered under when it has one of its own. */
 export const describe = (drag) => offered(drag).map((o) => {
-  if (o.path == null) return `${o.type} ${JSON.stringify(o.value)}`;
-  return `${o.type} ${shown(o.path)}${o.named ? ` as ${JSON.stringify(o.name)}` : ''}`;
+  if (o.path == null) return `${o.type} ${quoted(o.value)}`;
+  return `${o.type} ${shown(o.path)}${o.named ? ` as ${quoted(o.name)}` : ''}`;
 }).join(', ') || 'nothing';
 
 /** A `tree` row's note of what its node's drag carries, empty when it carries nothing now (D10, D14). */
