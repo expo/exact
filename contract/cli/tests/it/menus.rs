@@ -910,6 +910,29 @@ fn a_menu_order_is_one_of_three_words_on_its_trigger() {
     assert!(message.contains("menuOrder"), "{message}");
 }
 
+/// `keepsMenuPresented` on a menu or on one of its rows says whether a pick
+/// leaves the menu open (LLP 1115 §2): a flag kept as a prop for the host,
+/// bound too, and unset when unsaid. SwiftUI's name points at Exact's.
+#[test]
+fn keeps_menu_presented_is_a_flag_on_a_menu_and_its_rows() {
+    let r = boot(&app("button popovertarget=\"m\"\n  text \"Open\"\ncolumn id=\"m\" popover=\"auto\" role=\"menu\" keepsMenuPresented=true testId=\"m\"\n  button press=go keepsMenuPresented=busy testId=\"bound\"\n    text \"One\"\n  button press=go testId=\"unsaid\"\n    text \"Two\""));
+    assert_eq!(
+        node(&r, "m").props.bool(PropId::KeepsMenuPresented),
+        Some(true)
+    );
+    assert_eq!(
+        node(&r, "bound").props.bool(PropId::KeepsMenuPresented),
+        Some(false)
+    );
+    assert_eq!(
+        node(&r, "unsaid").props.bool(PropId::KeepsMenuPresented),
+        None,
+        "unsaid, its menu's"
+    );
+    let (_, message) = refused("column id=\"m\" popover=\"auto\" role=\"menu\" menuActionDismissBehavior=\"disabled\"\n  button press=go\n    text \"One\"");
+    assert!(message.contains("keepsMenuPresented"), "{message}");
+}
+
 #[test]
 fn computed_alertdialog_role_checks_shape_and_preserves_non_alert_dialog() {
     // Exact #1876 repro: dynamic conditional role reaching "alertdialog" on a laid-out dialog.

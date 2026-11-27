@@ -672,8 +672,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "backgroundMaterial" => AttrTarget::Prop(p("backgroundMaterial")),
         "glassGroup" => AttrTarget::Prop(p("glassGroup")),
         "glassInteractive" => AttrTarget::Prop(p("glassInteractive")),
-        // The order a trigger's menu shows its rows in (LLP 1115 §2).
-        "menuOrder" => AttrTarget::Prop(p("menuOrder")),
+        "menuOrder" | "keepsMenuPresented" => AttrTarget::Prop(p(name)),
         "buttonStyle" => AttrTarget::Prop(p("buttonStyle")),
         "listStyle" => AttrTarget::Prop(p("listStyle")),
         "toolbarPlacement" => AttrTarget::Prop(p("toolbarPlacement")),
@@ -992,8 +991,9 @@ pub fn renamed(old: &str) -> Option<&'static str> {
         "autoComplete" | "textContentType" | "autoCompleteType" => "autocomplete",
         "viewportFit" | "safeArea" | "safeAreaView" => "viewport-fit",
         "statusBarStyle" | "barStyle" | "StatusBar" => "status-bar-style",
-        // UIKit's and SwiftUI's names for a menu's order.
+        // UIKit's and SwiftUI's names for a menu's order and for keeping it open.
         "preferredMenuElementOrder" | "menu-order" | "menuElementOrder" => "menuOrder",
+        "keeps-menu-presented" | "menuActionDismissBehavior" => "keepsMenuPresented",
         // UIKit's `UIGlassEffect` properties and SwiftUI's `.tint`/`.interactive()`.
         "background-material-tint" | "backgroundMaterialTint" | "glassTint" | "glass-tint" => {
             "-exact-glass-tint"
