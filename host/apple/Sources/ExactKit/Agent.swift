@@ -15,7 +15,6 @@
 import Foundation
 import CoreFoundation
 import CExact
-import QuartzCore
 #if os(macOS)
 import AppKit
 #endif
@@ -364,12 +363,6 @@ public final class Agent {
         case "tap" where req["part"] != nil: emit(tagged(partTap(req))) // a hatch's part: the aim and the landing (AgentParts.swift)
         case "tap":
             var r: [String: Any]
-            // Screenshot mode: the tap's synchronous UI mutations are batched in one transaction, committed before
-            // the tap waits on anything or replies (a transition's completion can wait on that commit). It batches
-            // mutations; it does not promise the pixels are on screen when the reply arrives. Every exit commits it.
-            var batching = ScreenshotMode.oneCommit
-            if batching { CATransaction.begin() }
-            defer { if batching { CATransaction.commit() } }
             #if os(macOS)
             let wasOpen = presenter.viewport.window?.isVisible == true
             #endif
@@ -424,7 +417,6 @@ public final class Agent {
             // `close`'s does, since nothing is left to read after it.
             if wasOpen, r["error"] == nil, req["close"] == nil, presenter.viewport.window?.isVisible != true { r["closed"] = true }
             #endif
-            if batching { batching = false; CATransaction.commit() }
             // The touch runner's observation reads (`aim`, `log`) are not
             // inputs: they answer at once, within its own deadline.
             if req["aim"] == nil, req["log"] == nil { r = completingInput(r) }

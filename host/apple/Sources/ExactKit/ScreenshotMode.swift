@@ -6,13 +6,10 @@
 //                                included: an animation ends in 1/n of its time.
 //   EXACT_UIKIT_ANIMATIONS=0     UIKit's view animations are off (UIView.setAnimationsEnabled), and a tab switch
 //                                selects without the tab bar's transition.
-//   EXACT_AGENT_ONE_COMMIT=1     the UI mutations the agent's tap makes synchronously are batched in one
-//                                CATransaction, committed before the tap waits or replies. It batches mutations; it
-//                                does not promise the pixels are on screen when the reply arrives.
 //   EXACT_AGENT_TAP_SETTLE=1     the agent's tap settles the clock in the same main-queue turn and answers with the
 //                                settle (`settle` in its reply): one request per state instead of a tap and a clock.
 //
-// Public API only: CALayer.speed, UIView.setAnimationsEnabled, UIView.performWithoutAnimation, CATransaction.
+// Public API only: CALayer.speed, UIView.setAnimationsEnabled, UIView.performWithoutAnimation.
 import Foundation
 #if os(iOS)
 import UIKit
@@ -22,12 +19,10 @@ public enum ScreenshotMode {
     #if EXACT_AGENT
     private static let environment = ProcessInfo.processInfo.environment
     public static let uikitAnimationsOff = environment["EXACT_UIKIT_ANIMATIONS"] == "0"
-    public static let oneCommit = environment["EXACT_AGENT_ONE_COMMIT"] == "1"
     public static let tapSettle = environment["EXACT_AGENT_TAP_SETTLE"] == "1"
     static let speed: Float? = environment["EXACT_ANIMATION_SPEED"].flatMap(Float.init).flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
     #else
     public static let uikitAnimationsOff = false
-    public static let oneCommit = false
     public static let tapSettle = false
     #endif
 
