@@ -13,9 +13,9 @@
 // clamped, a reader's own or one that moves it, is scrolled back to where it was, so only that change is clamped. A reader is read as laid out, with every
 // scroll offset at zero: the offsets of the scrollers in its containing blocks' chain come off, and a sticky box in its
 // ancestry is read where layout puts it, without the offset its scrollers give it, as the kernel lays it out. A transition already running elsewhere
-// keeps running; one running on a property a reader's input moves restarts from its previous end value. The document is
-// the one owner until the web's owners exist: its unsafe area is the layout viewport's edges that
-// `env(safe-area-inset-*)` gives. The page's keyboard is the session's (D7, D17), a docked keyboard's depth up from the
+// keeps running; one running on a property a reader's input moves restarts from its previous end value. A reader's band
+// is what layout shows obstructing it, measured, never declared: the layout viewport's unsafe area, the edges that
+// `env(safe-area-inset-*)` gives, and a transparent bar laid over the reader's route, to that bar's bottom (`barred`). The page's keyboard is the session's (D7, D17), a docked keyboard's depth up from the
 // layout viewport's bottom (`keyboardInset`: the Virtual Keyboard API's rectangle, else the visual viewport's
 // shortfall), from which each reader's `--exact-keyboard-inset-*` and `--exact-keyboard-undocked-inset-*` are its
 // overlap from its bottom edge, not limited by its size, as the kernel derives them for the native hosts, and 0 while
@@ -77,7 +77,7 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   sticky.forEach((a) => a.setAttribute(REST, ""));
   try {
     // A sticky ancestor held at rest is positioned as it was, so the chains read before the marks still hold
-    const result = rounds(readers, reads, chains, band, keyboard);
+    const result = rounds(readers, reads, chains, band, keyboard, box);
     // The last round's values are the settled ones. Where nothing marked can transition, no sticky box was held and no
     // scroller moved (read from the rounds' last layout), they stay as written: putting the provisional values back and
     // writing the settled ones again would lay the page out once more for the same result
@@ -192,26 +192,33 @@ function write(el, reads, inputs) {
  * Each round reads every reader's box in one pass and writes every input it moves in one batch. A reader's next input is
  * D9's secant step on its residuals, the measured less the input, of this round and the last (`step`), within half a
  * device pixel of settled; its box is read as laid out, with every scroll offset at zero. */
-function rounds(readers, reads, chains, band, keyboard) {
+function rounds(readers, reads, chains, band, keyboard, box) {
   const written = new Map(), samples = readers.map(() => []);
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
-  const keys = [0, 0, keyboard, 0], caps = [...band, ...keys, ...keys];
+  const keys = [0, 0, keyboard, 0], caps = readers.map(() => [...band, ...keys, ...keys]);
   const tolerance = 0.5 / (globalThis.devicePixelRatio || 1);
-  // Each round's offsets, which its values can clamp
-  const read = () => readers.map((el) => {
-    if (!el.isConnected || !el.getClientRects().length) return null;
-    const b = el.getBoundingClientRect(), [dx, dy] = unscrolled(chains.get(el));
-    const r = { top: b.top + dy, right: b.right + dx, bottom: b.bottom + dy, left: b.left + dx };
-    const k = overlap(r, keys, width, height);
-    return [...overlap(r, band, width, height), ...k, ...k];
-  });
+  // Each round's offsets, which its values can clamp, and the bars laid over readers' routes, which a reader in a bar can
+  // move: a reader under one takes the bar's bottom as its top band where that is the deeper, at most its depth
+  const covers = barred(readers);
+  const read = () => {
+    const seen = new Map();
+    return readers.map((el, i) => {
+      if (!el.isConnected || !el.getClientRects().length) return null;
+      const b = el.getBoundingClientRect(), [dx, dy] = unscrolled(chains.get(el));
+      const r = { top: b.top + dy, right: b.right + dx, bottom: b.bottom + dy, left: b.left + dx };
+      const over = covers.get(el), bar = over && barLine(over, box, seen), deeper = bar && bar.line > band[0];
+      caps[i][0] = deeper ? bar.depth : band[0];
+      const o = overlap(r, deeper ? [bar.line, band[1], band[2], band[3]] : band, width, height), k = overlap(r, keys, width, height);
+      return [Math.min(o[0], caps[i][0]), o[1], o[2], o[3], ...k, ...k];
+    });
+  };
   let measured = read();
   for (let round = 0; round < ROUNDS; round++) {
     let moved = false;
     readers.forEach((el, i) => {
       const input = written.get(el), m = measured[i], only = reads.get(el).inputs;
       if (written.has(el) && settled(input, m, tolerance, only)) return;
-      const next = input == null || m == null ? m : step(input, m, samples[i], caps, tolerance);
+      const next = input == null || m == null ? m : step(input, m, samples[i], caps[i], tolerance);
       written.set(el, next);
       write(el, only, next);
       moved = true;
@@ -250,6 +257,43 @@ function step(input, measured, last, caps, tolerance) {
 /** How far a box lies from where it would with every scroll offset at zero, x then y (D9), given its `scrollers`, the
  * scroll containers of its `chain`: the offsets of the scrollers that move it, those in its containing blocks' chain, the
  * document's included unless a fixed box with no containing ancestor ends it. */
+/** The routes whose transparent bar lies over each reader (`routes.js` `clearBar`), outermost last, with each route's
+ * bar: found once per transaction, as no round changes which route holds a box. The boxes inside a route take its bar,
+ * as content under a UIKit bar does; the route itself does not, nor a box inside the bar, since the bar is the route's
+ * first child in its flow (neutral.css) and either would move it by what it reads. */
+function barred(readers) {
+  const covers = new Map(), bar = new Map();
+  for (const el of readers) {
+    const over = [];
+    for (let route = el.parentElement?.closest(TRANSPARENT); route; route = route.parentElement?.closest(TRANSPARENT)) {
+      if (!bar.has(route)) bar.set(route, [...route.children].find((c) => c.hasAttribute("data-exact-clear")) ?? null);
+      const header = bar.get(route);
+      if (header && !header.contains(el)) over.push([route, header]);
+    }
+    if (over.length) covers.set(el, over);
+  }
+  return covers;
+}
+const TRANSPARENT = '[data-navigationbar="transparent"]';
+
+/** Where the bars over a reader end (`line`, the lowest bottom, nested routes' bars composing) and how far that lies
+ * below the outermost such route's top (`depth`), in viewport coordinates as laid out with every scroll offset at zero;
+ * read in each round, since a reader inside a bar can resize it, each route once a round (`seen`). */
+function barLine(over, box, seen) {
+  const top = (el) => {
+    if (!seen.has(el)) seen.set(el, el.getClientRects().length ? el.getBoundingClientRect().top + unscrolled(chain(el, box).filter((a) => a === document.scrollingElement || box(a).scrolls))[1] : null);
+    return seen.get(el);
+  };
+  let line = -Infinity, first = Infinity;
+  for (const [route, header] of over) {
+    const at = top(header);
+    if (at == null) continue;
+    line = Math.max(line, at + header.getBoundingClientRect().height);
+    first = Math.min(first, top(route) ?? first);
+  }
+  return line > -Infinity ? { line, depth: Math.max(0, line - first) } : null;
+}
+
 function unscrolled(scrollers) {
   let dx = 0, dy = 0;
   for (const a of scrollers) {
