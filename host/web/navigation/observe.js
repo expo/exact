@@ -15,13 +15,13 @@
 // ancestry is read where layout puts it, without the offset its scrollers give it, as the kernel lays it out. A transition already running elsewhere
 // keeps running; one running on a property a reader's input moves restarts from its previous end value. A reader's band
 // is what layout shows obstructing it, measured, never declared: the layout viewport's unsafe area, the edges that
-// `env(safe-area-inset-*)` gives, and a transparent bar laid over the reader's route, to that bar's bottom (`barred`). The page's keyboard is the session's (D7, D17), a docked keyboard's depth up from the
+// `env(safe-area-inset-*)` gives, a transparent bar laid over the reader's route, to that bar's bottom, and what the boxes around the reader reserve (`over`). The page's keyboard is the session's (D7, D17), a docked keyboard's depth up from the
 // layout viewport's bottom (`keyboardInset`: the Virtual Keyboard API's rectangle, else the visual viewport's
 // shortfall), from which each reader's `--exact-keyboard-inset-*` and `--exact-keyboard-undocked-inset-*` are its
 // overlap from its bottom edge, not limited by its size, as the kernel derives them for the native hosts, and 0 while
 // no keyboard shows. `keyboardInset` gives only that depth, so the two families read alike, a floating keyboard taken
 // as docked. Activation (stage 5) runs it at each commit; until then only its tests do.
-import { drop, own } from "./inputs.js";
+import { drop, own, register } from "./inputs.js";
 import { keyboardInset } from "./environment.js";
 
 const EDGES = ["top", "right", "bottom", "left"];
@@ -54,6 +54,7 @@ export function overlap(r, band, width, height) {
  * bound. A reader out of the document, or with no box, takes `initial`. */
 export function observe(readers, band = documentBand(), keyboard = keyboardInset()) {
   if (!readers.length) return { rounds: 0, unsettled: [] };
+  reserves = register(RESERVED);
   // Each reader's inputs are only those its style reads: kept, written and compared alone
   const reads = new Map(readers.map((el) => [el, consumed(el)]));
   const root = document.documentElement, before = new Map(readers.map((el) => [el, reads.get(el).inputs.map((i) => el.style.getPropertyValue(NAMES[i]))]));
@@ -197,19 +198,19 @@ function rounds(readers, reads, chains, band, keyboard, box) {
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
   const keys = [0, 0, keyboard, 0], caps = readers.map(() => [...band, ...keys, ...keys]);
   const tolerance = 0.5 / (globalThis.devicePixelRatio || 1);
-  // Each round's offsets, which its values can clamp, and the bars laid over readers' routes, which a reader in a bar can
-  // move: a reader under one takes the bar's bottom as its top band where that is the deeper, at most its depth
-  const covers = barred(readers);
+  // Each round's offsets, which its values can clamp, and what lies over each reader inside its owner (bars, other boxes'
+  // reservations), which a reader's input can move: its band is the unsafe area's edges after them, at most their depths
+  const held = over(readers, box);
   const read = () => {
     const seen = new Map();
     return readers.map((el, i) => {
       if (!el.isConnected || !el.getClientRects().length) return null;
       const b = el.getBoundingClientRect(), [dx, dy] = unscrolled(chains.get(el));
       const r = { top: b.top + dy, right: b.right + dx, bottom: b.bottom + dy, left: b.left + dx };
-      const over = covers.get(el), bar = over && barLine(over, box, seen), deeper = bar && bar.line > band[0];
-      caps[i][0] = deeper ? bar.depth : band[0];
-      const o = overlap(r, deeper ? [bar.line, band[1], band[2], band[3]] : band, width, height), k = overlap(r, keys, width, height);
-      return [Math.min(o[0], caps[i][0]), o[1], o[2], o[3], ...k, ...k];
+      const steps = held.get(el), inside = steps ? lines(steps, band, width, height, box, seen) : { band, caps: band };
+      inside.caps.forEach((c, e) => { caps[i][e] = c; });
+      const o = overlap(r, inside.band, width, height), k = overlap(r, keys, width, height);
+      return [...o.map((d, e) => Math.min(d, inside.caps[e])), ...k, ...k];
     });
   };
   let measured = read();
@@ -257,41 +258,69 @@ function step(input, measured, last, caps, tolerance) {
 /** How far a box lies from where it would with every scroll offset at zero, x then y (D9), given its `scrollers`, the
  * scroll containers of its `chain`: the offsets of the scrollers that move it, those in its containing blocks' chain, the
  * document's included unless a fixed box with no containing ancestor ends it. */
-/** The routes whose transparent bar lies over each reader (`routes.js` `clearBar`), outermost last, with each route's
- * bar: found once per transaction, as no round changes which route holds a box. The boxes inside a route take its bar,
- * as content under a UIKit bar does; the route itself does not, nor a box inside the bar, since the bar is the route's
- * first child in its flow (neutral.css) and either would move it by what it reads. */
-function barred(readers) {
-  const covers = new Map(), bar = new Map();
-  for (const el of readers) {
-    const over = [];
-    for (let route = el.parentElement?.closest(TRANSPARENT); route; route = route.parentElement?.closest(TRANSPARENT)) {
-      if (!bar.has(route)) bar.set(route, [...route.children].find((c) => c.hasAttribute("data-exact-clear")) ?? null);
-      const header = bar.get(route);
-      if (header && !header.contains(el)) over.push([route, header]);
+/** What lies over each reader inside its owner, outermost first, found once per transaction as no round changes which
+ * box holds another: each route whose transparent bar lies over it (`routes.js` `clearBar`), and each box that reserves
+ * part of the unsafe area inside it (D11: an additional inset, which may be negative, then safe-area padding, as the
+ * emitter writes them inline in `RESERVED`'s registered properties). The boxes inside a route take its bar, as content under a
+ * UIKit bar does; the route itself does not, nor a box inside the bar, since the bar is the route's first child in its
+ * flow (neutral.css) and either would move it by what it reads. A box observes only what reaches it, not its own
+ * reservation, which its descendants observe (the kernel's `Reserved::inside`). */
+function over(readers, box) {
+  const own = new Map(), held = new Map();
+  const steps = (a) => {
+    let found = own.get(a);
+    if (!found) {
+      found = [];
+      if (a.matches(TRANSPARENT)) {
+        const header = [...a.children].find((c) => c.hasAttribute("data-exact-clear"));
+        if (header) found.push({ route: a, header });
+      }
+      const reserved = box(a).reserved;
+      if (reserved) found.push({ box: a, ...reserved });
+      own.set(a, found);
     }
-    if (over.length) covers.set(el, over);
+    return found;
+  };
+  for (const el of readers) {
+    const found = [];
+    for (let a = el.parentElement?.closest(HOLDS); a; a = a.parentElement?.closest(HOLDS)) found.unshift(...steps(a).filter((step) => !step.header?.contains(el)));
+    if (found.length) held.set(el, found);
   }
-  return covers;
+  return held;
 }
 const TRANSPARENT = '[data-navigationbar="transparent"]';
+/** The boxes that can lie over a reader: a transparent bar's route, and a box whose inline style declares a reservation,
+ * as the emitter writes one; a native ancestor walk finds them, so a page with none costs one per reader. */
+const HOLDS = `${TRANSPARENT}, [style*="--exact-additional-safe-area-"], [style*="--exact-safe-area-padding-"]`;
 
-/** Where the bars over a reader end (`line`, the lowest bottom, nested routes' bars composing) and how far that lies
- * below the outermost such route's top (`depth`), in viewport coordinates as laid out with every scroll offset at zero;
- * read in each round, since a reader inside a bar can resize it, each route once a round (`seen`). */
-function barLine(over, box, seen) {
-  const top = (el) => {
-    if (!seen.has(el)) seen.set(el, el.getClientRects().length ? el.getBoundingClientRect().top + unscrolled(chain(el, box).filter((a) => a === document.scrollingElement || box(a).scrolls))[1] : null);
+/** The unsafe area's edges inside a reader's owner, as lines in viewport coordinates (top, right, bottom, left; laid out
+ * with every scroll offset at zero), and each edge's depth below the box that drew it (`caps`): from the viewport's
+ * unsafe area `band`, through each of `steps` (`over`) in order: a bar draws the top line down to its bottom; a reserving
+ * box takes what reaches it on each edge, adds its additional inset, clamps at 0 and adds its safe-area padding, from its
+ * own edge. Each box is read once a round (`seen`). */
+function lines(steps, band, width, height, box, seen) {
+  const at = (el) => {
+    if (!seen.has(el)) {
+      const b = el.getClientRects().length ? el.getBoundingClientRect() : null, [dx, dy] = b ? unscrolled(chain(el, box).filter((a) => a === document.scrollingElement || box(a).scrolls)) : [0, 0];
+      seen.set(el, b && { top: b.top + dy, right: b.right + dx, bottom: b.bottom + dy, left: b.left + dx });
+    }
     return seen.get(el);
   };
-  let line = -Infinity, first = Infinity;
-  for (const [route, header] of over) {
-    const at = top(header);
-    if (at == null) continue;
-    line = Math.max(line, at + header.getBoundingClientRect().height);
-    first = Math.min(first, top(route) ?? first);
+  const line = [band[0], width - band[1], height - band[2], band[3]], caps = [...band];
+  for (const step of steps) {
+    if (step.route) {
+      const bar = at(step.header), route = at(step.route);
+      if (bar && route && bar.bottom > line[0]) { line[0] = bar.bottom; caps[0] = bar.bottom - route.top; }
+      continue;
+    }
+    const r = at(step.box);
+    if (!r) continue;
+    const reached = overlap(r, [line[0], width - line[1], height - line[2], line[3]], width, height);
+    const depth = reached.map((d, e) => Math.max(0, d + step.added[e]) + step.padding[e]);
+    line[0] = r.top + depth[0]; line[1] = r.right - depth[1]; line[2] = r.bottom - depth[2]; line[3] = r.left + depth[3];
+    depth.forEach((d, e) => { caps[e] = d; });
   }
-  return line > -Infinity ? { line, depth: Math.max(0, line - first) } : null;
+  return { band: [line[0], width - line[1], height - line[2], line[3]], caps };
 }
 
 function unscrolled(scrollers) {
@@ -331,14 +360,30 @@ function styles() {
     let b = known.get(el);
     if (!b) {
       const s = getComputedStyle(el);
-      let fixed, scrolls, transitions;
+      let fixed, scrolls, transitions, reserved;
       b = { position: s.position, get fixed() { return fixed ??= fixedContainer(s); },
+        get reserved() { return reserved === undefined ? (reserved = reservation(s)) : reserved; },
         get scrolls() { return scrolls ??= [s.overflowX, s.overflowY].some((o) => o !== "visible" && o !== "clip"); },
         get transitions() { return transitions ??= s.transitionDuration.split(",").some((d) => parseFloat(d) > 0); } };
       known.set(el, b);
     }
     return b;
   };
+}
+
+/** The registered properties the emitter writes a reserving box's lengths in (D11), each a `<length>` that does not
+ * inherit, `0px` unsaid: its additional insets, which may be negative, then its safe-area padding, by edge. */
+export const RESERVED = ["additional-safe-area", "safe-area-padding"].flatMap((f) => ["top", "right", "bottom", "left"].map((e) => `--exact-${f}-${e}`));
+
+/** Whether the browser registers `RESERVED`; one that cannot inherits them and gives their text, so no box counts as
+ * reserving there. */
+let reserves = false;
+
+/** What a box with the computed style `s` reserves (`RESERVED`), or null where it reserves nothing. */
+function reservation(s) {
+  if (!reserves) return null;
+  const v = RESERVED.map((name) => parseFloat(s.getPropertyValue(name)) || 0);
+  return v.some((x) => x !== 0) ? { added: v.slice(0, 4), padding: v.slice(4) } : null;
 }
 
 /** Whether a box with the computed style `s` is the containing block of its fixed descendants, and so of its absolute

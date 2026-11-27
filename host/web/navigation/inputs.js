@@ -42,3 +42,21 @@ function declaration(name) {
   if (!p) patterns.set(name, (p = new RegExp(`(^|;)\\s*${name}\\s*:[^;]*`, "g")));
   return p;
 }
+
+const registered = new Set();
+/** Register `names` as `<length>` properties that do not inherit, `0px` unsaid (CSS Properties and Values API), so a
+ * box's value stays its own and the browser resolves it to pixels. Whether every one is registered: an engine without
+ * `CSS.registerProperty` registers none. */
+export function register(names) {
+  if (typeof CSS === "undefined" || typeof CSS.registerProperty !== "function") return false;
+  for (const name of names) {
+    if (registered.has(name)) continue;
+    try {
+      CSS.registerProperty({ name, syntax: "<length>", inherits: false, initialValue: "0px" });
+    } catch {
+      // registered already in this document, by an earlier copy of this module
+    }
+    registered.add(name);
+  }
+  return true;
+}
