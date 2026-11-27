@@ -114,6 +114,9 @@ public struct Batch {
     /// The split rule of the stack main last asked about, read on the owner
     /// as the runtime made this batch, which can change it (`Runtime.splitAsked`).
     package var split: SplitRead?
+    /// The press of a row of the split's list that made this batch, which
+    /// travels with it through a stage to its reveal (`SplitPress`).
+    package var splitPress: SplitPress?
     /// Whether `split` differs from what the last batch read carried for the
     /// same stack: a layout-only change (such as a list's direction) can leave
     /// wire ops empty while changing whether the stack splits.
@@ -174,6 +177,18 @@ package struct SplitRead {
     package init(view: UInt32, retained: UInt32, json: Data, sequence: UInt64) {
         (self.view, self.retained, self.json, self.sequence) = (view, retained, json, sequence)
     }
+}
+
+/// A press of a row of a split's list (LLP 1127 D16), carried on the batch the
+/// press made: the pressed view, the list it was a row of, and whether its press
+/// writes the router. An action's press reads that on the owner before it is
+/// dispatched (`exact_press_writes_router`; nil for a view that hears no press),
+/// so a press that removes or recycles its row still answers for it; a link the
+/// row follows in the window attaches its row to the navigation batch it makes,
+/// as a press that writes the router.
+package struct SplitPress: Equatable {
+    package let row: UInt32, list: UInt32, writesRouter: Bool?
+    package init(row: UInt32, list: UInt32, writesRouter: Bool?) { (self.row, self.list, self.writesRouter) = (row, list, writesRouter) }
 }
 
 /// Immutable composition services, installed before the runtime can serve a turn.
@@ -535,10 +550,19 @@ package final class Runtime {
     }
     /// A press, with the modifiers held as a chord prefix (`KeyCodes.held`),
     /// after a pointer's point from the viewport where it had one: its
-    /// `MouseEvent`'s `clientX`/`clientY` (LLP 1021 D2).
-    package func press(_ view: UInt32, held: String = "", at client: CGPoint? = nil, now: Double) -> Batch {
+    /// `MouseEvent`'s `clientX`/`clientY` (LLP 1021 D2). `splitRow`: the row of
+    /// a split's list this press is, which the batch carries (`SplitPress`).
+    package func press(_ view: UInt32, held: String = "", at client: CGPoint? = nil, splitRow: (row: UInt32, list: UInt32)? = nil, now: Double) -> Batch {
         let line = client.map { "\(Double($0.x)),\(Double($0.y)),\(held)" } ?? held
-        return on { read(exact_dispatch(rt, view, 0, write(line), now)) }
+        return on {
+            let press = splitRow.map { row -> SplitPress in
+                let writes = exact_press_writes_router(rt, row.row)
+                return SplitPress(row: row.row, list: row.list, writesRouter: writes == 2 ? nil : writes == 1)
+            }
+            var batch = read(exact_dispatch(rt, view, 0, write(line), now))
+            batch.splitPress = press
+            return batch
+        }
     }
     /// The pointer over the view (`true`) or gone from it.
     package func hover(_ view: UInt32, over: Bool, now: Double) -> Batch { on { read(exact_dispatch(rt, view, over ? 2 : 3, 0, now)) } }

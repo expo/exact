@@ -33,7 +33,9 @@ extension ExactSession {
             log("navigate refused: no navigation root handler or matching route")
             return nil
         }
-        if followed { return applyInput(go).map { $0.error == nil } ?? false }
+        // A link a row of a split's list followed is that row's press, which navigates (`Batch.splitPress`)
+        let row = followed ? pressSplitRow.map { SplitPress(row: $0.row, list: $0.list, writesRouter: true) } : nil
+        if followed { return applyInput { go().map { var batch = $0; batch.splitPress = row; return batch } }.map { $0.error == nil } ?? false }
         guard let batch = go() else { return false }
         apply(batch)
         return batch.error == nil

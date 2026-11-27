@@ -311,7 +311,7 @@ extension Runtime {
     /// which each later batch that can change it carries.
     package func readSplit(_ view: UInt32, retained: UInt32, sequence: UInt64) -> SplitRead {
         splitAsked = (view, retained)
-        let length = exact_stack_split(rt, view, retained, 0)
+        let length = exact_stack_split(rt, view, retained)
         let json = Data(bytes: exact_out(rt), count: Int(length))
         splitReadJson = (view, json)
         return SplitRead(view: view, retained: retained, json: json, sequence: sequence)

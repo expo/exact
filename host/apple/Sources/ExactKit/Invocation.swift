@@ -231,6 +231,16 @@ extension ExactSession {
         apply(batch)
         return batch
     }
+
+    /// The row of a split's list the press being sent is, which its batch carries (`Batch.splitPress`,
+    /// SplitMac.swift); iOS's split leaves its selection to UIKit.
+    var pressSplitRow: (row: UInt32, list: UInt32)? {
+        #if os(macOS)
+        presenter.pressSplitRow
+        #else
+        nil
+        #endif
+    }
 }
 
 #if os(iOS) || os(tvOS)

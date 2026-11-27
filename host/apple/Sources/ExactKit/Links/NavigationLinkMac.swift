@@ -97,11 +97,10 @@ package protocol StackSplitting: AnyObject {
     var listDivider: (view: NSSplitView, index: Int)? { get }
     var hasInspector: Bool { get }
     var emphasizedRow: NodeView? { get }
-    /// The press of the row the list is pressing: a route it brings is that row's detail.
-    var pressing: UInt32? { get set }
     /// The list whose row pushes the detail.
     var table: UInt32? { get }
-    func pressesPaintedRow(_ node: NodeView) -> Bool
+    /// The split's painted list, where `node` is what a click on one of its rows presses.
+    func paintedRowList(_ node: NodeView) -> UInt32?
     func authored(_ mounted: [NodeView], in home: NSView) -> [NodeView]
     func deselected(_ list: UInt32)
     func holds(_ route: NodeView) -> Bool
@@ -298,9 +297,8 @@ package final class NoSplit: StackSplitting {
     package var listDivider: (view: NSSplitView, index: Int)? { nil }
     package var hasInspector: Bool { false }
     package var emphasizedRow: NodeView? { nil }
-    package var pressing: UInt32?
     package var table: UInt32? { nil }
-    package func pressesPaintedRow(_ node: NodeView) -> Bool { false }
+    package func paintedRowList(_ node: NodeView) -> UInt32? { nil }
     package func authored(_ mounted: [NodeView], in home: NSView) -> [NodeView] { mounted }
     package func deselected(_ list: UInt32) {}
     package func holds(_ route: NodeView) -> Bool { false }

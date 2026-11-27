@@ -474,6 +474,57 @@ mod exports {
         exact_collection_feedback(rt, bytes.len(), 1000.);
         REFUSAL.with(|r| assert!(String::from_utf8_lossy(&r.borrow()).contains("no such runtime")));
     }
+
+    /// `exact_press_writes_router` (LLP 1127 D16): a row that pushes, a
+    /// button that only counts, and a text with no press answer 1, 0 and 2;
+    /// a busy or gone runtime answers 2, never its refusal's length.
+    #[test]
+    fn press_writes_router_export_answers_each_press_and_two_when_refused() {
+        const APP: &str = r#"routes nav
+  list "/"
+  item "/item/:id"
+
+component App
+  state refreshes = 0
+  action open(id: string)
+    nav = push(nav, path("item", id))
+  action refresh
+    refreshes = refreshes + 1
+  view
+    column navigationBack="back"
+      for e in stack(nav) key=e.id
+        if e.name == "list"
+          column navigationKey=`${e.id}`
+            button press=open("a") testId="row"
+              text "A"
+            button press=refresh testId="refresh"
+              text "Refresh"
+            text `${refreshes}` testId="count"
+"#;
+        let mut bridge = Bridge::<Rows>::new();
+        bridge.boot(
+            &contract::compile(APP).unwrap().encode(),
+            Rows::default(),
+            Hooks::none(),
+            400.,
+            800.,
+        );
+        let kernel = bridge.host.as_ref().unwrap().runner().kernel();
+        let views = ["row", "refresh", "count"]
+            .map(|t| kernel.node_by_key(kernel.find_by_test_id(t)[0]).unwrap().id);
+        let rt = exact_create();
+        with_entry(&EXACT_RUNTIMES, rt, |entry| entry.bridge = bridge);
+        assert_eq!(
+            views.map(|view| exact_press_writes_router(rt, view)),
+            [1, 0, 2]
+        );
+        let entry = EXACT_RUNTIMES.with(|r| r.borrow().get(rt)).unwrap();
+        let busy = entry.borrow();
+        assert_eq!(exact_press_writes_router(rt, views[0]), 2, "busy");
+        drop(busy);
+        exact_destroy(rt);
+        assert_eq!(exact_press_writes_router(rt, views[0]), 2, "gone");
+    }
 }
 
 /// Rows a list report measures move the rows after them; a row's

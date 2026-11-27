@@ -1323,8 +1323,16 @@ macro_rules! host {
         /// Whether a stack splits, by the runner's rule (LLP 1115.002 D4),
         /// JSON; returns its length.
         #[no_mangle]
-        pub extern "C" fn exact_stack_split(rt: u32, view: u32, retained: u32, pressed: u32) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.stack_split(view, retained, pressed), |n| n)
+        pub extern "C" fn exact_stack_split(rt: u32, view: u32, retained: u32) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.stack_split(view, retained), |n| n)
+        }
+
+        /// Whether a view's press writes the router (LLP 1127 D16): 1, 0, or
+        /// 2 for a view that hears no press and for a runtime that refuses
+        /// the call (gone, or busy).
+        #[no_mangle]
+        pub extern "C" fn exact_press_writes_router(rt: u32, view: u32) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.press_writes_router(view), |_| 2)
         }
 
         /// A command's data (`share`, LLP 1069.003; `saveFile`, LLP

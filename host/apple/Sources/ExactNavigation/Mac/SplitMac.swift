@@ -130,15 +130,20 @@ final class SplitHost {
     /// The split rule the last applied batch carried (`Batch.split`), so
     /// main does not wait on the owner to read it (LLP 1072 T2).
     private var heardSplit: HeardSplit?
-    /// Each route that is a row's detail, with that row's press and the
-    /// route's location when it became so. A route that moved since is
-    /// still where its stack's pane begins, with no row.
-    private var rowOf: [UInt32: (row: UInt32?, at: String?)] = [:]
-    /// The routes read as some pane's so far: one that comes while a row is
-    /// being pressed is that row's.
+    /// Each route that is a row's detail, with that row's press, the
+    /// route's location when it became so and the list the row was in,
+    /// whose split alone it counts in. A route that moved since is still
+    /// where its stack's pane begins, with no row. `recycled`: the press's row
+    /// was rebound to another item, so its route keeps the press, which marks
+    /// no row and leaves none to the app's current one.
+    private var rowOf: [UInt32: (row: UInt32?, at: String?, list: UInt32?, recycled: Bool)] = [:]
+    /// The routes read as some pane's so far: one that comes as a row is
+    /// pressed is that row's.
     private var seen = Set<UInt32>()
-    /// The row a table is pressing now (`TableFeed.pressRow`).
-    var pressing: UInt32?
+    /// The press of a row that made the batch being applied (`Batch.splitPress`),
+    /// which `read` takes once: a route that comes with it is that row's, the
+    /// row nil where the batch rebinds the row's view to another item.
+    private var heardPress: (press: SplitPress, row: UInt32?)?
     /// The routes in the detail's pane, each with its stack's root route.
     private var held: [UInt32: (route: NodeView, list: UInt32)] = [:]
     /// The stacks that split no longer: their routes go back to the page.
@@ -235,7 +240,7 @@ final class SplitHost {
         placeholder?.removeFromSuperview()
         held.removeAll(); rowOf.removeAll(); seen.removeAll(); kept.removeAll(); ended.removeAll()
         heardSplit = nil
-        shown = nil; pressing = nil; lastDetail = nil; selected = nil; placeholder = nil; veiled = nil
+        shown = nil; heardPress = nil; lastDetail = nil; selected = nil; placeholder = nil; veiled = nil
         mark(nil)
         controller?.split(false, width: nil, empty: false)
     }
@@ -243,24 +248,29 @@ final class SplitHost {
     private static func sheet(_ route: NodeView) -> Bool { NavigationRules.presents(route.props["navigationPresentation"]) }
 
     /// A batch's split rule (`Batch.split`), as navigation projects it: the
-    /// newest the runtime made is the one main keeps (LLP 1072 T2).
+    /// newest the runtime made is the one main keeps (LLP 1072 T2). The batch's
+    /// row press is heard with it, at a stage's reveal too.
     func hearSplit(_ batch: Batch) {
+        // A view the batch rebinds to another list item (`renew`, LLP 1078) is no longer the row a press picked: its
+        // association keeps the route's place in the pane, with no row, as the batch's own press does
+        let renewed = Set(batch.ops.lazy.filter { $0.op == .renew }.compactMap(\.nodeID))
+        for (route, entry) in rowOf where entry.row.map(renewed.contains) == true { rowOf[route] = (nil, entry.at, entry.list, true) }
+        heardPress = batch.splitPress.map { ($0, renewed.contains($0.row) ? nil : $0.row) }
         guard let read = batch.split, read.sequence > heardSplit?.read.sequence ?? 0 else { return }
         heardSplit = heardSplit?.read.json == read.json ? heardSplit.map { HeardSplit(read, rule: $0.rule) } : HeardSplit(read)
     }
 
     /// The runner's rule for `list`, from the last applied batch that could
     /// change it (`Batch.split`), so main does not wait on the owner for it
-    /// (LLP 1072 T2). A stack no batch has answered for yet (a new root route
-    /// or retained list), or a row press asking `pressWrites`, asks the runner;
-    /// later batches carry it.
+    /// (LLP 1072 T2), so the pane shows what the applied views show, a stage
+    /// prepared beside them included. A stack no batch has answered for yet (a
+    /// new root route or retained list) asks the runner, whose newest tree can
+    /// run ahead of the views while a stage prepares; later batches carry it.
     private func ask(_ list: NodeView) -> StackSplit? {
         guard let session = presenter.session else { return nil }
         let retained = kept[list.id] ?? 0
         let answer: StackSplit?
-        if pressing != nil {
-            answer = session.runtime.stackSplit(list.id, retaining: kept[list.id], pressed: pressing)
-        } else if let heard = heardSplit, heard.read.view == list.id,
+        if let heard = heardSplit, heard.read.view == list.id,
                   heard.read.retained == retained || (retained != 0 && heard.rule?.list == retained) || (retained == 0 && heard.rule == nil) {
             answer = heard.rule
         } else {
@@ -272,7 +282,7 @@ final class SplitHost {
         }
         let nextRetained = answer?.list ?? 0
         kept[list.id] = answer?.list
-        if pressing == nil, let heard = heardSplit, heard.read.view == list.id, nextRetained != heard.read.retained {
+        if let heard = heardSplit, heard.read.view == list.id, nextRetained != heard.read.retained {
             session.runtime.retainSplit(list.id, from: heard.read.retained, to: nextRetained)
         }
         return answer
@@ -297,23 +307,29 @@ final class SplitHost {
         let end = routes.indices.dropFirst().first { Self.sheet(routes[$0]) } ?? routes.count
         let pane = Array(routes[1..<end]), top = min(selected, end - 1)
         let detail = top >= 1 ? routes[top] : nil
-        for (route, row) in rule.rows { rowOf[route] = (row, rule.locations[route]) }
-        // A route that comes, or stands, as a row is pressed is that row's, where the press writes the router:
-        // a row that only acts (a refresh) leaves the detail's row as it was.
-        // A table selected the row that was pressed: it is told again which row is the detail's (`select`).
-        if pressing != nil, rule.pressWrites == false { self.selected = nil }
-        if let pressing, rule.pressWrites != false, let detail, top == selected, !seen.contains(detail.id) || rule.rows[detail.id] == nil {
-            rowOf[detail.id] = (rule.rows[detail.id] ?? pressing, rule.locations[detail.id])
+        for (route, row) in rule.rows { rowOf[route] = (row, rule.locations[route], rule.list, false) }
+        // A route that comes, or stands, with a row's press of this list is that row's, where the press writes the
+        // router: a row that only acts (a refresh) leaves the detail's row as it was. A table selected the row that
+        // was pressed: it is told again which row is the detail's (`select`).
+        let press = heardPress.flatMap { $0.press.list == rule.list ? $0 : nil }
+        heardPress = nil
+        if press?.press.writesRouter == false { self.selected = nil }
+        if let press, press.press.writesRouter != false, let detail, top == selected, !seen.contains(detail.id) || rule.rows[detail.id] == nil {
+            let row = rule.rows[detail.id] ?? press.row
+            rowOf[detail.id] = (row, rule.locations[detail.id], press.press.list, row == nil)
         }
         // One that has moved since (`replace` keeps a route's id) to where no row's press or link took it
         // keeps its place in the pane and loses its row association (LLP 1127 D3).
-        for (route, entry) in rowOf where entry.row != nil {
-            if let at = entry.at, let now = rule.locations[route], now != at { rowOf[route] = (nil, now) }
+        for (route, entry) in rowOf where entry.row != nil || entry.recycled {
+            if let at = entry.at, let now = rule.locations[route], now != at { rowOf[route] = (nil, now, entry.list, false) }
         }
         seen.formUnion(pane.map(\.id))
-        let base = top >= 1 ? stride(from: top, through: 1, by: -1).first { rowOf[routes[$0].id] != nil } ?? 1 : 1
-        let owner = top >= 1 ? rowOf[routes[base].id] : nil
-        let current = detail != nil && owner?.row == nil ? rule.current : nil
+        // Only an association made in this list counts: another list that becomes the split's has its own rows
+        func ours(_ route: UInt32) -> (row: UInt32?, at: String?, list: UInt32?, recycled: Bool)? { rowOf[route].flatMap { $0.list == rule.list ? $0 : nil } }
+        let base = top >= 1 ? stride(from: top, through: 1, by: -1).first { ours(routes[$0].id) != nil } ?? 1 : 1
+        let owner = top >= 1 ? ours(routes[base].id) : nil
+        // The app's current row stands in where no press owns the detail; a press whose row was recycled still does
+        let current = detail != nil && owner?.row == nil && owner?.recycled != true ? rule.current : nil
         shown = Shown(root: root, list: list, table: rule.list, width: rule.width.map { CGFloat($0) }, placeholder: rule.placeholder, routes: pane, detail: detail,
                       base: base, row: owner?.row ?? current)
         wantController()
@@ -473,13 +489,13 @@ final class SplitHost {
         list.style["appearance"]?.string != "none" && (list.props["listStyle"] != nil || list.props["listRows"] == "true")
     }
 
-    /// Whether `node` is what a click on a row of the split's painted list
-    /// presses (`rowPress`): a route that comes as it is pressed is that
-    /// row's detail, as one that comes as a table's row is pressed
+    /// The split's painted list, where `node` is what a click on one of its
+    /// rows presses (`rowPress`): a route that comes with its press is that
+    /// row's detail, as one that comes with a table's row press is
     /// (`TableFeed.pressRow`).
-    func pressesPaintedRow(_ node: NodeView) -> Bool {
-        guard active, let list = veiled, let row = row(of: node, in: list) else { return false }
-        return (presenter.tables.authoredRow(of: row) ?? row).rowPress === node
+    func paintedRowList(_ node: NodeView) -> UInt32? {
+        guard active, let list = veiled, let row = row(of: node, in: list) else { return nil }
+        return (presenter.tables.authoredRow(of: row) ?? row).rowPress === node ? list.id : nil
     }
 
     /// Draw `row` selected, and no other row of a painted list (D5). Asked

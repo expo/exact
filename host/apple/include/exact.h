@@ -32,7 +32,7 @@
 #include <stdint.h>
 
 /* The ABI's version: part of the compatibility id (LLP 1030 D3a). */
-#define EXACT_ABI_VERSION 20
+#define EXACT_ABI_VERSION 21
 
 #ifdef __cplusplus
 extern "C" {
@@ -1120,18 +1120,22 @@ uint32_t exact_radio_group(ExactRuntime rt, uint32_t view);
 uint32_t exact_role_keys(ExactRuntime rt, uint32_t view, uint32_t focused, size_t len);
 /* The runner's answer for the stack whose root route is `view` (LLP 1115.002 D4, LLP 1127 D1), JSON in the
  * output buffer, not a batch: {"asked":bool,"placeholder":view|null,"list":view|null,"width":number|null,
- * "rows":[[route,row]...],"locations":[[route,url]...],"current":view|null,"pressWrites":bool|null}: whether
+ * "rows":[[route,row]...],"locations":[[route,url]...],"current":view|null}: whether
  * the root route asks for the split (LLP 1127 D1), the route's own placeholder box, which the split shows
  * while nothing is selected, the list whose row pushes,
  * the list column's width where `navigationSplit` names one, each route above the
  * root that is a row's detail with that row, each route above the root with its
- * location, the current row, and whether the press of `pressed` writes the router. null for a view that is
+ * location, and the current row. null for a view that is
  * no route, for a root route presented as a sheet (`modal`, `fullscreen`) or saying "none", and for one
  * that does not ask and has no list whose rows push, nor an eligible `retained` list. Each host admits a split from the answer by its own
  * rule (LLP 1127 D22): the Mac where `asked` or where `list` is found. */
-/* `retained` is a previous list to keep while empty and still eligible, or 0;
- * `pressed` is a view being pressed, or 0. */
-uint32_t exact_stack_split(ExactRuntime rt, uint32_t view, uint32_t retained, uint32_t pressed);
+/* `retained` is a previous list to keep while empty and still eligible, or 0. */
+uint32_t exact_stack_split(ExactRuntime rt, uint32_t view, uint32_t retained);
+/* Whether the press of `view` writes the router (LLP 1127 D16), a fact of the plan at the view's site, not a
+ * batch: 1 where it does, 0 where it does not, 2 for a view that hears no press or a runtime that refuses the
+ * call (gone, or busy). Read before the press is dispatched, it answers for a press that then removes or
+ * recycles its view. */
+uint32_t exact_press_writes_router(ExactRuntime rt, uint32_t view);
 /* A button's face, custom or native (LLP 1069.011.000 D1), JSON in the output
  * buffer, not a batch: {"button":bool,"title":string|null,"symbol":apple-name|null,
  * "raster","leading","fits":bool,"label":string|null,"style",...the native style}. */

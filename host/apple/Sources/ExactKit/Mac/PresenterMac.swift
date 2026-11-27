@@ -886,16 +886,19 @@ package final class Presenter {
         guard let click = pressClick ?? nativeClick, [.leftMouseDown, .leftMouseUp].contains(click.type) else { return nil }
         return client(NodeView.point(click, in: viewport.window))
     }
-    package func press(_ id: UInt32, fromNativeMenu: Bool = false, held: String = "", bubbled: Bool = false, outsideModal: Bool = false, click: NSEvent? = nil) {
+    /// The row of the split's list the press being sent is (`press`), which its batch carries (`Batch.splitPress`).
+    var pressSplitRow: (row: UInt32, list: UInt32)?
+    /// `splitList`: the split's table whose row this press is (`TableFeed.pressRow`).
+    package func press(_ id: UInt32, fromNativeMenu: Bool = false, held: String = "", bubbled: Bool = false, outsideModal: Bool = false, click: NSEvent? = nil, splitList: UInt32? = nil) {
         pressHeld = held; defer { pressHeld = "" } // `outsideModal`: an app-wide menu item's (ShortcutsMac `enabled`)
         guard let node = textHost(id), !(bubbled || outsideModal ? node.authoredInert : node.inert), !node.disabled,
               fromNativeMenu || (segments.shown(node) ?? sidebar.shows(node) ?? dataTables.shows(node) ?? !node.isHiddenOrHasHiddenAncestor) || toolbar.contains(node) else { return }
         commitPendingEdit() // the press no longer ends a field's editing (FocusMac.swift)
         guard views[node.id] === node else { return }
-        // A route this press brings is the row's detail (SplitMac.swift).
-        let split = navigation.stackSplit, row = split.pressing == nil && split.pressesPaintedRow(node)
-        if row { split.pressing = node.id }
-        defer { if row { split.pressing = nil } }
+        // A route this press brings is the row's detail (SplitMac.swift): its batch says which row it was.
+        let outer = pressSplitRow
+        pressSplitRow = outer ?? (splitList ?? navigation.stackSplit.paintedRowList(node)).map { (row: node.id, list: $0) }
+        defer { pressSplitRow = outer }
         let command = dialogs.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
         let popover = menus.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
         // A link follows its link, and one that also hides its popover (a menu's link row) hides it then

@@ -1433,7 +1433,7 @@
       ]
     },
     "appleAbiExports": {
-      "ceiling": 317,
+      "ceiling": 318,
       "sites": [
         "host/apple/activityarm/ActivityArm.swift: exact_activity_close",
         "host/apple/activityarm/ActivityArm.swift: exact_activity_open",
@@ -1570,6 +1570,7 @@
         "host/apple/src/abi/exports.rs: exact_presence",
         "host/apple/src/abi/exports.rs: exact_present_frames",
         "host/apple/src/abi/exports.rs: exact_press_face",
+        "host/apple/src/abi/exports.rs: exact_press_writes_router",
         "host/apple/src/abi/exports.rs: exact_protocol_location_of",
         "host/apple/src/abi/exports.rs: exact_pump",
         "host/apple/src/abi/exports.rs: exact_radio_group",
