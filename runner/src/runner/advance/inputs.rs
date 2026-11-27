@@ -48,6 +48,25 @@ impl<D: DataSource> Runner<D> {
     }
 
     fn hold_input(&mut self, input: Input, at: f64) -> Advanced {
+        // Refuse an input at NaN: no cutoff ever passes it, so held it and every
+        // input behind it would wait for ever. A time past the clock's bound is
+        // held as any other: a cutoff at or past it passes it, and it runs once
+        // its due work is refused with a clock error, at the time the clock then
+        // gives: where it stopped, or a live clock's fresh sample.
+        // Due work that stops first, at a change action's yield, leaves it at the
+        // queue's front until a later cutoff passes it again.
+        if at.is_nan() {
+            if let Input::Event(_, _, Some(committed)) = input {
+                committed(false);
+            }
+            return Advanced {
+                receipts: Vec::new(),
+                now_ms: self.now_ms,
+                error: Some(RunnerError::NonFiniteClock),
+                stopped_on_request: false,
+                needs_apply: false,
+            };
+        }
         self.clock.held.push_back(Held { input, at });
         let mut a = self.run_held(self.seek_cutoff(at), false, true);
         a.now_ms = self.now_ms;
@@ -95,7 +114,7 @@ impl<D: DataSource> Runner<D> {
         while let Some(at) = self.held_input_due().filter(|at| *at <= cutoff) {
             let due = self.seek_cutoff(at);
             for _ in 0..TIMER_FIRE_LIMIT {
-                let step = self.advance_due(due, until_request, timers);
+                let step = self.advance_due(due, until_request, timers, false);
                 a.receipts.extend(step.receipts);
                 if step.needs_apply || step.stopped_on_request {
                     a.needs_apply = step.needs_apply;
@@ -146,3 +165,7 @@ impl<D: DataSource> Runner<D> {
         a
     }
 }
+
+#[cfg(test)]
+#[path = "held_input_tests.rs"]
+mod held_input_tests;

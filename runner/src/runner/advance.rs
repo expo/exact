@@ -416,7 +416,7 @@ impl<D: DataSource> Runner<D> {
     /// timer fires while a wake runs unseen.
     fn advance_within(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
         if self.clock.held.is_empty() {
-            return self.advance_due(now_ms, until_request, timers);
+            return self.advance_due(now_ms, until_request, timers, true);
         }
         let mut a = self.run_held(now_ms, until_request, timers);
         if a.error.is_some() || a.stopped_on_request || a.needs_apply {
@@ -427,7 +427,7 @@ impl<D: DataSource> Runner<D> {
             a.needs_apply = true;
             return a;
         }
-        let rest = self.advance_due(now_ms, until_request, timers);
+        let rest = self.advance_due(now_ms, until_request, timers, true);
         a.receipts.extend(rest.receipts);
         a.now_ms = rest.now_ms;
         a.error = rest.error;
@@ -442,15 +442,30 @@ impl<D: DataSource> Runner<D> {
             .any(|(i, t)| self.timer_row(i).change && t.next_ms <= now_ms)
     }
 
-    /// [`Self::advance_within`] with no input held.
-    fn advance_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
+    /// [`Self::advance_within`] with no input held, or the work due by a held
+    /// input's arrival. `inputs` says whether held inputs are this call's to
+    /// run: the loop that services one (`run_held`) owns the queue, and runs
+    /// each input once the work due by its arrival returns.
+    fn advance_due(
+        &mut self,
+        now_ms: f64,
+        until_request: bool,
+        timers: bool,
+        inputs: bool,
+    ) -> Advanced {
         let outer = std::mem::replace(&mut self.clock.due, true);
-        let a = self.run_due(now_ms, until_request, timers);
+        let a = self.run_due(now_ms, until_request, timers, inputs);
         self.clock.due = outer;
         a
     }
 
-    fn run_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
+    fn run_due(
+        &mut self,
+        now_ms: f64,
+        until_request: bool,
+        timers: bool,
+        inputs: bool,
+    ) -> Advanced {
         if self.poisoned {
             return Advanced {
                 receipts: Vec::new(),
@@ -491,7 +506,13 @@ impl<D: DataSource> Runner<D> {
             a.needs_apply = true;
             return a;
         }
-        let rest = self.advance_within(now_ms, until_request, timers);
+        // Run what falls due after the expiry, and the held inputs only when
+        // they are this call's: the loop servicing one runs them after it
+        let rest = if inputs {
+            self.advance_within(now_ms, until_request, timers)
+        } else {
+            self.run_due(now_ms, until_request, timers, false)
+        };
         a.receipts.extend(rest.receipts);
         a.now_ms = rest.now_ms;
         a.error = rest.error;
