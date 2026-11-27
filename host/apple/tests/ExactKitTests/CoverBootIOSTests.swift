@@ -56,7 +56,7 @@ final class CoverBootIOSTests: XCTestCase {
         route.view.layoutIfNeeded()
         navigation.reportCovers()
         XCTAssertGreaterThan(route.view.safeAreaInsets.bottom, 0)
-        XCTAssertEqual(route.bottomClearance, 0, "the document already clears the window's bottom safe area")
+        XCTAssertEqual(route.bottomClearance, route.view.safeAreaInsets.bottom, "under `cover` a route clears its own bottom inset (LLP 1123 D3)")
     }
 
     func testARefusedGenerationUsesTheBakesOwnViewportPolicy() throws {

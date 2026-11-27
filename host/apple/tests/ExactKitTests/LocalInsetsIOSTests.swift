@@ -221,7 +221,13 @@ final class LocalInsetsIOSTests: XCTestCase {
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         XCTAssertEqual(onScreen(sv).maxY, onScreen(tabs.view).maxY, accuracy: 0.5)
         XCTAssertEqual(sv.adjustedContentInset.bottom, c.view.safeAreaInsets.bottom, accuracy: 0.5)
-        XCTAssertGreaterThan(sv.adjustedContentInset.bottom, try XCTUnwrap(window).safeAreaInsets.bottom)
+        // The tab bar adds its height where UIKit sets it along the bottom; an iPhone Duo sets it in its vertical bar,
+        // which adds to the side instead
+        if c.traitCollection.placesVerticalBar {
+            XCTAssertEqual(sv.adjustedContentInset.bottom, try XCTUnwrap(window).safeAreaInsets.bottom, accuracy: 0.5)
+        } else {
+            XCTAssertGreaterThan(sv.adjustedContentInset.bottom, try XCTUnwrap(window).safeAreaInsets.bottom)
+        }
         let bar = try XCTUnwrap(c.navigationController?.navigationBar)
         sv.contentInsetAdjustmentBehavior = .automatic
         session.presenter.navigationHost.selectScrollEdges(of: c)
@@ -229,6 +235,9 @@ final class LocalInsetsIOSTests: XCTestCase {
         XCTAssertEqual(sv.adjustedContentInset.top, 0, accuracy: 0.5)
         let expanded = bar.bounds.height
         sv.setContentOffset(CGPoint(x: 0, y: 600), animated: false)
+        // An iPhone Duo's bar shows no large title to collapse: UIKit lays it out at its inline height (58 points on
+        // the cover display, measured before and after this scroll)
+        guard !c.traitCollection.placesVerticalBar else { return }
         waitFor("scrolling collapses the large title") { bar.bounds.height < expanded - 1 }
     }
 
