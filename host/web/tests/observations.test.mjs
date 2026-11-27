@@ -59,19 +59,24 @@ const TRANSITIONS = `<!doctype html><style>body { margin: 0 } div { box-sizing: 
   <div id="moves" style="left:100px;top:calc(60px - var(--exact-safe-area-inset-top, 60px));transition:top 1s linear"></div>
   <div id="other" style="left:200px;top:300px;opacity:0;transition:opacity 1s linear"></div>
   <div id="fresh" style="left:300px;top:300px;opacity:0;transition:opacity 1s linear"></div>
+  <div id="hands" style="left:0;top:0;width:390px;--hero:var(--exact-safe-area-inset-top, 5px)"><div id="takes" style="position:static;height:var(--hero);transition:height 1s linear"></div></div>
   <script type="module">
     import { observe } from '/observe.js';
-    const other = document.getElementById('other');
+    const other = document.getElementById('other'), takes = document.getElementById('takes'), events = [];
+    for (const type of ['transitionrun', 'transitioncancel']) takes.addEventListener(type, (e) => events.push(e.type + ' ' + e.propertyName));
     other.getBoundingClientRect();
     other.style.opacity = '1';
     getComputedStyle(other).opacity;
     setTimeout(() => {
       const running = Math.round(other.getAnimations()[0].currentTime), fresh = document.getElementById('fresh');
       fresh.style.opacity = '1';
-      const readers = ['pads', 'moves'].map((id) => document.getElementById(id)), { rounds } = observe(readers, [47, 0, 34, 0]);
+      const readers = ['pads', 'moves', 'hands'].map((id) => document.getElementById(id)), { rounds } = observe(readers, [47, 0, 34, 0]);
       const transitions = (el) => el.getAnimations().map((a) => [a.transitionProperty, a.effect.getKeyframes()[0][a.transitionProperty === 'top' ? 'top' : 'paddingTop'], a.effect.getKeyframes().at(-1)[a.transitionProperty === 'top' ? 'top' : 'paddingTop']]);
-      window.result = { rounds, pads: transitions(readers[0]), moves: transitions(readers[1]), other: other.getAnimations().map((a) => Math.round(a.currentTime) - running),
-        fresh: fresh.getAnimations().map((a) => a.transitionProperty), rule: document.documentElement.classList.contains('exact-rounds') };
+      const result = { rounds, pads: transitions(readers[0]), moves: transitions(readers[1]), other: other.getAnimations().map((a) => Math.round(a.currentTime) - running),
+        fresh: fresh.getAnimations().map((a) => a.transitionProperty), marked: document.querySelectorAll('[data-exact-round]').length,
+        takes: takes.getAnimations().map((a) => [a.transitionProperty, a.effect.getKeyframes()[0].height, a.effect.getKeyframes().at(-1).height]) };
+      // The transition events a commit's change dispatches come at the next rendering step
+      requestAnimationFrame(() => requestAnimationFrame(() => { window.result = { ...result, events }; }));
     }, 100);
   </script>`;
 
@@ -277,7 +282,7 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`the rounds follow 
 
 // A reader at the bottom under a 300-point keyboard, one above it, asked with the keyboard and with none showing
 const KEYBOARD = `<!doctype html><style>body { margin: 0 } div { box-sizing: border-box; position: absolute; left: 0; width: 100px }</style>
-  <div id="foot" style="top:600px;height:200px;padding-bottom:var(--exact-keyboard-inset-bottom, 7px)"></div>
+  <div id="foot" style="top:600px;height:200px;padding-bottom:max(var(--exact-keyboard-inset-bottom, 7px), var(--exact-keyboard-undocked-inset-bottom, 7px))"></div>
   <div id="head" style="top:0;height:100px"></div>
   <script type="module">
     import { observe } from '/observe.js';
@@ -298,11 +303,11 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes 
     const r = await page.evaluate(() => window.result);
     // The reader at the bottom: the keyboard's 300 on its bottom edge, in both families, not limited by its 200-point
     // height, as a native view's guide is not; the one above: none
-    expect(r.shown.foot).toEqual([['0px', '0px', '300px', '0px'], ['0px', '0px', '300px', '0px']]);
+    expect(r.shown.foot).toEqual([['', '', '300px', ''], ['', '', '300px', '']]);
     expect(r.shown.padding).toBe(300);
     expect(r.shown.head).toEqual([['0px', '0px', '0px', '0px'], ['0px', '0px', '0px', '0px']]);
-    // With no keyboard showing, each is 0, as the kernel gives a placed box
-    expect(r.none).toEqual([['0px', '0px', '0px', '0px'], ['0px', '0px', '0px', '0px']]);
+    // With no keyboard showing, each is 0, as the kernel gives a placed box; the edges it does not read stay unwritten
+    expect(r.none).toEqual([['', '', '0px', ''], ['', '', '0px', '']]);
     expect(r.padding).toBe(0);
   } finally {
     await browser.close();
@@ -323,7 +328,11 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`a round's values s
     expect(r.moves).toEqual([['top', '0px', '60px']]);
     expect(r.other).toEqual([0]);
     expect(r.fresh).toEqual(['opacity'], "the page's own change before the rounds starts its transition");
-    expect(r.rule).toBe(false);
+    expect(r.marked).toBe(0);
+    // A reader that hands its observation to a descendant (a custom property it declares) is marked with its subtree:
+    // the descendant takes one transition, to the settled value, and none from a round's
+    expect(r.takes).toEqual([['height', '5px', '47px']]);
+    expect(r.events).toEqual(['transitionrun height']);
   } finally {
     await browser.close();
   }
@@ -341,9 +350,10 @@ for (const engine of ['chromium', 'webkit', 'firefox']) test(`each reader takes 
     await page.waitForFunction(() => window.result);
     const r = await page.evaluate(() => window.result);
     expect(r.band).toEqual([47, 0, 34, 0]);
-    expect(r.inputs.top).toEqual(['47px', '0px', '0px', '0px']);
+    // Only the edges a reader reads are written
+    expect(r.inputs.top).toEqual(['47px', '', '', '']);
     expect(r.padding.top).toBe(47);
-    expect(r.inputs.low).toEqual(['0px', '0px', '0px', '0px']);
+    expect(r.inputs.low).toEqual(['0px', '', '', '']);
     expect(r.padding.low).toBe(0);
     // 60 less its own depth under the bar: 13, then 26, 39, 52, past the bar, where it rests
     expect(r.tops.settles).toBe(60);
