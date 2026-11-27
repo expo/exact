@@ -173,7 +173,7 @@ impl Disk {
         // Written too, for its modification time (Windows asks for write access).
         let mut file = File::options().read(true).write(true).open(&path).ok()?;
         let entry = read(&mut file, url).and_then(|(head, at, len)| {
-            let whole = file.metadata().ok()?.len() == at + len;
+            let whole = Some(file.metadata().ok()?.len()) == at.checked_add(len);
             file.seek(SeekFrom::Start(at)).ok()?;
             whole.then_some((head, len))
         });

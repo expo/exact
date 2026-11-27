@@ -29,6 +29,10 @@ static KEPT: OnceLock<PathBuf> = OnceLock::new();
 /// to ask; none for an app with no storage (an agent drive with no scratch
 /// tree keeps none of the developer's).
 pub(crate) fn keep_on_disk(app_id: &str) {
+    // A test's presenters are not to fill the developer's cache.
+    if cfg!(test) {
+        return;
+    }
     if let Ok(Some(([_, cache, _], _))) = crate::picker::app_dirs(app_id) {
         let _ = KEPT.set(cache.with_file_name("image-cache"));
     }
@@ -519,21 +523,15 @@ impl Downloads {
             };
             let _running = Running(&self.running);
             if job.refresh {
-                // Not before its server said (LLP 1011 §4).
+                // Not before its server said (LLP 1011 §4). Its own
+                // `Retry-After` is not kept: a load would then fail while the
+                // disk still holds a picture it may show.
                 if self.cooling(&job.url).is_some() {
                     continue;
                 }
                 let (controller, mut then) = (AbortController::new(), None);
                 let whole = Instant::now() + self.policy.whole;
                 let result = self.fetch(&job, &controller.signal(), whole, &mut then);
-                if let Err(Failure {
-                    after: Some(at),
-                    message,
-                    ..
-                }) = &result
-                {
-                    self.cool(&job.url, *at, message);
-                }
                 let body = result.ok().filter(|body| body.status.is_none());
                 if let Some(body) = &body {
                     self.cache.lock().unwrap().put(&job.url, body.clone());
