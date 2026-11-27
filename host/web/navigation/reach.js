@@ -8,6 +8,7 @@
 // a scroller and a box with a plain background colour under `auto`, the edges a box names otherwise.
 
 import { own, register } from "./inputs.js";
+import { keyboardInset } from "./environment.js";
 import { chain, documentBand, lines, over, styles, unscrolled } from "./observe.js";
 
 /** Each of `boxes` (elements) and how far it reaches past its border box on each edge (top right bottom left), against
@@ -49,7 +50,7 @@ function measure(boxes, band, cut = () => false) {
   };
   for (const el of boxes) {
     if (!el.isConnected || !el.getClientRects().length) {
-      out.set(el, { reach: [0, 0, 0, 0], room: [0, 0, 0, 0] });
+      out.set(el, { reach: [0, 0, 0, 0], room: [0, 0, 0, 0], rect: null, inner: null });
       continue;
     }
     const r = laid(el), steps = held.get(el);
@@ -70,7 +71,7 @@ function measure(boxes, band, cut = () => false) {
         stops.forEach((stop, e) => { if (stop) room[e] = Math.min(room[e], Math.max(0, left[e])); });
       }
     }
-    out.set(el, { reach: reached.map((d, e) => Math.min(d, room[e])), room });
+    out.set(el, { reach: reached.map((d, e) => Math.min(d, room[e])), room, rect: r, inner });
   }
   return out;
 }
@@ -115,5 +116,27 @@ export function extension(boxes, band = documentBand()) {
       const extent = drawn || clips[e] || playing || !bound || bound === "none" ? 0 : bound === "auto" ? reach[e] : Math.min(Math.max(0, parseFloat(bound) || 0), room[e]);
       own(el, EXTENT[e], `${extent}px`);
     });
+  }
+}
+
+/** The registered lengths the executor writes each scroller's occupied depth in, edge by edge (D14), from which the
+ * emitter composes its content inset. */
+export const OCCUPIED = EDGES.map((e) => `--exact-scroll-occupied-${e}`);
+
+/** Write on each of `scrollers` how deep the unsafe area occupies it on each edge (D14's occupied terms): how far the
+ * area a box there observes (the band, bars and reservations) reaches into the scroller's frame as its reach carries it,
+ * and on the bottom edge the docked keyboard's overlap (`keyboard`, the depth up from the viewport's bottom) where that is
+ * deeper, which a scroller takes as a content inset under `resizes-visual`. The web has no platform adjustment, so the
+ * whole occupied depth is the scroller's (D14's P is 0). */
+export function insets(scrollers, band = documentBand(), keyboard = keyboardInset()) {
+  register(OCCUPIED);
+  const height = document.documentElement.clientHeight;
+  for (const [el, { reach, rect, inner }] of measure(scrollers, band)) {
+    if (!el.isConnected) continue;
+    const occupied = rect ? [
+      inner[0] - (rect.top - reach[0]), (rect.right + reach[1]) - inner[1], (rect.bottom + reach[2]) - inner[2], inner[3] - (rect.left - reach[3]),
+    ].map((d) => Math.max(0, d)) : [0, 0, 0, 0];
+    if (rect) occupied[2] = Math.max(occupied[2], keyboard - (height - (rect.bottom + reach[2])));
+    occupied.forEach((d, e) => own(el, OCCUPIED[e], `${Math.max(0, d)}px`));
   }
 }
