@@ -1053,64 +1053,78 @@ final class PageEdgesIOSTests: XCTestCase {
         let sheet = box(route, y: 0, height: 566)
         let header = box(sheet, y: 0, height: 60)
         let scroller = box(sheet, y: 60, height: 506, overflow: "y")
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller, "the component's scroller reaches the edge")
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "the component's scroller reaches the edge")
         // A sibling stands where layout put it, not where a transform draws it: a control bar riding the navigation
         // bar lies over the scroller below it on screen
         header.transform = CGAffineTransform(translationX: 0, y: 100)
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller, "a header drawn over the scroller stays above it")
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "a header drawn over the scroller stays above it")
         header.transform = .identity
         // The scroller and the boxes around it are drawn where layout put their foot: one scaled about its top, or
         // turned, draws the scroll view short of the edge
         sheet.layer.anchorPoint = CGPoint(x: 0.5, y: 0)
         sheet.frame = CGRect(x: 0, y: 0, width: 400, height: 566)
         sheet.transform = CGAffineTransform(scaleX: 1, y: 0.75)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a wrapper scaled to 75% ends 141.5 above its laid-out foot")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a wrapper scaled to 75% ends 141.5 above its laid-out foot")
         sheet.transform = .identity
         sheet.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         sheet.frame = CGRect(x: 0, y: 0, width: 400, height: 566)
         scroller.transform = CGAffineTransform(rotationAngle: 0.02)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a turned scroller's corner crossing the edge is not its foot")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a turned scroller's corner crossing the edge is not its foot")
         scroller.transform = CGAffineTransform(rotationAngle: .pi)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a half-turn brings the scroller's top to the edge")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a half-turn brings the scroller's top to the edge")
         scroller.transform = CGAffineTransform(scaleX: 1, y: -1)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a flipped scroller's top is at the edge")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a flipped scroller's top is at the edge")
         scroller.transform = .identity
-        // A layout gap is measured where layout put the scroller, apart from a nudge a transform draws: 1 point short,
-        // drawn half a point lower, is short
-        scroller.frame.size.height = 505
-        scroller.transform = CGAffineTransform(translationX: 0, y: 0.5)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a scroller laid out a point short of the foot")
+        // Frames agree within half a device pixel, a sixth of a point at 3x (LLP 1123 D9), and not within half a
+        // point: a header reaching a tenth of a point into the scroller still ends above it, three tenths do not; a
+        // scroller drawn a tenth of a point off its laid-out foot keeps it, three tenths do not
+        let half = 0.5 / 3.0
+        header.frame.size.height = 60.1
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "a sibling within half a pixel")
+        header.frame.size.height = 60.3
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a sibling three tenths of a point into it")
+        header.frame.size.height = 60
+        scroller.transform = CGAffineTransform(translationX: 0, y: 0.1)
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller, "a foot within half a pixel")
+        scroller.transform = CGAffineTransform(translationX: 0, y: 0.3)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a foot drawn three tenths of a point off")
+        scroller.transform = .identity
+        // A layout gap is measured where layout put the scroller, apart from a nudge a transform draws: laid out just
+        // over half a point short, and drawn a quarter of a device pixel lower, within half a point on screen, is short
+        scroller.frame.size.height = 506 - (0.5 + half / 4)
+        scroller.transform = CGAffineTransform(translationX: 0, y: half / 2)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a scroller laid out over half a point short of the foot")
         scroller.transform = .identity
         scroller.frame.size.height = 506
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route), "not with the cover unsaid: it ends 34 above the content box")
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller)
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, scale: 3), "not with the cover unsaid: it ends 34 above the content box")
         sheet.frame.size.height = 576
         scroller.frame.size.height = 516
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a 24-point gap is neither the edge nor the 34-point bar")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a 24-point gap is neither the edge nor the 34-point bar")
         sheet.frame.size.height = 566
         scroller.frame.size.height = 506
         sheet.applyKernelContentBox(CGRect(x: 0, y: 0, width: 400, height: 546), padding: [0, 0, 20, 0])
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a padding under it keeps the cover")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a padding under it keeps the cover")
         sheet.applyKernelContentBox(nil, padding: nil)
         scroller.frame.size.height = 446
         let footer = box(sheet, y: 506, height: 60)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a footer under it keeps the cover")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a footer under it keeps the cover")
         footer.removeFromSuperview()
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "nor does a scroller that ends short of its parent")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "nor does a scroller that ends short of its parent")
         scroller.frame.size.height = 506
         scroller.style["overflow_y"] = nil
         scroller.style["overflow_x"] = .string("scroll")
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a sideways scroller takes no bottom inset")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a sideways scroller takes no bottom inset")
         scroller.style["overflow_x"] = nil
         scroller.style["overflow_y"] = .string("scroll")
         // The route's child sized to its content, 200 points of a 600-point
         // route: its scroller ends far above the home indicator.
         sheet.frame.size.height = 200
         scroller.frame.size.height = 140
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a route's child short of its content box keeps the cover")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a route's child short of its content box keeps the cover")
         sheet.frame.size.height = 566
         scroller.frame.size.height = 506
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === scroller)
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === scroller)
         // The component's column ends in a row filling it: a side column
         // beside the scroller reaches the edge too.
         scroller.removeFromSuperview()
@@ -1118,7 +1132,7 @@ final class PageEdgesIOSTests: XCTestCase {
         _ = box(split, y: 0, height: 506)
         let right = box(split, y: 0, height: 506, overflow: "y")
         right.frame.origin.x = 200
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a row's scroller beside a column keeps the cover")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a row's scroller beside a column keeps the cover")
         // A full-height row: a column with Save at its foot, and a scroller
         // beside it. The Save button reaches the edge too: the cover stays.
         sheet.removeFromSuperview()
@@ -1127,13 +1141,13 @@ final class PageEdgesIOSTests: XCTestCase {
         _ = box(side, y: 522, height: 44)
         let beside = box(row, y: 0, height: 566, overflow: "y")
         beside.frame.origin.x = 200
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a scroller with a sibling beside it in a row keeps the cover")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a scroller with a sibling beside it in a row keeps the cover")
         side.removeFromSuperview()
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34) === beside, "the row's only child spans its bottom edge")
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3) === beside, "the row's only child spans its bottom edge")
         // A reversed column: its last child is at its top, above the scroller.
         _ = box(row, y: 0, height: 60)
         beside.frame.origin = CGPoint(x: 0, y: 60); beside.frame.size.height = 506
-        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34), "a last child above its sibling is not at the edge")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, cover: 34, scale: 3), "a last child above its sibling is not at the edge")
     }
 }
 #endif

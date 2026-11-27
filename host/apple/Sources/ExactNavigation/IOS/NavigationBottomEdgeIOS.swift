@@ -39,7 +39,7 @@ extension NavigationHost {
         let peers = arrangementScrollers(in: c, top: false)
         let peer = contentScroller(of: c).flatMap { node in peers.contains(where: { $0 === node }) ? node : nil } ?? peers.first
         let padding = RouteGeometry.clearancePadding(c.node, edge: 2, inset: c.bottomClearance)
-        guard let found = Self.bottomScroller(in: c.node, cover: padding, lifting: c.liftedBottomRows) ?? peer else { return nil }
+        guard let found = Self.bottomScroller(in: c.node, cover: padding, lifting: c.liftedBottomRows, scale: presenter.gridScale) ?? peer else { return nil }
         // A separate scroller with an open foot draws through the cover with a band
         // (LLP 1131 D2). Inside a clipping wrapper the wrapper must grow with it.
         if #available(iOS 26.0, tvOS 26.0, *), cover, found !== c.collapseScroll,
@@ -73,7 +73,7 @@ extension NavigationHost {
     /// cover. One that scrolls vertically only: UIKit's bottom inset would
     /// let a sideways carousel scroll up and down. `cover` is the route's
     /// bottom cover, which the route's child may end above.
-    static func bottomScroller(in route: NodeView, cover: CGFloat = 0, lifting: [NodeView] = []) -> NodeView? {
+    static func bottomScroller(in route: NodeView, cover: CGFloat = 0, lifting: [NodeView] = [], scale: CGFloat) -> NodeView? {
         let flowing = RouteGeometry.inFlow
         // The last in-flow child spans the bottom edge alone when every other
         // ends above its top, as children stacked down a block or a column
@@ -81,9 +81,13 @@ extension NavigationHost {
         // (a column with a Save button at its foot) and keeps the cover. The
         // laid-out frames say so, not one a transform moves (a control bar
         // riding the navigation bar); the host is not sent the flex direction.
+        // Frames that agree within half a device pixel of the page's display
+        // (`scale`) agree, as the kernel's observations judge them (LLP 1123
+        // D9); a route being pushed may not be in a window to say its own
+        let half = 0.5 / max(scale, 1)
         func alone(_ last: NodeView, among children: [NodeView]) -> Bool {
             let top = ControlBars.laid(last).minY
-            return children.allSatisfy { $0 === last || ControlBars.laid($0).maxY <= top + 0.5 }
+            return children.allSatisfy { $0 === last || ControlBars.laid($0).maxY <= top + half }
         }
         // The scroller and each box around it keep their foot where layout put
         // it, its bottom still at the bottom: a transform of their own that
@@ -96,7 +100,7 @@ extension NavigationHost {
                   let holder = node.superview else { return false }
             let foot = ControlBars.laid(node).maxY
             return [node.bounds.minX, node.bounds.maxX].allSatisfy {
-                abs(node.convert(CGPoint(x: $0, y: node.bounds.maxY), to: holder).y - foot) <= 0.5
+                abs(node.convert(CGPoint(x: $0, y: node.bounds.maxY), to: holder).y - foot) <= half
             }
         }
         var parent = route

@@ -885,11 +885,11 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let scroller = box(route, y: 100, height: 500, scrolls: true)
         let menu = box(route, y: 0, height: 0, props: ["popover": "auto"])
         let dialog = box(route, y: 0, height: 0, props: ["semanticTag": "dialog"])
-        XCTAssertTrue(NavigationHost.bottomScroller(in: route) === scroller)
+        XCTAssertTrue(NavigationHost.bottomScroller(in: route, scale: 3) === scroller)
         XCTAssertFalse(RouteGeometry.inFlow(menu))
         XCTAssertFalse(RouteGeometry.inFlow(dialog))
         _ = box(route, y: 0, height: 0)
-        XCTAssertNil(NavigationHost.bottomScroller(in: route), "a box in the flow after it still keeps the cover")
+        XCTAssertNil(NavigationHost.bottomScroller(in: route, scale: 3), "a box in the flow after it still keeps the cover")
     }
 
     /// A route that paints no background shows what the web shows through
