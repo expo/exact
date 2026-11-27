@@ -220,9 +220,18 @@ fn stage_in(
         }
     };
     let mut files = Vec::new();
-    for (n, DragFile { entry: name, name: offered }) in dragged.iter().enumerate() {
+    for (
+        n,
+        DragFile {
+            entry: name,
+            name: offered,
+        },
+    ) in dragged.iter().enumerate()
+    {
         // The name is a basename (D14's rule, or the entry's own); anything else is no copy's
-        let Some(leaf) = Some(offered.as_str()).filter(|leaf| !leaf.is_empty() && !leaf.contains('/')) else {
+        let Some(leaf) =
+            Some(offered.as_str()).filter(|leaf| !leaf.is_empty() && !leaf.contains('/'))
+        else {
             continue;
         };
         let Ok(leaf) = CString::new(leaf) else {

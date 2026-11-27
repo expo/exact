@@ -34,7 +34,8 @@ impl<D: DataSource> Runner<D> {
         // Forget the refusals of nodes the batches before this one destroyed
         if !self.drag_refused.is_empty() {
             let kernel = &self.kernel;
-            self.drag_refused.retain(|(id, _), _| kernel.node(*id).is_some());
+            self.drag_refused
+                .retain(|(id, _), _| kernel.node(*id).is_some());
         }
         // Each node's names, written after its files once the pass is done
         let mut names_after = Vec::new();
@@ -65,10 +66,14 @@ impl<D: DataSource> Runner<D> {
                     (set_or_clear(id, prop, kept.files), None)
                 }
                 _ => {
-                    let (kept, refused) = value.map(|v| self.admitted_entries(v)).unwrap_or_default();
+                    let (kept, refused) =
+                        value.map(|v| self.admitted_entries(v)).unwrap_or_default();
                     self.journal_drag(id, false, refused);
                     let names = set_or_clear(id, PropId::DataTransferNames, kept.names);
-                    (set_or_clear(id, PropId::DataTransferFiles, kept.files), Some(names))
+                    (
+                        set_or_clear(id, PropId::DataTransferFiles, kept.files),
+                        Some(names),
+                    )
                 }
             };
             ops[at] = replaced;
@@ -120,7 +125,10 @@ impl<D: DataSource> Runner<D> {
             // The URL itself stays out of the journal: it may hold a password or a token.
             Some(why) => (
                 String::new(),
-                vec![Refusal { what: value.to_owned(), line: format!("url is not an absolute http: or https: URL: {why}") }],
+                vec![Refusal {
+                    what: value.to_owned(),
+                    line: format!("url is not an absolute http: or https: URL: {why}"),
+                }],
             ),
         }
     }
@@ -128,7 +136,11 @@ impl<D: DataSource> Runner<D> {
     /// The newline-joined files a plan compiled before D14 binds, as this
     /// host carries them, and why each it leaves out is refused.
     pub(super) fn admitted_files(&self, value: &str) -> (AdmittedFiles, Vec<Refusal>) {
-        let files: Vec<String> = value.split('\n').filter(|e| !e.is_empty()).map(str::to_owned).collect();
+        let files: Vec<String> = value
+            .split('\n')
+            .filter(|e| !e.is_empty())
+            .map(str::to_owned)
+            .collect();
         self.admitted_pairs(&files, None)
     }
 
@@ -140,7 +152,8 @@ impl<D: DataSource> Runner<D> {
                 AdmittedFiles::default(),
                 vec![Refusal {
                     what: value.to_owned(),
-                    line: "the drag's files could not be read: rebuild the app with this Exact".into(),
+                    line: "the drag's files could not be read: rebuild the app with this Exact"
+                        .into(),
                 }],
             ),
         }
@@ -149,29 +162,44 @@ impl<D: DataSource> Runner<D> {
     /// Each file this host carries with the name it is offered under, a
     /// refused file taking its name with it, and why each part left out is
     /// refused.
-    fn admitted_pairs(&self, files: &[String], names: Option<&[String]>) -> (AdmittedFiles, Vec<Refusal>) {
+    fn admitted_pairs(
+        &self,
+        files: &[String],
+        names: Option<&[String]>,
+    ) -> (AdmittedFiles, Vec<Refusal>) {
         let web = self.platform == crate::page::Platform::Web;
         let (mut kept, mut offered, mut refused) = (Vec::new(), Vec::new(), Vec::new());
         for (at, file) in files.iter().enumerate() {
-            let name = names.and_then(|names| names.get(at)).map(String::as_str).unwrap_or("");
+            let name = names
+                .and_then(|names| names.get(at))
+                .map(String::as_str)
+                .unwrap_or("");
             if file.is_empty() {
                 continue;
             }
             // The admitted files reach the hosts one per line
             let admitted = if file.contains(['\r', '\n']) {
-                Err(format!("{file:?}: a file with a line break cannot be carried"))
+                Err(format!(
+                    "{file:?}: a file with a line break cannot be carried"
+                ))
             } else {
                 crate::transfer::drag_file(self, file, web)
             };
             if let Err(line) = admitted {
-                refused.push(Refusal { what: format!("file\0{file}"), line });
+                refused.push(Refusal {
+                    what: format!("file\0{file}"),
+                    line,
+                });
                 continue;
             }
             kept.push(file.as_str());
             offered.push(match offered_name(file, name) {
                 Ok(name) => name,
                 Err(line) => {
-                    refused.push(Refusal { what: format!("name\0{file}\0{name}"), line });
+                    refused.push(Refusal {
+                        what: format!("name\0{file}\0{name}"),
+                        line,
+                    });
                     String::new()
                 }
             });
@@ -182,14 +210,27 @@ impl<D: DataSource> Runner<D> {
                 line: format!("name {name:?}: there is no file in files= for it"),
             });
         }
-        let names = if offered.iter().all(String::is_empty) { String::new() } else { offered.join("\n") };
-        (AdmittedFiles { files: kept.join("\n"), names }, refused)
+        let names = if offered.iter().all(String::is_empty) {
+            String::new()
+        } else {
+            offered.join("\n")
+        };
+        (
+            AdmittedFiles {
+                files: kept.join("\n"),
+                names,
+            },
+            refused,
+        )
     }
 }
 
 /// Whether the commit pass admits `prop`.
 fn is_drag(prop: PropId) -> bool {
-    matches!(prop, PropId::DataTransferUrl | PropId::DataTransferFiles | PropId::DataTransferEntries)
+    matches!(
+        prop,
+        PropId::DataTransferUrl | PropId::DataTransferFiles | PropId::DataTransferEntries
+    )
 }
 
 /// The name `file` is offered under for `name`, empty for its own, or why
@@ -209,6 +250,10 @@ fn set_or_clear(id: ViewId, prop: PropId, value: String) -> Op {
     if value.is_empty() {
         Op::ClearProp { id, prop }
     } else {
-        Op::SetProp { id, prop, value: PropValue::Str(value.into()) }
+        Op::SetProp {
+            id,
+            prop,
+            value: PropValue::Str(value.into()),
+        }
     }
 }

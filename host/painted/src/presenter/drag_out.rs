@@ -251,7 +251,10 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             .map(|entry| {
                 let own = entry.rsplit('/').next().unwrap_or(entry);
                 let name = names.next().filter(|name| !name.is_empty()).unwrap_or(own);
-                DragFile { entry: entry.to_string(), name: name.to_string() }
+                DragFile {
+                    entry: entry.to_string(),
+                    name: name.to_string(),
+                }
             })
             .collect();
         (

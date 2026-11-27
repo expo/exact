@@ -35,8 +35,15 @@ fn held(r: &Runner<Source>, test_id: &str) -> (String, String) {
     let key = r.kernel().find_by_test_id(test_id)[0];
     let props = r.kernel().node_by_key(key).unwrap().props;
     let text = |p| props.str(p).unwrap_or_default().to_string();
-    assert_eq!(props.str(PropId::DataTransferEntries), None, "the encoded value reaches no host");
-    (text(PropId::DataTransferFiles), text(PropId::DataTransferNames))
+    assert_eq!(
+        props.str(PropId::DataTransferEntries),
+        None,
+        "the encoded value reaches no host"
+    );
+    (
+        text(PropId::DataTransferFiles),
+        text(PropId::DataTransferNames),
+    )
 }
 
 fn refusals(r: &Runner<Source>) -> Vec<String> {
@@ -110,24 +117,52 @@ fn every_boundary_holds_and_the_offered_name_is_checked() {
 
 #[test]
 fn no_names_differ_from_one_empty_name_and_all_empty_names_carry_none() {
-    let none = boot(&card(r#"["app:/data/a.jpg"]"#, "[]", "[]"), Platform::Ios, Kernel::with_monospace());
+    let none = boot(
+        &card(r#"["app:/data/a.jpg"]"#, "[]", "[]"),
+        Platform::Ios,
+        Kernel::with_monospace(),
+    );
     assert_eq!(held(&none, "card"), ("app:/data/a.jpg".into(), "".into()));
-    let surplus = boot(&card("[]", r#"[""]"#, "[]"), Platform::Ios, Kernel::with_monospace());
+    let surplus = boot(
+        &card("[]", r#"[""]"#, "[]"),
+        Platform::Ios,
+        Kernel::with_monospace(),
+    );
     assert_eq!(held(&surplus, "card"), ("".into(), "".into()));
-    assert_eq!(refusals(&surplus), ["drag: refused: name \"\": there is no file in files= for it"]);
-    let empty = boot(&card(r#"["app:/data/a.jpg"]"#, r#"[""]"#, "[]"), Platform::Ios, Kernel::with_monospace());
+    assert_eq!(
+        refusals(&surplus),
+        ["drag: refused: name \"\": there is no file in files= for it"]
+    );
+    let empty = boot(
+        &card(r#"["app:/data/a.jpg"]"#, r#"[""]"#, "[]"),
+        Platform::Ios,
+        Kernel::with_monospace(),
+    );
     assert_eq!(held(&empty, "card"), ("app:/data/a.jpg".into(), "".into()));
     assert!(refusals(&empty).is_empty());
 }
 
 #[test]
 fn either_list_changing_admits_both_and_a_standing_refusal_is_journaled_once() {
-    let src = card(r#"["app:/data/../x.pdf", "app:/data/a.jpg"]"#, r#"["", "First"]"#, r#"["", "Second"]"#);
+    let src = card(
+        r#"["app:/data/../x.pdf", "app:/data/a.jpg"]"#,
+        r#"["", "First"]"#,
+        r#"["", "Second"]"#,
+    );
     let mut r = boot(&src, Platform::Ios, Kernel::with_monospace());
-    assert_eq!(held(&r, "card"), ("app:/data/a.jpg".into(), "First.jpg".into()));
+    assert_eq!(
+        held(&r, "card"),
+        ("app:/data/a.jpg".into(), "First.jpg".into())
+    );
     r.dispatch(view(&r, "swap"), Event::Press).unwrap();
-    assert_eq!(held(&r, "card"), ("app:/data/a.jpg".into(), "Second.jpg".into()));
-    assert_eq!(refusals(&r), ["drag: refused: app:/data/../x.pdf is not a plain app:/ path"]);
+    assert_eq!(
+        held(&r, "card"),
+        ("app:/data/a.jpg".into(), "Second.jpg".into())
+    );
+    assert_eq!(
+        refusals(&r),
+        ["drag: refused: app:/data/../x.pdf is not a plain app:/ path"]
+    );
     // The web carries no `app:/` file, and so none of its names.
     let web = boot(&src, Platform::Web, Kernel::with_monospace());
     assert_eq!(held(&web, "card"), ("".into(), "".into()));
@@ -137,11 +172,23 @@ fn either_list_changing_admits_both_and_a_standing_refusal_is_journaled_once() {
 fn each_list_changed_or_cleared_alone_admits_both_again() {
     let src = "component A\n  state files: string[] = [\"app:/data/a.jpg\", \"app:/data/b.jpg\"]\n  state names: string[] = [\"First\", \"Second\"]\n  action fewer\n    files = [\"app:/data/b.jpg\"]\n  action unnamed\n    names = []\n  action emptied\n    files = []\n  view\n    column\n      column draggable=true dataTransfer=DataTransfer(files=files, names=names) testId=\"card\"\n        text \"a\"\n      button press=fewer testId=\"fewer\"\n        text \"b\"\n      button press=unnamed testId=\"unnamed\"\n        text \"c\"\n      button press=emptied testId=\"emptied\"\n        text \"d\"\n";
     let mut r = boot(src, Platform::Ios, Kernel::with_monospace());
-    assert_eq!(held(&r, "card"), ("app:/data/a.jpg\napp:/data/b.jpg".into(), "First.jpg\nSecond.jpg".into()));
+    assert_eq!(
+        held(&r, "card"),
+        (
+            "app:/data/a.jpg\napp:/data/b.jpg".into(),
+            "First.jpg\nSecond.jpg".into()
+        )
+    );
     // Files changed alone: the names pair again by place, and the one past the files is refused.
     r.dispatch(view(&r, "fewer"), Event::Press).unwrap();
-    assert_eq!(held(&r, "card"), ("app:/data/b.jpg".into(), "First.jpg".into()));
-    assert_eq!(refusals(&r), ["drag: refused: name \"Second\": there is no file in files= for it"]);
+    assert_eq!(
+        held(&r, "card"),
+        ("app:/data/b.jpg".into(), "First.jpg".into())
+    );
+    assert_eq!(
+        refusals(&r),
+        ["drag: refused: name \"Second\": there is no file in files= for it"]
+    );
     // Names cleared alone: the files keep their own names.
     r.dispatch(view(&r, "unnamed"), Event::Press).unwrap();
     assert_eq!(held(&r, "card"), ("app:/data/b.jpg".into(), "".into()));
@@ -174,7 +221,10 @@ fn a_node_built_again_journals_its_refusal_again() {
         r.dispatch(view(&r, "toggle"), Event::Press).unwrap();
     }
     assert_eq!(held(&r, "card"), ("app:/data/a.jpg".into(), "A.jpg".into()));
-    assert_eq!(refusals(&r), ["drag: refused: app:/data/../x.pdf is not a plain app:/ path"; 2]);
+    assert_eq!(
+        refusals(&r),
+        ["drag: refused: app:/data/../x.pdf is not a plain app:/ path"; 2]
+    );
 }
 
 #[test]
@@ -192,7 +242,11 @@ fn a_line_feed_in_a_files_only_binding_refuses_only_its_file() {
 fn a_plan_compiled_before_names_is_read_as_before() {
     // A plan from before D14 binds `dataTransferFiles`, newline-joined paths, even one that begins as the
     // encoding would: its entries are read as paths, never decoded.
-    let src = card(r#"["app:/data/a.jpg", "app:/data/b.jpg"]"#, r#"["A"]"#, "[]");
+    let src = card(
+        r#"["app:/data/a.jpg", "app:/data/b.jpg"]"#,
+        r#"["A"]"#,
+        "[]",
+    );
     let mut plan = contract::compile(&src).unwrap();
     let mut rebound = 0;
     for row in plan.bindings.to_mut().iter_mut() {
@@ -204,7 +258,14 @@ fn a_plan_compiled_before_names_is_read_as_before() {
     assert_eq!(rebound, 1);
     let plan = contract::bake(plan, boxed(Grants)).unwrap();
     let r = Platform::Ios.boot(|| {
-        Runner::boot(plan, boxed(Grants), Kernel::with_monospace(), Default::default(), "/").unwrap()
+        Runner::boot(
+            plan,
+            boxed(Grants),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap()
     });
     assert_eq!(held(&r, "card"), ("".into(), "".into()));
     assert_eq!(
@@ -219,13 +280,23 @@ fn a_plan_compiled_before_names_is_read_as_before() {
 
 #[test]
 fn a_render_with_no_kernel_folds_the_same_names() {
-    let src = card(r#"["app:/data/a.jpg", "app:/data/b.jpg"]"#, r#"["", "Mount Fuji"]"#, "[]");
+    let src = card(
+        r#"["app:/data/a.jpg", "app:/data/b.jpg"]"#,
+        r#"["", "Mount Fuji"]"#,
+        "[]",
+    );
     let mut r = boot(&src, Platform::Ios, Kernel::with_monospace());
     let id = view(&r, "card");
     let doc = r.document_tree().unwrap();
     let props = &doc.node(id).unwrap().props;
-    assert_eq!(props.str(PropId::DataTransferFiles), Some("app:/data/a.jpg\napp:/data/b.jpg"));
-    assert_eq!(props.str(PropId::DataTransferNames), Some("\nMount Fuji.jpg"));
+    assert_eq!(
+        props.str(PropId::DataTransferFiles),
+        Some("app:/data/a.jpg\napp:/data/b.jpg")
+    );
+    assert_eq!(
+        props.str(PropId::DataTransferNames),
+        Some("\nMount Fuji.jpg")
+    );
     assert_eq!(props.str(PropId::DataTransferEntries), None);
 }
 
@@ -238,7 +309,13 @@ fn an_apps_own_functions_do_not_change_the_encoding() {
         card(r#"["app:/data/a b.jpg", "app:/data/c.jpg"]"#, r#"["Mount Fuji", ""]"#, "[]")
     );
     let r = boot(&src, Platform::Ios, Kernel::with_monospace());
-    assert_eq!(held(&r, "card"), ("app:/data/a b.jpg\napp:/data/c.jpg".into(), "Mount Fuji.jpg\n".into()));
+    assert_eq!(
+        held(&r, "card"),
+        (
+            "app:/data/a b.jpg\napp:/data/c.jpg".into(),
+            "Mount Fuji.jpg\n".into()
+        )
+    );
     assert!(refusals(&r).is_empty(), "{:?}", refusals(&r));
 }
 

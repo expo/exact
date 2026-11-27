@@ -251,7 +251,10 @@ fn a_node_with_only_values_the_host_does_not_offer_is_not_a_source() {
     let lift = lifts.borrow_mut().pop().unwrap();
     assert_eq!(
         lift.files,
-        [super::drag_out::DragFile { entry: "assets/a.png".into(), name: "a.png".into() }],
+        [super::drag_out::DragFile {
+            entry: "assets/a.png".into(),
+            name: "a.png".into()
+        }],
         "a host that offers files lifts the inner node"
     );
 }

@@ -175,8 +175,18 @@ fn a_long_press_on_a_draggable_node_asks_the_reader_for_its_drag() {
     let (app, next) = string(words, next);
     let app_name = string(words, next).0;
     assert_eq!(
-        [shipped.as_str(), shipped_name.as_str(), app.as_str(), app_name.as_str()],
-        ["assets/a.png", "a.png", "app:/data/shared/fuji.png", "Fuji at dawn.png"],
+        [
+            shipped.as_str(),
+            shipped_name.as_str(),
+            app.as_str(),
+            app_name.as_str()
+        ],
+        [
+            "assets/a.png",
+            "a.png",
+            "app:/data/shared/fuji.png",
+            "Fuji at dawn.png"
+        ],
         "as the node names them, each with the name it is offered under (LLP 1094.000 D14)"
     );
 }
@@ -464,8 +474,14 @@ fn the_request_writes_the_words_the_reader_reads() {
         text: "Fuji".into(),
         url: "https://example.com/1".into(),
         files: vec![
-            super::drag_out::DragFile { entry: "assets/a.png".into(), name: "a.png".into() },
-            super::drag_out::DragFile { entry: "app:/data/b.pdf".into(), name: "Notes.pdf".into() },
+            super::drag_out::DragFile {
+                entry: "assets/a.png".into(),
+                name: "a.png".into(),
+            },
+            super::drag_out::DragFile {
+                entry: "app:/data/b.pdf".into(),
+                name: "Notes.pdf".into(),
+            },
         ],
     };
     let mut words = Vec::new();
@@ -474,8 +490,8 @@ fn the_request_writes_the_words_the_reader_reads() {
         words,
         [
             7, 10, 20, 30, 40, 15, 25, 1, 4, 1768584518, 21, 1886680168, 791624307, 1835104357,
-            778398832, 795701091, 49, 2, 12, 1702064993, 1630499700, 1735290926, 5, 1852845665, 103,
-            15, 980447329, 1952539695, 778186593, 6710384, 9, 1702129486, 1685073523, 102
+            778398832, 795701091, 49, 2, 12, 1702064993, 1630499700, 1735290926, 5, 1852845665,
+            103, 15, 980447329, 1952539695, 778186593, 6710384, 9, 1702129486, 1685073523, 102
         ]
     );
 }

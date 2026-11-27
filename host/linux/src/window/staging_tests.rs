@@ -18,7 +18,10 @@ fn shipped(files: &[(&str, &str)]) -> tempfile::TempDir {
 fn own(entries: &[&str]) -> Vec<DragFile> {
     entries
         .iter()
-        .map(|entry| DragFile { entry: (*entry).to_owned(), name: entry.rsplit('/').next().unwrap().to_owned() })
+        .map(|entry| DragFile {
+            entry: (*entry).to_owned(),
+            name: entry.rsplit('/').next().unwrap().to_owned(),
+        })
         .collect()
 }
 
@@ -28,7 +31,10 @@ fn staged(names: &[&str], assets: &Assets) -> (tempfile::TempDir, Vec<PathBuf>, 
 }
 
 /// [`staged`] of files with names of their own.
-fn staged_files(names: &[DragFile], assets: &Assets) -> (tempfile::TempDir, Vec<PathBuf>, Vec<String>) {
+fn staged_files(
+    names: &[DragFile],
+    assets: &Assets,
+) -> (tempfile::TempDir, Vec<PathBuf>, Vec<String>) {
     let base = tempfile::tempdir().unwrap();
     let lines = RefCell::new(Vec::new());
     let copies = stage_in(base.path(), names, assets, None, &|line| {
@@ -73,12 +79,26 @@ fn each_copy_keeps_its_files_name_in_a_folder_of_its_own() {
 fn each_copy_takes_the_name_it_is_offered_under() {
     let root = shipped(&[("assets/1016.jpg", "Fuji"), ("assets/1017.jpg", "Etna")]);
     let assets = Assets::embedded(root.path().to_owned());
-    let named = |entry: &str, name: &str| DragFile { entry: entry.into(), name: name.into() };
-    let (_base, copies, lines) =
-        staged_files(&[named("assets/1016.jpg", "Mount Fuji.jpg"), named("assets/1017.jpg", "Mount Fuji.jpg")], &assets);
+    let named = |entry: &str, name: &str| DragFile {
+        entry: entry.into(),
+        name: name.into(),
+    };
+    let (_base, copies, lines) = staged_files(
+        &[
+            named("assets/1016.jpg", "Mount Fuji.jpg"),
+            named("assets/1017.jpg", "Mount Fuji.jpg"),
+        ],
+        &assets,
+    );
     assert!(lines.is_empty(), "{lines:?}");
     let folder = copies[0].parent().unwrap().parent().unwrap();
-    assert_eq!(copies, [folder.join("0/Mount Fuji.jpg"), folder.join("1/Mount Fuji.jpg")]);
+    assert_eq!(
+        copies,
+        [
+            folder.join("0/Mount Fuji.jpg"),
+            folder.join("1/Mount Fuji.jpg")
+        ]
+    );
     assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), "Fuji");
     assert_eq!(std::fs::read_to_string(&copies[1]).unwrap(), "Etna");
 }

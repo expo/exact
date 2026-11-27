@@ -40,15 +40,26 @@ fn is_device_name(name: &str) -> bool {
     if ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str()) {
         return true;
     }
-    let Some(rest) = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT")) else {
+    let Some(rest) = stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+    else {
         return false;
     };
-    matches!(rest, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+    matches!(
+        rest,
+        "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+    )
 }
 
 /// The suffixes that spell one type in the extension table `expect drag`
 /// reads (`scripts/share-target.mjs`).
-const ALIASES: [[&str; 2]; 4] = [["jpg", "jpeg"], ["htm", "html"], ["txt", "text"], ["md", "markdown"]];
+const ALIASES: [[&str; 2]; 4] = [
+    ["jpg", "jpeg"],
+    ["htm", "html"],
+    ["txt", "text"],
+    ["md", "markdown"],
+];
 
 /// What follows the last dot of `name`, when that dot is neither its first
 /// character nor its last.
@@ -62,7 +73,8 @@ fn suffix(name: &str) -> Option<&str> {
 fn same_type(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
         || ALIASES.iter().any(|pair| {
-            pair.iter().any(|s| s.eq_ignore_ascii_case(a)) && pair.iter().any(|s| s.eq_ignore_ascii_case(b))
+            pair.iter().any(|s| s.eq_ignore_ascii_case(a))
+                && pair.iter().any(|s| s.eq_ignore_ascii_case(b))
         })
 }
 
@@ -72,7 +84,9 @@ fn same_type(a: &str, b: &str) -> bool {
 pub fn offered_drag_name(file: &str, name: &str) -> String {
     let own = file.rsplit('/').next().unwrap_or(file);
     match suffix(own) {
-        Some(theirs) if !suffix(name).is_some_and(|s| same_type(s, theirs)) => format!("{name}.{theirs}"),
+        Some(theirs) if !suffix(name).is_some_and(|s| same_type(s, theirs)) => {
+            format!("{name}.{theirs}")
+        }
         _ => name.to_owned(),
     }
 }
@@ -97,7 +111,10 @@ fn entries(part: &str) -> Option<Vec<String>> {
     if part.is_empty() {
         return Some(Vec::new());
     }
-    part.strip_suffix('\n')?.split('\n').map(percent_decoded).collect()
+    part.strip_suffix('\n')?
+        .split('\n')
+        .map(percent_decoded)
+        .collect()
 }
 
 /// `s` with each `%XX` read as a byte, which must make UTF-8.
@@ -122,7 +139,15 @@ mod tests {
     /// The cases `host/web-js/drag.test.mjs` holds its port to.
     #[test]
     fn a_name_is_a_portable_basename_of_up_to_255_bytes() {
-        for ok in ["Mount Fuji.jpg", "St. Paul", "Fuji", ".profile", "a".repeat(255).as_str(), "COM0.txt", "CONSOLE"] {
+        for ok in [
+            "Mount Fuji.jpg",
+            "St. Paul",
+            "Fuji",
+            ".profile",
+            "a".repeat(255).as_str(),
+            "COM0.txt",
+            "CONSOLE",
+        ] {
             assert_eq!(drag_name_refusal(ok), None, "{ok}");
         }
         for (bad, why) in [
@@ -130,7 +155,10 @@ mod tests {
             (&"é".repeat(128), "a name is 1 to 255 bytes of UTF-8"),
             ("a\nb", "a name holds no control character"),
             ("a\u{7f}", "a name holds no control character"),
-            ("photos/1016.jpg", r#"a name holds none of < > : " / \ | ? *"#),
+            (
+                "photos/1016.jpg",
+                r#"a name holds none of < > : " / \ | ? *"#,
+            ),
             ("a:b", r#"a name holds none of < > : " / \ | ? *"#),
             (" a", "a name neither begins nor ends with a space"),
             ("a ", "a name neither begins nor ends with a space"),
@@ -160,7 +188,11 @@ mod tests {
             ("assets/README", "Read me.txt", "Read me.txt"),
             ("assets/.profile", "Profile", "Profile"),
             // A Kelvin sign is no `k`: only ASCII letters fold, here and in the JS port
-            ("assets/a.md", "Notes.mar\u{212a}down", "Notes.mar\u{212a}down.md"),
+            (
+                "assets/a.md",
+                "Notes.mar\u{212a}down",
+                "Notes.mar\u{212a}down.md",
+            ),
         ] {
             assert_eq!(offered_drag_name(file, name), offered, "{file} {name}");
         }
@@ -169,14 +201,26 @@ mod tests {
     #[test]
     fn the_entries_keep_every_boundary() {
         assert_eq!(decode_drag_entries(""), Some((vec![], None)));
-        assert_eq!(decode_drag_entries("a%0Ab.jpg\n"), Some((vec!["a\nb.jpg".into()], None)));
+        assert_eq!(
+            decode_drag_entries("a%0Ab.jpg\n"),
+            Some((vec!["a\nb.jpg".into()], None))
+        );
         assert_eq!(
             decode_drag_entries("assets%2Fa.jpg\nassets%2Fb.jpg\n\u{1e}\nB%20b\n"),
-            Some((vec!["assets/a.jpg".into(), "assets/b.jpg".into()], Some(vec!["".into(), "B b".into()])))
+            Some((
+                vec!["assets/a.jpg".into(), "assets/b.jpg".into()],
+                Some(vec!["".into(), "B b".into()])
+            ))
         );
         // No names differs from one empty name
-        assert_eq!(decode_drag_entries("a\n\u{1e}"), Some((vec!["a".into()], Some(vec![]))));
-        assert_eq!(decode_drag_entries("a\n\u{1e}\n"), Some((vec!["a".into()], Some(vec!["".into()]))));
+        assert_eq!(
+            decode_drag_entries("a\n\u{1e}"),
+            Some((vec!["a".into()], Some(vec![])))
+        );
+        assert_eq!(
+            decode_drag_entries("a\n\u{1e}\n"),
+            Some((vec!["a".into()], Some(vec!["".into()])))
+        );
         for broken in ["a", "a\n\u{1e}b", "%4", "%zz\n", "%FF\n"] {
             assert_eq!(decode_drag_entries(broken), None, "{broken:?}");
         }

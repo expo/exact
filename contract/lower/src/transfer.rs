@@ -55,11 +55,29 @@ impl Lowerer<'_> {
                 continue;
             };
             match name.as_str() {
-                "text" => self.data_transfer_row(PropId::DataTransferText, value, scope, locals, a.written, bindings)?,
-                "url" => self.data_transfer_row(PropId::DataTransferUrl, value, scope, locals, a.written, bindings)?,
+                "text" => self.data_transfer_row(
+                    PropId::DataTransferText,
+                    value,
+                    scope,
+                    locals,
+                    a.written,
+                    bindings,
+                )?,
+                "url" => self.data_transfer_row(
+                    PropId::DataTransferUrl,
+                    value,
+                    scope,
+                    locals,
+                    a.written,
+                    bindings,
+                )?,
                 "files" => {
                     let code = self.drag_entries(value, named("names"), scope, locals)?;
-                    bindings.push(crate::prop_row(PropId::DataTransferEntries, code, a.written));
+                    bindings.push(crate::prop_row(
+                        PropId::DataTransferEntries,
+                        code,
+                        a.written,
+                    ));
                 }
                 _ => {}
             }
@@ -111,7 +129,13 @@ impl Lowerer<'_> {
     }
 
     /// `list`, each entry percent-encoded and followed by a line feed, joined.
-    fn drag_encoded(&mut self, asm: &mut Asm, list: &Expr, scope: &Scope, locals: &mut u16) -> Result<(), LowerError> {
+    fn drag_encoded(
+        &mut self,
+        asm: &mut Asm,
+        list: &Expr,
+        scope: &Scope,
+        locals: &mut u16,
+    ) -> Result<(), LowerError> {
         expr::compile(self, asm, list, scope, locals)?;
         // The VM binds each item and its index to the next two locals (`expr::callback_body`)
         let (end, item) = (asm.label(), *locals);

@@ -24,7 +24,10 @@ impl<D: DataSource> Runner<D> {
             if let Some(url) = node.props.str(PropId::DataTransferUrl) {
                 admitted.push((PropId::DataTransferUrl, self.admitted_url(url).0));
             }
-            let files = match (node.props.str(PropId::DataTransferEntries), node.props.str(PropId::DataTransferFiles)) {
+            let files = match (
+                node.props.str(PropId::DataTransferEntries),
+                node.props.str(PropId::DataTransferFiles),
+            ) {
                 (Some(entries), _) => Some(self.admitted_entries(entries).0),
                 (None, Some(files)) => Some(self.admitted_files(files).0),
                 (None, None) => None,
