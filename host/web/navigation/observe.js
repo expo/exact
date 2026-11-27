@@ -58,16 +58,22 @@ export function observe(readers, band = documentBand(), keyboard = keyboardInset
   const root = document.documentElement, before = new Map(readers.map((el) => [el, reads.get(el).inputs.map((i) => el.style.getPropertyValue(NAMES[i]))]));
   // The page's own style changes first, so what they start transitions as it would: the rule then holds only the rounds'
   root.getBoundingClientRect();
+  // Each reader's scrollers, its containing blocks' chain: a round moves lengths, never what makes a containing block,
+  // so the chains hold for the transaction, and readers that share ancestors read each one's style once
+  // Only a scroll container has an offset, so only those in the chain are read
+  const box = styles(), scroller = document.scrollingElement;
+  const chains = new Map(readers.map((el) => [el, chain(el, box).filter((a) => a === scroller || box(a).scrolls)]));
   // The scrollers a round's values can clamp: each reader's own and those that move it
-  const scrollers = new Map([...readers, ...readers.flatMap(chain)].map((a) => [a, [a.scrollLeft, a.scrollTop]]));
-  const sticky = [...new Set(readers.flatMap(ancestry))].filter((a) => getComputedStyle(a).position === "sticky");
+  const scrollers = new Map([...readers.filter((el) => box(el).scrolls), ...[...chains.values()].flat()].map((a) => [a, [a.scrollLeft, a.scrollTop]]));
+  const sticky = [...new Set(readers.flatMap(ancestry))].filter((a) => box(a).position === "sticky");
   ensureRoundsRule();
   // Only what a round can restyle is marked, so the marks restyle the readers and the subtrees they hand an observation
   // to, never the whole document
   for (const [el, { subtree }] of reads) el.setAttribute(ROUND, subtree ? "subtree" : "");
   sticky.forEach((a) => a.setAttribute(REST, ""));
   try {
-    const result = rounds(readers, reads, band, keyboard);
+    // A sticky ancestor held at rest is positioned as it was, so the chains read before the marks still hold
+    const result = rounds(readers, reads, chains, band, keyboard);
     // The provisional values out, and each scroller where it was, then the settled ones in once the marks are gone
     for (const [el, was] of before) reads.get(el).inputs.forEach((i, k) => was[k] ? el.style.setProperty(NAMES[i], was[k]) : el.style.removeProperty(NAMES[i]));
     sticky.forEach((a) => a.removeAttribute(REST));
@@ -176,7 +182,7 @@ function write(el, reads, inputs) {
  * Each round reads every reader's box in one pass and writes every input it moves in one batch. A reader's next input is
  * D9's secant step on its residuals, the measured less the input, of this round and the last (`step`), within half a
  * device pixel of settled; its box is read as laid out, with every scroll offset at zero. */
-function rounds(readers, reads, band, keyboard) {
+function rounds(readers, reads, chains, band, keyboard) {
   const written = new Map(), samples = readers.map(() => []);
   const width = document.documentElement.clientWidth, height = document.documentElement.clientHeight;
   const keys = [0, 0, keyboard, 0], caps = [...band, ...keys, ...keys];
@@ -184,7 +190,7 @@ function rounds(readers, reads, band, keyboard) {
   // Each round's offsets, which its values can clamp
   const read = () => readers.map((el) => {
     if (!el.isConnected || !el.getClientRects().length) return null;
-    const b = el.getBoundingClientRect(), [dx, dy] = unscrolled(el);
+    const b = el.getBoundingClientRect(), [dx, dy] = unscrolled(chains.get(el));
     const r = { top: b.top + dy, right: b.right + dx, bottom: b.bottom + dy, left: b.left + dx };
     const k = overlap(r, keys, width, height);
     return [...overlap(r, band, width, height), ...k, ...k];
@@ -231,12 +237,12 @@ function step(input, measured, last, caps, tolerance) {
   });
 }
 
-/** How far `el`'s box lies from where it would with every scroll offset at zero, x then y (D9): the offsets of the
- * scrollers that move it, those in its containing blocks' chain, the document's included unless a fixed box with no
- * containing ancestor ends it. */
-function unscrolled(el) {
+/** How far a box lies from where it would with every scroll offset at zero, x then y (D9), given its `scrollers`, the
+ * scroll containers of its `chain`: the offsets of the scrollers that move it, those in its containing blocks' chain, the
+ * document's included unless a fixed box with no containing ancestor ends it. */
+function unscrolled(scrollers) {
   let dx = 0, dy = 0;
-  for (const a of chain(el)) {
+  for (const a of scrollers) {
     dx += a.scrollLeft;
     dy += a.scrollTop;
   }
@@ -247,19 +253,37 @@ function unscrolled(el) {
  * containing block or one of that block's, the document's scroller last, unless the chain ends at a fixed box that only
  * the viewport contains. An in-flow box's containing block is its parent's box; an absolute one's its nearest positioned
  * ancestor or one that contains fixed boxes; a fixed one's its nearest that contains fixed boxes. */
-function chain(el) {
+function chain(el, box = styles()) {
   const scroller = document.scrollingElement, found = [];
-  let position = getComputedStyle(el).position;
+  let position = box(el).position;
   for (let a = el.parentElement; a; a = a.parentElement) {
     if (a === scroller) break;
-    const s = getComputedStyle(a);
-    const contains = position === "fixed" ? fixedContainer(s) : position === "absolute" ? s.position !== "static" || fixedContainer(s) : true;
+    const b = box(a);
+    const contains = position === "fixed" ? b.fixed : position === "absolute" ? b.position !== "static" || b.fixed : true;
     if (!contains) continue;
     found.push(a);
-    position = s.position;
+    position = b.position;
   }
-  if (scroller && (position !== "fixed" || fixedContainer(getComputedStyle(scroller)))) found.push(scroller);
+  if (scroller && (position !== "fixed" || box(scroller).fixed)) found.push(scroller);
   return found;
+}
+
+/** A transaction's reading of each element's computed position, of whether it contains fixed boxes, and of whether it
+ * is a scroll container (CSS Overflow 3: an axis neither `visible` nor `clip`), once each: the last two only when
+ * asked. */
+function styles() {
+  const known = new Map();
+  return (el) => {
+    let b = known.get(el);
+    if (!b) {
+      const s = getComputedStyle(el);
+      let fixed, scrolls;
+      b = { position: s.position, get fixed() { return fixed ??= fixedContainer(s); },
+        get scrolls() { return scrolls ??= [s.overflowX, s.overflowY].some((o) => o !== "visible" && o !== "clip"); } };
+      known.set(el, b);
+    }
+    return b;
+  };
 }
 
 /** Whether a box with the computed style `s` is the containing block of its fixed descendants, and so of its absolute
