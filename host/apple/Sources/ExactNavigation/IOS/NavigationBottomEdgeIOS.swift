@@ -79,21 +79,37 @@ extension NavigationHost {
         // ends above its top, as children stacked down a block or a column
         // do. Beside it in a row or a grid, a sibling reaches the edge too
         // (a column with a Save button at its foot) and keeps the cover. The
-        // laid-out frames say so; the host is not sent the flex direction.
+        // laid-out frames say so, not one a transform moves (a control bar
+        // riding the navigation bar); the host is not sent the flex direction.
         func alone(_ last: NodeView, among children: [NodeView]) -> Bool {
-            children.allSatisfy { $0 === last || $0.frame.maxY <= last.frame.minY + 0.5 }
+            let top = ControlBars.laid(last).minY
+            return children.allSatisfy { $0 === last || ControlBars.laid($0).maxY <= top + 0.5 }
+        }
+        // The scroller and each box around it keep their foot where layout put
+        // it, its bottom still at the bottom: a transform of their own that
+        // scales, turns, flips vertically or moves one draws the native scroll
+        // view away from the edge whose band it would take. Its drawn bottom
+        // corners are read, not `frame`, which a transform leaves undefined.
+        func keepsFoot(_ node: NodeView) -> Bool {
+            let t = node.transform
+            guard CATransform3DIsAffine(node.layer.transform), abs(t.b) < 0.00001, abs(t.c) < 0.00001, t.d > 0,
+                  let holder = node.superview else { return false }
+            let foot = ControlBars.laid(node).maxY
+            return [node.bounds.minX, node.bounds.maxX].allSatisfy {
+                abs(node.convert(CGPoint(x: $0, y: node.bounds.maxY), to: holder).y - foot) <= 0.5
+            }
         }
         var parent = route
         while true {
             let children = parent.container.subviews.compactMap { $0 as? NodeView }.filter { child in flowing(child) && !lifting.contains(where: { $0 === child }) }
-            guard let last = children.last, alone(last, among: children) else { return nil }
-            // Each reaches the foot of its parent's content box: the route's
-            // child that box less the cover the kernel may pad it by, a
-            // deeper one its parent's bottom, with nothing (a padding, a
-            // border) under it.
+            guard let last = children.last, alone(last, among: children), keepsFoot(last) else { return nil }
+            // Each reaches the foot of its parent's content box where layout
+            // put it (its drawn foot is `keepsFoot`'s): the route's child that
+            // box less the cover the kernel may pad it by, a deeper one its
+            // parent's bottom, with nothing (a padding, a border) under it.
             let foot = parent === route ? parent.contentBox().maxY : parent.bounds.maxY
             if parent !== route, parent.contentBox().maxY < foot - 0.5 { return nil }
-            let gap = foot - parent.convert(last.bounds, from: last).maxY
+            let gap = foot - parent.convert(ControlBars.laid(last), from: last.superview).maxY
             if gap > 0.5 && !(parent === route && abs(gap - cover) <= 0.5) { return nil }
             if last.scrollView != nil { return ["scroll", "auto"].contains(last.style["overflow_y"]?.string ?? "") ? last : nil }
             parent = last
