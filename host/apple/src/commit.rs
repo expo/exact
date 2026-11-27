@@ -222,14 +222,13 @@ impl<D: DataSource> Host<D> {
         } else if inert {
             self.inert_layout(&mut batch, !receipts.is_empty()).err()
         } else {
-            // The flag ends with this layout, even when a panic unwinds
-            // through it to a caller that keeps the host
-            self.presence.committed = !receipts.is_empty();
-            let laid =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.layout(&mut batch)));
-            self.presence.committed = false;
-            laid.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-                .err()
+            let laid = self.layout(&mut batch).err();
+            // A layout that follows a runner commit's receipts, not a tick's
+            // or the host's own: its authored moves ride (LLP 1010 §6.12)
+            if !receipts.is_empty() {
+                self.emit_rides(&mut batch);
+            }
+            laid
         };
         if layout_error.is_some() && !receipts.is_empty() {
             self.emit_ranks(&mut batch);

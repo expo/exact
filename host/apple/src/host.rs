@@ -96,6 +96,8 @@ mod presence;
 pub mod region_seam;
 #[path = "renew.rs"]
 mod renew;
+#[path = "rides.rs"]
+mod rides;
 #[path = "route_overflow.rs"]
 mod route_overflow;
 #[path = "route_parts.rs"]
@@ -307,6 +309,7 @@ pub struct Host<D: DataSource> {
     /// A grouped session (LLP 1094), from its lift until its ghost lands.
     group: Option<arrange_group::GroupArrange>,
     presence: presence::Presence,
+    rides: rides::Rides,
     flights: flights::Flights,
     /// The content region, which only [`LinkedRegions`] makes.
     content_region: Option<Box<dyn std::any::Any>>,
@@ -715,6 +718,7 @@ impl<D: DataSource> Host<D> {
             arrange: None,
             group: None,
             presence: presence::Presence::default(),
+            rides: rides::Rides::default(),
             flights: flights::Flights::default(),
             content_region,
             regions: links.regions,

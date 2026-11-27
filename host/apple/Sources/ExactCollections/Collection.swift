@@ -160,7 +160,7 @@ final class CollectionHost: ListHosting {
         /// The platform's insets of the port when the batch began
         /// (`portInsets`): one that changed under it moved the port.
         var batchInsets: [Double]?
-        #if os(iOS) || os(tvOS)
+        #if os(iOS)
         /// Where each mounted row, and each row still leaving, showed along
         /// the list's axis when the batch began, relative to the port: a
         /// batch that moves them rides from there (`rideBatch`).
@@ -201,7 +201,7 @@ final class CollectionHost: ListHosting {
     var contactEvent: AnyObject?
     var batchDepth = 0
     var correcting = false
-    #if os(iOS) || os(tvOS)
+    #if os(iOS)
     /// The exits under way when the outermost batch began, the lists the
     /// batches under way say a runner commit moved (`Batch.rides`), and the
     /// lists whose rows this batch's end moves (`rideBatch`).
@@ -430,19 +430,21 @@ final class CollectionHost: ListHosting {
         // feedback sequences and correction revisions all start over.
         if batch.replacesTree { reset() }
         if batchDepth == 0 {
-            #if os(iOS) || os(tvOS)
+            #if os(iOS)
             batchLeaving = presenter.map { Set($0.leaving.keys) } ?? []
             #endif
             for (view, entry) in entries {
                 entry.batchInsets = portInsets(view); entry.batchStart = batchOffset(view)
-                #if os(iOS) || os(tvOS)
+                #if os(iOS)
                 entry.batchRows = rowStarts(view)
                 #endif
             }
         }
         batchDepth += 1
-        #if os(iOS) || os(tvOS)
+        #if os(iOS)
         rideOwed.formUnion(batch.rides)
+        #endif
+        #if os(iOS) || os(tvOS)
         invalidateRecords(batch)
         #endif
         for op in batch.ops where op.op == .collections {
@@ -520,8 +522,8 @@ final class CollectionHost: ListHosting {
         for (view, entry) in entries {
             guard let port = geometry(view) else { continue }
             // The rows move once, after the outermost batch has placed them all
-            #if os(iOS) || os(tvOS)
-            if batchDepth == 1, removes(view, began: batchLeaving) || rideOwed.contains(view) { riding.insert(view) }
+            #if os(iOS)
+            if batchDepth == 1, removes(view, began: batchLeaving) || rideOwed.contains(view), canRide(view) { riding.insert(view) }
             #endif
             let dimensions = [port.portCross, port.portMain, port.cross]
             let planned = entry.cursor.sequence, jumped = entry.cursor.jumpedAt
@@ -560,7 +562,7 @@ final class CollectionHost: ListHosting {
                entry.cursor.takeCorrection(revision: entry.snapshot.revision,
                    sequence: correction.sequence == planned ? entry.cursor.sequence : correction.sequence, authored: entry.authored) {
                 correcting = true
-                #if os(iOS) || os(tvOS)
+                #if os(iOS)
                 // A list riding the batch takes its new place at once: its rows move from where they showed
                 correct(view, top: correction.offset, extent: entry.snapshot.extent, smooth: correction.smooth && !riding.contains(view), authored: entry.authored)
                 #else
@@ -568,13 +570,14 @@ final class CollectionHost: ListHosting {
                 #endif
                 correcting = false
             }
-            #if os(iOS) || os(tvOS)
-            if batchDepth == 1, riding.remove(view) != nil { rideBatch(view) }
+            #if os(iOS)
+            // From where the rows end up once the presenter's offsets and scroll snap are written
+            if batchDepth == 1, riding.remove(view) != nil { presenter?.afterBatch { [weak self] in self?.rideBatch(view) } }
             #endif
             entry.batchStart = nil
             dirty.insert(view)
         }
-        #if os(iOS) || os(tvOS)
+        #if os(iOS)
         if batchDepth == 1 { riding.removeAll(); batchLeaving.removeAll(); rideOwed.removeAll() }
         #endif
         batchDepth = max(0, batchDepth - 1)

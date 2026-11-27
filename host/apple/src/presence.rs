@@ -55,10 +55,6 @@ pub(crate) struct Presence {
     layout: LayoutMotion,
     /// A resize lays out next: positions are taken, not animated.
     pub(super) snap: bool,
-    /// The layout under way follows a runner commit (`Host::commit_tree`),
-    /// not a motion tick or the host's geometry: the lists whose rows it
-    /// moves ride that move (`Batch::rides`).
-    pub(super) committed: bool,
     /// This operation lays out for a host's fact, not an app's commit (an
     /// inset, the text size, a native size): a box it moves takes its place
     /// unless it is moving already, as on the web, where a layout transition
