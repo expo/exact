@@ -446,7 +446,8 @@ impl Kernel {
         let mut top = slot;
         let mut at = Some(slot);
         while let Some(s) = at {
-            if self.arena.flags(s).has(NodeFlags::HIDDEN) {
+            // A route waiting for its block has no geometry, nor has what it holds (LLP 1123)
+            if self.arena.flags(s).has(NodeFlags::HIDDEN) || self.arena.blocks.pending(s) {
                 return None;
             }
             top = s;

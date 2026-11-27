@@ -275,6 +275,9 @@ pub(crate) struct Blocks(
     crate::sorted::SlotSet,
     /// The window's aspect-fit guide a host fits the first root to (LLP 1123 D16, `root_fit.rs`).
     super::root_fit::RootFits,
+    /// The routes their host will present with a block of its own and has not yet placed (LLP 1123, "a presented
+    /// owner waits for its block"), laid out nowhere until it gives one (`set_pending`).
+    crate::sorted::SlotSet,
 );
 
 /// One node's block: the one in force, the host's or else the one the
@@ -412,10 +415,16 @@ impl Blocks {
         }
     }
 
-    /// `slot` gone: neither block stands, nor its local insets.
+    /// `slot` gone: neither block stands, nor its local insets, nor its wait for one.
     pub(crate) fn remove(&mut self, slot: u32) {
         self.0.retain(|b| b.slot != slot);
         self.set_local(slot, None);
+        self.4.remove(slot);
+    }
+
+    /// Whether `slot` waits for the block its host will present it in (`Kernel::set_pending`).
+    pub(crate) fn pending(&self, slot: u32) -> bool {
+        self.4.contains(slot)
     }
 
     /// The local insets a host gave the owner whose root is `slot`.
@@ -573,7 +582,8 @@ pub(crate) fn apply(
     s: &mut taffy::style::Style,
 ) {
     let Some(block) = block else {
-        if closed_dialog(arena, slot) {
+        // A route waiting for the block its host presents it in is laid out nowhere until then, as a closed dialog is
+        if closed_dialog(arena, slot) || arena.blocks.pending(slot) {
             s.display = taffy::Display::None;
         }
         return;
@@ -698,6 +708,30 @@ fn cyclic(block: HostBlock, s: &mut taffy::style::Style) {
 }
 
 impl Kernel {
+    /// Say that `view`, a route its host will present with a block of its own, waits for that block (LLP 1123, "a
+    /// presented owner waits for its block"), or no longer does; whether that changed. Until the host gives the block
+    /// (`set_host_block`, which ends the wait), the route has no layout box: none of its subtree is laid out in its
+    /// parent's flow or published, and its geometry is unavailable, as a closed dialog's is. The host decides it before
+    /// the layout of the batch that creates the route.
+    pub fn set_pending(&mut self, view: ViewId, pending: bool) -> Result<bool, KernelError> {
+        let slot = self
+            .arena
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        let changed = match pending && self.arena.blocks.given(slot).is_none() {
+            true => self.arena.blocks.4.insert(slot),
+            false => self.arena.blocks.4.remove(slot),
+        };
+        if changed {
+            if let (Some(node), Some(layout)) = (self.arena.taffy(slot), self.layout.as_deref_mut())
+            {
+                layout.restyle(&self.arena, slot, node);
+                layout.mark_dirty(node);
+            }
+        }
+        Ok(changed)
+    }
+
     /// Give `view` a containing block, or take it back (`None`): at the next
     /// layout its subtree is laid out in the block, or in its parent again
     /// (in the viewport for a top-layer box, the block the kernel implies).
@@ -736,6 +770,10 @@ impl Kernel {
         }
         let before = self.arena.blocks.get(slot);
         let hosted = self.arena.hosted_readout(slot);
+        // The block its host presents it in ends a route's wait (`set_pending`)
+        if block.is_some() {
+            self.arena.blocks.4.remove(slot);
+        }
         // Measure the readers under a box that gains or gives back a block again, which
         // changes the band they observe; a reader elsewhere that this moves has a frame
         // that moved
