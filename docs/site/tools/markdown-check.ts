@@ -58,9 +58,10 @@ for (const p of pages) {
   // The generated index and feedback headings sit outside the article's outline.
   const article = body.replace(/^\n*> ## Documentation index\n> Fetch the complete documentation index at: .*\n(?:> .*\n)*/, '');
   const feedbackBlock = /^(\n*# .*\n)(?<gap>\n?)<AgentInstructions>\n(?<instructions>[\s\S]*?)\n<\/AgentInstructions>\n/;
+  const anyFeedbackBlock = /^<AgentInstructions>\n[\s\S]*?\n<\/AgentInstructions>$/m;
   const feedback = article.match(feedbackBlock)?.groups;
   const instructions = feedback?.gap ? feedback.instructions : undefined;
-  const tokens = marked.lexer(article.replace(feedbackBlock, '$1\n'), { gfm: true });
+  const tokens = marked.lexer(article.replace(anyFeedbackBlock, ''), { gfm: true });
   if (!tokens.some(token => token.type === 'heading' && token.depth === 1 && token.text.trim())) fail(where, 'no H1');
   let above = 0;
   marked.walkTokens(tokens, token => {
