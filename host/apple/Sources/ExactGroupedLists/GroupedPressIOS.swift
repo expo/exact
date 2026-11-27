@@ -106,7 +106,7 @@ extension GroupedListView {
         #if os(iOS)
         guard row.pressable, let node, node.platformOwnsPress else { return false }
         #else
-        // tvOS dims no press: the focused cell's look is the only one a row has
+        // tvOS builds the shared cell code but makes no grouped list's cells (`Runtime.groupedList` is nil there): a compile-time fallback
         guard row.pressable, let node else { return false }
         #endif
         return !node.wrote("background_color") && !node.wrote("background_image")
