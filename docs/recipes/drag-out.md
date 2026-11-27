@@ -10,54 +10,49 @@ drags text and link, not files. `tree` and `expect drag` work on all hosts.
 ```text
 fn thumb(l: Landmark): string = `assets/apple/${l.id}-thumb.jpg`
 
-link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l.name draggable=true dataTransfer=DataTransfer(files=[thumb(l)]) testId=`card-${l.id}`
+link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l.name draggable=true dataTransfer=DataTransfer(text=l.name, files=[thumb(l)], names=[l.name]) testId=`card-${l.id}`
   image thumb(l) width=120 height=120 object-fit="cover"
 ```
 
 - **`draggable`** is a boolean, which may be bound: `draggable=(not
   editing)`. It goes on a box (`view`, `column`, `row`, `box`), a `link`, a
-  `button` or an `image`, not on a run of text or anywhere inside a grouped
-  list (`list appearance="auto"`).
-- **`dataTransfer=DataTransfer(text=, url=, files=[…])`** is what the drag
-  carries; give at least one. `text` goes as plain text, `url` as a URI
-  list (Android: plain text), each file as itself, typed by extension:
-  - `url` is an absolute `http:` or `https:` URL, never an app path, which
-    another app cannot open;
-  - a file the app ships is written as an `image` names one,
-    `assets/photos/7.jpg`, and needs no grant;
-  - an `app:/` path, such as `app:/data/exports/7.pdf`, needs the `fs.read`
-    grant for it in `app.json`, and the web cannot carry one;
-  - not an element's `"#id"`: a drag carries a file, so name the file the
-    element shows.
-- `draggable=true` needs `dataTransfer`, and `dataTransfer` needs
-  `draggable`. Nothing drags on a native host unless it says so.
-- **No drag events yet.** `dragstart`, `drag` and `dragend` are refused: an
-  app cannot react when a drag begins or ends.
+  `button` or an `image`, not on a run of text or inside a grouped list
+  (`list appearance="auto"`). It needs `dataTransfer`, which needs it.
+- **`dataTransfer=DataTransfer(text=, url=, files=[…], names=[…])`** is what
+  the drag carries; give `text`, `url` or `files`. Each file goes as itself,
+  typed by extension:
+  - `url` is an absolute `http:` or `https:` URL, never an app path;
+  - a shipped file is written as an `image` names one, `assets/photos/7.jpg`;
+  - an `app:/` path needs its `fs.read` grant, and the web cannot carry one;
+  - not an element's `"#id"`: name the file the element shows.
+- **`names`**, with `files`, names each file at its place, so Finder or
+  Files saves `Mount Fuji.jpg`, not `1016-thumb.jpg`. A name without the
+  file's suffix gets it; an empty one keeps the file's own. The rule a name
+  keeps is under `draggable` in `docs/contract-grammar.md`.
+- **No drag events yet**: `dragstart`, `drag` and `dragend` are refused.
 
 ## Gestures
 
 On one node, `pan`, `panrelease`, `reorderFor`, `transformDragFor` and
 `heightDragFor` claim the drag's movement and are refused beside `draggable`:
 put the gesture on a child, or `draggable` on a wrapper. `press`,
-`contextmenu`, `contextPopover` and swipes may share the node (LLP 1094.000
-D8).
+`contextmenu`, `contextPopover` and swipes may share the node (D8).
 
 ## Testing it
 
-The runner admits each file and `url` for the host: a file outside the
-grants, an `app:/` file on the web, or a `url` that is not absolute is
-refused and journaled as `drag: refused: …`, and `tree` shows the node's
-`draggable` and `dataTransfer…` props as admitted. An authored test asserts
-them, the same on every host:
+The runner refuses and journals (`drag: refused: …`) a file outside the
+grants, an `app:/` file on the web, a name that breaks the rule (the file
+keeps its own) and a `url` that is not absolute. `tree` shows on each
+node's line what its drag carries as admitted. A test asserts it the same on
+every host:
 
 ```contract-test
 test "a card carries its landmark's thumbnail for a drag"
   clock settle
-  expect drag "card-1016" has "image/jpeg" name "1016-thumb.jpg"
-  expect drag "card-1016" missing "text/plain"
+  expect drag "card-1016" has "image/jpeg" name "Mount Fuji.jpg"
+  expect drag "card-1016" missing "text/uri-list"
 ```
 
-`has "text/plain" == "…"` compares a string, `name` a file's own name, and
-`none` passes while the node carries nothing (`draggable` false, or nothing
-admitted). A test of `app:/` files names its hosts (`test "…" on ios,
-macos`).
+`has "text/plain" == "…"` compares a string, `name` the name a file is
+offered under, and `none` passes while the node carries nothing. A test of
+`app:/` files names its hosts (`test "…" on ios, macos`).

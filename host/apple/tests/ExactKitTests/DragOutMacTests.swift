@@ -216,6 +216,17 @@ final class DragOutMacTests: XCTestCase {
         XCTAssertNotNil(NSApp.nextEvent(matching: .leftMouseUp, until: Date().addingTimeInterval(2), inMode: .default, dequeue: true), "to the session's window")
     }
 
+    /// Each promise is written under the name `dataTransferNames` holds at its
+    /// place, else the file's own, its type still its own extension's (LLP
+    /// 1094.000 D14).
+    func testANamedFileIsPromisedUnderItsNameAndTypedByItsOwn() throws {
+        let p = presenter(["draggable": "true", "dataTransferFiles": "assets/apple/1016.jpg\napp:/data/notes.pdf",
+                           "dataTransferNames": "Mount Fuji.jpg\n"])
+        let promises = try DragItemsMac.items(of: try XCTUnwrap(p.views[10]), in: nil).map { try XCTUnwrap($0.item as? NSFilePromiseProvider) }
+        XCTAssertEqual(promises.map { $0.fileType }, [UTType.jpeg.identifier, UTType.pdf.identifier])
+        XCTAssertEqual(promises.map { $0.delegate?.filePromiseProvider($0, fileNameForType: $0.fileType) }, ["Mount Fuji.jpg", "notes.pdf"])
+    }
+
     /// With files, the URL and the text are pasteboard items of their own (LLP 1094.000 D5).
     func testTheItemsArePromisesThenTheURLThenTheText() throws {
         let p = presenter(["draggable": "true", "dataTransferFiles": "assets/apple/1016-thumb.jpg\napp:/data/notes.pdf",

@@ -1,7 +1,7 @@
-// @ref LLP 1094.000 D6 — a drag out of the page is the browser's own. A node an author made draggable carries
+// @ref LLP 1094.000 D6, D14 — a drag out of the page is the browser's own. A node an author made draggable carries
 // HTML's `draggable` attribute (`element.rs`), and as its drag starts this listener gives the drag the node's
 // admitted data, read from its `data-` attributes: `text` as `text/plain`, `url` and then each shipped file's
-// absolute URL as `text/uri-list`, an image file as `text/html`, and the first file as Chrome's `DownloadURL`,
+// absolute URL as `text/uri-list`, an image file as `text/html`, and the first file, by its admitted name, as Chrome's `DownloadURL`,
 // which Chrome on macOS and Windows saves as a file where the drop lands in the Finder or Explorer; elsewhere the
 // receiver reads the URL. A node that carries nothing begins no drag. The JS target loads it from
 // `drag.js`; the wasm target's glue loads it when a node first turns draggable.
@@ -34,11 +34,13 @@ const KEEPS_A_MOUSE = `${DRAG_FIELDS},button,a[href],[data-exact-on~="press"]`;
 /** What `node`'s drag carries, `{ text, uris, html, download }`, or null when it carries nothing. Its files are
  * shipped `assets/` paths (the page admits nothing else), made absolute against `base`. */
 export function carried(node, base) {
-  const files = (node.getAttribute('data-datatransferfiles') ?? '').split('\n').filter(Boolean).map((entry) => {
+  const names = (node.getAttribute('data-datatransfernames') ?? '').split('\n');
+  const files = (node.getAttribute('data-datatransferfiles') ?? '').split('\n').filter(Boolean).map((entry, at) => {
     // A name's trailing spaces encoded, which the URL parser would otherwise strip
     const href = new URL(entry.replace(/ +$/, (spaces) => '%20'.repeat(spaces.length)), base).href;
-    const name = entry.slice(entry.lastIndexOf('/') + 1);
-    return { href, name, type: typeOf(name) };
+    const own = entry.slice(entry.lastIndexOf('/') + 1);
+    // The name D14 admitted, else the file's own; the type is the file's own suffix's
+    return { href, name: names[at] || own, type: typeOf(own) };
   });
   const text = node.getAttribute('data-datatransfertext') || '', url = node.getAttribute('data-datatransferurl') || '';
   if (!text && !url && !files.length) return null;

@@ -282,7 +282,8 @@ internal class Requests(private val activity: ExactActivity) {
     }
 
     /** A node's drag out of the app ([DragOut]): the node, its box and the finger in the view's pixels, 1 when an
-     * assistive service started it, its text and URL, then its files' count and each file as the node names it. */
+     * assistive service started it, its text and URL, then its files' count and each file as the node names it and
+     * the name it is offered under. */
     private fun drag(w: IntArray, at: Int) {
         val view = view ?: return
         val ask = DragOut.read(w, at)

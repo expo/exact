@@ -274,6 +274,19 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertEqual(items.map { ($0.localObject as? DragItems.Lifted)?.id }, [10, 10, 10, 10])
     }
 
+    /// Each file is offered under the name `dataTransferNames` holds at its
+    /// place, else its own, its type still its own extension's (LLP 1094.000
+    /// D14); with no text, the lift is named by the first file's name.
+    func testANamedFileIsSuggestedUnderItsNameAndTypedByItsOwn() throws {
+        let p = page(["draggable": "true", "dataTransferFiles": "assets/apple/1016.jpg\napp:/data/notes.pdf\nassets/apple/1017.jpg",
+                      "dataTransferNames": "Mount Fuji.jpg\n\nFuji.png.jpg"])
+        let node = try XCTUnwrap(p.views[10])
+        let items = DragItems.items(of: node, in: nil)
+        XCTAssertEqual(items.map { $0.itemProvider.suggestedName }, ["Mount Fuji.jpg", "notes.pdf", "Fuji.png.jpg"])
+        XCTAssertEqual(items.map { $0.itemProvider.registeredTypeIdentifiers }, [[UTType.jpeg.identifier], [UTType.pdf.identifier], [UTType.jpeg.identifier]])
+        XCTAssertEqual(DragItems.name(of: node), "Mount Fuji.jpg")
+    }
+
     func testWithNoFileOneItemCarriesTheURLAndText() throws {
         let titled = DragItems.items(of: try XCTUnwrap(page(["draggable": "true", "dataTransferUrl": "https://example.com/1016",
                                                              "dataTransferText": "Mount Fuji"]).views[10]), in: nil)
@@ -434,9 +447,9 @@ final class DragOutIOSTests: XCTestCase {
     }
 
     /// An `app:/` file is opened when a destination asks (here by a stand-in,
-    /// of a file made after the lift) and copied off the main thread; its
-    /// load answers the whole file with the descriptor already closed. A
-    /// copy that fails leaves no folder behind.
+    /// of a file made after the lift) and copied off the main thread under
+    /// the name it is offered under; its load answers the whole file with the
+    /// descriptor already closed. A copy that fails leaves no folder behind.
     func testAnAppFileIsOpenedAndCopiedWhenTheDestinationAsks() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("drag-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -444,7 +457,7 @@ final class DragOutIOSTests: XCTestCase {
         let scratch = DragItems.Scratch()
         var fd: Int32 = -1, offMain = true
         let load = { (flags: Int32) in
-            DragItems.appFile("app:/data/notes.txt", scratch, DragFiles.Journal()) { _, _ in
+            DragItems.appFile("app:/data/notes.txt", "Backup notes.txt", scratch, DragFiles.Journal()) { _, _ in
                 offMain = offMain && !Thread.isMainThread
                 fd = open(folder.appendingPathComponent("notes.txt").path, flags)
                 return fd >= 0 ? .success(fd) : .failure(DragFiles.posix())
@@ -453,15 +466,17 @@ final class DragOutIOSTests: XCTestCase {
         let reads = load(O_RDONLY), fails = load(O_WRONLY)
         try Data("the backup".utf8).write(to: folder.appendingPathComponent("notes.txt"))
         let done = expectation(description: "the file loads")
-        var read: Data?, closed = false
+        var read: Data?, closed = false, copied: String?
         _ = reads({ url, _, error in
             XCTAssertNil(error)
             closed = fcntl(fd, F_GETFD) == -1 && errno == EBADF
             read = url.flatMap { try? Data(contentsOf: $0) }
+            copied = url?.lastPathComponent
             done.fulfill()
         })
         wait(for: [done], timeout: 5)
         XCTAssertEqual(read, Data("the backup".utf8))
+        XCTAssertEqual(copied, "Backup notes.txt", "the copy has the name the file is offered under (LLP 1094.000 D14)")
         XCTAssertTrue(closed, "the descriptor closed before the answer")
         XCTAssertTrue(offMain, "the copy runs off the main thread")
         // A descriptor that cannot be read fails the copy

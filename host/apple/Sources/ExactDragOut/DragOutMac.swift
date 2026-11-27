@@ -119,7 +119,7 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
 
     /// What `node` carries, as its props say it.
     static func carried(_ node: NodeView) -> [String?] {
-        ["dataTransferFiles", "dataTransferUrl", "dataTransferText"].map { node.props[$0] }
+        ["dataTransferFiles", "dataTransferNames", "dataTransferUrl", "dataTransferText"].map { node.props[$0] }
     }
 
     // MARK: NSDraggingSource

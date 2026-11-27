@@ -24,7 +24,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod drag_name;
 mod http_url;
+pub use drag_name::{decode_drag_entries, drag_name_refusal, offered_drag_name, DRAG_NAMES_MARK};
 pub use http_url::{has_http_scheme, http_url_refusal};
 pub mod asm;
 pub mod builder;

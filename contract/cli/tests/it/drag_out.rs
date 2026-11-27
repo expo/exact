@@ -90,6 +90,11 @@ fn each_argument_binds_its_prop_and_a_bound_draggable_follows_state() {
         card,
         (Some(true), "".into(), "".into(), "assets/1016.jpg".into())
     );
+    assert_eq!(
+        held(&r, "card-1016", PropId::DataTransferNames).as_deref(),
+        Some("Mount Fuji.jpg"),
+        "named by the card's title, the photo's suffix added (D14)"
+    );
     let row = (
         "Mount Fuji".to_string(),
         "https://example.com/landmarks/1016".to_string(),
