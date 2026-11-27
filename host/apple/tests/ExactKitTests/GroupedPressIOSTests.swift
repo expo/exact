@@ -94,6 +94,34 @@ final class GroupedPressIOSTests: GroupedListFixture {
         XCTAssertNotEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear, "highlighted on the list's background")
         row.pressed = false
         XCTAssertEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear)
+        // A ground of its own when the cell is configured, then none with no
+        // configuration since: the cell reads the row as it is now
+        p.apply(wireBatch([["op": "style", "id": 21, "style": ["text_color": [0, 0, 0, 255], "background_color": [255, 255, 255, 255], "written": ["background_color"]]]]))
+        let configured = try cell(p, 21), l = try list(p)
+        var snapshot = l.source.snapshot()
+        snapshot.reconfigureItems([21])
+        l.source.apply(snapshot, animatingDifferences: false)
+        row.style["background_color"] = nil
+        row.style["written"] = nil
+        XCTAssertTrue(try cell(p, 21) === configured, "the same cell")
+        row.pressed = true
+        XCTAssertNotEqual(try cell(p, 21).backgroundConfiguration?.backgroundColor, .clear, "highlighted once its ground is gone")
+        row.pressed = false
+    }
+
+    /// A custom row as tall as the window still shows its press as its
+    /// cell's highlight: the dim's exception for a scrim over the window is
+    /// the dim's alone.
+    func testAWindowTallCustomRowIsItsCellsHighlight() throws {
+        let p = presenter(props: ["listStyle": "plain"]) { self.model("plain", custom: true) }
+        p.apply(wireBatch([["op": "frame", "id": 21, "x": 0.0, "y": 52.0, "w": 402.0, "h": 860.0]]))
+        let row = try XCTUnwrap(p.views[21])
+        _ = try cell(p, 21)
+        let window = try XCTUnwrap(row.window), shown = row.convert(row.bounds, to: window)
+        XCTAssertTrue(shown.width >= window.bounds.width && shown.height >= window.bounds.height * 0.9, "as tall and wide as the window: \(shown)")
+        row.pressed = true
+        XCTAssertTrue(try XCTUnwrap(try cell(p, 21) as? GroupedCell).configurationState.isHighlighted)
+        row.pressed = false
     }
 
     /// A custom row with a background of its own would cover its cell's

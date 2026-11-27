@@ -1116,8 +1116,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             if let fill = ThemeRoles.color("secondary-grouped-background", in: host.presenter.root) { card.backgroundColor = fill }
             cell.backgroundConfiguration = card
         } else {
-            let highlights = row.pressable && !row.disabled && Self.pressIsCells(row, host.presenter.views[id])
-            cell.configurationUpdateHandler = { cell, state in
+            cell.configurationUpdateHandler = { [weak self] cell, state in
+                let highlights = row.pressable && !row.disabled && Self.pressIsCells(row, self?.host.presenter.views[id])
                 cell.backgroundConfiguration = highlights && (state.isHighlighted || state.isSelected)
                     ? cell.defaultBackgroundConfiguration().updated(for: state) : .clear()
             }

@@ -480,18 +480,24 @@ extension NodeView {
     /// How long a dim shows at least, so a quick tap still flashes.
     static let dimHold: CFTimeInterval = 0.1
 
-    /// Whether a press shows the platform's dim: a node the host presses
-    /// (a `press` handler, a link's `href` or a custom invoker's visual contact),
-    /// with no pressed look written (a
+    /// Whether the author left this node's press to the platform: a node
+    /// the host presses (a `press` handler, a link's `href` or a custom
+    /// invoker's visual contact), with no pressed look written (a
     /// `-exact-press-scale` or pressed paint, any value, 1 included, is the
-    /// author's: `authorsPress`), no `pointerdown` or `pointerup` of its own
-    /// (the author paints its pressed state), and not a scrim covering the
-    /// window (a backdrop that closes a sheet shows nothing in UIKit). A
-    /// native button is UIKit's own and never comes here.
+    /// author's: `authorsPress`) and no `pointerdown` or `pointerup` of its
+    /// own (the author paints its pressed state). A native button is UIKit's
+    /// own and never comes here. A list's row then shows its cell's ground.
+    package var platformOwnsPress: Bool {
+        !authorsPress && !isNativeButton && !isSurfaceControl
+            && (handlers.contains("press") || defaultLink != nil || pressContact?.invokerLook == true || overlayHoldsPress)
+            && !handlers.contains("pointerdown") && !handlers.contains("pointerup")
+    }
+
+    /// Whether a press shows the platform's dim: one the platform owns
+    /// (`platformOwnsPress`), unless the node is a scrim covering the window
+    /// (a backdrop that closes a sheet shows nothing in UIKit).
     package var platformPressDims: Bool {
-        guard !authorsPress, !isNativeButton, !isSurfaceControl,
-              handlers.contains("press") || defaultLink != nil || pressContact?.invokerLook == true || overlayHoldsPress,
-              !handlers.contains("pointerdown"), !handlers.contains("pointerup") else { return false }
+        guard platformOwnsPress else { return false }
         if let w = window {
             let r = convert(bounds, to: w)
             if r.width >= w.bounds.width, r.height >= w.bounds.height * 0.9 { return false }
