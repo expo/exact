@@ -999,7 +999,7 @@ extension Agent {
     /// grouped list's cell or accessory).
     func obscured(_ v: UIView, at p: CGPoint, hit: UIView, barItem: Bool = false, request: [String: Any] = [:]) -> String? {
         let location = ["at", "x", "y"].contains { request[$0] != nil } ? "the requested point" : "its middle"
-        if let container = presenter.keyboardContainer,
+        if let container = presenter.keyboardContainer, !KeysCover.takes(hit, at: p),
            let top = presenter.keyboardGuideTop(in: container), p.y >= container.convert(CGPoint(x: 0, y: top), to: nil).y {
             return "\(location) is under the software keyboard; dismiss it or scroll the target above it first (state shows keyboard.top)"
         }

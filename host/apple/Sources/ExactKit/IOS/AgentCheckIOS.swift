@@ -240,13 +240,15 @@ extension Agent {
             // the screen, a row past a scroller's end. Whatever is over that point covers nothing the scroller cut
             // away: a row past a tab's scroller, under the tab bar the agent paints there, was one (LLP 1116.003).
             let seen = shown(v)
-            if seen.isNull || b.midY >= seen.maxY || b.midY < seen.minY {
+            let p = CGPoint(x: min(max(b.midX, port.minX + 1), port.maxX - 1), y: min(max(b.midY, port.minY + 1), port.maxY - 1))
+            // A card's row over keys its cover holds clear is over no keyboard (KeysCoverIOS.swift)
+            let overClearedKeys = KeysCover.takes(v, at: p)
+            if !overClearedKeys, seen.isNull || b.midY >= seen.maxY || b.midY < seen.minY {
                 let up = seen.isNull ? b.midY < port.midY : b.midY < seen.minY
                 let screen = seen.isNull || b.midY >= port.maxY || b.midY < port.minY
                 return reachable(v, hit: nil, above: up) ? nil : ["kind": "offscreen", "name": "the \(up ? "top" : "bottom") of \(screen ? "the screen" : "its scroller")"]
             }
-            let p = CGPoint(x: min(max(b.midX, port.minX + 1), port.maxX - 1), y: min(max(b.midY, port.minY + 1), port.maxY - 1))
-            if let top = keyboard, p.y >= top {
+            if let top = keyboard, p.y >= top, !overClearedKeys {
                 return reachable(v, hit: nil, above: false) ? nil : ["kind": "keyboard", "name": "the software keyboard"]
             }
             guard let hit = win.hitTest(p, with: nil), hit !== v, !hit.isDescendant(of: v), !v.isDescendant(of: hit), !inPlatformMenu(hit) else { return nil }

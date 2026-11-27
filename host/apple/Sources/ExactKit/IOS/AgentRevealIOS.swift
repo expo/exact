@@ -129,7 +129,9 @@ extension Agent {
         var port = sv.pageBounds.inset(by: sv.adjustedContentInset)
         guard let window = sv.window else { return port }
         var covers = bars(over: sv).map { $0.convert($0.bounds, to: nil) }
-        if let top = keyboardTopInWindow() {
+        // Not over keys a cover holds clear when the target lies on them (KeysCoverIOS.swift)
+        let overClearedKeys = v.map { KeysCover.takes($0, at: $0.convert(CGPoint(x: $0.bounds.midX, y: $0.bounds.midY), to: nil)) } ?? false
+        if let top = keyboardTopInWindow(), !overClearedKeys {
             covers.append(CGRect(x: window.bounds.minX, y: top, width: window.bounds.width, height: max(0, window.bounds.maxY - top)))
         }
         port = Self.port(port, clearOf: covers.map { sv.convert($0, from: nil) })

@@ -2,6 +2,15 @@
 import UIKit
 
 extension MenuHost {
+    /// Lifts `entry` again outside `sync` where `sync` still would: its popover open and painted under its name, the
+    /// incarnation it opened, and no confirmation (`sync` hides one; it shows as UIKit's alert).
+    func relift(_ entry: Lifted) { if lifts(entry) { lift(entry) } }
+    func lifts(_ entry: Lifted) -> Bool {
+        guard let presenter, let pop = entry.popover, presenter.views[pop.id] === pop, pop.incarnation == entry.incarnation,
+              pop.props["popover"] != nil, !isConfirmation(pop), let name = pop.props["id"] else { return false }
+        return agentOpen[name] === entry
+    }
+
     /// Hears touches on the surface the popovers are lifted over: the top
     /// modal's view, or the view the document is mounted in.
     func observeTouches() {
@@ -25,6 +34,14 @@ package final class PopoverLayer: UIView {
     private weak var popover: UIView?
     var rehost: (() -> Void)?
     private var mounting = false
+    #if os(iOS)
+    /// The keys it lies over, clear in their window, their picture under its popover (KeysCoverIOS.swift).
+    var keysCover: KeysCover? {
+        didSet { if oldValue !== keysCover { oldValue?.remove() } }
+    }
+    /// Its opening decided against a cover, or its cover's ground went: it stays above the keys till it closes.
+    var keysSpent = false
+    #endif
 
     package init(presenter: Presenter, order: Int, popover: UIView) {
         hosts = presenter.dialogs.controllers(holding: popover).reversed().map { Host(controller: $0) }
@@ -82,8 +99,20 @@ package final class PopoverLayer: UIView {
         if frame != place { frame = place }
     }
 
+    #if os(iOS)
+    // Out of its page as the popover closes: the keys come back with it
+    package override func removeFromSuperview() {
+        keysCover = nil
+        super.removeFromSuperview()
+    }
+    #endif
+
     package override func didMoveToWindow() {
         super.didMoveToWindow()
+        #if os(iOS)
+        // Out of its window: the keys come back now, and it stays above them (its rehost places it there)
+        if window == nil, !mounting { keysCover = nil; keysSpent = true }
+        #endif
         if !mounting, window == nil, superview != nil { rehost?() }
     }
 
