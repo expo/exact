@@ -703,6 +703,20 @@ Widget reads the list the app published to the App Group. Its refresh and
 render receive the selected ID. Computing options in the extension, images,
 dependent parameters and entity choices on watchOS and Android stay deferred.
 
+**Expanded (pending Charlie's ruling on the pull request; asked by Jacob, 2026-11-27; LLP 1126.005):**
+on iOS and macOS, a content-index kind may be `within` another, and a widget's
+row of it lists only the entries within its parent row's choice; a kind may be
+kept out of the system's search with `"search": false`; and the app reads the
+configurations of its placed widgets of a kind with `placedWidgets`
+(`@exact/widgets`). Consumer: the Expo Services app's Observe widgets, whose
+Environment row must list the chosen project's environments, whose
+environments must not appear in Spotlight, and whose background fetch must ask
+only for what placed widgets show. Take: none named; needs Charlie's waiver.
+Until Charlie rules, this entry is a request and not a ruling. Still deferred:
+computing options in the extension, images, a default entry for an entity
+row, a row that follows a fixed `enum` row, entity choices and `within` on
+watchOS and Android, and placed widgets on Android and the watch.
+
 **Expanded (Charlie, 2026-11-18, #710, "the `rules/DEFERRED.md` waiver is
 granted"; LLP 1126.004):** controls, a button the system draws outside the
 app that runs one of its tools or opens one of its locations: `controls` in
