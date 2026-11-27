@@ -256,6 +256,8 @@ pub(crate) struct Collection {
     /// What a retiring row may be rebound to another item under (LLP 1078):
     /// `None` when no row of this list can be.
     reuse: Option<Rc<reuse::Reuse>>,
+    /// It has shown its settled first rows (`live`), recorded by the report that confirmed them.
+    live: bool,
 }
 fn index_error(e: index::IndexError) -> InstanceError {
     InstanceError::Collection(e.to_string())
@@ -301,6 +303,40 @@ impl Collection {
             nest::PinEpoch::bump();
         }
         self.geometry = Some(g);
+    }
+
+    /// @ref LLP 1010 §6.12 — whether the list has shown its settled first
+    /// rows, as an accepted report confirmed them (`note_settled`). Opening,
+    /// restoring and a new incarnation are not live, and what changes rows
+    /// then moves none. Once live, it stays so.
+    pub(crate) fn live(&self) -> bool {
+        self.live
+    }
+
+    /// After an accepted report, with `extent` the list's extent before it:
+    /// the report confirmed the list's first rows settled when they are
+    /// there and measured, the extent stood still, nothing is pending, no
+    /// correction is outstanding (the start at a list's end or a restored
+    /// place included) and a list that opens at its end has opened there.
+    pub(super) fn note_settled(&mut self, extent: f64) {
+        if self.live
+            || self.geometry.is_none()
+            || self.at_end
+            || self.pending
+            || self.correction.is_some()
+        {
+            return;
+        }
+        if (self.index.len() > 0 || self.fixed.is_some())
+            && !self.mounted.is_empty()
+            && (self.index.total_height() - extent).abs() < 0.01
+            && self
+                .mounted
+                .iter()
+                .all(|m| self.index.is_measured_at(m.position))
+        {
+            self.live = true;
+        }
     }
 
     pub(super) fn follow_end(&mut self, enabled: bool) {
@@ -1192,6 +1228,7 @@ impl Collection {
         }
         self.reveal_shown(u);
         self.settle_start(extent);
+        self.note_settled(extent);
         let mut now = self.snapshot();
         // Receiving a newer sequence without changing rows/extent/correction is
         // a fact update, not a new frame (avoids post-layout feedback loops).

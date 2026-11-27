@@ -346,11 +346,11 @@ fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
     let (mut bridge, _, _) = fixture(&source);
     let list = snapshot(&bridge).view;
     let rides = format!("\"rides\":[{list}]");
-    // Reports until the window rests: the last one moves no row
+    // Reports measuring the mounted rows until the window rests: the last one moves no row
     let mut rested = String::new();
     for now in 1..=8 {
         let before = snapshot(&bridge);
-        rested = send(&mut bridge, &facts(&before, 0.), f64::from(now) / 10.);
+        rested = send(&mut bridge, &measured(&before, 0.), f64::from(now) / 10.);
         if snapshot(&bridge).revision == before.revision {
             break;
         }
@@ -368,6 +368,86 @@ fn a_commit_that_moves_a_lists_rows_has_them_ride_the_move() {
     let len = bridge.resize(400., 600.);
     let resized = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
     assert!(!resized.contains("\"rides\""), "{resized}");
+}
+
+#[test]
+fn a_list_rides_only_once_its_first_rows_have_settled() {
+    // A list at the top and one that opens at its end, each with a row its
+    // commits grow and shrink in its first window
+    for end in [false, true] {
+        let source = SOURCE
+            .replace(
+                "action toggle",
+                "state tall = false\n  action grow\n    tall = true\n  action shrink\n    tall = false\n  action toggle",
+            )
+            .replace(
+                "      if showing\n",
+                "      button press=grow testId=\"grow\"\n        text \"grow\"\n      button press=shrink testId=\"shrink\"\n        text \"shrink\"\n      if showing\n",
+            )
+            .replace(
+                "list virtualized=true",
+                if end { "list virtualized=true scroll-start=\"end\"" } else { "list virtualized=true" },
+            )
+            .replace(
+                "            text `${row}` testId=`row-${row}`",
+                "            column height=(tall and (row == 0 or row == 999) ? 80 : 20)\n              text `${row}` testId=`row-${row}`",
+            );
+        let (mut bridge, _, _) = fixture(&source);
+        let list = snapshot(&bridge).view;
+        let press = |bridge: &mut Bridge<Rows>, id: &str, now: f64| {
+            let kernel = bridge.host.as_ref().unwrap().runner().kernel();
+            let node = kernel
+                .node_by_key(kernel.find_by_test_id(id)[0])
+                .unwrap()
+                .id;
+            let len = bridge.dispatch(node, 0, 0, now);
+            String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned()
+        };
+        let rides = |out: &str| out.contains(&format!("\"rides\":[{list}]"));
+        // Before any report the list is opening
+        assert!(
+            !rides(&press(&mut bridge, "grow", 0.1)),
+            "end {end}: before any report"
+        );
+        // A report that measured nothing has not settled its rows
+        let before = snapshot(&bridge);
+        let top = before.correction.as_ref().map_or(0., |c| c.offset);
+        send(&mut bridge, &facts(&before, top), 0.2);
+        assert!(
+            !rides(&press(&mut bridge, "shrink", 0.3)),
+            "end {end}: rows not yet measured"
+        );
+        // Reports measuring the rows, at the corrections they ask for, until they rest
+        for now in 4..=16 {
+            let before = snapshot(&bridge);
+            let top = before.correction.as_ref().map_or(top, |c| c.offset);
+            send(&mut bridge, &measured(&before, top), f64::from(now) / 10.);
+            if snapshot(&bridge).revision == before.revision && snapshot(&bridge).live {
+                break;
+            }
+        }
+        assert!(snapshot(&bridge).live, "end {end}: settled");
+        assert!(
+            rides(&press(&mut bridge, "grow", 2.0)),
+            "end {end}: the first settled edit rides"
+        );
+    }
+}
+
+/// `facts` measuring every mounted row at its laid-out size: 20 points, or
+/// 80 for a row the fixture's `tall` grows.
+fn measured(snapshot: &CollectionSnapshot, top: f64) -> CollectionFeedback {
+    let mut f = facts(snapshot, top);
+    f.measurements = snapshot
+        .rows
+        .iter()
+        .map(|row| RowMeasurement {
+            view: row.view,
+            epoch: row.epoch,
+            size: 20.,
+        })
+        .collect();
+    f
 }
 
 #[test]

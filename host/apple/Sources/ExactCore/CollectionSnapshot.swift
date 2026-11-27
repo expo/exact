@@ -90,6 +90,8 @@ package struct CollectionSnapshot {
     package let lastRequest: UInt64
     package var underWay: Bool { seeking || waiting }
     package var window: Window? = nil
+    /// It has shown its settled first rows: a change to it may move them (LLP 1010 §6.12).
+    package var live = false
     package init(view: UInt32, horizontal: Bool, parent: UInt32?, revision: UInt64, sequence: UInt64, extent: Double,
                  rows: [Row], fixed: [Fixed], correction: Correction?, count: Int, pending: Bool, seeking: Bool,
                  waiting: Bool, request: UInt64, lastRequest: UInt64, window: Window? = nil) {

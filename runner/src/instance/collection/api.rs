@@ -12,6 +12,7 @@ impl Collection {
             axis: self.axis,
             parent: self.parent,
             restored: self.restored,
+            live: self.live,
             seeking: self.target.is_some() && !self.request_waits(),
             waiting: self.request_waits(),
             request: self.request,

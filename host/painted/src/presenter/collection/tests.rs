@@ -10,6 +10,7 @@ fn snapshot() -> CollectionSnapshot {
         axis: exact_runner::ListAxis::Vertical,
         parent: None,
         restored: false,
+        live: false,
         seeking: false,
         waiting: false,
         request: 0,

@@ -53,7 +53,7 @@ final class CollectionRideIOSTests: XCTestCase {
         let scroll = try list(p)
         let leaving = try XCTUnwrap(p.views[12]), seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 49, "totalExtent": 1960, "rows": rows([8, 10, 14]),
-            "correction": ["scrollSequence": seq, "offset": 1660, "smooth": true]]]],
+            "correction": ["scrollSequence": seq, "offset": 1660, "smooth": true], "live": true]]],
             ["op": "exit", "id": 12],
             ["op": "create", "id": 8, "kind": "view"],
             ["op": "children", "id": 1, "ids": [8, 10, 14]],
@@ -70,6 +70,24 @@ final class CollectionRideIOSTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(ride(leaving)?.fromValue as? CGFloat), -40, accuracy: 0.5, "the leaving row comes down with it")
         XCTAssertEqual(try XCTUnwrap(ride(try XCTUnwrap(p.views[8]))?.fromValue as? CGFloat), -40, accuracy: 0.5, "and the row the move mounted above it")
         XCTAssertNil(ride(try XCTUnwrap(p.views[14])), "the row after it stays where it showed")
+    }
+
+    /// The same removal while the list is still opening (it has not shown its
+    /// settled first rows): the row still leaves with its exit, but the rows
+    /// take their places with no ride (LLP 1010 §6.12, "Only a live list").
+    func testARemovalBeforeTheListSettlesMovesNoRow() throws {
+        let p = presenter()
+        _ = try list(p)
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 3, "scrollSequence": 0, "count": 49, "totalExtent": 1960, "rows": rows([8, 10, 14]),
+            "correction": ["scrollSequence": seq, "offset": 1660, "smooth": false]]]],
+            ["op": "exit", "id": 12],
+            ["op": "create", "id": 8, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [8, 10, 14]],
+            ["op": "frame", "id": 8, "x": 0.0, "y": 1840.0, "w": 300.0, "h": 40.0],
+            ["op": "frame", "id": 14, "x": 0.0, "y": 1920.0, "w": 300.0, "h": 40.0],
+            ["op": "content", "id": 1, "w": 300.0, "h": 1960.0]]))
+        for id: UInt32 in [8, 10, 14] { XCTAssertNil(ride(try XCTUnwrap(p.views[id])), "row \(id) takes its place") }
     }
 
     /// A runner commit that grows the last row at a followed end (a receipt

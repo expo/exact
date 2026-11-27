@@ -99,6 +99,7 @@ impl Collection {
         {
             return Ok(None);
         }
+        let extent = self.index.total_height();
         let mut feedback = feedback.clone();
         for m in &mut feedback.measurements {
             m.size += self.gap_after(by_view.get(&m.view).map(|&i| &self.mounted[i]));
@@ -108,6 +109,7 @@ impl Collection {
         };
         self.scrolling = fill.scrolling;
         self.reveal_shown(u);
+        self.note_settled(extent);
         Ok(Some(edge))
     }
 

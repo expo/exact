@@ -859,6 +859,7 @@ fn snapshot_json_preserves_u64_metadata_as_decimal_strings() {
         axis: ListAxis::Vertical,
         parent: None,
         restored: false,
+        live: false,
         seeking: false,
         waiting: false,
         request: 0,

@@ -521,7 +521,8 @@ final class CollectionHost: ListHosting {
             guard let port = geometry(view) else { continue }
             // The rows move once, after the outermost batch has placed them all
             #if os(iOS) || os(tvOS)
-            if batchDepth == 1, removes(view, began: batchLeaving) || rideOwed.contains(view) { riding.insert(view) }
+            // (A row's exit rides only a list that has settled, as a commit's does: LLP 1010 §6.12.)
+            if batchDepth == 1, entry.snapshot.live && removes(view, began: batchLeaving) || rideOwed.contains(view) { riding.insert(view) }
             #endif
             let dimensions = [port.portCross, port.portMain, port.cross]
             let planned = entry.cursor.sequence, jumped = entry.cursor.jumpedAt

@@ -36,7 +36,7 @@ extension BatchReader {
         var rows: [CollectionSnapshot.Row]?, fixed: [CollectionSnapshot.Fixed] = [], correction: CollectionSnapshot.Correction?
         var count: UInt64?, request: UInt64?, lastRequest: UInt64?
         var window: CollectionSnapshot.Window?
-        var horizontal = false, pending = false, seeking = false, waiting = false, valid = true
+        var horizontal = false, pending = false, seeking = false, waiting = false, live = false, valid = true
         try object { r, key in
             switch key {
             case "view": view = try r.collectionID()
@@ -48,6 +48,7 @@ extension BatchReader {
             case "count": count = try r.collectionUInt()
             case "pending": pending = try r.collectionBool()
             case "seeking": seeking = try r.collectionBool()
+            case "live": live = try r.collectionBool()
             case "waiting": waiting = try r.collectionBool()
             case "request": request = try r.collectionUInt()
             case "lastRequest": lastRequest = try r.collectionUInt()
@@ -74,10 +75,12 @@ extension BatchReader {
         guard valid, let view, let revision, let sequence, let extent, let rows,
               fixed.isEmpty || !horizontal,
               Set(rows.map(\.view) + fixed.map(\.view)).count == rows.count + fixed.count else { return nil }
-        return CollectionSnapshot(view: view, horizontal: horizontal, parent: parent, revision: revision,
+        var snapshot = CollectionSnapshot(view: view, horizontal: horizontal, parent: parent, revision: revision,
             sequence: sequence, extent: extent, rows: rows, fixed: fixed, correction: correction,
             count: count.map { Int(clamping: $0) } ?? rows.count, pending: pending, seeking: seeking,
             waiting: waiting, request: request ?? 0, lastRequest: lastRequest ?? 0, window: window)
+        snapshot.live = live
+        return snapshot
     }
 
     private mutating func collectionRow() throws -> CollectionSnapshot.Row? {

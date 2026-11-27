@@ -299,9 +299,10 @@ export const classifications = [
     ["runner:runner/src/instance/collection/mod.rs", "Collection::feedback#scroll_sequence:1 Collection::update_data#data_generation:1 Collection::update_data#scroll_sequence:1"],
     ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection_travel#scroll_sequence:1 Tree::update_collection#scroll_sequence:1"],
     ["runner:runner/src/instance/collection/nest.rs", "PinEpoch::bump#PIN_EPOCH.fetch_add:1"],
+    ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection_live"],
     ["runner:runner/src/runner/list_seam.rs",
       "Runner::collection_travel Runner::collection Runner::collection_data Runner::collection_feedback Runner::collection_feedback_bytes Runner::collection_feedback_filled " +
-      "Runner::collection_mounted Runner::collection_shown Runner::collections Runner::collections_bounded Runner::collections_json Runner::collections_shallow " +
+      "Runner::collection_live Runner::collection_mounted Runner::collection_shown Runner::collections Runner::collections_bounded Runner::collections_json Runner::collections_shallow " +
       "Runner::kept_positions_json Runner::list_sections"],
     ["runner:runner/src/runner/gates.rs", "Runner::collection_reply_key"],
     ["runner:runner/src/runner/foresee.rs", "Runner::foresee"],
