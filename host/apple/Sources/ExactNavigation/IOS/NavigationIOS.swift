@@ -1191,10 +1191,12 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         guard let selected = selectedKey,
               let key = routeKey(containing: view, layout: layout) else { return false }
         // A split's list beside its detail is live; the detail under the list
-        // over it, and the columns under a sheet, show and are not (LLP 1127 D8)
+        // over it, and the columns under a sheet, show and are not (LLP 1127 D5)
         #if os(iOS)
         if let split, split.paired, key == split.searchOwner?.key { return !split.searchState.primaryExposed }
         #endif
+        // The detail UIKit keeps behind the folded list is out of sight (LLP 1127 D12)
+        if self.split?.kept.contains(where: { $0.key == key }) == true { return true }
         let split = splitShown
         if split.beside.contains(where: { $0.key == key }) { return false }
         if split.under.contains(where: { $0.key == key }) { return true }

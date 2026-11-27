@@ -19,6 +19,22 @@ final class SplitIOSTests: XCTestCase {
     private var session: ExactSession?
     /// The view booted out of the window (`boot(mounted: false)`), which nothing else holds.
     private var unmounted: ExactView?
+    /// UIKit's proposals as an iPhone Duo's fold makes them (`split(_:)`).
+    private var proposals: FoldProposals?
+
+    /// UIKit's split delegate as UIKit calls it at an iPhone Duo's fold: UIKit's collapse proposal there is the detail
+    /// (measured, LLP 1127 D4), and a test window's trait change has it propose the list. Exact returns whatever
+    /// UIKit proposes, so a test that means the fold sets the proposal it measures against; every other call goes to
+    /// the split as UIKit made it.
+    final class FoldProposals: NSObject, UISplitViewControllerDelegate {
+        var split: SplitIOS?
+        var collapse: UISplitViewController.Column = .secondary
+        func splitViewController(_ svc: UISplitViewController, topColumnForCollapsingToProposedTopColumn proposed: UISplitViewController.Column) -> UISplitViewController.Column {
+            split?.splitViewController(svc, topColumnForCollapsingToProposedTopColumn: collapse) ?? proposed
+        }
+        override func responds(to selector: Selector!) -> Bool { super.responds(to: selector) || split?.responds(to: selector) == true }
+        override func forwardingTarget(for selector: Selector!) -> Any? { split?.responds(to: selector) == true ? split : nil }
+    }
 
     override func tearDown() {
         session?.destroy()
@@ -26,6 +42,7 @@ final class SplitIOSTests: XCTestCase {
         window = nil
         session = nil
         unmounted = nil
+        proposals = nil
         super.tearDown()
     }
 
@@ -59,7 +76,14 @@ final class SplitIOSTests: XCTestCase {
     private func split(_ session: ExactSession) throws -> SplitIOS {
         let navigation = session.presenter.navigationHost, agent = Agent(session: session)
         until("a list whose rows push is a split") { navigation.split != nil && !agent.nativeInFlight() }
-        return try XCTUnwrap(navigation.split)
+        let split = try XCTUnwrap(navigation.split)
+        if proposals?.split !== split {
+            let fold = FoldProposals()
+            fold.split = split
+            proposals = fold
+            split.controller.delegate = fold
+        }
+        return split
     }
 
     func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
@@ -307,8 +331,8 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertTrue(navigation.split === split, "the rows' coming keeps the split")
         try tap(session, "row-a")
         until("the book is in the detail") { navigation.split?.shown.count == 2 && !agent.nativeInFlight() }
-        XCTAssertNil(agent.back()["error"])
-        until("back at the list") { navigation.split?.shown.count == 1 && !agent.nativeInFlight() }
+        XCTAssertTrue(session.navigate("/"), "the app returns to its root, which clears the detail (LLP 1127 D13)")
+        until("back at the list") { navigation.split?.held.count == 1 && !agent.nativeInFlight() }
         try tap(session, "stop")
         until("the root says none: a stack again") { navigation.split == nil && navigation.primaryNavigation != nil && !agent.nativeInFlight() }
         XCTAssertTrue(navigation.primaryNavigation?.viewControllers.first === root, "the same route, in a stack")
@@ -442,7 +466,7 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertEqual(split.controller.displayMode, .oneOverSecondary, "a batch that changes no detail shows no column")
         try tap(session, "row-b")
         until("book b replaces book a and shows") { has(session, "book-b") && split.controller.displayMode == .secondaryOnly && !agent.nativeInFlight() }
-        XCTAssertNil(agent.back()["error"], "Back from the detail's base clears it (LLP 1127 D4)")
+        XCTAssertTrue(session.navigate("/"), "the app returns to its root, which clears the detail (LLP 1127 D13); the base shows no Back beside the list (D20)")
         until("back at the root, the list over the empty detail") {
             split.shown.count == 1 && split.controller.displayMode == .oneOverSecondary && !agent.nativeInFlight()
         }
@@ -703,7 +727,7 @@ final class SplitIOSTests: XCTestCase {
         until("expanded again, its row selected again") { !split.controller.isCollapsed && list.sidebar && selected() == [rowA] && !agent.nativeInFlight() }
         XCTAssertTrue(bare(), "and no ground of its own again")
         XCTAssertEqual(try XCTUnwrap(cell()).accessories.count, 0)
-        XCTAssertNil(agent.back()["error"], "Back from the detail's base clears it (LLP 1127 D4)")
+        XCTAssertTrue(session.navigate("/"), "the app returns to its root, which clears the detail (LLP 1127 D13); the base shows no Back beside the list (D20)")
         until("nothing selected at the list") { split.shown.count == 1 && selected() == [] && !agent.nativeInFlight() }
     }
 
@@ -775,7 +799,7 @@ final class SplitIOSTests: XCTestCase {
         until("the page is the detail, the current row selected") {
             has(session, "page-page") && split.detailRoutes.count == 1 && selected() == [rowPage] && !agent.nativeInFlight()
         }
-        XCTAssertNil(agent.back()["error"])
+        XCTAssertTrue(session.navigate("/"), "the app returns to its root (LLP 1127 D13)")
         until("back at the list, no row selected") { split.shown.count == 1 && selected().isEmpty && !agent.nativeInFlight() }
         try tap(session, "row-press")
         until("book c is the detail") { has(session, "book-c") && split.detailRoutes.count == 1 && !agent.nativeInFlight() }
@@ -915,12 +939,13 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertNil(agent.back()["error"])
         until("back at the book") { split.shown.count == 2 && !agent.nativeInFlight() }
         agree("expanded on the book")
-        XCTAssertNil(agent.back()["error"], "Back from the detail's base clears it (LLP 1127 D4)")
-        until("back at the list") { split.shown.count == 1 }
-        agree("expanded at the list")
+        XCTAssertNotNil(agent.back()["error"], "the detail's base shows no Back beside the list (LLP 1127 D20)")
         window?.traitOverrides.horizontalSizeClass = .compact
         until("collapsed") { split.controller.isCollapsed }
-        agree("collapsed at the list again")
+        agree("collapsed on the book")
+        XCTAssertNil(agent.back()["error"], "the book's own Back")
+        until("back at the list") { split.shown.count == 1 }
+        agree("collapsed at the list")
     }
 
     /// LLP 1127 §1, item 2: UIKit takes N1 out of N0 as the split expands
@@ -1150,6 +1175,67 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertEqual(presses, [bookBack], "the book's Back, once")
     }
 
+    /// LLP 1127 D11, D12: folded, UIKit's Back from a page that declares no Back of its own only shows the list.
+    /// UIKit keeps the page and so does the router, out of sight: the list is live and the page is not, the app is at
+    /// rest, a batch that changes nothing leaves the list up, the page's row shows the same page again, and an unfold
+    /// after another Back shows it beside the list.
+    func testABackToTheListFromAPageThatDeclaresNoBackKeepsIt() throws {
+        let session = try boot(), agent = Agent(session: session), navigation = session.presenter.navigationHost
+        let split = try split(session)
+        try tap(session, "row-page")
+        until("the page is pushed") { split.nested && split.shown.count == 2 && !agent.nativeInFlight() }
+        let page = try XCTUnwrap(split.detailRoutes.first)
+        func backToTheList(_ what: String) {
+            XCTAssertNil(agent.back()["error"], "\(what): the agent's Back is UIKit's pop of the page")
+            until("\(what): the list shows") { !split.nested && !agent.nativeInFlight() }
+            XCTAssertEqual(navigation.selectedKey, page.key, "\(what): the router keeps the page")
+            XCTAssertTrue(split.kept.first === page, "\(what): UIKit keeps it")
+            XCTAssertNil(navigation.restDifference, "\(what): at rest")
+            XCTAssertFalse(navigation.syncOwed, "\(what): no sync owed")
+        }
+        backToTheList("the first Back")
+        XCTAssertTrue(try inactive(session, "page-page"), "the kept page is not live")
+        XCTAssertFalse(try inactive(session, "row-a"), "the list is")
+        XCTAssertNotNil(agent.back()["error"], "the list has no Back")
+        try tap(session, "row-count")
+        until("the count's batch is applied") { !agent.nativeInFlight() }
+        XCTAssertFalse(split.nested, "a batch that changes nothing leaves the list up")
+        try tap(session, "row-page")
+        until("the page's row shows it again") { split.nested && !agent.nativeInFlight() }
+        XCTAssertTrue(split.detailRoutes.first === page, "the same page")
+        backToTheList("the second Back")
+        let window = try XCTUnwrap(self.window)
+        window.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+        window.rootViewController?.view.subviews.first?.frame = window.bounds
+        window.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertTrue(split.detailRoutes.first === page && split.shown.count == 2, "the page shows beside the list")
+        XCTAssertFalse(try inactive(session, "page-page"), "live beside it")
+    }
+
+    /// LLP 1127 D4: UIKit's proposals stand at a fold, whichever column it proposes, and only with nothing selected
+    /// does the collapse answer the list.
+    func testTheFoldsAnswersAreUIKitsProposals() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let agent = Agent(session: session), split = try split(session)
+        func collapse(_ proposed: UISplitViewController.Column) -> UISplitViewController.Column {
+            let answer = split.splitViewController(split.controller, topColumnForCollapsingToProposedTopColumn: proposed)
+            split.splitViewControllerDidCollapse(split.controller)
+            waitForMainQueue("the collapse's report")
+            return answer
+        }
+        XCTAssertEqual(collapse(.secondary), .primary, "nothing selected, the list")
+        try tap(session, "row-a")
+        until("a book beside the list") { split.detailRoutes.count == 1 && !agent.nativeInFlight() }
+        XCTAssertEqual(collapse(.secondary), .secondary)
+        XCTAssertEqual(collapse(.primary), .primary)
+        for mode in [UISplitViewController.DisplayMode.oneBesideSecondary, .oneOverSecondary, .secondaryOnly] {
+            XCTAssertEqual(split.splitViewController(split.controller, displayModeForExpandingToProposedDisplayMode: mode), mode)
+            split.splitViewControllerDidExpand(split.controller)
+            waitForMainQueue("the expansion's report")
+        }
+    }
+
     /// The app replaces the notes with another visit while the finger is down
     /// on a swipe in N1's own stack: the app's stack counts the list's route
     /// beneath N1's, as deep as when the swipe began, so the swipe's source
@@ -1201,12 +1287,17 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertTrue(navigation.routeTransition(split.list, operation: .pop, from: split.detail, to: root) is RouteTransition, "and its exit")
         XCTAssertNil(agent.back()["error"])
         until("back at the list") { split.shown.count == 1 && !agent.nativeInFlight() }
+        // UIKit keeps the page behind the list (LLP 1127 D12): the app returns to its root before its next row
+        XCTAssertTrue(session.navigate("/"))
+        until("the app at its root") { split.detailRoutes.isEmpty && !agent.nativeInFlight() }
         if #available(iOS 18.0, *) {
             try tap(session, "row-photo")
             until("the photo is pushed") { split.shown.count == 2 && split.nested && !agent.nativeInFlight() }
             XCTAssertNotNil(split.detail.preferredTransition, "N1 zooms in with the photo, from its row")
             XCTAssertNil(agent.back()["error"])
             until("back at the list again") { split.shown.count == 1 && !agent.nativeInFlight() }
+            XCTAssertTrue(session.navigate("/"))
+            until("the app at its root again") { split.detailRoutes.isEmpty && !agent.nativeInFlight() }
         }
         try tap(session, "row-a")
         until("the book is pushed") { split.shown.count == 2 && split.nested && !agent.nativeInFlight() }
@@ -1254,8 +1345,11 @@ extension SplitIOSTests {
         try tap(session, "row-photo")
         until("the photo is pushed") { split.shown.count == 2 && split.nested && !agent.nativeInFlight() }
         XCTAssertNotNil(split.detail.preferredTransition, "N0 pushes N1 with the photo's zoom")
-        split.list.popViewController(animated: false)
-        until("UIKit's Back at the list") { split.shown.count == 1 && !agent.nativeInFlight() }
+        split.list.popViewController(animated: true)
+        until("UIKit's Back at the list") { split.shown.count == 1 && split.list.transitionCoordinator == nil && !agent.nativeInFlight() }
+        // The photo declares no Back: UIKit keeps it behind the list, and the app returns to its root (LLP 1127 D12, D13)
+        XCTAssertTrue(session.navigate("/"))
+        until("the app at its root") { split.detailRoutes.isEmpty && !agent.nativeInFlight() }
         window?.traitOverrides.horizontalSizeClass = .regular
         until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
         try tap(session, "row-a")
@@ -1266,7 +1360,7 @@ extension SplitIOSTests {
         XCTAssertNil(split.detail.preferredTransition, "N0 pops N1 without the photo's zoom")
         window?.traitOverrides.horizontalSizeClass = .regular
         until("expanded again") { !split.controller.isCollapsed && !agent.nativeInFlight() }
-        XCTAssertNil(agent.back()["error"], "Back from the detail's base clears it (LLP 1127 D4)")
+        XCTAssertTrue(session.navigate("/"), "the app returns to its root, which clears the detail (LLP 1127 D13); the base shows no Back beside the list (D20)")
         until("back at the list") { split.shown.count == 1 && !agent.nativeInFlight() }
         try tap(session, "row-photo")
         until("the photo is the detail") { has(session, "photo-page") && split.detailRoutes.count == 1 && !agent.nativeInFlight() }

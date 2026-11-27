@@ -413,7 +413,7 @@ package protocol NavigationHosting: AnyObject {
     func isInactiveRoute(containing view: UIView, layout: Bool) -> Bool
     func resolve(route key: String, id: String) -> NodeView?
     /// Each route shown beside its stack's top or under a pane over it, by
-    /// its node (LLP 1127 D8): a split's columns. The others show in their stack.
+    /// its node (LLP 1127 D5): a split's columns. The others show in their stack.
     var routesShown: [UInt32: BlockShown] { get }
     /// The blocks of the nodes UIKit holds in views of their own (the sidebar's footer, the tab bar's accessory).
     var paneBlocks: [(id: UInt32, block: HostBlock, placement: BlockPlacement?)] { get }

@@ -181,19 +181,14 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertTrue(fixture.split.searchState.primaryForeground)
         resize(regular: false)
         waitFor("UIKit collapses the split") { fixture.split.settledCollapsed }
-        fixture.settle("the compact primary covers the retained detail")
-        XCTAssertFalse(fixture.split.nested)
+        fixture.settle("the fold settles on UIKit's column")
+        // UIKit proposes the detail: the chosen book covers the list, and the search waits behind its Back with its
+        // query (LLP 1127 D4, LLP 1127.000 D3)
+        XCTAssertTrue(fixture.split.nested, fixture.searchFacts)
         XCTAssertTrue(detail.topViewController === book)
-        XCTAssertTrue(try fixture.inactive(book.node))
-        XCTAssertTrue(results.visible, fixture.searchFacts)
-        XCTAssertEqual(try fixture.resultsOffset(), offset, accuracy: 1)
-        try fixture.openQuery("Fuji")
-        XCTAssertTrue(fixture.search.bindEditor().isFirstResponder, fixture.searchFacts)
-        try fixture.tap("result-a")
-        waitFor("UIKit reveals the secondary again") { fixture.split.nested }
-        fixture.settle("the repeated selection settles")
-        XCTAssertTrue(detail.topViewController === book)
-        XCTAssertFalse(fixture.search.bindEditor().isFirstResponder, fixture.searchFacts)
+        XCTAssertFalse(try fixture.inactive(book.node))
+        XCTAssertFalse(results.visible, fixture.searchFacts)
+        XCTAssertEqual(try fixture.value(), "Fuji")
         fixture.split.list.popViewController(animated: true)
         waitFor("Back selects the library visit") { fixture.host.selectedKey == fixture.list.key }
         fixture.settle("the library and its search settle")
@@ -201,10 +196,16 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertEqual(fixture.count("backs"), 1)
         XCTAssertTrue(fixture.search.results === results)
         XCTAssertTrue(results.visible, fixture.searchFacts)
-        // UIKit's search controller ends editing as the push begins and resumes it as the pop ends
-        XCTAssertTrue(fixture.search.bindEditor().isFirstResponder, fixture.searchFacts)
         XCTAssertEqual(try fixture.resultsOffset(), offset, accuracy: 1)
         XCTAssertEqual(try fixture.value(), "Fuji")
+        // A result chosen again over the same results reveals its book, and UIKit ends editing as the push begins
+        try fixture.openQuery("Fuji")
+        XCTAssertTrue(fixture.search.bindEditor().isFirstResponder, fixture.searchFacts)
+        try fixture.tap("result-a")
+        waitFor("UIKit reveals the secondary again") { fixture.split.nested }
+        fixture.settle("the repeated selection settles")
+        XCTAssertEqual((detail.topViewController as? RouteController)?.key.isEmpty, false)
+        XCTAssertFalse(fixture.search.bindEditor().isFirstResponder, fixture.searchFacts)
     }
 
     func testAnOrdinarySplitHoldsTheLatestRouteThroughACoordinatorlessFold() throws {
@@ -385,6 +386,43 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertEqual(moved, [], "no row moves or animates as the keys go down")
     }
 
+    /// LLP 1127.000 D2: with a query in the field, the results come into the detail column as UIKit presents the
+    /// search, and the page they covered comes back as UIKit dismisses it, each on the search's own transition: a
+    /// snapshot of what the column showed fades out over the new content, as UIKit fades a search's results
+    /// controller, rather than the change landing once the keyboard has stopped moving.
+    func testDetailResultsComeAndGoOnTheSearchsOwnTransition() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot(regular: true, detailSearch: true)
+        let results = try XCTUnwrap(fixture.search.results)
+        try fixture.navigate("/book/b")
+        let page = try XCTUnwrap(fixture.split.detail.topViewController as? RouteController)
+        try fixture.openQuery("Fuji")
+        XCTAssertTrue(fixture.split.detail.topViewController === results, fixture.searchFacts)
+        // Whether, while UIKit moved the search, the column showed `shown` and a snapshot of what it showed before faded
+        // out over it
+        func activate(_ active: Bool, until shown: UIViewController) -> (shown: Bool, fades: Bool) {
+            var moved = false, shownWhileMoving = false, fadedWhileMoving = false
+            fixture.search.controller.isActive = active
+            waitFor("UIKit moves the search, and ends", facts: { fixture.searchFacts }) {
+                guard fixture.search.controller.transitionCoordinator != nil else { return moved }
+                moved = true
+                if fixture.split.detail.topViewController === shown { shownWhileMoving = true }
+                if fixture.split.detail.view.subviews.contains(where: { $0.layer.animation(forKey: "opacity") != nil }) { fadedWhileMoving = true }
+                return false
+            }
+            fixture.settle("the search's transition ends")
+            XCTAssertTrue(fixture.split.detail.topViewController === shown, fixture.searchFacts)
+            return (shownWhileMoving, fadedWhileMoving)
+        }
+        let closed = activate(false, until: page)
+        XCTAssertTrue(closed.shown, "the page is back while UIKit dismisses the search")
+        XCTAssertTrue(closed.fades, "the results fade out over it")
+        XCTAssertEqual(try fixture.value(), "Fuji", "the fixture's cancel keeps the query")
+        let opened = activate(true, until: results)
+        XCTAssertTrue(opened.shown, "the results are in while UIKit presents the search")
+        XCTAssertTrue(opened.fades, "the page fades out over them")
+    }
+
     func testDetailResultsTransferThroughBrowsingEditingAndChosenPostures() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
         let fixture = try boot(regular: true, detailSearch: true)
@@ -421,15 +459,18 @@ final class SearchLevelsIOSTests: XCTestCase {
             fixture.settle("the column handoff completes")
         }
 
+        // A fold shows the column UIKit proposes, the retained book; the search waits behind its Back with its query,
+        // its results ready over the list (LLP 1127 D4, LLP 1127.000 D3)
+        func coveredByTheBook() throws {
+            XCTAssertTrue(fixture.split.list.topViewController === fixture.split.detail, fixture.searchFacts)
+            XCTAssertTrue(fixture.split.detail.topViewController === retained)
+            XCTAssertTrue(results.parent === container)
+            XCTAssertFalse(try fixture.inactive(retained.node))
+            XCTAssertTrue(try fixture.inactive(books))
+            XCTAssertEqual(try fixture.value(), "Fuji")
+        }
         move(regular: false)
-        XCTAssertTrue(results.parent === container)
-        XCTAssertTrue(fixture.split.detail.topViewController === retained)
-        let compactEditor = fixture.search.bindEditor()
-        XCTAssertTrue(compactEditor.isFirstResponder)
-        XCTAssertEqual(compactEditor.selectedTextRange.flatMap { compactEditor.text(in: $0) }, "uj")
-        XCTAssertTrue(try fixture.inactive(books))
-        XCTAssertTrue(books.accessibilityElementsHidden)
-        XCTAssertEqual(try fixture.resultsOffset(), offset, accuracy: 1)
+        try coveredByTheBook()
         move(regular: true)
         try browseInDetail()
         let movedEditor = fixture.search.bindEditor()
@@ -442,7 +483,7 @@ final class SearchLevelsIOSTests: XCTestCase {
         fixture.search.resign()
         fixture.settle("browsing without a keyboard")
         move(regular: false)
-        XCTAssertTrue(results.parent === container)
+        try coveredByTheBook()
         XCTAssertFalse(fixture.search.bindEditor().isFirstResponder)
         move(regular: true)
         try browseInDetail()
@@ -1227,3 +1268,4 @@ final class SearchLevelsIOSTests: XCTestCase {
     }
 }
 #endif
+

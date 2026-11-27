@@ -55,7 +55,17 @@ extension NavigationHost {
             more.popViewController(animated: !ExactEnv.agentFreezes)
             return ""
         }
-        // From a split's base expanded, where no Back shows, it clears the selection (LLP 1127 D4)
+        #if os(iOS)
+        // The Back a person has (LLP 1127 D20): none from the detail's first route expanded, where UIKit shows no
+        // Back; folded, UIKit's own pop of the detail where that pop only shows the list (D11, D12)
+        if modalNavigation == nil, let split {
+            if !split.controller.isCollapsed, split.detailRoutes.count <= 1 { return nil }
+            if split.controller.isCollapsed, split.nested, split.detailRoutes.count == 1, popOnlyShowsList(split) {
+                split.list.popViewController(animated: !ExactEnv.agentFreezes)
+                return ""
+            }
+        }
+        #endif
         let depth = modalNavigation == nil ? split?.shown.count : nil
         guard (depth ?? navigation?.viewControllers.count ?? 0) > 1 else { return nil }
         guard back != nil else { return backRefusal }
@@ -139,7 +149,7 @@ extension NavigationHost {
     }
 
     /// Whether a route holds an element named by the root's `navigationBack`.
-    private func declaresBack(_ route: NodeView) -> Bool {
+    func declaresBack(_ route: NodeView) -> Bool {
         guard let name = container?.props["navigationBack"] else { return false }
         return presenter.carrying("id").contains { $0.props["id"] == name && ($0 === route || $0.isDescendant(of: route)) }
     }

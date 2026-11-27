@@ -1,4 +1,4 @@
-// @ref LLP 1127 D2, D5, D8 — the navigation host's side of a split
+// @ref LLP 1127 D2, D5 — the navigation host's side of a split
 // (SplitIOS.swift): when a stack splits, installing and writing its columns,
 // following UIKit's changes to them, and which of its routes are live.
 #if os(iOS) || os(tvOS)
@@ -158,16 +158,20 @@ extension NavigationHost {
         if split.pairedSearch?.placesResultsInDetail == true {
             changingRoutes = !split.matchesResultsProjection(stack) || split.searchOwner !== stack.first
         } else {
-            changingRoutes = !split.shown.elementsEqual(stack, by: ===)
+            changingRoutes = !split.held.elementsEqual(stack, by: ===)
         }
         #else
-        changingRoutes = !split.shown.elementsEqual(stack, by: ===)
+        changingRoutes = !split.held.elementsEqual(stack, by: ===)
         #endif
         // UIKit lays an arriving route out as it is given the stack: a lifted header must have left the layout by then
         if changingRoutes, liftHeld { return true }
         let location = stack.count > 1 ? stack.last.flatMap { split.rule?.locations[$0.node.id] } : nil
         let relocated = location != nil && split.topLocation != nil && location != split.topLocation && stack.last === split.detailRoutes.last
-        guard split.show(stack, animated: animated, relocated: relocated, revealsDetail: reveal) else {
+        // A row's press whose navigation the router took owes the detail a reveal, the same visit too: the row of the
+        // detail kept behind the folded list shows it again (LLP 1127 D14)
+        let revision = routerRevision
+        let owed = reveal ?? (revision != split.syncedRevision && !split.presses.isEmpty && stack.count > 1 ? true : nil)
+        guard split.show(stack, animated: animated, relocated: relocated, revealsDetail: owed) else {
             #if os(iOS)
             if split.pairedSearch?.placesResultsInDetail == true {
                 scheduleSplitProjection()
@@ -177,6 +181,7 @@ extension NavigationHost {
             return split.moving
         }
         split.topLocation = location
+        split.syncedRevision = revision
         if changingRoutes { lastTransition = "idle" }
         // A press that opened a detail may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS)
         if let arrived = split.detailRoutes.last, arrived !== top { presenter.pressShows(arrived.node) }
@@ -195,7 +200,7 @@ extension NavigationHost {
 
     /// An inactive tab keeps its columns and its row. Read its rule without replacing the active tab's subscription.
     func syncInactiveSplit(_ columns: SplitIOS, _ routes: [RouteController], sequence: UInt64) {
-        let changed = !columns.shown.elementsEqual(routes, by: ===)
+        let changed = !columns.held.elementsEqual(routes, by: ===)
         guard changed || !columns.presses.isEmpty else {
             #if os(iOS)
             reconcileBackHistory(in: columns.list)
@@ -321,7 +326,7 @@ extension NavigationHost {
     }
 
     /// The coordinator of the pop that took `route` out of its stack: its
-    /// stack's, or N0's while N1 is what leaves (LLP 1127 D5.4).
+    /// stack's, or N0's while N1 is what leaves (LLP 1127 D10).
     func popCoordinator(of route: RouteController) -> UIViewControllerTransitionCoordinator? {
         guard let stack = route.lastStack else { return nil }
         let columns = split?.detail === stack ? split : tabSplits.values.first { $0.detail === stack }
@@ -331,17 +336,29 @@ extension NavigationHost {
 
     /// An interactive pop's source on `nav` and the depth of the app's stack
     /// before it began. N1 leaving N0 takes its top with it, above the root;
-    /// beneath N1's own routes is the root (LLP 1127 D5.4).
+    /// beneath N1's own routes is the root (LLP 1127 D10).
     func popSource(_ transition: UIViewControllerTransitionCoordinator, on nav: UINavigationController) -> Swipe? {
         let from = transition.viewController(forKey: .from)
         if let split, nav === split.list, from === split.detail {
+            if popOnlyShowsList(split) { return nil }
             return split.detailRoutes.last.map { ($0.node, $0.key, 1 + split.detailRoutes.count) }
         }
         let beneath = split?.detail === nav ? 2 : 1
         return (from as? RouteController).map { ($0.node, $0.key, nav.viewControllers.count + beneath) }
     }
 
-    /// How the split's routes show against the stack's top (LLP 1127 D8):
+    /// Whether UIKit's pop of N1 off N0, collapsed, only shows the list (LLP 1127 D11, D12): N1 keeps its routes and
+    /// the router keeps them, unless N1 holds only its first route and that route declares a Back of its own, which
+    /// the pop is then (LLP 1115 D5). A history choice of the list while N1 holds more keeps N1 whole.
+    func popOnlyShowsList(_ split: SplitIOS) -> Bool {
+        let routes = split.detailRoutes
+        guard let first = routes.first else { return false }
+        // The route's node as the tree holds it now: a route written anew keeps its controller
+        let node = routeIDs.compactMap { presenter.views[$0] }.first { $0.props["navigationKey"] == first.key } ?? first.node
+        return routes.count > 1 || !declaresBack(node)
+    }
+
+    /// How the split's routes show against the stack's top (LLP 1127 D5):
     /// as the columns show them while nothing is presented over the split
     /// (`SplitIOS.showing`). A presentation covers what is under it first:
     /// under sheets the routes the columns show are shown and not live; a
@@ -368,7 +385,11 @@ extension NavigationHost {
     /// over it, as the runner is told (claim kind 23 of `exact_host_covers`).
     var routesShown: [UInt32: BlockShown] {
         let shown = splitShown
-        return Dictionary(shown.beside.map { ($0.node.id, .beside) } + shown.under.map { ($0.node.id, .under) }, uniquingKeysWith: { first, _ in first })
+        var routes: [UInt32: BlockShown] = Dictionary(shown.beside.map { ($0.node.id, BlockShown.beside) } + shown.under.map { ($0.node.id, BlockShown.under) },
+                                                      uniquingKeysWith: { first, _ in first })
+        // The detail UIKit keeps behind the folded list is out of sight, whatever is presented over it
+        for route in split?.kept ?? [] { routes[route.node.id] = .hidden }
+        return routes
     }
 
     /// Whether `view` is in the split's list column while the split is

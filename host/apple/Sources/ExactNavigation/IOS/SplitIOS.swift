@@ -1,4 +1,4 @@
-// @ref LLP 1127 D2, D5, D6, D8 — a list and its detail on iOS are UIKit's
+// @ref LLP 1127 D2, D5, D6 — a list and its detail on iOS are UIKit's
 // split view. Where a stack's root route holds a list whose rows push (the
 // runner's rule, `StackSplit`), the stack is the two columns of a
 // `.doubleColumn` `UISplitViewController`: the root route in the list's
@@ -29,7 +29,8 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     let list: UINavigationController
     /// The detail's column, N1: the routes above the root.
     let detail: UINavigationController
-    /// The detail while the stack is at its root (LLP 1127 D7).
+    /// The detail while the stack is at its root: a controller with no words, which keeps N1's bar and with it UIKit's
+    /// sidebar button (LLP 1127 D17).
     let empty = UIViewController()
     /// What UIKit shows changed: it collapsed or expanded, or showed or hid the list.
     var changed: () -> Void = {}
@@ -76,7 +77,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
 
     private func detailProjection(_ stack: [RouteController], expanded: Bool, beside: Bool) -> [UIViewController] {
         let routes = Array(stack.dropFirst())
-        guard let search = pairedSearch, search.placesResultsInDetail, search.open, let results = search.results else {
+        guard let search = pairedSearch, search.placesResultsInDetail, search.resultsHoldDetail, let results = search.results else {
             return routes.isEmpty ? [empty] : routes
         }
         if let base = searchState.resultBase, let index = routes.firstIndex(where: { $0.key == base }) {
@@ -85,6 +86,60 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         }
         if beside, searchState.primaryForeground, results.authoredVisible { return [results] }
         return routes.isEmpty ? [empty] : routes
+    }
+
+    /// LLP 1127.000 D2, and LLP 1127 D15's one exception: as UIKit begins presenting the search with a query, or
+    /// dismissing it for the person's close, N1 takes the results or gives back the detail they covered at once, from
+    /// controllers the host already holds, under a snapshot of what it showed, which the caller fades out on the
+    /// search's own transition (`fadeOut(_:along:)`). The change is made before UIKit begins that transition: once it
+    /// has, N1 reports the transition as its own and UIKit holds its stack until the end. Anything else moving the
+    /// columns leaves the change to the projection. Returns the snapshot, if it changed what N1 shows.
+    func swapResultsWithSearch() -> UIView? {
+        guard let search = pairedSearch, search.placesResultsInDetail, let results = search.results, resultsBesidePrimary,
+              !moving, !writing, !columnsAboutToMove, controller.transitionCoordinator == nil, list.transitionCoordinator == nil,
+              detail.transitionCoordinator == nil, let view = detail.viewIfLoaded, view.window != nil else { return nil }
+        let next = detailProjection(stack, expanded: true, beside: true)
+        guard !Self.same(detail.viewControllers, next) else { return nil }
+        let arriving = next.contains { $0 === results }, departing = detail.viewControllers.contains { $0 === results }
+        if arriving && !departing {
+            guard results.leaveSearchContainer(search), releaseResults(results, in: search) else { return nil }
+            results.prepareDetailBar()
+        }
+        // A close under a chosen result keeps it on top: nothing shows a change to fade
+        let cover = detail.topViewController === next.last ? nil : view.snapshotView(afterScreenUpdates: false)
+        if let cover {
+            cover.frame = view.bounds
+            view.addSubview(cover)
+        }
+        writing = true
+        let installed = write(next, detail, false)
+        writing = false
+        if departing && !arriving {
+            releasingResults = true
+            DispatchQueue.main.async { [weak self] in self?.releasingResults = false }
+        }
+        guard installed else {
+            cover?.removeFromSuperview()
+            return nil
+        }
+        return cover
+    }
+
+    /// Fades `cover` out alongside `transition` in N1's view, which lies outside the search's container; at once with
+    /// no transition, one that refuses the animation, or the agent's frozen clock. The search's animator is not a UIView
+    /// animation, so UIKit runs the block just after the move begins and outside any animation ("for transitioning
+    /// animators that are not implemented with UIView animations, the alongside animations will be run just after their
+    /// animateTransition: method returns", `UIViewControllerTransitionCoordinator`): the fade takes the move's own
+    /// duration and curve from its context, and a block run inside the move's animation inherits it instead.
+    func fadeOut(_ cover: UIView, along transition: UIViewControllerTransitionCoordinator?) {
+        guard !ExactEnv.agentFreezes, let transition, let view = detail.viewIfLoaded,
+              transition.animateAlongsideTransition(in: view, animation: { context in
+                  let curve = UIView.AnimationOptions(rawValue: UInt(context.completionCurve.rawValue) << 16)
+                  UIView.animate(withDuration: context.transitionDuration, delay: 0, options: curve) { cover.alpha = 0 }
+              }, completion: { _ in cover.removeFromSuperview() }) else {
+            cover.removeFromSuperview()
+            return
+        }
     }
 
     private func prepareResults(for next: [UIViewController]) -> Bool {
@@ -162,6 +217,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         let after: UInt64
         var through: UInt64 = .max, landed = false
     }
+    /// The router's revision the columns were last written for: a row's press that advances it owes the detail one
+    /// reveal, its stack changed or not (LLP 1127 D14, `NavigationHost.syncSplit`).
+    var syncedRevision: UInt64 = 0
     /// The base, by its route, and its location, as the last batch synced
     /// left them (`NavigationHost.creditPresses`).
     var lastBase: (id: UInt32, at: String?)?
@@ -188,10 +246,6 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         self.list = list
         self.detail = detail
         super.init()
-        var unavailable = UIContentUnavailableConfiguration.empty()
-        // English until the host has a strings table for its own words, as on the web (LLP 1116.006 D2)
-        unavailable.text = "No Selection"
-        empty.contentUnavailableConfiguration = unavailable
         #if os(iOS)
         empty.view.backgroundColor = .systemBackground
         #endif
@@ -233,6 +287,11 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var detailRoutes: [RouteController] { detail.stackRoutes.compactMap { $0 as? RouteController } }
     /// The controller whose top the person sees.
     var front: UINavigationController { showsDetail && !detailRoutes.isEmpty ? detail : list }
+    /// The routes the columns hold, root first, shown or kept out of sight (`kept`): what a write of the router's
+    /// stack is compared with.
+    var held: [RouteController] {
+        list.stackRoutes.prefix(1).compactMap { $0 as? RouteController } + detailRoutes
+    }
     /// The routes UIKit shows as one stack, root first.
     var shown: [RouteController] {
         list.stackRoutes.prefix(1).compactMap { $0 as? RouteController } + (showsDetail ? detailRoutes : [])
@@ -448,14 +507,14 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
 
     /// Whether UIKit is moving the columns or their stacks: a push or pop in
     /// either, the split's own transition (`show(_:)`, a rotation), or an
-    /// expansion or a collapse (LLP 1127 D5.8).
+    /// expansion or a collapse (LLP 1127 D15).
     var inTransition: Bool {
         moving || controller.transitionCoordinator != nil
             || [list, detail].contains { $0.transitionCoordinator?.presentationStyle == UIModalPresentationStyle.none }
     }
 
     /// How deep the stack is that `nav`'s pop recognizer pops, for the gate
-    /// (`NavigationHost.popMayBegin`, LLP 1127 D5.3); nil for a stack not the
+    /// (`NavigationHost.popMayBegin`, LLP 1127 D10); nil for a stack not the
     /// split's. N1's pops its routes while it shows them. Collapsed, N0's pops
     /// N1 only while N1 holds just one route: with more, it would take them
     /// all, bypassing a refused Back on the top one.
@@ -473,12 +532,14 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     }
 
     /// How UIKit shows the columns against the stack's top while nothing is
-    /// presented over them (LLP 1127 D8): beside the detail the list is live
+    /// presented over them (LLP 1127 D5): beside the detail the list is live
     /// with it, and over the detail only the list is. With the detail alone
     /// only N1's top is live, so a list the stack's top is shows and is not
     /// live there. Collapsed, the routes are one stack.
     var showing: (beside: [RouteController], under: [RouteController]) {
-        guard !controller.isCollapsed, let root = list.stackRoutes.first as? RouteController else { return ([], []) }
+        guard let root = list.stackRoutes.first as? RouteController else { return ([], []) }
+        // Collapsed, the routes are one stack, but for the list UIKit shows over the detail it keeps (`kept`)
+        if controller.isCollapsed { return kept.isEmpty ? ([], []) : ([root], []) }
         let top = detailRoutes.last
         if inspecting != nil {
             switch controller.displayMode {
@@ -493,6 +554,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         default: return ([root], [])
         }
     }
+
+    /// N1's routes UIKit keeps out of sight while the collapsed split shows its list, which the router keeps too and
+    /// the runner is told are hidden (LLP 1127 D5, D12).
+    var kept: [RouteController] { controller.isCollapsed && !moving && !nested ? detailRoutes : [] }
 
     /// The stack, root first, in the two columns; what UIKit shows of it is
     /// UIKit's. A push or pop within the detail is animated as a stack's is;
@@ -591,7 +656,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #endif
         if collapsed {
             // UIKit animates the push of N1 itself when it is outside N0
-            if !rest.isEmpty, !nested, !paired || revealDetail { reveal(.secondary, animated: animated) }
+            if !rest.isEmpty, !nested, revealDetail { reveal(.secondary, animated: animated) }
         } else if moved || revealDetail {
             if !rest.isEmpty, revealDetail, overlaysDetail { reveal(.secondary, animated: animated) }
             if rest.isEmpty, hadDetail, controller.displayMode == .secondaryOnly { reveal(.primary, animated: animated) }
@@ -657,22 +722,22 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         }
         #endif
         #if os(iOS)
+        // UIKit's proposal stands; nothing selected, the list (LLP 1127 D4)
+        let top: UISplitViewController.Column = projectedDetailTop == nil ? .primary : proposedTopColumn
         if paired {
             pairedSearch?.preparePostureMove()
             searchState.beginOwnerMove()
-            searchState.collapseToPrimary = projectedDetailTop == nil || searchState.primaryForeground
+            searchState.collapseToPrimary = top == .primary
             if pairedSearch?.placesResultsInDetail == true {
                 stageDetail(searchState.committed.isEmpty ? stack : searchState.committed,
                             expanded: false, beside: false, awaitingCommit: searchState.pop != nil)
             }
             changed()
-            return searchState.collapseToPrimary ? .primary : .secondary
+            return top
         }
         #endif
-        let coversList = !detailRoutes.isEmpty
-        if coversList { listWillBeCovered() }
-        else { for route in detailRoutes { route.held = false } }
-        return coversList ? .secondary : .primary
+        if top == .secondary { listWillBeCovered() }
+        return top
     }
     func splitViewController(_ svc: UISplitViewController,
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
@@ -683,12 +748,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
             pairedSearch?.preparePostureMove()
             searchState.collapseToPrimary = false
             searchState.beginOwnerMove()
-            let exposePrimary = searchState.primaryForeground || searchState.resultBase != nil
-            let mode: UISplitViewController.DisplayMode = exposePrimary && proposedDisplayMode == .secondaryOnly
-                ? .oneOverSecondary : proposedDisplayMode
-            stageForExpansion(mode)
+            stageForExpansion(proposedDisplayMode)
             changed()
-            return mode
+            return proposedDisplayMode
         }
         #endif
         return proposedDisplayMode

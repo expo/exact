@@ -18,6 +18,14 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     let resultsContainer: UIViewController?
     var placesResultsInDetail: Bool { resultsContainer != nil }
     private(set) var open = false
+    #if os(iOS)
+    /// The snapshot over N1's swap, until the search's move begins (`swapAlongTransition`)
+    private var fading: UIView?
+    #endif
+    /// Whether the results hold the detail column: from the search's presentation until the person's close begins, so
+    /// the detail they covered comes back as UIKit dismisses the search (LLP 1127.000 D2). The host's own close keeps
+    /// them there until it settles.
+    var resultsHoldDetail: Bool { open && pairedClose.map { $0.cause == .projection } ?? true }
     private var restoreActivation = false
     private var restoreEditing = false
     private var savedSelection: (start: Int, end: Int)?
@@ -95,7 +103,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         self.results = results
         let container = detailPlacement && results != nil ? UIViewController() : nil
         resultsContainer = container
-        controller = UISearchController(searchResultsController: container ?? results)
+        controller = SearchControllerIOS(searchResultsController: container ?? results)
         #else
         controller = UISearchController(searchResultsController: nil)
         #endif
@@ -104,6 +112,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         controller.delegate = self
         #if os(iOS)
         controller.searchResultsUpdater = self
+        (controller as? SearchControllerIOS)?.willMove = { [weak self] transition in self?.fade(along: transition) }
         _ = bindEditor()
         if results != nil { controller.showsSearchResultsController = false }
         #endif
@@ -315,12 +324,36 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
             }
             results?.update(self)
             host?.scheduleSplitProjection()
+            swapAlongTransition()
         }
         #endif
     }
+    #if os(iOS)
+    /// The results come into the detail column, or give it back, as the delegate announces the search's move, under a
+    /// snapshot that fades out on the move's own coordinator (`fade(along:)`), or goes as the move ends without one
+    /// (LLP 1127.000 D2).
+    private func swapAlongTransition() {
+        fading?.removeFromSuperview()
+        fading = nil
+        guard placesResultsInDetail, let split = host?.split, split.pairedSearch === self else { return }
+        fading = split.swapResultsWithSearch()
+    }
+
+    /// Fades the snapshot over the swap out alongside the search's move, as UIKit begins it and an animation can still
+    /// join it (`SearchControllerIOS`)
+    private func fade(along transition: UIViewControllerTransitionCoordinator?) {
+        guard let cover = fading else { return }
+        fading = nil
+        guard let split = host?.split else { return cover.removeFromSuperview() }
+        split.fadeOut(cover, along: transition)
+    }
+    #endif
     func didPresentSearchController(_ search: UISearchController) {
         #if os(iOS)
         showScopes()
+        #endif
+        #if os(iOS)
+        fade(along: nil)
         #endif
         // Inside UIKit's completion of the move its refocus may still come: what the host held back goes after it
         let move = presentation
@@ -386,6 +419,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
             let exposed = host?.mayCancelSearch(self) == true
             if !exposed { prepareCoverMove() }
             beginClose(exposed ? .uikit : .projection)
+            swapAlongTransition()
             return
         }
         #endif
@@ -409,6 +443,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     }
     func didDismissSearchController(_ search: UISearchController) {
         #if os(iOS)
+        fade(along: nil)
         if paired {
             host?.scheduleSplitProjection()
             return
@@ -579,6 +614,25 @@ extension HeaderSearch: UISearchResultsUpdating {
         // UIKit resets the query before ending editing, without the bar's text-change callback
         guard acceptingDismissal else { return }
         searchBar(search.searchBar, textDidChange: search.searchBar.text ?? "")
+    }
+}
+#endif
+#if os(iOS)
+/// UIKit's search controller, which tells its owner as UIKit begins to present or dismiss it, with the move's
+/// coordinator, while an animation can still be queued in its context: the delegate's `willPresentSearchController(_:)`
+/// and `willDismissSearchController(_:)` come before UIKit names the coordinator, and a turn later
+/// `animateAlongsideTransition(in:animation:completion:)` returns false.
+final class SearchControllerIOS: UISearchController {
+    var willMove: ((UIViewControllerTransitionCoordinator?) -> Void)?
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        willMove?(transitionCoordinator)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        willMove?(transitionCoordinator)
     }
 }
 #endif

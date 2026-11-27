@@ -56,7 +56,7 @@ extension NavigationHost {
     /// Whether the zoom's drag-down dismissal of `pushed` may begin: where
     /// an edge swipe may, the platform's Back going and nothing moving. A
     /// collapsed split's detail column, which N0 pops whole, only while it
-    /// holds just its base, as N0's back swipe (LLP 1127 D5.3): with more,
+    /// holds just its base, as N0's back swipe (LLP 1127 D10): with more,
     /// the pop would take them all, past the top route's own Back. The
     /// column's base itself never, as N1 cannot pop it: N0's pop of the
     /// column is its dismissal.

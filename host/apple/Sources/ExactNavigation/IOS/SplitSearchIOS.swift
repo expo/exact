@@ -233,7 +233,8 @@ extension NavigationHost {
         let source: RouteController
         let removedController: UIViewController
         if nav === split.list {
-            guard split.controller.isCollapsed, !state.collapseToPrimary,
+            // A Back to the results is the result's; a Back that only shows the list keeps the detail (LLP 1127 D12)
+            guard split.controller.isCollapsed, !state.collapseToPrimary, toResults || !popOnlyShowsList(split),
                   nav.viewControllers.first === landing, let top = split.detail.topViewController as? RouteController else { return }
             // The secondary can keep the route in its own stack after leaving the primary's stack.
             (source, removedController) = (top, split.detail)

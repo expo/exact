@@ -118,12 +118,8 @@ extension NavigationHost {
                 continue
             }
             #endif
-            let held: [UIViewController]
-            if let columns, columns.paired {
-                held = Array(columns.list.stackRoutes.prefix(1)) + columns.detailRoutes
-            } else {
-                held = columns?.shown ?? holder.stackRoutes
-            }
+            // The columns' routes, those UIKit keeps behind the folded list among them (LLP 1127 D12)
+            let held: [UIViewController] = columns?.held ?? holder.stackRoutes
             if !held.elementsEqual(wanted, by: ===) {
                 return (tabPanels.isEmpty ? "the stack" : "tab \(index)") + Self.routerStackDifference(held: held, wanted: wanted)
             }
@@ -337,12 +333,14 @@ extension RouteController {
     /// tab tapped in the turn of the pop leaves it a child for good (LLP
     /// 1075.003 §9.16), so the stack is read, not the parent.
     /// A split's detail column keeps its routes as UIKit takes it off the
-    /// list's column for a person's Back collapsed: they are in no stack the
-    /// person sees until UIKit nests the column again or expands the split
-    /// (`SplitIOS.showsDetail`, LLP 1127 D5).
+    /// list's column for a person's Back collapsed, and so does the router
+    /// where that Back only shows the list (`popOnlyShowsList`, LLP 1127
+    /// D12); where it is the detail's own Back, they are in no stack the
+    /// person sees until UIKit nests the column again or expands the split.
     var inStack: Bool {
         guard let stack, stack.stackRoutes.contains(where: { $0 === self }) else { return false }
-        return host?.split.map { $0.detail !== stack || $0.showsDetail } ?? true
+        guard let host, let split = host.split, split.detail === stack, !split.showsDetail else { return true }
+        return host.popOnlyShowsList(split)
     }
 
     /// The stack it is in: its plain tab, checked first because under More
