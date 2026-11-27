@@ -211,10 +211,14 @@ extension Presenter {
 
 extension NodeView {
     package override func mouseDown(with event: NSEvent) {
-        // A first click AppKit gave this view for a drag reaches nothing else, through its up (LLP 1094.000 D5)
-        if let chain = holdPresenter?.mouseChain, chain.takeFirstMouseDrag(event, at: self) {
-            chain.downDragOnly(self, event: event)
-            return
+        if let chain = holdPresenter?.mouseChain {
+            // A drag-only contact whose up never came ends before a new down goes its way
+            chain.endDragOnly()
+            // A first click AppKit gave this view for a drag reaches nothing else, through its up, while it still may (LLP 1094.000 D5)
+            if chain.takeFirstMouseDrag(event, at: self), firstMouseDragsHere(event) {
+                chain.downDragOnly(self, event: event)
+                return
+            }
         }
         let releases = TitleBarAreaMac.takesRelease(of: event, at: self)
         defer { if releases { TitleBarAreaMac.release(to: self) } }

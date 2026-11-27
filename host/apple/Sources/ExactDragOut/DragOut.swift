@@ -182,17 +182,6 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
         return carried ? [] : DragItems.items(of: node, in: presenter?.session)
     }
 
-    /// The drag a tap adds to (D4, "Adding to a drag"): the one the person is
-    /// holding, which carries an item from another node, not one the tap's
-    /// own touch began.
-    func dragInteraction(_ interaction: UIDragInteraction, sessionForAddingItems sessions: [UIDragSession], withTouchAt point: CGPoint) -> UIDragSession? {
-        guard let view = interaction.view, let window = view.window,
-              let node = lifted(by: interaction, atWindowPoint: view.convert(point, to: window)) else { return nil }
-        return sessions.first { session in
-            session.items.contains { item in (item.localObject as? DragItems.Lifted).map { $0.id != node.id } ?? true }
-        }
-    }
-
     /// The node from whose view UIKit shows a context menu (D4). A request for
     /// its items then is the menu's, Ask Siri's (WWDC26 session 278) or a drag of
     /// the menu's preview, with no touch on the node, so it is answered as a

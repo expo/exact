@@ -10,9 +10,15 @@ package protocol MouseRecognizer: AnyObject {
     var armed: NodeView? { get }
     var engaged: Bool { get }
     func arm(_ node: NodeView, event: NSEvent)
+    /// Arms on a first click in a window that was not key, which the drag
+    /// out of the app takes alone (LLP 1094.000 D5).
+    func armFromBackground(_ node: NodeView, event: NSEvent)
     func drag(_ event: NSEvent) -> Bool
     func up(_ event: NSEvent) -> Bool
     func cancel()
+}
+extension MouseRecognizer {
+    package func armFromBackground(_ node: NodeView, event: NSEvent) { arm(node, event: event) }
 }
 extension MouseLayoutPan: MouseRecognizer {
     var armed: NodeView? { candidate }
@@ -302,8 +308,15 @@ final class MouseChain {
         downEvent = event
         dragOnly = event
         guard let drag = presenter?.mouseDragOut else { order = []; return }
-        drag.arm(node, event: event)
+        drag.armFromBackground(node, event: event)
         order = drag.armed == nil ? [] : [drag]
+    }
+    /// Ends a drag-only contact whose up will not come (its view went), so
+    /// the next click goes its way.
+    func endDragOnly() {
+        guard dragOnly != nil else { return }
+        if let drag = presenter?.mouseDragOut, !drag.engaged { drag.cancel() }
+        order = []; downEvent = nil; dragOnly = nil
     }
     func drag(_ event: NSEvent) -> Bool {
         if let owner = order.first(where: { $0.engaged }) { return owner.drag(event) }

@@ -86,6 +86,17 @@ final class DragOutMacTests: XCTestCase {
         XCTAssertEqual(pointers, [], "no pointer event")
         XCTAssertEqual(presses, [], "no press")
         XCTAssertNil(p.mouseDragOut?.armed, "the up ends the contact")
+        // A drag-only contact whose up never comes ends at the next down, which goes its way
+        NodeView.everyClickCounts = false
+        XCTAssertTrue(card.acceptsFirstMouse(for: down))
+        card.mouseDown(with: down)
+        XCTAssertTrue(p.mouseDragOut?.armed === card)
+        NodeView.everyClickCounts = true
+        let next = event(.leftMouseDown, onCard, [])
+        card.mouseDown(with: next)
+        card.mouseUp(with: event(.leftMouseUp, onCard, []))
+        XCTAssertEqual(pointers.first, .down, "the next click's pointerdown")
+        NodeView.everyClickCounts = false
         p.apply(wireBatch([["op": "props", "id": 10, "set": ["draggable": "false"]]]))
         XCTAssertFalse(card.acceptsFirstMouse(for: down), "a card that does not drag")
         // A swipe on the card arms too, which rule 4 ranks first: the click only activates the window

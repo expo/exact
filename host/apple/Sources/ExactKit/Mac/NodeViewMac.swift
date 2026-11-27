@@ -1274,8 +1274,15 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// already (a control or a list row clicks through), on a node a press
     /// would arm a drag from. A Control-click is a contextual click.
     func firstMouseDrags(_ event: NSEvent?) -> Bool {
-        guard let event, event.type == .leftMouseDown, !event.modifierFlags.contains(.control), let window, let presenter,
-              !(NSApp.isActive && window.isKeyWindow), !Self.countsFirstMouse(event), !clicksThrough else { return false }
+        guard let window, !(NSApp.isActive && window.isKeyWindow) else { return false }
+        return firstMouseDragsHere(event)
+    }
+    /// The rest of `firstMouseDrags`, which the down AppKit gives the view
+    /// after it has made the window key reads again: the view's own answer
+    /// and the drag's eligibility, as they are now.
+    func firstMouseDragsHere(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseDown, !event.modifierFlags.contains(.control), let presenter,
+              !Self.countsFirstMouse(event), !clicksThrough else { return false }
         return DragOutLink.installed?.arms(self, in: presenter) ?? false
     }
 

@@ -136,12 +136,6 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertTrue(try sources(p).dragInteraction(first, itemsForAddingTo: session, withTouchAt: CGPoint(x: 100, y: 60)).isEmpty, "none from the card lifted")
         session.carried = []
         XCTAssertTrue(try sources(p).dragInteraction(second, itemsForAddingTo: session, withTouchAt: CGPoint(x: 300, y: 60)).isEmpty, "off the card")
-        // Beside a drag the tap's own touch began, the tap adds to the one the person holds
-        let held = PointDragSession(at: CGPoint(x: 120, y: 80), in: window), begun = PointDragSession(at: CGPoint(x: 120, y: 260), in: window)
-        held.carried = try sources(p).dragInteraction(first, itemsForBeginning: held)
-        begun.carried = try sources(p).dragInteraction(second, itemsForBeginning: begun)
-        XCTAssertTrue(try sources(p).dragInteraction(second, sessionForAddingItems: [begun, held], withTouchAt: CGPoint(x: 100, y: 60)) === held)
-        XCTAssertNil(try sources(p).dragInteraction(second, sessionForAddingItems: [held], withTouchAt: CGPoint(x: 300, y: 60)), "off the card")
     }
 
     /// The lift reads what the touch lands on now, as the window routes it:

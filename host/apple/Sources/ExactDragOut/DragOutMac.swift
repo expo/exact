@@ -45,9 +45,13 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
     /// whether or not the node is still there.
     private weak var sessionWindow: NSWindow?
     private var origin = CGPoint.zero
-    /// Whether the down was in a window that was not key, or of an app that
-    /// was not active: the drag then keeps the window where it was (D5).
+    /// Whether the down was a first click the drag takes alone, in a window
+    /// that was not key: the drag then keeps the window where it was (D5).
     private(set) var fromBackground = false
+    func armFromBackground(_ node: NodeView, event: NSEvent) {
+        arm(node, event: event)
+        fromBackground = armed != nil
+    }
     /// AppKit's session, begun from the node; a test's stand-in records it,
     /// since a session follows the hardware mouse.
     var begin: (NodeView, [NSDraggingItem], NSEvent, NSDraggingSource) -> Void = { $0.beginDraggingSession(with: $1, event: $2, source: $3) }
@@ -60,7 +64,7 @@ final class MouseDragOut: NSObject, MouseRecognizer, NSDraggingSource {
         guard !ExactEnv.agentMode, let presenter, node.window?.windowNumber == event.windowNumber else { return }
         armed = Self.source(from: node, in: presenter)
         carried = armed.map(Self.carried) ?? []
-        fromBackground = !(NSApp.isActive && node.window?.isKeyWindow == true)
+        fromBackground = false
         down = node
         downWindow = node.window
         origin = event.locationInWindow
