@@ -106,11 +106,13 @@ export function install({ PropHooks, say, document = globalThis.document, signal
   const write = (e, name, kept) => (kept ? e.setAttribute(name, kept) : e.removeAttribute(name));
   // Each element's refusals by attribute, journaled once while they stand: matched one for one by what was refused
   const journaled = (e, name, run) => {
-    const before = [...(standing.get(e)?.[name] ?? [])], now = [];
+    // How many of each stood before, spent as the same ones stand again
+    const stood = new Map(), now = [];
+    for (const what of standing.get(e)?.[name] ?? []) stood.set(what, (stood.get(what) ?? 0) + 1);
     const result = run((line, what) => {
-      const at = before.indexOf(what);
-      if (at < 0) say(`drag: refused: ${line}`);
-      else before.splice(at, 1);
+      const left = stood.get(what) ?? 0;
+      if (left > 0) stood.set(what, left - 1);
+      else say(`drag: refused: ${line}`);
       now.push(what);
     });
     (standing.get(e) ?? standing.set(e, {}).get(e))[name] = now;

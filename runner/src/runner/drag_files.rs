@@ -94,13 +94,16 @@ impl<D: DataSource> Runner<D> {
     /// stand before, matched one for one by what was refused, and keeps the
     /// ones that stand now.
     fn journal_drag(&mut self, id: ViewId, url: bool, refused: Vec<Refusal>) {
-        let mut before = self.drag_refused.remove(&(id, url)).unwrap_or_default();
+        let before = self.drag_refused.remove(&(id, url)).unwrap_or_default();
+        // How many of each stood before, spent as the same ones stand again
+        let mut stood = std::collections::HashMap::<&str, usize>::new();
+        for what in &before {
+            *stood.entry(what).or_default() += 1;
+        }
         let mut now = Vec::with_capacity(refused.len());
         for Refusal { what, line } in refused {
-            match before.iter().position(|stood| *stood == what) {
-                Some(at) => {
-                    before.swap_remove(at);
-                }
+            match stood.get_mut(what.as_str()).filter(|left| **left > 0) {
+                Some(left) => *left -= 1,
                 None => self.log(format!("drag: refused: {line}")),
             }
             now.push(what);

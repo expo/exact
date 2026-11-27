@@ -36,10 +36,10 @@ link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l
   empty name keeps the file's own. A name whose suffix is not the file's, or
   another spelling of its type, gets the file's suffix (`Mount Fuji` becomes
   `Mount Fuji.jpg`, `Fuji.png` becomes `Fuji.png.jpg`; `Fuji.jpeg` stays).
-  Exact's rule for a name, so that every system can write it: 1 to 255
-  bytes of UTF-8, with no control character, none of `< > : " / \ | ? *`,
-  no space at either end, no dot at the end, and not a name Windows keeps
-  for a device (`CON`, `NUL`, `COM1`, …). The compiler refuses a literal
+  Exact's portable-basename rule for a name: 1 to 255 bytes of UTF-8, with
+  no control character, none of `< > : " / \ | ? *`, no space at either
+  end, no dot at the end, and not a name Windows keeps for a device (`CON`,
+  `NUL`, `COM1`, …). The compiler refuses a literal
   name that breaks it; the runner journals a bound one and offers the file
   under its own name. The type stays the file's. Where the platform takes a
   name: the item's suggested name on iOS, the promised file on the Mac, the
