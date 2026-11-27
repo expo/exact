@@ -9,6 +9,10 @@ import XCTest
 /// toolbar sits on the keys under the root's default `resizes-content`, and
 /// `exactViewport().keyboardHeight` is the overlap the presenter reads
 /// from the keyboard's layout guide, told with the view and back to 0.
+private extension Array {
+    var nilIfEmpty: Self? { isEmpty ? nil : self }
+}
+
 final class KeyboardSheetIOSTests: XCTestCase {
     private var window: UIWindow?
     private var session: ExactSession?
@@ -149,6 +153,34 @@ final class KeyboardSheetIOSTests: XCTestCase {
             XCTAssertLessThan(distance, 1, "\(node?.kind ?? "?") \(d.id) \(node?.props["testId"] ?? "") was drawn at \(d.at) on frame \(d.frame) of \(frames), laid out at \(laid[d.id] ?? .zero)")
         }
         XCTAssertNotNil(off, "the route's node views were sampled")
+    }
+
+    /// A grouped list in a sheet reaches across the sheet's side clearance to its edge, as UIKit lays its own list over
+    /// the whole sheet, so its vertical indicator lies at the sheet's edge: on an iPhone Duo, outside the vertical bar's
+    /// strip (`GroupedListView.sideReach`, from the list's controller view's safe area, not the window's). Where nothing
+    /// clears the list's side, it keeps its box.
+    func testASheetsGroupedListReachesTheSheetsSideClearance() throws {
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "a sheet's side clearance is its window scene's safe area")
+        }
+        let session = try fixture(scene)
+        let p = session.presenter
+        p.press(try XCTUnwrap(named("open-form")).id)
+        until("the presentation begins") { p.modalHost.owner?.isBeingPresented == true }
+        let owner = try XCTUnwrap(p.modalHost.owner)
+        until("the presentation lands") { !owner.isBeingPresented }
+        let list = try XCTUnwrap(p.views.values.first { $0.props["id"] == "form-list" })
+        let collection = try XCTUnwrap(sequence(first: list.subviews, next: { $0.flatMap(\.subviews).nilIfEmpty }).joined().first { $0 is UICollectionView } as? UICollectionView)
+        let container = try XCTUnwrap(sequence(first: list as UIView, next: \.superview).first { $0.next is UIViewController })
+        let side = container.safeAreaInsets.right, box = list.convert(list.bounds, to: container).maxX
+        let reached = try XCTUnwrap(collection.superview).convert(collection.frame, to: container).maxX
+        if container.traitCollection.placesVerticalBar { XCTAssertGreaterThan(side, 0, "an iPhone Duo's sheet clears the vertical bar's strip") }
+        if side > 0, abs(container.bounds.maxX - side - box) < 0.5 {
+            XCTAssertEqual(reached, container.bounds.maxX, accuracy: 0.5, "the list reaches the sheet's edge, \(side) past its box")
+            XCTAssertEqual(collection.verticalScrollIndicatorInsets.right, 0, accuracy: 0.5, "its indicator at that edge")
+        } else {
+            XCTAssertEqual(reached, box, accuracy: 0.5, "the list keeps its box where nothing clears its side")
+        }
     }
 
     /// A dialog sheet's editor: the page is not avoided under it (the sheet
