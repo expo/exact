@@ -44,15 +44,15 @@ function declaration(name) {
 }
 
 const registered = new Set();
-/** Register `names` as `<length>` properties that do not inherit, `0px` unsaid (CSS Properties and Values API), so a
- * box's value stays its own and the browser resolves it to pixels. Whether every one is registered: an engine without
- * `CSS.registerProperty` registers none. */
-export function register(names) {
+/** Register `names` as properties of `syntax` that do not inherit, `initial` unsaid (CSS Properties and Values API), a
+ * `<length>` and `0px` unless said, so a box's value stays its own and the browser resolves it. Whether every one is
+ * registered: an engine without `CSS.registerProperty` registers none. */
+export function register(names, syntax = "<length>", initial = "0px") {
   if (typeof CSS === "undefined" || typeof CSS.registerProperty !== "function") return false;
   for (const name of names) {
     if (registered.has(name)) continue;
     try {
-      CSS.registerProperty({ name, syntax: "<length>", inherits: false, initialValue: "0px" });
+      CSS.registerProperty({ name, syntax, inherits: false, initialValue: initial });
     } catch {
       // registered already in this document, by an earlier copy of this module
     }
